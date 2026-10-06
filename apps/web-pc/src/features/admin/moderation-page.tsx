@@ -15,6 +15,7 @@ import { adminLoadOutcome } from './admin-messages'
 import { useAdminModerationQueue, useAdminModerationRecords } from './admin-queries'
 import {
   cursorSearch,
+  dayParam,
   dayRangeSearch,
   optionalSearch,
   trimmedSearch,
@@ -287,12 +288,8 @@ export function parseModerationSearch(search: Record<string, unknown>): Moderati
     typeof search.listingId === 'string' && search.listingId.length > 0
       ? search.listingId
       : undefined
-  const from =
-    typeof search.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.from)
-      ? search.from
-      : undefined
-  const to =
-    typeof search.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.to) ? search.to : undefined
+  const from = dayParam(search.from)
+  const to = dayParam(search.to)
   const cursor = cursorSearch(search.cursor)
   const tab = search.tab === 'records' ? 'records' : 'queue'
   return {

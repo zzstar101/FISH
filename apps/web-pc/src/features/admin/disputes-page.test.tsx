@@ -30,6 +30,9 @@ void mock.module('@tanstack/react-router', () => ({
     const qs = query.toString()
     return createElement('a', { href: qs ? `${href}?${qs}` : href }, props.children)
   },
+  // Outlet 与本目录其它测试文件保持一致：mock.module 在同进程内是共享的（不带 --isolate 时
+  // admin-shell.test.tsx 会消费本模块的 mock，缺 Outlet 直接把它的用例炸成 SyntaxError）。
+  Outlet: () => createElement('div', null),
   useNavigate: () => async () => {},
 }))
 
@@ -349,21 +352,27 @@ describe('DisputeResolveDialog（处理弹窗）', () => {
     expect(text).toContain('0/500')
     expect(text).toContain('提交处理结论')
     expect(text).toContain('不改成交事实、不执行处罚')
+    // 复用 admin-dialog-parts 之后结构必须与原来逐字一致：三列卡片、同一个 radio 组名、
+    // 契约上限经 maxLength 传入（#465 审查 Duplicated Code 的最小修复不得改行为）。
+    expect(html).toContain('grid grid-cols-3 gap-2 border-0 p-0 m-0')
+    expect(html).toContain('name="dispute-resolve-resolution"')
+    expect(html).toContain('maxLength="500"')
+    expect(html).toContain('placeholder="写进审计、不可抵赖；1–500 字"')
   })
 
   test('服务端错误渲染在弹窗内部（#448 教训）', () => {
-    const text = textOf(
-      renderToStaticMarkup(
-        createElement(DisputeResolveDialog, {
-          errorMessage: '该争议已被处理或已撤回，请刷新后重试',
-          onClose: () => {},
-          onSubmit: () => {},
-          pending: false,
-          subjectLabel: '其他「考研数学资料」',
-        }),
-      ),
+    const html = renderToStaticMarkup(
+      createElement(DisputeResolveDialog, {
+        errorMessage: '该争议已被处理或已撤回，请刷新后重试',
+        onClose: () => {},
+        onSubmit: () => {},
+        pending: false,
+        subjectLabel: '其他「考研数学资料」',
+      }),
     )
-    expect(text).toContain('该争议已被处理或已撤回，请刷新后重试')
+    expect(textOf(html)).toContain('该争议已被处理或已撤回，请刷新后重试')
+    expect(html).toContain('role="alert"')
+    expect(html).toContain('bg-danger-soft text-danger')
   })
 })
 

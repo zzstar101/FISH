@@ -16,6 +16,7 @@ import { adminLoadOutcome } from './admin-messages'
 import { useAdminTransactions } from './admin-queries'
 import {
   cursorSearch,
+  dayParam,
   dayRangeSearch,
   optionalSearch,
   trimmedSearch,
@@ -199,12 +200,8 @@ export function parseTransactionsSearch(search: Record<string, unknown>): Transa
   const buyerId = idParam(search.buyerId)
   const sellerId = idParam(search.sellerId)
   const listingId = idParam(search.listingId)
-  const from =
-    typeof search.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.from)
-      ? search.from
-      : undefined
-  const to =
-    typeof search.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.to) ? search.to : undefined
+  const from = dayParam(search.from)
+  const to = dayParam(search.to)
   const cursor = cursorSearch(search.cursor)
   return {
     ...(q !== undefined ? { q } : {}),

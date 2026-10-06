@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@fish/ui/dialog'
 import { useState } from 'react'
+import { DialogAlert, OptionCards, ReasonField } from './admin-dialog-parts'
 import { validateReason } from './admin-view'
 
 /**
@@ -76,60 +77,26 @@ export function DisputeResolveDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <fieldset className="grid grid-cols-3 gap-2 border-0 p-0 m-0">
-            <legend className="sr-only">处理结论</legend>
-            {options.map((option) => {
-              const active = resolution === option.value
-              return (
-                <label
-                  className={`block cursor-pointer rounded-xl border p-3 text-left transition-colors ${
-                    active
-                      ? 'border-brand bg-brand-soft/60'
-                      : 'border-line bg-white/70 hover:border-brand/40'
-                  }`}
-                  key={option.value}
-                >
-                  <input
-                    checked={active}
-                    className="sr-only"
-                    name="dispute-resolve-resolution"
-                    onChange={() => setResolution(option.value)}
-                    type="radio"
-                    value={option.value}
-                  />
-                  <span className="block font-semibold text-sm">{option.label}</span>
-                  <span className="mt-1 block text-ink-3 text-xs">{option.hint}</span>
-                </label>
-              )
-            })}
-          </fieldset>
+          <OptionCards
+            activeClassName={() => 'border-brand bg-brand-soft/60'}
+            columns={3}
+            legend="处理结论"
+            name="dispute-resolve-resolution"
+            onChange={setResolution}
+            options={options}
+            value={resolution}
+          />
 
-          <div className="space-y-1.5">
-            <span className="font-medium text-sm">
-              处理原因 <span className="text-coral">*</span>
-            </span>
-            <textarea
-              aria-label="处理原因"
-              className="min-h-20 w-full rounded-xl border border-line bg-white/80 px-3 py-2 text-sm focus-visible:ring-3 focus-visible:ring-brand/15 focus:outline-none"
-              maxLength={MAX_DISPUTE_RESOLUTION_NOTE_LENGTH}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="写进审计、不可抵赖；1–500 字"
-              value={reason}
-            />
-            <span className="block text-right text-ink-3 text-xs">
-              {reason.trim().length}/{MAX_DISPUTE_RESOLUTION_NOTE_LENGTH}
-            </span>
-          </div>
+          <ReasonField
+            ariaLabel="处理原因"
+            label="处理原因"
+            maxLength={MAX_DISPUTE_RESOLUTION_NOTE_LENGTH}
+            onChange={setReason}
+            value={reason}
+          />
 
           {shownError !== null ? (
-            <p
-              className={`rounded-xl px-3.5 py-2.5 text-sm ${
-                localError !== null ? 'bg-warn-soft text-warn' : 'bg-danger-soft text-danger'
-              }`}
-              role="alert"
-            >
-              {shownError}
-            </p>
+            <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
           ) : null}
         </div>
 

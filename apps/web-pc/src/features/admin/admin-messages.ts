@@ -4,7 +4,7 @@ import { ApiError } from '../../lib/api-client'
  * Admin 域错误码 → 界面文案（#467）。
  *
  * 与其它域的 `api.ts` 错误映射同口径：调用方只依赖 `code` 分支，这里把「哪个码落到
- * 哪种界面」集中成纯函数。治理/审核/举报三组写操作的冲突（409）必须**如实展示**并
+ * 哪种界面」集中成纯函数。治理/审核/举报/争议四组写操作的冲突（409）必须**如实展示**并
  * 提示刷新，不能吞成成功，也不能当成网络错误掩盖「已被他人处理」的事实。
  */
 
@@ -26,81 +26,73 @@ export function adminLoadOutcome(error: unknown): AdminLoadOutcome {
 
 export type AdminActionOutcome = { message: string; conflict: boolean }
 
+/**
+ * 写操作失败码 → 文案的统一骨架（#465 审查发现 Repeated Switches：治理/审核/举报/争议
+ * 四个域各抄一遍同形 switch，第 4 份就是本 PR 加的）。
+ *
+ * 各域只提供「自己特有的码 → 文案」；三类兜底——`VALIDATION_FAILED` 的 field 级文案、
+ * 未知码透传 `message`、非 `ApiError` 归网络异常——全仓同口径，只在这里写一次。
+ * 冲突（409）必须如实标记 `conflict: true` 并提示刷新，不能吞成成功、也不能当网络错误掩盖
+ * 「已被他人处理」的事实。
+ */
+function actionError(
+  error: unknown,
+  cases: Readonly<Record<string, AdminActionOutcome>>,
+): AdminActionOutcome {
+  if (!isApiError(error)) return { message: '网络异常，请稍后重试', conflict: false }
+  if (error.code === 'VALIDATION_FAILED') {
+    return { message: validationMessage(error), conflict: false }
+  }
+  return cases[error.code] ?? { message: error.message, conflict: false }
+}
+
 /** 治理写（下架/恢复/限制/封禁/解除）的失败文案。409 = 状态已被别人改掉，必须刷新。 */
 export function governanceActionError(error: unknown): AdminActionOutcome {
-  if (isApiError(error)) {
-    switch (error.code) {
-      case 'GOVERNANCE_TARGET_NOT_FOUND':
-        return { message: '目标不存在或已被删除', conflict: false }
-      case 'GOVERNANCE_SOURCE_REPORT_NOT_FOUND':
-        return { message: '关联的举报单不存在，请核对后重试', conflict: false }
-      case 'GOVERNANCE_SOURCE_REPORT_MISMATCH':
-        return { message: '关联的举报单与本次治理目标不匹配', conflict: false }
-      case 'GOVERNANCE_SELF_TARGET':
-        return { message: '不能对自己执行治理操作', conflict: false }
-      case 'GOVERNANCE_CONFLICT':
-        return { message: '目标状态已被其他管理员变更，请刷新后重试', conflict: true }
-      case 'USER_GUARD_BUSY':
-        return { message: '系统繁忙，请稍后重试', conflict: false }
-      case 'VALIDATION_FAILED':
-        return { message: validationMessage(error), conflict: false }
-      default:
-        return { message: error.message, conflict: false }
-    }
-  }
-  return { message: '网络异常，请稍后重试', conflict: false }
+  return actionError(error, {
+    GOVERNANCE_TARGET_NOT_FOUND: { message: '目标不存在或已被删除', conflict: false },
+    GOVERNANCE_SOURCE_REPORT_NOT_FOUND: {
+      message: '关联的举报单不存在，请核对后重试',
+      conflict: false,
+    },
+    GOVERNANCE_SOURCE_REPORT_MISMATCH: {
+      message: '关联的举报单与本次治理目标不匹配',
+      conflict: false,
+    },
+    GOVERNANCE_SELF_TARGET: { message: '不能对自己执行治理操作', conflict: false },
+    GOVERNANCE_CONFLICT: {
+      message: '目标状态已被其他管理员变更，请刷新后重试',
+      conflict: true,
+    },
+    USER_GUARD_BUSY: { message: '系统繁忙，请稍后重试', conflict: false },
+  })
 }
 
 /** 人工审核决定的失败文案。同 key 重试撞 409 = 已被处理（含被自己此前的成功请求）。 */
 export function moderationDecisionError(error: unknown): AdminActionOutcome {
-  if (isApiError(error)) {
-    switch (error.code) {
-      case 'MODERATION_CONFLICT':
-        return { message: '该审核记录已被其他管理员处理，请刷新后重试', conflict: true }
-      case 'ADMIN_NOT_FOUND':
-        return { message: '审核记录不存在或已被删除', conflict: false }
-      case 'VALIDATION_FAILED':
-        return { message: validationMessage(error), conflict: false }
-      default:
-        return { message: error.message, conflict: false }
-    }
-  }
-  return { message: '网络异常，请稍后重试', conflict: false }
+  return actionError(error, {
+    MODERATION_CONFLICT: {
+      message: '该审核记录已被其他管理员处理，请刷新后重试',
+      conflict: true,
+    },
+    ADMIN_NOT_FOUND: { message: '审核记录不存在或已被删除', conflict: false },
+  })
 }
 
 /** 处理举报的失败文案。重复处理 → 409（无幂等键，状态机拒绝）。 */
 export function reportHandleError(error: unknown): AdminActionOutcome {
-  if (isApiError(error)) {
-    switch (error.code) {
-      case 'REPORT_CONFLICT':
-        return { message: '该举报已被处理，请刷新后重试', conflict: true }
-      case 'REPORT_NOT_FOUND':
-        return { message: '举报不存在或已被删除', conflict: false }
-      case 'VALIDATION_FAILED':
-        return { message: validationMessage(error), conflict: false }
-      default:
-        return { message: error.message, conflict: false }
-    }
-  }
-  return { message: '网络异常，请稍后重试', conflict: false }
+  return actionError(error, {
+    REPORT_CONFLICT: { message: '该举报已被处理，请刷新后重试', conflict: true },
+    REPORT_NOT_FOUND: { message: '举报不存在或已被删除', conflict: false },
+  })
 }
 
 /** 处理争议的失败文案。重复处理 / 已被撤回 → 409（无幂等键，状态机拒绝）。 */
 export function disputeResolveError(error: unknown): AdminActionOutcome {
-  if (isApiError(error)) {
-    switch (error.code) {
-      case 'DISPUTE_CONFLICT':
-      case 'DISPUTE_NOT_PENDING':
-        return { message: '该争议已被处理或已撤回，请刷新后重试', conflict: true }
-      case 'DISPUTE_NOT_FOUND':
-        return { message: '争议不存在或已被删除', conflict: false }
-      case 'VALIDATION_FAILED':
-        return { message: validationMessage(error), conflict: false }
-      default:
-        return { message: error.message, conflict: false }
-    }
-  }
-  return { message: '网络异常，请稍后重试', conflict: false }
+  return actionError(error, {
+    DISPUTE_CONFLICT: { message: '该争议已被处理或已撤回，请刷新后重试', conflict: true },
+    DISPUTE_NOT_PENDING: { message: '该争议已被处理或已撤回，请刷新后重试', conflict: true },
+    DISPUTE_NOT_FOUND: { message: '争议不存在或已被删除', conflict: false },
+  })
 }
 
 /** 422 details 的第一条透传（服务端给了 field 级文案时优先用它）。 */

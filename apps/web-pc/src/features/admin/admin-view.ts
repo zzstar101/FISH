@@ -5,7 +5,12 @@ import type {
   UserRole,
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus } from '@fish/contracts/auth/user'
-import type { DisputeResolution, DisputeStatus, DisputeType } from '@fish/contracts/disputes/schema'
+import type {
+  AdminDisputeDetail,
+  DisputeResolution,
+  DisputeStatus,
+  DisputeType,
+} from '@fish/contracts/disputes/schema'
 import type { ListingModerationStatus, ListingStatus } from '@fish/contracts/listings/schema'
 import type { ModerationDecision } from '@fish/contracts/moderation/schema'
 import type { TransactionStatus } from '@fish/contracts/transactions/schema'
@@ -182,7 +187,10 @@ export const DISPUTE_STATUS_META: Record<DisputeStatus, { label: string; variant
 
 /**
  * 争议类型。刻意**不含**骚扰/威胁——那属于举报域，且争议结论不触发治理动作。
- * 文案与 `apps/miniapp` 的用户侧表单保持一致口径（「商品与描述不符」等）。
+ *
+ * 文案是管理端自己的口径：`apps/miniapp` 目前**没有**争议表单/页面
+ * （`git grep ITEM_MISMATCH -- apps/miniapp` 零命中），所以不存在可对齐的用户侧文案，
+ * 也就不声明「与用户侧保持一致」（#465 审查发现：原注释是一句无法验证的声明）。
  */
 export const DISPUTE_TYPE_META: Record<DisputeType, { label: string }> = {
   ITEM_MISMATCH: { label: '商品与描述不符' },
@@ -201,10 +209,42 @@ export const DISPUTE_RESOLUTION_META: Record<
   INCONCLUSIVE: { label: '无法认定', variant: 'warn' },
 }
 
+/** 契约只给内联枚举（`DisputeEvidenceMessageSchema` 的 `type`）不导出具名类型：从 DTO 派生。 */
+type DisputeEvidenceType = AdminDisputeDetail['evidence'][number]['message']['type']
+
+/**
+ * 证据消息类型 → 界面文案。键取自契约派生联合（`Record<契约联合, …>`）：
+ * 契约新增类型而这里没补，`tsc` 当场报错；不像 `Record<string, string>` 那样
+ * 把裸枚举值（`MEDIA`）静默显示给处理人（#465 审查发现 Primitive Obsession）。
+ */
+export const EVIDENCE_TYPE_LABEL: Record<DisputeEvidenceType, string> = {
+  // 不是「商品卡片」：服务端存的是消息正文，而 LISTING 消息的正文就是商品公开 id
+  //（`apps/api/src/modules/messages/service.ts`），所以这里只能显示 `lst_…` 引用。
+  LISTING: '商品引用',
+  MEDIA: '图片/语音',
+  SYSTEM: '系统消息',
+  TEXT: '文字',
+}
+
+/** 未知取值只可能来自契约漂移：照实显示原文，不猜一个像样的中文（少说胜于误导）。 */
+export function evidenceTypeLabel(type: DisputeEvidenceType): string {
+  return EVIDENCE_TYPE_LABEL[type] ?? type
+}
+
 // ---------------------------------------------------------------------------
 // Record 索引在 noUncheckedIndexedAccess 下是 V | undefined：统一经函数回退，
 // 调用方不写 `?? 兜底`（契约枚举全覆盖的 Record 理论上不会 miss，回退只兜类型系统）。
 // ---------------------------------------------------------------------------
+
+/**
+ * 未知枚举值的回退（#465 审查发现）：契约是 `z.enum`，未知值只可能来自契约漂移
+ * （服务端比前端新）。若回退到某个既有枚举值，`BOGUS` 会被渲染成「待处理」，
+ * 处理人会当成真实状态照常操作；统一显示「未知」并标灰，宁可少说也不误导。
+ */
+const UNKNOWN_META: { label: string; variant: BadgeVariant } = {
+  label: '未知',
+  variant: 'secondary',
+}
 
 export function listingStatusMeta(status: ListingStatus) {
   return LISTING_STATUS_META[status] ?? LISTING_STATUS_META.OFFLINE
@@ -235,13 +275,13 @@ export function moderationProviderMeta(provider: AdminModerationProvider) {
 }
 
 export function disputeStatusMeta(status: DisputeStatus) {
-  return DISPUTE_STATUS_META[status] ?? DISPUTE_STATUS_META.PENDING
+  return DISPUTE_STATUS_META[status] ?? UNKNOWN_META
 }
 
 export function disputeResolutionMeta(resolution: DisputeResolution) {
-  return DISPUTE_RESOLUTION_META[resolution] ?? DISPUTE_RESOLUTION_META.INCONCLUSIVE
+  return DISPUTE_RESOLUTION_META[resolution] ?? UNKNOWN_META
 }
 
 export function disputeTypeLabel(type: DisputeType): string {
-  return (DISPUTE_TYPE_META[type] ?? DISPUTE_TYPE_META.OTHER).label
+  return (DISPUTE_TYPE_META[type] ?? UNKNOWN_META).label
 }

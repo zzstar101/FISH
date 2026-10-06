@@ -18,6 +18,7 @@ import { adminLoadOutcome } from './admin-messages'
 import { useAdminListings } from './admin-queries'
 import {
   cursorSearch,
+  dayParam,
   dayRangeSearch,
   optionalSearch,
   trimmedSearch,
@@ -178,12 +179,8 @@ export function parseListingsSearch(search: Record<string, unknown>): ListingsSe
   const q = trimmedSearch(search.q)
   const sellerId =
     typeof search.sellerId === 'string' && search.sellerId.length > 0 ? search.sellerId : undefined
-  const from =
-    typeof search.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.from)
-      ? search.from
-      : undefined
-  const to =
-    typeof search.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.to) ? search.to : undefined
+  const from = dayParam(search.from)
+  const to = dayParam(search.to)
   const cursor = cursorSearch(search.cursor)
   return {
     ...(q !== undefined ? { q } : {}),

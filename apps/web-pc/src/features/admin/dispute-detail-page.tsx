@@ -19,20 +19,12 @@ import {
   disputeResolutionMeta,
   disputeStatusMeta,
   disputeTypeLabel,
+  evidenceTypeLabel,
   formatAdminDateTime,
   transactionStatusMeta,
 } from './admin-view'
 import { DisputeResolveDialog } from './dispute-resolve-dialog'
 import type { DisputesSearch } from './disputes-page'
-
-const EVIDENCE_TYPE_LABEL: Record<string, string> = {
-  // 不是「商品卡片」：服务端存的是消息正文，而 LISTING 消息的正文就是商品公开 id
-  //（`apps/api/src/modules/messages/service.ts`），所以这里只能显示 `lst_…` 引用。
-  LISTING: '商品引用',
-  MEDIA: '图片/语音',
-  SYSTEM: '系统消息',
-  TEXT: '文字',
-}
 
 /**
  * 处理按钮与冲突横幅的显示条件。抽成纯函数是为了让「409 之后再不可提交」这条
@@ -304,9 +296,7 @@ export function DisputeDetailView({
             {detail.evidence.map((evidence) => (
               <li className="rounded-xl bg-surface-2 p-3" key={evidence.message.id}>
                 <p className="flex flex-wrap items-center gap-2 text-ink-3 text-xs">
-                  <Badge variant="secondary">
-                    {EVIDENCE_TYPE_LABEL[evidence.message.type] ?? evidence.message.type}
-                  </Badge>
+                  <Badge variant="secondary">{evidenceTypeLabel(evidence.message.type)}</Badge>
                   <span>
                     {evidence.message.senderNickname ?? '系统'} ·{' '}
                     {formatAdminDateTime(evidence.message.createdAt)}

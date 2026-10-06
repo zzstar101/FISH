@@ -16,6 +16,7 @@ import { adminLoadOutcome } from './admin-messages'
 import { useAdminDisputes } from './admin-queries'
 import {
   cursorSearch,
+  dayParam,
   dayRangeSearch,
   optionalSearch,
   trimmedSearch,
@@ -167,10 +168,8 @@ export function parseDisputesSearch(search: Record<string, unknown>): DisputesSe
   const status = optionalSearch(DisputeStatusSchema, search.status)
   const type = optionalSearch(DisputeTypeSchema, search.type)
   const q = trimmedSearch(search.q)
-  const day = (value: unknown): string | undefined =>
-    typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined
-  const from = day(search.from)
-  const to = day(search.to)
+  const from = dayParam(search.from)
+  const to = dayParam(search.to)
   const cursor = cursorSearch(search.cursor)
   return {
     ...(status !== undefined ? { status } : {}),

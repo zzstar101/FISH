@@ -11,7 +11,13 @@ import { useNavigate } from '@tanstack/react-router'
 import { DateRangeFilter, FilterChips, ForbiddenInline, LoadMore } from './admin-filter'
 import { adminLoadOutcome } from './admin-messages'
 import { useAdminAuditLogs } from './admin-queries'
-import { cursorSearch, dayRangeSearch, optionalSearch, withoutCursor } from './admin-search'
+import {
+  cursorSearch,
+  dayParam,
+  dayRangeSearch,
+  optionalSearch,
+  withoutCursor,
+} from './admin-search'
 import { AUDIT_TARGET_TYPE_LABEL, auditActionLabel, formatAdminDateTime } from './admin-view'
 
 export type AuditSearch = {
@@ -169,12 +175,8 @@ export function parseAuditSearch(search: Record<string, unknown>): AuditSearch {
   const targetType = optionalSearch(AdminAuditTargetTypeSchema, search.targetType)
   const idParam = (value: unknown): string | undefined =>
     typeof value === 'string' && value.length > 0 ? value : undefined
-  const from =
-    typeof search.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.from)
-      ? search.from
-      : undefined
-  const to =
-    typeof search.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.to) ? search.to : undefined
+  const from = dayParam(search.from)
+  const to = dayParam(search.to)
   const cursor = cursorSearch(search.cursor)
   return {
     ...(idParam(search.actorId) !== undefined ? { actorId: idParam(search.actorId) } : {}),

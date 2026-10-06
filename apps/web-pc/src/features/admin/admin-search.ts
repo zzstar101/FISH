@@ -36,6 +36,17 @@ export function cursorSearch(value: unknown): string | undefined {
 }
 
 /**
+ * URL 日期参数（`<input type="date">` 的 `YYYY-MM-DD`）→ 原样回传，形状不对就丢弃。
+ *
+ * 与 `dayRangeSearch` 的分工：这个只把 URL 参数收敛成「看起来是日期」，页面拿到后原样写回
+ * 输入框、提交时才经 `dayRangeSearch` 换算成服务端时间区间（那里才做真实日期校验）。
+ * #465 审查发现：各列表页的 `parse*Search` 里内联抄了同一段正则，抽到这里，全仓只此一份。
+ */
+export function dayParam(value: unknown): string | undefined {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined
+}
+
+/**
  * 日期输入（`<input type="date">` 的 `YYYY-MM-DD`）→ 服务端时间段。
  *
  * 契约口径是**左闭右开**（`>= createdFrom` 且 `< createdTo`）：`createdTo` 直接传用户选的

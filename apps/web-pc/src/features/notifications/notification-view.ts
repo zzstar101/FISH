@@ -102,7 +102,7 @@ export function notificationCopy(item: NotificationDto): {
       return {
         emoji: '⚖️',
         title: '交易争议有更新',
-        description: disputeEventCopy(item.payload.disputeEvent, item.payload.resolution),
+        description: disputeEventCopy(item.payload.disputeEvent),
       }
   }
 }
@@ -111,37 +111,19 @@ export function notificationCopy(item: NotificationDto): {
  * 争议通知一句话。`disputeEvent` 缺席（历史行 / 脏 payload）时退回不含事件信息的通用句，
  * 与 `txEventCopy` 同一姿态——不编一个可能不对的进展。
  *
- * `RESOLVED` **必须带上结论**：处理结果只写进 `disputes` 表和管理端页面，普通用户
- * 看不到管理端，通知是当事人目前唯一的可见出口（票面「结果可见范围」）。措辞对双方
- * 都成立（发件人不区分角色），所以不写「你的反馈」这类有视角的说法。
+ * 这里刻意**不**带出处理结论（#465 审查：结论文案属 PR C 的用户侧票面，本 PR 只交付管理端；
+ * 在后台票面里替另一张票定义用户可见措辞，等于把验收边界挪到本 PR 之外）。
  */
-function disputeEventCopy(
-  event: NotificationDto['payload']['disputeEvent'],
-  resolution: NotificationDto['payload']['resolution'],
-): string {
+function disputeEventCopy(event: NotificationDto['payload']['disputeEvent']): string {
   switch (event) {
     case 'FILED':
       return '对方就这笔交易发起了争议。'
     case 'WITHDRAWN':
       return '对方撤回了这笔交易的争议。'
     case 'RESOLVED':
-      return `平台已处理这笔交易的争议：${resolutionCopy(resolution)}，该结论为最终结论。`
+      return '争议已处理，该结论为最终结论。'
     default:
       return '这笔交易的争议状态有变化。'
-  }
-}
-
-/** 结论一句话。脏 payload（结论字段缺席或非枚举值）退回中性说法，不猜结论。 */
-function resolutionCopy(resolution: NotificationDto['payload']['resolution']): string {
-  switch (resolution) {
-    case 'UPHELD':
-      return '认定反馈成立'
-    case 'DISMISSED':
-      return '认定反馈不成立'
-    case 'INCONCLUSIVE':
-      return '无法认定责任'
-    default:
-      return '结论已记录'
   }
 }
 
