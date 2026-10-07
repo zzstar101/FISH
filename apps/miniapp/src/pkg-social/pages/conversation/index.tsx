@@ -1036,6 +1036,17 @@ export default function Conversation() {
           ),
         )
         if (dropReply) void Taro.showToast({ title: REPLY_DROPPED_TIP, icon: 'none' })
+        if (code === 'CONVERSATION_UNAVAILABLE') {
+          // 拉黑守卫（#466）：服务端中性文案直出（与媒体路径的 error.message 直显同口径），
+          // 不暴露「谁拉黑了谁」；失败气泡保留可重试——解除拉黑后重试即恢复。
+          void Taro.showToast({
+            title:
+              error instanceof Error && error.message !== ''
+                ? error.message
+                : '会话当前不可用，暂时无法发送消息',
+            icon: 'none',
+          })
+        }
       })
       .finally(() => {
         deferredRef.current = settleSend(deferredRef.current, current)

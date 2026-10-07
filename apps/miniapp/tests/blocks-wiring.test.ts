@@ -94,3 +94,36 @@ describe('他人主页拉黑入口：接线', () => {
     expect(code).toContain('登录已失效，请重新登录')
   })
 })
+
+describe('会话域中性提示（#466 验收：报错不暴露对方黑名单）', () => {
+  test('建会话描述函数带 CONVERSATION_UNAVAILABLE 分支，且共用同一中性文案常量', async () => {
+    const code = await Bun.file(new URL('../src/features/chat/api.ts', import.meta.url)).text()
+
+    expect(code).toContain("CONVERSATION_UNAVAILABLE_TEXT = '会话当前不可用'")
+    expect(code).toMatch(
+      /describeCreateConversationFailure[\s\S]*?code === 'CONVERSATION_UNAVAILABLE'/,
+    )
+  })
+
+  test('聊一聊 / 想要匹配入口把该码映射到中性文案，而不是「请重试」', async () => {
+    const listingDetail = await Bun.file(
+      new URL('../src/pkg-browse/pages/listing-detail/index.tsx', import.meta.url),
+    ).text()
+    expect(listingDetail).toContain('CONVERSATION_UNAVAILABLE_TEXT')
+
+    const match = await Bun.file(
+      new URL('../src/pkg-browse/pages/match/index.tsx', import.meta.url),
+    ).text()
+    expect(match).toContain('CONVERSATION_UNAVAILABLE_TEXT')
+    expect(match).toContain("code === 'CONVERSATION_UNAVAILABLE'")
+  })
+
+  test('会话页文本发送失败遇到该码：中性 toast 直出，失败气泡保留可重试', async () => {
+    const code = await Bun.file(
+      new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url),
+    ).text()
+
+    expect(code).toMatch(/code === 'CONVERSATION_UNAVAILABLE'/)
+    expect(code).toContain('会话当前不可用，暂时无法发送消息')
+  })
+})

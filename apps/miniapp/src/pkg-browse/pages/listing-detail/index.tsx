@@ -34,7 +34,11 @@ import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
-import { createConversation, describeCreateConversationFailure } from '@/features/chat/api'
+import {
+  CONVERSATION_UNAVAILABLE_TEXT,
+  createConversation,
+  describeCreateConversationFailure,
+} from '@/features/chat/api'
 import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
@@ -936,7 +940,12 @@ export default function ListingDetail() {
           return
         }
         void Taro.showToast({
-          title: isUnauthenticatedError(error) ? '请先登录后再聊一聊' : '会话发起失败，请重试',
+          title: isUnauthenticatedError(error)
+            ? '请先登录后再聊一聊'
+            : isApiError(error) && error.code === 'CONVERSATION_UNAVAILABLE'
+              ? // 拉黑守卫（#466）中性文案：不暴露「谁拉黑了谁」
+                CONVERSATION_UNAVAILABLE_TEXT
+              : '会话发起失败，请重试',
           icon: 'none',
         })
       })
