@@ -7,6 +7,7 @@ import { Image, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import { useAuth } from '@/features/auth/store'
 import { createTransactionReview } from '@/features/transaction/api'
 import {
   appendWithinLimit,
@@ -38,7 +39,7 @@ import './index.scss'
  * 的孤儿回收兜底，与 PC 端 abort 的语义一致。
  */
 
-/** 评价的三档（同 `components/order-list` 的订单卡文案） */
+/** 评价的三档（#195 冻结口径：好评 / 中评 / 差评，不是 1–5 星）；订单卡的内联表单已随 #475 下沉到本组件 */
 const REVIEW_TIERS: { key: TransactionReviewRating; label: string }[] = [
   { key: 'POSITIVE', label: '好评' },
   { key: 'NEUTRAL', label: '中评' },
@@ -68,6 +69,11 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
   const imagesRef = useRef<ReviewImageSlot[]>([])
   /** 卸载哨兵：关层后在途上传的迟到结果不再发后续请求 */
   const aliveRef = useRef(true)
+  /** 上传链所属的账号（第一次选图时铸定）：每一步发请求前都要求身份未变（#170/#208 口径） */
+  const { user } = useAuth()
+  const ownerRef = useRef<string | null>(null)
+  /** 原生选图面板的在飞哨：连点加图位不并发第二扇 */
+  const pickingRef = useRef(false)
   useEffect(() => {
     return () => {
       aliveRef.current = false
@@ -79,9 +85,11 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
     setImages(next)
   }
 
-  /** 槽位还在表里且仍是「上传中」才算数 —— 移除/重试之后的迟到结果一律丢弃 */
+  /** 槽位还在表里、身份未变、仍是「上传中」才算数 —— 移除/换号后的迟到结果一律丢弃 */
   const slotActive = (id: string) =>
-    aliveRef.current && imagesRef.current.some((slot) => slot.id === id)
+    aliveRef.current &&
+    (ownerRef.current === null || user?.id === ownerRef.current) &&
+    imagesRef.current.some((slot) => slot.id === id)
 
   const runUpload = (id: string, photo: ReviewPhoto) => {
     return uploadReviewImage(transactionId, photo, () => slotActive(id))
@@ -115,6 +123,9 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
   const addImages = () => {
     const room = MAX_REVIEW_IMAGES - imagesRef.current.length
     if (room <= 0 || busy) return
+    if (pickingRef.current) return // 原生选图面板还开着：连点不并发第二扇
+    pickingRef.current = true
+    if (ownerRef.current === null) ownerRef.current = user?.id ?? null
     void pickPhotos(room)
       .then(({ photos, rejected }) => {
         if (rejected !== null) void Taro.showToast({ title: rejected, icon: 'none' })
@@ -141,6 +152,9 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
           title: caught instanceof Error ? caught.message : '无法选择图片，请重试',
           icon: 'none',
         })
+      })
+      .finally(() => {
+        pickingRef.current = false
       })
   }
 

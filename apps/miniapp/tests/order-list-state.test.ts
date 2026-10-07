@@ -326,12 +326,7 @@ describe('submitReview —— 提交评价（#475 起在 components/review-dialo
   test('载荷：rating 取档位，空评语省略 body 字段；配图只收 uploaded 的键', async () => {
     const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
     expect(body).toContain('const trimmed = body.trim()')
-    expectAfter(
-      body,
-      'const trimmed = body.trim()',
-      'createTransactionReview(',
-      '先 trim 再组载荷',
-    )
+    expectAfter(body, 'const trimmed = body.trim()', 'createTransactionReview(', '先 trim 再组载荷')
     expect(body).toContain('rating: tier')
     expect(body).toContain("...(trimmed === '' ? {} : { body: trimmed })")
     expect(body).not.toContain("body: ''")

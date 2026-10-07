@@ -33,10 +33,11 @@ type Props = {
   /** 评价弹层副标题（这笔交易的商品标题） */
   listingTitle: string
   /**
-   * 重读信号：页面的 `syncOnShow` 刷到更新的交易快照（`updatedAt`）时值会变 ——
-   * 离页期间对方可能刚评了，返回本页时随之重读。组件内自己的重读用 `refreshTick`。
+   * 重读信号：页面的 `useDidShow` 每次真实返回自增（show 代次）—— 离页期间
+   * 对方可能刚评了（评价落库不 touch 交易快照，没有别的信号可用）。
+   * 组件内自己的重读（重试 / 提交成功后）用 `refreshTick`。
    */
-  reloadSignal?: string
+  reloadSignal?: number
 }
 
 export default function MeetupReviewBlock({
