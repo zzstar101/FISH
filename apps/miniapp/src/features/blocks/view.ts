@@ -9,12 +9,6 @@
  * 静默为 false，形状判别是这里的唯一可靠依据。
  */
 
-/** 读状态的归类结果：`failed` 带行内文案，页面不自己拼错误句。 */
-export type BlockReadOutcome =
-  | { kind: 'loaded'; blocked: boolean }
-  | { kind: 'notFound' }
-  | { kind: 'failed'; message: string }
-
 function apiErrorShapeOf(error: unknown): { code?: string; status?: number } {
   if (typeof error !== 'object' || error === null) return {}
   const shaped = error as { name?: unknown; code?: unknown; status?: unknown }
@@ -37,21 +31,11 @@ export function describeBlockFailure(error: unknown): string {
 }
 
 /**
- * 读拉黑状态的失败归类：404 `USER_NOT_FOUND` 单独成 `notFound`（降级「不可拉黑」），
- * 与网络 / 服务端失败分开——后者保留重试语义。两种都不能让入口假装成「未拉黑可点」。
- */
-export function classifyBlockRead(error: unknown): BlockReadOutcome {
-  const { code, status } = apiErrorShapeOf(error)
-  if (status === 404 && code === 'USER_NOT_FOUND') return { kind: 'notFound' }
-  return { kind: 'failed', message: describeBlockFailure(error) }
-}
-
-/**
  * 他人主页拉黑入口的 UI 状态推导（对齐 PC `blockButtonState` 的口径）。
  *
- * 与关注钮同一边界：**读到状态之前不渲染**（`visible: false`），读失败 / 目标不存在
- * 也不渲染 —— 绝不猜一个状态画上去。渲染后：blocked=true 是「解除拉黑」（恢复性动作，
- * 点击直接执行）；false 是「拉黑该用户」（点击先过确认弹窗）。
+ * 与关注钮同一边界：**读到状态之前不渲染**（`visible: false`），读失败也不渲染
+ * （页面 catch 里保持 `read: null`，不猜一个状态画上去）。渲染后：blocked=true 是
+ * 「解除拉黑」（恢复性动作，点击直接执行）；false 是「拉黑该用户」（点击先过确认弹窗）。
  */
 export type BlockEntryView = {
   visible: boolean
@@ -61,10 +45,10 @@ export type BlockEntryView = {
 }
 
 export function blockEntryView(input: {
-  read: BlockReadOutcome | null
+  read: { blocked: boolean } | null
   pending: boolean
 }): BlockEntryView {
-  if (input.read === null || input.read.kind !== 'loaded') {
+  if (input.read === null) {
     return { visible: false, label: '拉黑该用户', busy: false, blocked: false }
   }
   if (input.pending) {

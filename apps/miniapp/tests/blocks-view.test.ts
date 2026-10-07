@@ -6,7 +6,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   blockConfirmModal,
   blockEntryView,
-  classifyBlockRead,
   describeBlockFailure,
 } from '../src/features/blocks/view'
 
@@ -33,52 +32,32 @@ describe('describeBlockFailure（域内错误码 → 行内文案）', () => {
   })
 })
 
-describe('classifyBlockRead（读状态失败归类）', () => {
-  test('404 USER_NOT_FOUND 单独成 notFound（降级「不可拉黑」，保留失败重试的语义分野）', () => {
-    expect(classifyBlockRead(apiErrorLike('USER_NOT_FOUND', 404))).toEqual({ kind: 'notFound' })
-  })
-
-  test('其余失败带行内文案，不裸抛', () => {
-    const failed = classifyBlockRead(new Error('网络断了'))
-    expect(failed).toEqual({ kind: 'failed', message: '操作失败，请重试' })
-  })
-})
-
 describe('blockEntryView（他人主页入口 UI 状态）', () => {
-  test('读到状态之前 / 读失败 / 目标不存在：不渲染（绝不猜一个状态画上去）', () => {
+  test('读到状态之前：不渲染（绝不猜一个状态画上去；读失败由页面保持 null）', () => {
     expect(blockEntryView({ read: null, pending: false }).visible).toBe(false)
-    expect(blockEntryView({ read: { kind: 'notFound' }, pending: false }).visible).toBe(false)
-    expect(blockEntryView({ read: { kind: 'failed', message: 'x' }, pending: false }).visible).toBe(
-      false,
-    )
   })
 
   test('未拉黑 → 「拉黑该用户」；已拉黑 → 「解除拉黑」', () => {
-    const notBlocked = blockEntryView({
-      read: { kind: 'loaded', blocked: false },
-      pending: false,
-    })
+    const notBlocked = blockEntryView({ read: { blocked: false }, pending: false })
     expect(notBlocked).toEqual({
       visible: true,
       label: '拉黑该用户',
       busy: false,
       blocked: false,
     })
-    const blocked = blockEntryView({ read: { kind: 'loaded', blocked: true }, pending: false })
+    const blocked = blockEntryView({ read: { blocked: true }, pending: false })
     expect(blocked.label).toBe('解除拉黑')
     expect(blocked.blocked).toBe(true)
   })
 
   test('写入中：busy + 按当前状态给「拉黑中…/解除中…」，不翻转语义', () => {
-    expect(blockEntryView({ read: { kind: 'loaded', blocked: false }, pending: true })).toEqual({
+    expect(blockEntryView({ read: { blocked: false }, pending: true })).toEqual({
       visible: true,
       label: '拉黑中…',
       busy: true,
       blocked: false,
     })
-    expect(blockEntryView({ read: { kind: 'loaded', blocked: true }, pending: true }).label).toBe(
-      '解除中…',
-    )
+    expect(blockEntryView({ read: { blocked: true }, pending: true }).label).toBe('解除中…')
   })
 })
 

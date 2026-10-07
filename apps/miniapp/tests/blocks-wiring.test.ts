@@ -58,3 +58,39 @@ describe('黑名单管理页：接线', () => {
     expect(settings).toContain('黑名单')
   })
 })
+
+describe('他人主页拉黑入口：接线', () => {
+  test('走 blocks api 模块；拉黑过确认弹窗、解除直接执行；成功以服务端为准回填', async () => {
+    const code = await Bun.file(
+      new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url),
+    ).text()
+
+    expect(code).toContain("from '@/features/blocks/api'")
+    expect(code).toContain('fetchBlockState')
+    expect(code).toContain('blockConfirmModal')
+    // 拉黑 = true（确认后），解除 = false（恢复性动作直接执行）
+    expect(code).toContain('runBlockWrite(key, true)')
+    expect(code).toContain('runBlockWrite(key, false)')
+    // 服务端真值回填，不本地翻转
+    expect(code).toContain('setBlockRead({ blocked: state.blocked })')
+  })
+
+  test('读状态之前不渲染、读失败保持隐藏；epoch 守卫与关注钮同一把钥匙', async () => {
+    const code = await Bun.file(
+      new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url),
+    ).text()
+
+    expect(code).toContain('blockEntryView({ read: blockRead, pending: blockBusy })')
+    expect(code).toContain('setBlockRead(null)')
+    expect(code).toContain('blockKeyRef.current !== key')
+  })
+
+  test('写失败给域内稳定文案，401 给登录文案（不裸抛）', async () => {
+    const code = await Bun.file(
+      new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url),
+    ).text()
+
+    expect(code).toContain('describeBlockFailure(error)')
+    expect(code).toContain('登录已失效，请重新登录')
+  })
+})
