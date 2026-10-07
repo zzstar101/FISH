@@ -19,6 +19,7 @@ import {
 } from '@/features/transaction/api'
 import { qrDataUrl } from '@/features/transaction/qr'
 import { isApiError } from '@/lib/request'
+import MeetupReviewBlock from './review-block'
 import {
   canAcquire,
   classifyConfirmFailure,
@@ -930,6 +931,16 @@ export default function TransactionMeetup() {
               <Text className="meetup__dead num">
                 本单交易码 <Text className="meetup__dead-code">已失效</Text>
               </Text>
+
+              {/* 交易评价（#195 两方读路径 + #475 写入口）：完成态的对账块。
+                  `reloadSignal` 用交易的 updatedAt —— 返回本页时 syncOnShow 刷到更新的
+                  快照（离页期间对方可能刚评了），本块随之重读。 */}
+              <MeetupReviewBlock
+                transactionId={tx.id}
+                myRole={tx.role}
+                listingTitle={tx.listing.title}
+                reloadSignal={tx.updatedAt}
+              />
             </View>
 
             {/* 吸底栏在震屏包裹层**之外**：见上面关于 `position: fixed` 包含块的说明 */}

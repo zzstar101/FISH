@@ -387,6 +387,23 @@ export default function MyComments() {
           <View className="cmt__bar" />
           <View className="cmt__fmain">
             {item.text !== '' ? <Text className="cmt__ctext">{item.text}</Text> : null}
+            {/*
+              评价配图（#475）：签名 URL 直渲，点按进 previewImage 看大图。
+              商品留言没有图片字段（恒为空数组），整块不渲染。
+            */}
+            {item.images.length > 0 ? (
+              <View className="cmt__imgs">
+                {item.images.map((url) => (
+                  <Image
+                    key={url}
+                    className="cmt__img"
+                    src={url}
+                    mode="aspectFill"
+                    onClick={() => void Taro.previewImage({ urls: item.images, current: url })}
+                  />
+                ))}
+              </View>
+            ) : null}
             <View className="cmt__cmeta">
               <Text className={`cmt__kind${trade ? ' cmt__kind--trade' : ''}`}>
                 {kindLabel(item.kind)}

@@ -49,11 +49,21 @@ const { nextIdentityState } = await import('../src/features/transaction/useOrder
  *     这是**正常**分支，弹了用户就再也进不去评价卡）；
  *   · 没选档位静默返回（按钮只是降了透明度，点下去什么都不发生）；
  *   · 空评语也给 `body: ''`（契约里「只打分」是省略字段，空串会被 422 拒）。
+ *
+ * #475 起提交评价（含配图上传编排）下沉到共享的 `components/review-dialog`
+ * （订单卡与面交页完成态共用），这条路径的切片改读弹层组件源码。
  * ------------------------------------------------------------------ */
 
 /** 源码读成字符串；路径与 `index.tsx` 同侧的组件目录 */
 async function orderListSource(): Promise<string> {
   return await Bun.file(new URL('../src/components/order-list/index.tsx', import.meta.url)).text()
+}
+
+/** 评价弹层（`components/review-dialog`，#475 起订单卡与面交页共用）的源码 */
+async function reviewDialogSource(): Promise<string> {
+  return await Bun.file(
+    new URL('../src/components/review-dialog/index.tsx', import.meta.url),
+  ).text()
 }
 
 /** 去掉注释后的源码：断言必须看**代码**（源码里正逐条解释这些机制，含注释即可蒙混过关） */
@@ -113,12 +123,26 @@ function mockEnabledDefinition(code: string): string {
 
 /** 取 `from` 到其后第一个 `to` 之间的**代码**（两端都不含），并压平空白 */
 async function sliceFlat(from: string, to: string): Promise<string> {
-  const text = flat(codeOnly(await orderListSource()))
+  return await sliceFlatFrom(orderListSource, from, to, '订单卡')
+}
+
+/** 同 `sliceFlat`，但源码与组件名可换（评价弹层用） */
+async function sliceFlatFrom(
+  reader: () => Promise<string>,
+  from: string,
+  to: string,
+  what: string,
+): Promise<string> {
+  const text = flat(codeOnly(await reader()))
   const start = text.indexOf(flat(from))
-  expect(start, `订单卡源码里缺少片段：${from}`).toBeGreaterThanOrEqual(0)
+  expect(start, `${what}源码里缺少片段：${from}`).toBeGreaterThanOrEqual(0)
   const end = text.indexOf(flat(to), start + from.length)
-  expect(end, `订单卡源码里缺少片段：${to}`).toBeGreaterThan(start)
+  expect(end, `${what}源码里缺少片段：${to}`).toBeGreaterThan(start)
   return text.slice(start + flat(from).length, end)
+}
+
+async function sliceDialog(from: string, to: string): Promise<string> {
+  return await sliceFlatFrom(reviewDialogSource, from, to, '评价弹层')
 }
 
 /** 断言 `later` 出现在 `earlier` **之后**（只钉「子串存在」的话，把落地语句提到守卫前仍会全绿） */
@@ -133,8 +157,9 @@ function expectAfter(body: string, earlier: string, later: string, why: string):
 
 const CANCEL = 'const cancelOrder = (item: OrderCardView) => {'
 const OPEN_REVIEW = 'const openReview = (item: OrderCardView) => {'
-const SUBMIT_REVIEW = 'const submitReview = () => {'
 const BACK_TO_TOP = 'const backToTop = () => {'
+const DIALOG_SUBMIT = 'const submit = () => {'
+const DIALOG_CLOSE = 'const close = () => {'
 
 describe('nextIdentityState —— 订单列表身份结转规则', () => {
   test('冷启动首帧（还没有身份、手里也没有数据）：idle —— 不加载，也没有东西要清', () => {
@@ -213,8 +238,8 @@ describe('cancelOrder —— 取消交易（订单卡写路径）', () => {
 
 describe('openReview —— 读评价边（订单卡写路径）', () => {
   test('先读边：进函数先挡连点，再 setReviewCheckingId，finally 一定解锁', async () => {
-    const body = await sliceFlat(OPEN_REVIEW, SUBMIT_REVIEW)
-    expect(body).toContain('if (reviewCheckingId !== null || reviewBusy) return')
+    const body = await sliceFlat(OPEN_REVIEW, BACK_TO_TOP)
+    expect(body).toContain('if (reviewCheckingId !== null) return')
     expectAfter(
       body,
       'setReviewCheckingId(item.id)',
@@ -229,8 +254,8 @@ describe('openReview —— 读评价边（订单卡写路径）', () => {
     )
   })
 
-  test('404 REVIEW_NOT_FOUND 是正常分支：清档位与评语、开弹层、直接 return（不弹错误 toast）', async () => {
-    const body = await sliceFlat(OPEN_REVIEW, SUBMIT_REVIEW)
+  test('404 REVIEW_NOT_FOUND 是正常分支：开弹层、直接 return（不弹错误 toast）', async () => {
+    const body = await sliceFlat(OPEN_REVIEW, BACK_TO_TOP)
     expect(body).toContain("isApiError(caught) && caught.code === 'REVIEW_NOT_FOUND'")
     const branchAt = body.indexOf("caught.code === 'REVIEW_NOT_FOUND'")
     const branchEnd = body.indexOf('return', branchAt)
@@ -238,19 +263,25 @@ describe('openReview —— 读评价边（订单卡写路径）', () => {
       branchAt,
     )
     const branch = body.slice(branchAt, branchEnd)
-    expectAfter(
-      branch,
-      'setReviewTier(null)',
-      "setReviewBody('')",
-      '开弹层前先清掉上一次的档位与评语',
-    )
-    expectAfter(branch, "setReviewBody('')", 'setReviewTarget(item)', '清完再开弹层')
     // 弹层目标只能是**这一笔**交易（写错成 items[0] 之类就是把评价挂到别的订单上）
     expect(branch).toContain('setReviewTarget(item)')
+    // 表单状态（档位 / 评语 / 配图）由 ReviewDialog 挂载时自持，这里不再有清场语句
+    expect(body).not.toContain('setReviewTier')
+    expect(body).not.toContain('setReviewBody')
+  })
+
+  test('弹层挂载：评价目标与标题来自同一张卡，提交成功才标记并收起', async () => {
+    const code = flat(codeOnly(await orderListSource()))
+    const at = code.indexOf('<ReviewDialog')
+    expect(at, '订单卡应挂载共享评价弹层').toBeGreaterThanOrEqual(0)
+    const jsx = code.slice(at, code.indexOf('/>', at))
+    expect(jsx).toContain('transactionId={reviewTarget.id}')
+    expect(jsx).toContain('listingTitle={reviewTarget.listing.title}')
+    expectAfter(jsx, 'setReviewedIds(', 'setReviewTarget(null)', '标记完再收起弹层')
   })
 
   test('已评过（200）不弹层：只把这张卡转「已评价」并说明', async () => {
-    const body = await sliceFlat(OPEN_REVIEW, SUBMIT_REVIEW)
+    const body = await sliceFlat(OPEN_REVIEW, BACK_TO_TOP)
     expectAfter(
       body,
       'fetchMyTransactionReview(item.id)',
@@ -272,47 +303,55 @@ describe('openReview —— 读评价边（订单卡写路径）', () => {
   })
 })
 
-describe('submitReview —— 提交评价（订单卡写路径）', () => {
+describe('submitReview —— 提交评价（#475 起在 components/review-dialog）', () => {
   test('没选档位不静默：先 toast 再 return，且这一步不发请求', async () => {
-    const body = await sliceFlat(SUBMIT_REVIEW, BACK_TO_TOP)
-    expect(body).toContain('if (reviewTarget === null || reviewBusy) return')
-    const tierAt = body.indexOf('if (reviewTier === null) {')
+    const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
+    expect(body).toContain('if (busy) return')
+    const tierAt = body.indexOf('if (tier === null) {')
     expect(tierAt, '没选档位必须显式判断').toBeGreaterThanOrEqual(0)
-    const guard = body.slice(tierAt, body.indexOf('setReviewBusy(true)', tierAt))
+    const guard = body.slice(tierAt, body.indexOf('setBusy(true)', tierAt))
     expect(guard).toContain("title: '请先选好评 / 中评 / 差评'")
     expect(guard).toContain('return')
     expect(guard).not.toContain('createTransactionReview')
   })
 
-  test('载荷：rating 取档位，评语 trim 后为空就省略 body 字段（契约的正常形态）', async () => {
-    const body = await sliceFlat(SUBMIT_REVIEW, BACK_TO_TOP)
-    expect(body).toContain('const trimmed = reviewBody.trim()')
+  test('闸门：有在途 / 失败的配图时不提交（不许静默丢图），在 setBusy 之前', async () => {
+    const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
+    const blockedAt = body.indexOf('reviewSubmitBlockedReason(imagesRef.current)')
+    expect(blockedAt, '提交前必须过配图闸门').toBeGreaterThanOrEqual(0)
+    expect(blockedAt).toBeLessThan(body.indexOf('setBusy(true)'))
+    expect(body).toContain("void Taro.showToast({ title: blocked, icon: 'none' })")
+  })
+
+  test('载荷：rating 取档位，空评语省略 body 字段；配图只收 uploaded 的键', async () => {
+    const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
+    expect(body).toContain('const trimmed = body.trim()')
     expectAfter(
       body,
-      'const trimmed = reviewBody.trim()',
+      'const trimmed = body.trim()',
       'createTransactionReview(',
       '先 trim 再组载荷',
     )
-    expect(body).toContain('rating: reviewTier')
+    expect(body).toContain('rating: tier')
     expect(body).toContain("...(trimmed === '' ? {} : { body: trimmed })")
     expect(body).not.toContain("body: ''")
+    expect(body).toContain('const imageObjectKeys = uploadedObjectKeys(imagesRef.current)')
+    expect(body).toContain('...(imageObjectKeys.length > 0 ? { imageObjectKeys } : {})')
   })
 
-  test('提交成功才关弹层：toast + 标记已评价 + setReviewTarget(null)，finally 解锁', async () => {
-    const body = await sliceFlat(SUBMIT_REVIEW, BACK_TO_TOP)
+  test('提交成功才关弹层：toast + onSubmitted；失败不关（评语不能因为一次抖动就丢）', async () => {
+    const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
     const thenAt = body.indexOf('.then(() => {')
     const catchAt = body.indexOf('.catch((caught: unknown) => {', thenAt)
     expect(catchAt, '提交评价必须有 catch 分支').toBeGreaterThan(thenAt)
     const success = body.slice(thenAt, catchAt)
-    expectAfter(success, 'setReviewedIds(', 'setReviewTarget(null)', '标记完再关弹层')
     expect(success).toContain("title: '评价已提交'")
-    expectAfter(body, 'setReviewTarget(null)', 'setReviewBusy(false)', '请求收尾必须解锁')
-    // 失败不关弹层：用户写的评语不能因为一次网络抖动就丢
-    const catchAt2 = body.indexOf('.catch((caught: unknown) => {', thenAt)
-    const finallyAt = body.indexOf('.finally(', catchAt2)
-    const failure = body.slice(catchAt2, finallyAt)
+    expect(success).toContain('onSubmitted()')
+    const finallyAt = body.indexOf('.finally(', catchAt)
+    const failure = body.slice(catchAt, finallyAt)
     expect(failure).toContain('Taro.showToast(')
-    expect(failure).not.toContain('setReviewTarget(null)')
+    expect(failure).not.toContain('onSubmitted()')
+    expect(body.slice(finallyAt)).toContain('setBusy(false)')
   })
 })
 
@@ -447,7 +486,7 @@ describe('演示来源的卡 —— 只说明，不跳真实接口页（#304）'
   test('取消交易 / 读评价边：假 id 不打真实写接口', async () => {
     const cancel = await sliceFlat(CANCEL, OPEN_REVIEW)
     expectAfter(cancel, 'if (blockIfDemo(item)) return', 'Taro.showModal(', '演示来源不打取消接口')
-    const review = await sliceFlat(OPEN_REVIEW, SUBMIT_REVIEW)
+    const review = await sliceFlat(OPEN_REVIEW, BACK_TO_TOP)
     expectAfter(
       review,
       'if (blockIfDemo(item)) return',
