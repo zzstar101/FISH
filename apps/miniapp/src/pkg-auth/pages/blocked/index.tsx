@@ -29,6 +29,7 @@ import { useAuth } from '@/features/auth/store'
 import { fetchMyBlocks, setBlock } from '@/features/blocks/api'
 import { describeBlockFailure } from '@/features/blocks/view'
 import { cancellable } from '@/lib/cancellable'
+import { isUnauthenticatedError } from '@/lib/request'
 import { relativeTimeOf } from '@/lib/time'
 import './index.scss'
 
@@ -169,7 +170,9 @@ export default function BlockedPage() {
           : prev,
       )
     } catch (error) {
-      if (accountSeq.current !== seq) return
+      // 取消不是失败：runLoad / 重进页会 cancel 在飞的「加载更多」，被取消的请求随后
+      // reject 时不能误标成页脚失败（following 页 loadMore 同款判据）。
+      if (run.isCancelled() || accountSeq.current !== seq) return
       console.debug('[miniapp] 黑名单：加载更多失败', error)
       setMoreError(true)
     } finally {
@@ -198,7 +201,12 @@ export default function BlockedPage() {
       .catch((error: unknown) => {
         if (accountSeq.current !== seq) return
         console.debug('[miniapp] 黑名单：解除失败', error)
-        setRowError({ id: row.id, message: describeBlockFailure(error) })
+        setRowError({
+          id: row.id,
+          message: isUnauthenticatedError(error)
+            ? '登录已失效，请重新登录'
+            : describeBlockFailure(error),
+        })
       })
       .finally(() => {
         if (accountSeq.current === seq) setBusyId(null)
