@@ -58,6 +58,7 @@ export default defineAppConfig({
       pages: [
         'pages/verify/index',
         'pages/settings/index',
+        'pages/blocked/index',
         'pages/account-deletion/index',
         'pages/profile-edit/index',
         'pages/login-confirm/index',
