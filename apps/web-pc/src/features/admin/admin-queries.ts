@@ -1,4 +1,5 @@
 import type { AdminDisputeResolveInput } from '@fish/contracts/disputes/schema'
+import type { AdminFeedbackHandleInput } from '@fish/contracts/feedback/schema'
 import type {
   GovernanceLiftRestrictionInput,
   GovernanceListingDelistInput,
@@ -20,6 +21,7 @@ import type { AdminUsersFilters } from './admin-api'
 import {
   type AdminAuditFilters,
   type AdminDisputesFilters,
+  type AdminFeedbackFilters,
   type AdminListingsFilters,
   type AdminModerationRecordsFilters,
   type AdminReportsFilters,
@@ -29,6 +31,8 @@ import {
   fetchAdminAuditLogs,
   fetchAdminDisputeDetail,
   fetchAdminDisputes,
+  fetchAdminFeedback,
+  fetchAdminFeedbackDetail,
   fetchAdminListingDetail,
   fetchAdminListings,
   fetchAdminMe,
@@ -46,6 +50,7 @@ import {
   restoreListing,
   restrictUserPublish,
   submitDisputeResolve,
+  submitFeedbackHandle,
   submitModerationDecision,
   submitReportHandle,
 } from './admin-api'
@@ -78,6 +83,9 @@ export const adminKeys = {
   moderationDetail: (recordId: string) => [...adminKeys.all(), 'moderation', recordId] as const,
   reports: (filters: AdminReportsFilters) => [...adminKeys.all(), 'reports', filters] as const,
   reportDetail: (reportId: string) => [...adminKeys.all(), 'report', reportId] as const,
+  feedback: (filters: AdminFeedbackFilters) => [...adminKeys.all(), 'feedback', filters] as const,
+  feedbackDetail: (feedbackId: string) =>
+    [...adminKeys.all(), 'feedback-detail', feedbackId] as const,
   disputes: (filters: AdminDisputesFilters) => [...adminKeys.all(), 'disputes', filters] as const,
   disputeDetail: (disputeId: string) => [...adminKeys.all(), 'dispute', disputeId] as const,
   transactions: (filters: AdminTransactionsFilters) =>
@@ -190,6 +198,24 @@ export function useAdminReports(filters: AdminReportsFilters) {
   })
 }
 
+export function useAdminFeedback(filters: AdminFeedbackFilters) {
+  return useInfiniteQuery({
+    queryKey: adminKeys.feedback(filters),
+    queryFn: ({ pageParam }) => fetchAdminFeedback(filters, pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 0,
+  })
+}
+
+export function useAdminFeedbackDetail(feedbackId: string) {
+  return useQuery({
+    queryFn: () => fetchAdminFeedbackDetail(feedbackId),
+    queryKey: adminKeys.feedbackDetail(feedbackId),
+    staleTime: 0,
+  })
+}
+
 export function useAdminReportDetail(reportId: string) {
   return useQuery({
     queryFn: () => fetchAdminReportDetail(reportId),
@@ -274,6 +300,12 @@ export function useModerationDecision(recordId: string) {
 
 export function useReportHandle(reportId: string) {
   return useAdminMutation((input: AdminReportHandleInput) => submitReportHandle(reportId, input))
+}
+
+export function useFeedbackHandle(feedbackId: string) {
+  return useAdminMutation((input: AdminFeedbackHandleInput) =>
+    submitFeedbackHandle(feedbackId, input),
+  )
 }
 
 export function useDisputeResolve(disputeId: string) {
