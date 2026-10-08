@@ -191,6 +191,38 @@ describe('意见反馈（#463 用户端）', () => {
   })
 })
 
+describe('意见反馈（#463 用户端分页）', () => {
+  test('空联系方式等同没留；「我的反馈」按游标翻页不重不漏', async () => {
+    const extra = await app.request(
+      FEEDBACK_ROUTES.create,
+      postAs(userCookie, {
+        clientRequestId: newId(),
+        type: 'UX',
+        content: '希望支持暗色模式',
+        contact: '',
+      }),
+    )
+    expect(extra.status).toBe(201)
+    expect(((await extra.json()) as { feedback: FeedbackBody }).feedback.contact).toBeNull()
+
+    const seen: string[] = []
+    let cursor: string | null = null
+    do {
+      const query = new URLSearchParams({ limit: '1', ...(cursor ? { cursor } : {}) })
+      const res = await app.request(`${FEEDBACK_ROUTES.mine}?${query}`, {
+        headers: { cookie: userCookie },
+      })
+      expect(res.status).toBe(200)
+      const page = (await res.json()) as { items: FeedbackBody[]; nextCursor: string | null }
+      seen.push(...page.items.map((item) => item.id))
+      cursor = page.nextCursor
+    } while (cursor)
+    expect(seen).toHaveLength(2)
+    expect(new Set(seen).size).toBe(2)
+    expect(seen).toContain(feedbackId)
+  })
+})
+
 describe('意见反馈（#463 管理端）', () => {
   test('普通用户碰队列 / 详情 / 处理都是 403', async () => {
     const headers = { cookie: userCookie }
@@ -334,7 +366,7 @@ describe('意见反馈（#463 管理端）', () => {
   test('用户在「我的反馈」看到处理结果；内部备注不外泄', async () => {
     const mine = await app.request(FEEDBACK_ROUTES.mine, { headers: { cookie: userCookie } })
     const { items } = (await mine.json()) as { items: (FeedbackBody & Record<string, unknown>)[] }
-    const item = items[0]
+    const item = items.find((candidate) => candidate.id === feedbackId)
     expect(item?.status === 'REPLIED' || item?.status === 'CLOSED').toBe(true)
     expect(item?.handledAt).not.toBeNull()
     if (item?.status === 'REPLIED') expect(item.reply).toBe('已在新版本修复，请更新后再试')

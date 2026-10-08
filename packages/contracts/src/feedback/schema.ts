@@ -52,8 +52,16 @@ export const FeedbackCreateInputSchema = z.strictObject({
   clientRequestId: z.uuid(),
   type: FeedbackTypeSchema,
   content: z.string().trim().min(FEEDBACK_CONTENT_MIN).max(FEEDBACK_CONTENT_MAX),
-  /** 用户自愿留的联系方式（手机号 / 微信号 / 邮箱），可空；只对本人与管理员可见。 */
-  contact: z.string().trim().min(1).max(FEEDBACK_CONTACT_MAX).optional(),
+  /**
+   * 用户自愿留的联系方式（手机号 / 微信号 / 邮箱），可空；只对本人与管理员可见。
+   * 空串 / 纯空白等同「没留」（小程序草稿的默认值就是 `''`），归一成 `undefined`。
+   */
+  contact: z
+    .string()
+    .trim()
+    .max(FEEDBACK_CONTACT_MAX)
+    .optional()
+    .transform((value) => (value ? value : undefined)),
 })
 export type FeedbackCreateInput = z.infer<typeof FeedbackCreateInputSchema>
 
