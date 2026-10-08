@@ -144,6 +144,17 @@ const NO_CONFIRMED_IMAGES: ConfirmedImageLookup = {
 /** create 时商品还不存在，图片组必然是空的：没有任何"没变的老图片"可以豁免确认校验。 */
 const NO_STORED_KEYS: ReadonlySet<string> = new Set()
 
+/**
+ * `deps.pendingImageDeletions` 缺省时的实现：没有任何键被证明"在待删台账里"，因此这道守卫
+ * 不生效（退化为 #476 之前的行为）。生产接线在 `apps/api/src/app.ts` 注入真实实现。
+ */
+const NO_PENDING_DELETIONS: PendingImageDeletions = { isPending: async () => false }
+
+/** #476：判断一个图片键是否已被摘除、正在等待回收（拒绝重新引用它，见 `assertUsableObjectKeys`）。 */
+export interface PendingImageDeletions {
+  isPending(objectKey: string): Promise<boolean>
+}
+
 export function createListingService(deps: {
   store: ListingStore
   storage: MediaStorage
@@ -154,6 +165,11 @@ export function createListingService(deps: {
    */
   mediaObjects?: ConfirmedImageLookup
   /**
+   * #476：待删图片键查询。给了它，写路径会拒绝**重新引用一个已被摘除、等待回收的公开键**
+   * （见 `assertUsableObjectKeys`）；缺省视为"永不待删"（生产接线在 `apps/api/src/app.ts` 注入）。
+   */
+  pendingImageDeletions?: PendingImageDeletions
+  /**
    * #228：文本审核 provider。app.ts 按 `CONTENT_MODERATION_TRANSPORT` 注入（local / tencent）；
    * 缺省用**本地 provider**（复用同一份词表，与旧同步实现行为一致），生产由 env 保证不会落到 local。
    */
@@ -163,6 +179,7 @@ export function createListingService(deps: {
 }): ListingService {
   const { store, storage } = deps
   const mediaObjects = deps.mediaObjects ?? NO_CONFIRMED_IMAGES
+  const pendingDeletions = deps.pendingImageDeletions ?? NO_PENDING_DELETIONS
   const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
   const now = deps.now ?? (() => new Date())
 
@@ -452,6 +469,20 @@ export function createListingService(deps: {
     const decisions: ModerationDecision[] = []
     // 逐张校验：≤9 次 HEAD，换掉"客户端可以拿 presign 传任意类型"的洞（契约 §7.7）。
     for (const objectKey of objectKeys) {
+      // #476：已被摘除、等待回收的公开键**不能被重新引用**。写路径的登记与回收任务的复核/删除之间
+      // 有一个窗口，若允许重新引用，回收会删掉一个刚被引用回来的对象、留下坏图。正常前端拿不到
+      // 已摘除的键（编辑态只下发当前图片组里的键），所以这条只挡构造请求。
+      // `storedKeys` 里的键是本商品图片组里没变的老图，**豁免**：多条商品共享同一个键时，一条摘除它、
+      // 另一条仍持有它，后者编辑（`objectKeys` 带上它）不能被误拒——那时该键仍被引用，回收本来也不会删。
+      if (
+        isPublicListingKey(objectKey) &&
+        !storedKeys.has(objectKey) &&
+        (await pendingDeletions.isPending(objectKey))
+      ) {
+        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
+          { field: 'objectKeys', message: '图片已不可用，请重新上传' },
+        ])
+      }
       // 两类服务端固化键都必须命中一行确认记录（#286）：机器 `ALLOW` 的公开键，以及审核中的私有键。
       // 没有记录 = 没走完 confirm，或当初被判 BLOCK（BLOCK 不固化、不落可引用键）。历史遗留键是
       // #286 之前的存量数据，本来就没有对应记录；`storedKeys` 里的键是本商品图片组里没变的老图，

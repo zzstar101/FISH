@@ -146,7 +146,7 @@ describe('cleanupRemovedListingImages', () => {
       now: NOW,
     })
 
-    expect(result).toEqual({ scanned: 1, deleted: 1 })
+    expect(result).toEqual({ scanned: 1, deleted: 1, failed: 0 })
     // rowPresent=true 只在"先删对象"的实现下成立：顺序一旦反了，这里会是 false。
     expect(log).toEqual([`deleteObject:${key}:rowPresent=true`])
     expect(await deletionRowCount(key)).toBe(0)
@@ -164,7 +164,7 @@ describe('cleanupRemovedListingImages', () => {
       now: NOW,
     })
 
-    expect(result).toEqual({ scanned: 0, deleted: 0 })
+    expect(result).toEqual({ scanned: 0, deleted: 0, failed: 0 })
     expect(log).toEqual([])
     expect(await deletionRowCount(key)).toBe(1)
   })
@@ -188,7 +188,7 @@ describe('cleanupRemovedListingImages', () => {
 
     // 仍被引用的键被查询的相关 NOT EXISTS 排除在候选集之外：既不删对象，也不占住批次头部
     // （若取回后再跳过，它会永久排在 `removed_at` 最前，累计到批次上限后真正可回收的行就扫不到了）。
-    expect(result).toEqual({ scanned: 0, deleted: 0 })
+    expect(result).toEqual({ scanned: 0, deleted: 0, failed: 0 })
     expect(log).toEqual([])
     // 台账行保留：该键今后真的被摘除时，写路径会刷新 removed_at 重新起算保留期。
     expect(await deletionRowCount(key)).toBe(1)
@@ -214,13 +214,13 @@ describe('cleanupRemovedListingImages', () => {
 
     // limit=1 时是否排除被引用的行是决定性的：若 blocked 占住批次头部，这里 scanned 会是 0、
     // reclaimable 永远轮不到（回收静默停摆）。
-    expect(result).toEqual({ scanned: 1, deleted: 1 })
+    expect(result).toEqual({ scanned: 1, deleted: 1, failed: 0 })
     expect(log).toEqual([`deleteObject:${reclaimable}:rowPresent=true`])
     expect(await deletionRowCount(blocked)).toBe(1)
     expect(await deletionRowCount(reclaimable)).toBe(0)
   })
 
-  test('删对象失败：行不删、错误冒出，下一轮重试同一行', async () => {
+  test('删对象失败：行不删、计入 failed、下一轮重试同一行', async () => {
     const key = makeKey('throwing')
     await registerDeletion(key, removedAt(30))
 
@@ -233,9 +233,8 @@ describe('cleanupRemovedListingImages', () => {
       },
     }
 
-    await expect(cleanupRemovedListingImages({ db, storage: failing, now: NOW })).rejects.toThrow(
-      '对象删除失败',
-    )
+    const first = await cleanupRemovedListingImages({ db, storage: failing, now: NOW })
+    expect(first).toEqual({ scanned: 1, deleted: 0, failed: 1 })
 
     // 对象删失败时绝不能删行：行一删，这个键就永远没人记得删了。
     expect(await deletionRowCount(key)).toBe(1)
@@ -247,9 +246,39 @@ describe('cleanupRemovedListingImages', () => {
       storage: recordingStorage(log),
       now: NOW,
     })
-    expect(result).toEqual({ scanned: 1, deleted: 1 })
+    expect(result).toEqual({ scanned: 1, deleted: 1, failed: 0 })
     expect(log).toEqual([`deleteObject:${key}:rowPresent=true`])
     expect(await deletionRowCount(key)).toBe(0)
+  })
+
+  test('一行删不掉不拖住整批：其后的可回收行照常删掉', async () => {
+    const broken = makeKey('broken-oldest')
+    const healthy = makeKey('healthy-later')
+    // broken 摘除更早（排在批次头部），删它会失败；healthy 在其后，必须仍被处理。
+    await registerDeletion(broken, removedAt(50))
+    await registerDeletion(healthy, removedAt(40))
+
+    const log: string[] = []
+    const storage: WorkerMediaStorage = {
+      async readBytes() {
+        return null
+      },
+      async deleteObject(key) {
+        if (key === broken) throw new Error('对象删除失败')
+        const present = await db.$count(
+          listingImageDeletions,
+          eq(listingImageDeletions.objectKey, key),
+        )
+        log.push(`deleteObject:${key}:rowPresent=${present > 0}`)
+      },
+    }
+
+    const result = await cleanupRemovedListingImages({ db, storage, now: NOW })
+
+    expect(result).toEqual({ scanned: 2, deleted: 1, failed: 1 })
+    expect(log).toEqual([`deleteObject:${healthy}:rowPresent=true`])
+    expect(await deletionRowCount(broken)).toBe(1)
+    expect(await deletionRowCount(healthy)).toBe(0)
   })
 
   test('limit 生效：3 条到期行 + limit 2 → 只删最早摘除的 2 条', async () => {
@@ -269,7 +298,7 @@ describe('cleanupRemovedListingImages', () => {
       limit: 2,
     })
 
-    expect(result).toEqual({ scanned: 2, deleted: 2 })
+    expect(result).toEqual({ scanned: 2, deleted: 2, failed: 0 })
     // 先摘除的先删：对象删除顺序必须与 removed_at 升序一致。
     expect(log).toEqual([
       `deleteObject:${oldest}:rowPresent=true`,

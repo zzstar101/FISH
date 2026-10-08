@@ -106,6 +106,25 @@ export async function isListingImageKeyReferenced(db: Db, objectKey: string): Pr
   return rows.length > 0
 }
 
+/**
+ * 该键是否在待删台账里（= 已被某条商品摘除、等待回收）。
+ *
+ * 写路径据此**拒绝重新引用一个待删键**（见 `listings/service.ts` 的 `assertUsableObjectKeys`）：
+ * 否则构造请求可以在回收任务的复核之后、删对象之前把该键重新引用回某条商品，回收仍会删掉对象、
+ * 留下坏图。拒绝之后，待删键在对象被删掉之前不可能再被引用，回收的复核因此是终局的。
+ */
+export async function isListingImageKeyPendingDeletion(
+  db: Db,
+  objectKey: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql`1` })
+    .from(listingImageDeletions)
+    .where(eq(listingImageDeletions.objectKey, objectKey))
+    .limit(1)
+  return rows.length > 0
+}
+
 /** 删掉一条待删行（对象已删除后调用）。 */
 export async function deleteListingImageDeletionRow(db: Db, objectKey: string): Promise<void> {
   await db.delete(listingImageDeletions).where(eq(listingImageDeletions.objectKey, objectKey))
