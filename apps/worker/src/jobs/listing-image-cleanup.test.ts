@@ -146,7 +146,7 @@ describe('cleanupRemovedListingImages', () => {
       now: NOW,
     })
 
-    expect(result).toEqual({ scanned: 1, deleted: 1, skipped: 0 })
+    expect(result).toEqual({ scanned: 1, deleted: 1 })
     // rowPresent=true 只在"先删对象"的实现下成立：顺序一旦反了，这里会是 false。
     expect(log).toEqual([`deleteObject:${key}:rowPresent=true`])
     expect(await deletionRowCount(key)).toBe(0)
@@ -164,12 +164,12 @@ describe('cleanupRemovedListingImages', () => {
       now: NOW,
     })
 
-    expect(result).toEqual({ scanned: 0, deleted: 0, skipped: 0 })
+    expect(result).toEqual({ scanned: 0, deleted: 0 })
     expect(log).toEqual([])
     expect(await deletionRowCount(key)).toBe(1)
   })
 
-  test('同一键仍被多条商品引用时不误删，台账行保留', async () => {
+  test('同一键仍被多条商品引用时不进入候选集，台账行保留', async () => {
     const sellerId = await createUser()
     const first = await createListing(sellerId)
     const second = await createListing(sellerId)
@@ -186,10 +186,38 @@ describe('cleanupRemovedListingImages', () => {
       now: NOW,
     })
 
-    expect(result).toEqual({ scanned: 1, deleted: 0, skipped: 1 })
+    // 仍被引用的键被查询的相关 NOT EXISTS 排除在候选集之外：既不删对象，也不占住批次头部
+    // （若取回后再跳过，它会永久排在 `removed_at` 最前，累计到批次上限后真正可回收的行就扫不到了）。
+    expect(result).toEqual({ scanned: 0, deleted: 0 })
     expect(log).toEqual([])
     // 台账行保留：该键今后真的被摘除时，写路径会刷新 removed_at 重新起算保留期。
     expect(await deletionRowCount(key)).toBe(1)
+  })
+
+  test('仍被引用的旧行不占住批次头部：可回收的行照样被处理（limit=1）', async () => {
+    const sellerId = await createUser()
+    const listingId = await createListing(sellerId)
+    // `blocked` 仍被引用且 removed_at 最早（本该排在批次第一位）；`reclaimable` 次之、可回收。
+    const blocked = makeKey('blocking')
+    const reclaimable = makeKey('reclaimable')
+    await referenceKey(listingId, blocked)
+    await registerDeletion(blocked, removedAt(50))
+    await registerDeletion(reclaimable, removedAt(40))
+
+    const log: string[] = []
+    const result = await cleanupRemovedListingImages({
+      db,
+      storage: recordingStorage(log),
+      now: NOW,
+      limit: 1,
+    })
+
+    // limit=1 时是否排除被引用的行是决定性的：若 blocked 占住批次头部，这里 scanned 会是 0、
+    // reclaimable 永远轮不到（回收静默停摆）。
+    expect(result).toEqual({ scanned: 1, deleted: 1 })
+    expect(log).toEqual([`deleteObject:${reclaimable}:rowPresent=true`])
+    expect(await deletionRowCount(blocked)).toBe(1)
+    expect(await deletionRowCount(reclaimable)).toBe(0)
   })
 
   test('删对象失败：行不删、错误冒出，下一轮重试同一行', async () => {
@@ -219,7 +247,7 @@ describe('cleanupRemovedListingImages', () => {
       storage: recordingStorage(log),
       now: NOW,
     })
-    expect(result).toEqual({ scanned: 1, deleted: 1, skipped: 0 })
+    expect(result).toEqual({ scanned: 1, deleted: 1 })
     expect(log).toEqual([`deleteObject:${key}:rowPresent=true`])
     expect(await deletionRowCount(key)).toBe(0)
   })
@@ -241,7 +269,7 @@ describe('cleanupRemovedListingImages', () => {
       limit: 2,
     })
 
-    expect(result).toEqual({ scanned: 2, deleted: 2, skipped: 0 })
+    expect(result).toEqual({ scanned: 2, deleted: 2 })
     // 先摘除的先删：对象删除顺序必须与 removed_at 升序一致。
     expect(log).toEqual([
       `deleteObject:${oldest}:rowPresent=true`,
