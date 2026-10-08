@@ -10,7 +10,6 @@ import {
 } from '@fish/ui/dialog'
 import { useState } from 'react'
 import { DialogErrorAlert, OptionCards, ReasonField } from './admin-dialog-parts'
-import { validateReason } from './admin-view'
 
 export type FeedbackHandleSubmit = {
   result: FeedbackHandleResult
@@ -30,7 +29,10 @@ export function validateFeedbackHandle(input: {
     if (reply.length === 0) return '请填写给用户的回复'
     if (reply.length > FEEDBACK_REPLY_MAX) return `回复不能超过 ${FEEDBACK_REPLY_MAX} 字`
   }
-  return validateReason(input.note)
+  const note = input.note.trim()
+  if (note.length === 0) return '请填写内部备注（必填）'
+  if (note.length > 500) return '内部备注不能超过 500 字'
+  return null
 }
 
 /**

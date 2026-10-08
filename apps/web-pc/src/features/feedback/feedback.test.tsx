@@ -3,7 +3,7 @@ import type { Feedback } from '@fish/contracts/feedback/schema'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ApiError } from '../../lib/api-client'
-import { FeedbackRow, feedbackSubmitErrorText } from './feedback-page'
+import { FeedbackRow, feedbackSubmitErrorText, submitOutcome } from './feedback-page'
 import { validateFeedbackForm } from './meta'
 
 const textOf = (html: string) => html.replace(/<[^>]*>/g, '')
@@ -69,5 +69,24 @@ describe('「我的反馈」行', () => {
     )
     expect(replied).toContain('已回复')
     expect(replied).toContain('平台回复已在新版本修复')
+  })
+})
+
+describe('提交结果判定（同键重放）', () => {
+  const sent = { type: 'BUG' as const, content: '发布页上传图片后一直转圈' }
+  test('新建或同内容重放都算已提交', () => {
+    expect(submitOutcome(sent, { created: true, feedback: sent })).toBe('submitted')
+    expect(submitOutcome(sent, { created: false, feedback: sent })).toBe('submitted')
+  })
+  test('重放回来的是改动前的内容：判为 stale-replay，不能清空草稿', () => {
+    expect(
+      submitOutcome(
+        { ...sent, content: `${sent.content}，补充：iOS 才会` },
+        { created: false, feedback: sent },
+      ),
+    ).toBe('stale-replay')
+    expect(submitOutcome({ ...sent, type: 'UX' }, { created: false, feedback: sent })).toBe(
+      'stale-replay',
+    )
   })
 })

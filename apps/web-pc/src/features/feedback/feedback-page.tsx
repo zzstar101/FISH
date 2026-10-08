@@ -38,12 +38,27 @@ export function feedbackSubmitErrorText(error: unknown): string {
   return '提交失败，内容已保留，请稍后重试'
 }
 
+/**
+ * 同一 `clientRequestId` 的重放（`created: false`）只会交回**首次**提交的那条：
+ * 如果用户在失败后改过草稿再重试，服务端那条与本次发出的内容不同。此时不能清空草稿
+ * 冒充「已提交」——改动没有送达。返回 `stale-replay` 让页面保留草稿并换新键。
+ */
+export function submitOutcome(
+  sent: { type: FeedbackType; content: string },
+  response: { created: boolean; feedback: Pick<Feedback, 'type' | 'content'> },
+): 'submitted' | 'stale-replay' {
+  if (response.created) return 'submitted'
+  return response.feedback.type === sent.type && response.feedback.content === sent.content
+    ? 'submitted'
+    : 'stale-replay'
+}
+
 function FeedbackContent() {
   const [type, setType] = useState<FeedbackType | null>(null)
   const [content, setContent] = useState('')
   const [contact, setContact] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
-  const [submitted, setSubmitted] = useState(false)
+  const [notice, setNotice] = useState<'submitted' | 'stale-replay' | null>(null)
   // 幂等键：同一份草稿的重试复用同一个键（超时后再点不会重复建单），提交成功后换新。
   const [clientRequestId, setClientRequestId] = useState(() => crypto.randomUUID())
   const submit = useSubmitFeedback()
@@ -55,19 +70,23 @@ function FeedbackContent() {
       return
     }
     setLocalError(null)
-    setSubmitted(false)
+    setNotice(null)
+    const sent = { type, content: content.trim() }
     try {
-      await submit.mutateAsync({
+      const response = await submit.mutateAsync({
         clientRequestId,
-        type,
-        content: content.trim(),
+        ...sent,
         ...(contact.trim() ? { contact: contact.trim() } : {}),
       })
-      setType(null)
-      setContent('')
-      setContact('')
+      const outcome = submitOutcome(sent, response)
+      // 两种结果都换新键：旧键已经对应服务端的一条，再用它只会一直重放那一条。
       setClientRequestId(crypto.randomUUID())
-      setSubmitted(true)
+      setNotice(outcome)
+      if (outcome === 'submitted') {
+        setType(null)
+        setContent('')
+        setContact('')
+      }
     } catch {
       // 失败文案由 submit.error 渲染；表单与幂等键保持不变，重试命中同一条。
     }
@@ -92,7 +111,11 @@ function FeedbackContent() {
               <Button
                 aria-pressed={type === option}
                 key={option}
-                onClick={() => setType(option)}
+                disabled={submit.isPending}
+                onClick={() => {
+                  setType(option)
+                  setNotice(null)
+                }}
                 size="sm"
                 variant={type === option ? 'default' : 'outline'}
               >
@@ -108,8 +131,13 @@ function FeedbackContent() {
           </span>
           <textarea
             className="min-h-28 w-full rounded-xl border border-line bg-white/80 px-3 py-2 text-sm focus-visible:ring-3 focus-visible:ring-brand/15 focus:outline-none"
+            aria-required
+            disabled={submit.isPending}
             maxLength={FEEDBACK_CONTENT_MAX + 100}
-            onChange={(event) => setContent(event.target.value)}
+            onChange={(event) => {
+              setContent(event.target.value)
+              setNotice(null)
+            }}
             placeholder="尽量写清楚发生了什么、在哪个页面、怎么复现"
             value={content}
           />
@@ -122,8 +150,12 @@ function FeedbackContent() {
           <span className="font-medium text-sm">联系方式（选填）</span>
           <input
             className="h-10 w-full rounded-xl border border-line bg-white/80 px-3 text-sm focus-visible:ring-3 focus-visible:ring-brand/15 focus:outline-none"
+            disabled={submit.isPending}
             maxLength={FEEDBACK_CONTACT_MAX}
-            onChange={(event) => setContact(event.target.value)}
+            onChange={(event) => {
+              setContact(event.target.value)
+              setNotice(null)
+            }}
             placeholder="手机号 / 微信号 / 邮箱，仅平台管理员可见"
             value={contact}
           />
@@ -139,9 +171,14 @@ function FeedbackContent() {
             {feedbackSubmitErrorText(submit.error)}
           </p>
         ) : null}
-        {submitted ? (
+        {notice === 'submitted' ? (
           <p className="text-success text-sm" role="status">
             已提交，我们会尽快处理。
+          </p>
+        ) : null}
+        {notice === 'stale-replay' ? (
+          <p className="text-warn text-sm" role="status">
+            上一次提交其实已经送达（见下方「我的反馈」），之后的修改没有提交。草稿已保留，确认后可再提交一次。
           </p>
         ) : null}
 
