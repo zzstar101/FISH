@@ -90,6 +90,22 @@ export async function listReclaimableListingImageDeletions(
     .limit(input.limit)
 }
 
+/**
+ * 该键此刻是否仍被**任何**商品引用（跨全部 `listing_images`，不只原来那条）。
+ *
+ * 候选集查询（`listReclaimableListingImageDeletions`）已经排除了"查询那一刻被引用"的键；这里供
+ * 回收任务在**删对象之前**再复核一次，把"候选集查出 → 删对象"之间的窗口从整批缩到单行。
+ * 复核失败的行不会被下一轮重取（它此刻被引用，会被候选集过滤掉），所以不会占住批次头部。
+ */
+export async function isListingImageKeyReferenced(db: Db, objectKey: string): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql`1` })
+    .from(listingImages)
+    .where(eq(listingImages.objectKey, objectKey))
+    .limit(1)
+  return rows.length > 0
+}
+
 /** 删掉一条待删行（对象已删除后调用）。 */
 export async function deleteListingImageDeletionRow(db: Db, objectKey: string): Promise<void> {
   await db.delete(listingImageDeletions).where(eq(listingImageDeletions.objectKey, objectKey))

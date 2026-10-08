@@ -2,6 +2,7 @@ import { LISTING_IMAGE_RETAIN_MS } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
 import {
   deleteListingImageDeletionRow,
+  isListingImageKeyReferenced,
   listReclaimableListingImageDeletions,
 } from '@fish/db/listing-image-deletions'
 import type { WorkerMediaStorage } from '../media-storage'
@@ -18,12 +19,13 @@ import type { WorkerMediaStorage } from '../media-storage'
  *
  * - **先删对象再删行**（与 `visual-embedding/cleanup.ts` 的到期查询图清理同一顺序）：反过来的话，
  *   删对象失败就再也查不到该删哪个键了。`deleteObject` 失败会抛错、本轮中止，下一轮重新捡起同一行。
- * - **误删防线在候选集这一层**（`listReclaimableListingImageDeletions` 的相关 `NOT EXISTS`）：
- *   同一把键被同一卖家的多条商品共享时，一条商品摘除它、另一条仍引用它，它就不会进入候选集。
- *   把过滤放在 SQL 而不是"取回来再跳过"还有一个原因：被引用的键可能长期留在台账里，取回再跳过会让
- *   它们永久占住 `ORDER BY removed_at` 的批次头部，累计到批次上限后回收静默停摆。
+ * - **误删防线分两层**：候选集查询（`listReclaimableListingImageDeletions` 的相关 `NOT EXISTS`）先
+ *   排除"查询那一刻仍被引用"的键；删对象前再对单行复核一次（`isListingImageKeyReferenced`）。同一把键
+ *   被同一卖家的多条商品共享时，一条商品摘除它、另一条仍引用它，它就不会被删。把过滤放进 SQL 而不是
+ *   只"取回来再跳过"还有一个原因：被引用的键可能长期留在台账里，只跳过会让它们永久占住
+ *   `ORDER BY removed_at` 的批次头部，累计到批次上限后回收静默停摆；放进 SQL 后批次头部始终是可回收的行。
  *
- * 已知残留窗口（接受，且与既有清理同形）：候选集查出后、`deleteObject` 之前，若有并发写请求把该键
+ * 已知残留窗口（接受，且与既有清理同形）：单行复核通过后、`deleteObject` 之前，若有并发写请求把该键
  * **重新引用**回某条商品，对象仍会被删。该键必须已被摘除且超过保留期，正常前端拿不到它
  * （编辑态只下发当前图片组里的键），只有构造请求才可能触发；把它彻底关掉需要写路径在事务内对对象
  * 存储发请求，违反 #286 的"锁内不发网络请求"约定，代价大于收益。
@@ -48,6 +50,9 @@ export async function cleanupRemovedListingImages(input: {
 
   let deleted = 0
   for (const row of rows) {
+    // 候选集已排除"查询那一刻仍被引用"的键；删对象前再复核一次，把窗口从整批缩到单行。
+    // 复核失败的行不会被下一轮重取（它此刻被引用，会被候选集过滤掉），所以不会占住批次头部。
+    if (await isListingImageKeyReferenced(input.db, row.objectKey)) continue
     await input.storage.deleteObject(row.objectKey)
     await deleteListingImageDeletionRow(input.db, row.objectKey)
     deleted += 1
