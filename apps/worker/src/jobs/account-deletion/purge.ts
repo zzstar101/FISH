@@ -31,6 +31,7 @@ import type { Db } from '@fish/db/client'
 import { adminAuditLogs } from '@fish/db/schema/admin'
 import { aiPolishRequests } from '@fish/db/schema/ai-polish-requests'
 import { favorites } from '@fish/db/schema/favorites'
+import { feedback } from '@fish/db/schema/feedback'
 import { follows } from '@fish/db/schema/follows'
 import { listings } from '@fish/db/schema/listings'
 import { loginTickets } from '@fish/db/schema/login-tickets'
@@ -44,7 +45,7 @@ import { users, wechatIdentities } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
 import { listingViewHistory } from '@fish/db/schema/view-history'
 import { wishes } from '@fish/db/schema/wishes'
-import { and, asc, eq, inArray, lte, or, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, lte, or, sql } from 'drizzle-orm'
 
 /** 一轮最多处理几个账号：注销是低频动作，批量只为「积压时不长时间占连接」。 */
 export const ACCOUNT_DELETION_PURGE_BATCH_SIZE = 50
@@ -68,6 +69,8 @@ export interface AccountDeletionPurgeCounts {
   listingsOfflined: number
   recommendationRequestsDetached: number
   recommendationEventsDetached: number
+  /** 意见反馈（#463）里自愿留的联系方式置空；反馈正文与处理记录保留（运营与审计证据）。 */
+  feedbackContactsCleared: number
 }
 
 export type AccountDeletionPurgeOutcome =
@@ -232,6 +235,15 @@ async function purgeOne(db: Db, userId: string, now: Date): Promise<AccountDelet
           .set({ userId: null })
           .where(eq(recommendationEvents.userId, userId))
           .returning({ id: recommendationEvents.id })
+      ).length,
+      // ⑥' 反馈里的联系方式是本人主动给的个人信息，随注销清掉；正文与回复留作处理记录，
+      //    提交人改由占位昵称承担匿名（同留言 / 评价的取舍）。
+      feedbackContactsCleared: (
+        await tx
+          .update(feedback)
+          .set({ contact: null })
+          .where(and(eq(feedback.userId, userId), isNotNull(feedback.contact)))
+          .returning({ id: feedback.id })
       ).length,
     }
 

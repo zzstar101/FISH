@@ -12,6 +12,10 @@ import {
   AdminDisputeResolveInputSchema,
 } from '@fish/contracts/disputes/schema'
 import {
+  AdminFeedbackHandleInputSchema,
+  AdminFeedbackQueueQuerySchema,
+} from '@fish/contracts/feedback/schema'
+import {
   GovernanceLiftRestrictionInputSchema,
   GovernanceListingDelistInputSchema,
   GovernanceListingRestoreInputSchema,
@@ -29,6 +33,8 @@ import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { DisputeService } from '../disputes/service'
 import { DisputeServiceError } from '../disputes/service'
+import type { FeedbackService } from '../feedback/service'
+import { FeedbackServiceError } from '../feedback/service'
 import type { GovernanceService } from '../governance/service'
 import { GovernanceServiceError } from '../governance/service'
 import type { ReportService } from '../reports/service'
@@ -51,6 +57,11 @@ export type AdminRouterOptions = {
    * 也绝不调 governance：争议结论不改变成交事实、不执行处罚。
    */
   disputesService: DisputeService
+  /**
+   * 意见反馈服务（#463）：管理端的反馈队列 / 详情 / 处理只经过它，与用户端
+   * `POST /feedback` 共用同一个实例。处理反馈只写反馈行 + 审计行，不触发任何治理动作。
+   */
+  feedbackService: FeedbackService
   /**
    * 认证守卫（`auth` 模块提供）：所有 `/admin/*` 先过它（401 `UNAUTHENTICATED`）。
    * 在 router 内 `use('*')` 应用，配合 `requireAdmin` 组成设计 §3.2 的双层守卫——
@@ -105,6 +116,14 @@ function requireDisputeId(c: Context): string {
   return decodePublicId(PUBLIC_ID_PREFIX.dispute, raw)
 }
 
+function requireFeedbackId(c: Context): string {
+  const raw = c.req.param('feedbackId')
+  if (!isPublicId(PUBLIC_ID_PREFIX.feedback, raw)) {
+    throw new FeedbackServiceError('FEEDBACK_NOT_FOUND', 404, '反馈不存在')
+  }
+  return decodePublicId(PUBLIC_ID_PREFIX.feedback, raw)
+}
+
 function internalGovernanceInput<T extends { sourceReportId?: string }>(
   input: T,
 ): Omit<T, 'sourceReportId'> & { sourceReportId?: string } {
@@ -156,6 +175,17 @@ function toDisputeErrorResponse(c: Context, error: unknown): Response {
   throw error
 }
 
+/** 反馈 service 异常 → 契约错误信封（与争议同理也认 `AdminError`）。 */
+function toFeedbackErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof FeedbackServiceError) {
+    return c.json(errorBody(error.code, error.message), error.status)
+  }
+  if (error instanceof AdminError) {
+    return c.json(errorBody(error.code, error.message), error.status)
+  }
+  throw error
+}
+
 /**
  * 治理 service 异常 → 契约错误信封。
  *
@@ -191,7 +221,7 @@ function validatedTargetId(
  * 额外执行 requireAdmin”），新加端点不会忘挂。
  */
 export function createAdminRouter(options: AdminRouterOptions) {
-  const { service, reportsService, disputesService, governance } = options
+  const { service, reportsService, disputesService, feedbackService, governance } = options
   const router = new Hono<{ Variables: AuthVariables }>()
 
   router.use('*', options.requireAuth)
@@ -460,6 +490,45 @@ export function createAdminRouter(options: AdminRouterOptions) {
       return c.json(await disputesService.getAdminDispute(requireDisputeId(c)), 200)
     } catch (error) {
       return toDisputeErrorResponse(c, error)
+    }
+  })
+
+  // --- 意见反馈（#463）：队列 / 详情 / 处理 --------------------------------
+  // 与举报段同一条边界：处理反馈只写反馈行与审计行，不动任何商品 / 用户状态。
+
+  router.get('/feedback', async (c) => {
+    const parsed = AdminFeedbackQueueQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+    try {
+      return c.json(await feedbackService.listAdmin(parsed.data), 200)
+    } catch (error) {
+      return toFeedbackErrorResponse(c, error)
+    }
+  })
+
+  // 动作段注册在详情之前，不依赖 Hono 的静态段优先语义（与举报 / 争议同理）。
+  router.post('/feedback/:feedbackId/handle', async (c) => {
+    const input = AdminFeedbackHandleInputSchema.safeParse(await c.req.json().catch(() => null))
+    if (!input.success) return zodValidationFailure(c, input.error.issues)
+    try {
+      await feedbackService.handleFeedback({
+        feedbackId: requireFeedbackId(c),
+        actorUserId: c.get('userId'),
+        result: input.data.result,
+        reply: input.data.reply ?? null,
+        note: input.data.note,
+      })
+      return c.body(null, 204)
+    } catch (error) {
+      return toFeedbackErrorResponse(c, error)
+    }
+  })
+
+  router.get('/feedback/:feedbackId', async (c) => {
+    try {
+      return c.json(await feedbackService.getAdmin(requireFeedbackId(c)), 200)
+    } catch (error) {
+      return toFeedbackErrorResponse(c, error)
     }
   })
 

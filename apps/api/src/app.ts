@@ -895,6 +895,10 @@ export function createApp(
   app.use('/disputes/*', auth.requireAuth)
   app.route('/disputes', admin.disputesRouter)
 
+  // 意见反馈（#463）同挂法。
+  app.use('/feedback/*', auth.requireAuth)
+  app.route('/feedback', admin.feedbackRouter)
+
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。
   app.onError((error, c) => {

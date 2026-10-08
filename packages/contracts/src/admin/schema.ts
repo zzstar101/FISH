@@ -10,6 +10,7 @@ import { z } from 'zod'
 import {
   AuditLogIdSchema,
   DisputeIdSchema,
+  FeedbackIdSchema,
   ListingIdSchema,
   ModerationRecordIdSchema,
   ReportIdSchema,
@@ -162,6 +163,7 @@ export const AdminAuditTargetTypeSchema = z.enum([
   'MODERATION_RECORD',
   'REPORT',
   'DISPUTE',
+  'FEEDBACK',
   'USER_RESTRICTION',
 ])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
@@ -172,6 +174,7 @@ export const AdminAuditTargetIdSchema = z.union([
   ModerationRecordIdSchema,
   ReportIdSchema,
   DisputeIdSchema,
+  FeedbackIdSchema,
   UserRestrictionIdSchema,
 ])
 
@@ -181,6 +184,7 @@ const auditTargetIdByType = {
   MODERATION_RECORD: ModerationRecordIdSchema,
   REPORT: ReportIdSchema,
   DISPUTE: DisputeIdSchema,
+  FEEDBACK: FeedbackIdSchema,
   USER_RESTRICTION: UserRestrictionIdSchema,
 } satisfies Record<AdminAuditTargetType, (typeof AdminAuditTargetIdSchema.options)[number]>
 
@@ -358,6 +362,8 @@ export const AdminAuditActionSchema = z.enum([
   'REPORT_DECISION',
   // #465：处理交易争议（只写结论，不改成交事实、不触发治理）。
   'DISPUTE_DECISION',
+  // #463：处理意见反馈（回复 / 结单，不触发治理）。
+  'FEEDBACK_DECISION',
   // #73 治理半场 PR3：五个治理端点各一个 action，审计可按动作单独筛选。
   'LISTING_DELISTED',
   'LISTING_RESTORED',

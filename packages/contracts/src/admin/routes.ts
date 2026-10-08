@@ -66,6 +66,12 @@ export const ADMIN_ROUTES = {
    * 与举报处理同边界：只写结论与审计，**不**修改成交事实、**不**触发封禁 / 下架。
    */
   disputeResolve: (disputeId: string) => `/admin/disputes/${disputeId}/resolve`,
+  /** GET 意见反馈队列（#463，游标分页 + 状态 / 类型筛选）。 */
+  feedback: '/admin/feedback',
+  /** GET 反馈详情（含提交人、联系方式、回复与内部备注）。 */
+  feedbackDetail: (feedbackId: string) => `/admin/feedback/${feedbackId}`,
+  /** POST 处理反馈（result = REPLIED + reply / CLOSED，note 必填）。只写结果，不触发治理动作。 */
+  feedbackHandle: (feedbackId: string) => `/admin/feedback/${feedbackId}/handle`,
   /**
    * 治理动作（#73 治理半场 PR3）。五个端点各自独立、可选带 `sourceReportId` 回链举报单；
    * 业务变更与审计写入同事务，并发靠条件更新（先到者成功，后到者 409）。

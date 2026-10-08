@@ -8,6 +8,7 @@ import { comments } from '@fish/db/schema/comments'
 import { conversations } from '@fish/db/schema/conversations'
 import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
 import { favorites } from '@fish/db/schema/favorites'
+import { feedback } from '@fish/db/schema/feedback'
 import { follows } from '@fish/db/schema/follows'
 import { listings } from '@fish/db/schema/listings'
 import { loginTickets } from '@fish/db/schema/login-tickets'
@@ -210,6 +211,14 @@ async function seedPrivateData(seeded: Seeded): Promise<void> {
     computedAt: NOW,
   })
   await db.insert(aiPolishRequests).values({ id: newId(), userId })
+  await db.insert(feedback).values({
+    id: newId(),
+    userId,
+    clientRequestId: newId(),
+    type: 'BUG',
+    content: '发布页提交按钮没反应',
+    contact: 'wx_private_handle',
+  })
   await db.insert(recommendationRequests).values({
     id: newId(),
     userId,
@@ -319,6 +328,7 @@ describe('到期去标识化：整份隐私清掉，历史证据留下', () => {
     expect(outcome.counts.favorites).toBe(1)
     expect(outcome.counts.follows).toBe(2)
     expect(outcome.counts.wishesClosed).toBe(1)
+    expect(outcome.counts.feedbackContactsCleared).toBe(1)
 
     // ① 私域数据：一行不留。
     expect(await countSessions(userId)).toBe(0)
@@ -334,6 +344,12 @@ describe('到期去标识化：整份隐私清掉，历史证据留下', () => {
     expect(await db.$count(notifications, eq(notifications.userId, userId))).toBe(0)
     expect(await db.$count(userInterestProfiles, eq(userInterestProfiles.userId, userId))).toBe(0)
     expect(await db.$count(aiPolishRequests, eq(aiPolishRequests.userId, userId))).toBe(0)
+    // 反馈：联系方式清掉，正文留作处理记录。
+    const [feedbackRow] = await db
+      .select({ contact: feedback.contact, content: feedback.content })
+      .from(feedback)
+      .where(eq(feedback.userId, userId))
+    expect(feedbackRow).toEqual({ contact: null, content: '发布页提交按钮没反应' })
 
     // ② users 行原地去标识化：昵称是占位串（notNull 不能置空），凭据与唯一键全部释放。
     const [row] = await db.select().from(users).where(eq(users.id, userId))

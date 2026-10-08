@@ -87,6 +87,7 @@ export const AUDIT_ACTION_META: Record<AdminAuditAction, string> = {
   MODERATION_DECISION: '人工审核决定',
   REPORT_DECISION: '举报处理',
   DISPUTE_DECISION: '争议处理',
+  FEEDBACK_DECISION: '反馈处理',
   LISTING_DELISTED: '下架商品',
   LISTING_RESTORED: '恢复商品',
   USER_RESTRICTED: '限制发布',
@@ -117,6 +118,7 @@ export const AUDIT_TARGET_TYPE_LABEL: Record<AdminAuditTargetType, string> = {
   MODERATION_RECORD: '审核记录',
   REPORT: '举报',
   DISPUTE: '争议',
+  FEEDBACK: '意见反馈',
   USER_RESTRICTION: '限制记录',
 }
 
