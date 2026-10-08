@@ -64,6 +64,8 @@ export const FeedbackCreateInputSchema = z.strictObject({
     .transform((value) => (value ? value : undefined)),
 })
 export type FeedbackCreateInput = z.infer<typeof FeedbackCreateInputSchema>
+/** 客户端发出的请求体形状（`contact` 可省略；空串由服务端归一为未留）。 */
+export type FeedbackCreateRequest = z.input<typeof FeedbackCreateInputSchema>
 
 /** 「我的反馈」里的一条（本人视角：含自己留的联系方式与管理员回复，不含内部处理备注）。 */
 export const FeedbackSchema = z.object({
