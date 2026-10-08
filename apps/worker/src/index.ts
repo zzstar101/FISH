@@ -10,6 +10,7 @@ import { createEmbeddingProvider } from './jobs/embedding/providers'
 import { scheduleFailedEmbedRetry } from './jobs/embedding/requeue'
 import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
+import { cleanupRemovedListingImages } from './jobs/listing-image-cleanup'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
 import { cleanupExpiredRecommendationData } from './jobs/recommendation/cleanup'
@@ -40,6 +41,14 @@ const VISUAL_MAINTENANCE_INTERVAL_MS = 60_000
  * 晚删一会儿不会让用户看到过期记录。
  */
 const VIEW_HISTORY_CLEANUP_INTERVAL_MS = 3_600_000
+
+/**
+ * 被替换掉的公开商品图对象回收（#476）的间隔。
+ *
+ * 保留期是 24 小时，小时级清理足够：它只删「摘除超过一天、且确认无任何商品引用」的键，
+ * 晚删一会儿不会让任何人看到坏图（对象早已无人引用）。
+ */
+const LISTING_IMAGE_CLEANUP_INTERVAL_MS = 3_600_000
 
 /**
  * 账号注销到期执行（#464）的间隔。
@@ -162,6 +171,20 @@ const runVisualMaintenance = createVisualMaintenance({
   cleanup: (now) => cleanupExpiredVisualQueryImages({ db, storage: mediaStorage, now }),
 })
 
+/** 周期性回收被替换掉的公开商品图对象（#476）。失败只记日志，不影响主循环。 */
+async function runListingImageCleanup(now: Date): Promise<void> {
+  try {
+    const result = await cleanupRemovedListingImages({ db, storage: mediaStorage, now })
+    if (result.deleted > 0) {
+      console.log(`[worker] 清理被替换的商品图对象 ${result.deleted} 个`)
+    }
+  } catch (error) {
+    // 与视觉维护同一语义：一轮失败只记日志，下一轮自然重试（对象删除幂等）。
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[worker] 商品图对象清理失败：${detail}`)
+  }
+}
+
 /** 周期性保留期清理（#323 R6 §7）：删 90 天前的推荐上下文与 180 天前的埋点。 */
 async function runRecommendationCleanup(now: Date): Promise<void> {
   try {
@@ -222,6 +245,8 @@ const SCHEDULES: MaintenanceSchedule[] = [
   { intervalMs: VISUAL_MAINTENANCE_INTERVAL_MS, lastRunAt: 0, run: runVisualMaintenance },
   { intervalMs: RECOMMENDATION_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runRecommendationCleanup },
   { intervalMs: VIEW_HISTORY_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runViewHistoryCleanup },
+  // #476：回收被替换掉的公开商品图对象（24 小时保留期，小时级）。
+  { intervalMs: LISTING_IMAGE_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runListingImageCleanup },
   // #464：账号注销冷静期到期（7 天）后执行去标识化。低频、单调、可重复执行。
   {
     intervalMs: ACCOUNT_DELETION_PURGE_INTERVAL_MS,
