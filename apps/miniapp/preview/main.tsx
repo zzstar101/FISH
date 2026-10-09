@@ -34,7 +34,6 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-auth/pages/login/index': () => import('@/pkg-auth/pages/login/index'),
   '/pkg-auth/pages/login-confirm/index': () => import('@/pkg-auth/pages/login-confirm/index'),
   '/pkg-auth/pages/settings/index': () => import('@/pkg-auth/pages/settings/index'),
-  '/pkg-auth/pages/blocked/index': () => import('@/pkg-auth/pages/blocked/index'),
   '/pkg-auth/pages/verify/index': () => import('@/pkg-auth/pages/verify/index'),
   '/pkg-browse/pages/user/index': () => import('@/pkg-browse/pages/user/index'),
   '/pkg-browse/pages/match/index': () => import('@/pkg-browse/pages/match/index'),
