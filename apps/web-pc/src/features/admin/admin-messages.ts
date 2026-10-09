@@ -118,6 +118,14 @@ export function disputeResolveError(error: unknown): AdminActionOutcome {
   })
 }
 
+/** 处理反馈的失败文案。重复处理 → 409（无幂等键，状态机拒绝）。 */
+export function feedbackHandleError(error: unknown): AdminActionOutcome {
+  return actionError(error, {
+    FEEDBACK_CONFLICT: { message: '该反馈已被处理，请刷新后重试', conflict: true },
+    FEEDBACK_NOT_FOUND: { message: '反馈不存在或已被删除', conflict: false },
+  })
+}
+
 /** 422 details 的第一条透传（服务端给了 field 级文案时优先用它）。 */
 function validationMessage(error: ApiError): string {
   const first = error.details?.[0]

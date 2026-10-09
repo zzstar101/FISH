@@ -9,6 +9,7 @@ import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
 import { favorites } from '@fish/db/schema/favorites'
 import { idRekeys } from '@fish/db/schema/id-rekeys'
 import { jobs } from '@fish/db/schema/jobs'
+import { listingImageDeletions } from '@fish/db/schema/listing-image-deletions'
 import { listingNumbers } from '@fish/db/schema/listing-numbers'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { messages } from '@fish/db/schema/messages'
@@ -17,7 +18,7 @@ import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, like, sql } from 'drizzle-orm'
 import { legacyMediaToken } from '../uploads/legacy-url'
 import { createListingService, ListingServiceError } from './service'
 import type { CreateListingRecord, FeedCursorKey, ListingStore } from './store'
@@ -98,6 +99,17 @@ async function withSeller(run: (sellerId: string, otherSellerId: string) => Prom
     await db
       .delete(listingModerationRecords)
       .where(inArray(listingModerationRecords.sellerId, userIds))
+    // #476：换图用例会在待删台账里留下键；按本人公开前缀清掉，别污染其它用例。
+    for (const userId of userIds) {
+      await db
+        .delete(listingImageDeletions)
+        .where(
+          like(
+            listingImageDeletions.objectKey,
+            `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/%`,
+          ),
+        )
+    }
     await db.delete(users).where(inArray(users.id, userIds))
   }
 }
@@ -203,6 +215,44 @@ test('发布在世界内写入商品、有序图片与 MATCH_LISTING job', async
     // 相同，所以首轮领取序 = 入队序）。反序会让首轮 MATCH 跑在向量落库之前，引擎按 M2 降级契约落
     // `ranking_version = 1`。重试/回收会推后 `run_at`，那种反转是已知边界（M4 §6.1 末尾）。
     expect(queued.map((job) => job.type)).toEqual(['EMBED_LISTING', 'MATCH_LISTING'])
+  })
+})
+
+test('图片全量替换：摘除的公开键登记进待删台账，仍在引用的键取消登记（#476）', async () => {
+  await withSeller(async (sellerId) => {
+    const publicKey = () =>
+      `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, sellerId)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+    const kept = publicKey()
+    const replaced = publicKey()
+    const added = publicKey()
+    // 历史遗留键（裸 UUID 前缀，非 `listings/{usr_…}/{med_…}.ext`）：不属于本票要回收的公开对象。
+    const legacy = `listings/${sellerId}/legacy.jpg`
+
+    const created = await store.createListingAtomic(
+      record(sellerId, { objectKeys: [kept, replaced, legacy] }),
+    )
+    const listingId = created.listingId
+
+    // 模拟"kept 曾被摘除过"：它此刻躺在待删台账里，本次换图又把它写回图片组，应当被取消登记。
+    await db
+      .insert(listingImageDeletions)
+      .values({ objectKey: kept, removedAt: new Date(Date.now() - 60_000) })
+
+    const result = await store.updateListingAtomic({
+      id: listingId,
+      sellerId,
+      objectKeys: [kept, added],
+      apply: () => ({ kind: 'write' as const, fields: { title: '换图后的商品' } }),
+    })
+    expect(result).toEqual({ kind: 'updated' })
+
+    const pending = await db
+      .select({ objectKey: listingImageDeletions.objectKey })
+      .from(listingImageDeletions)
+      .where(inArray(listingImageDeletions.objectKey, [kept, replaced, legacy, added]))
+    // 只登记被摘除的公开键 `replaced`：`kept` 仍被引用（取消登记）、`legacy` 非公开键不登记、
+    // `added` 是新引用（取消登记幂等、不新增行）。
+    expect(pending.map((row) => row.objectKey)).toEqual([replaced])
   })
 })
 

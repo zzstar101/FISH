@@ -19,11 +19,13 @@ export function ReasonField({
   label,
   maxLength = REASON_MAX_LENGTH,
   onChange,
+  placeholder = '写进审计、不可抵赖；1–500 字',
   value,
 }: {
   ariaLabel: string
   label: string
   maxLength?: number
+  placeholder?: string
   onChange: (value: string) => void
   value: string
 }) {
@@ -37,7 +39,7 @@ export function ReasonField({
         className="min-h-20 w-full rounded-xl border border-line bg-white/80 px-3 py-2 text-sm focus-visible:ring-3 focus-visible:ring-brand/15 focus:outline-none"
         maxLength={maxLength}
         onChange={(event) => onChange(event.target.value)}
-        placeholder="写进审计、不可抵赖；1–500 字"
+        placeholder={placeholder}
         value={value}
       />
       <span className="block text-right text-ink-3 text-xs">

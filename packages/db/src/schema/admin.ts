@@ -8,6 +8,7 @@ export const adminAuditActionEnum = pgEnum('admin_audit_action', [
   'MODERATION_DECISION',
   'REPORT_DECISION',
   'DISPUTE_DECISION',
+  'FEEDBACK_DECISION',
   'LISTING_DELISTED',
   'LISTING_RESTORED',
   'USER_RESTRICTED',
@@ -31,6 +32,7 @@ export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
   'MODERATION_RECORD',
   'REPORT',
   'DISPUTE',
+  'FEEDBACK',
   'USER_RESTRICTION',
 ])
 

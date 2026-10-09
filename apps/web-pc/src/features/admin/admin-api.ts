@@ -38,6 +38,14 @@ import {
   type AdminDisputeResolveInput,
 } from '@fish/contracts/disputes/schema'
 import {
+  type AdminFeedbackHandleInput,
+  type AdminFeedbackItem,
+  AdminFeedbackItemSchema,
+  type AdminFeedbackListResponse,
+  AdminFeedbackListResponseSchema,
+  type AdminFeedbackQueueQuery,
+} from '@fish/contracts/feedback/schema'
+import {
   type GovernanceLiftRestrictionInput,
   type GovernanceListingDelistInput,
   type GovernanceListingRestoreInput,
@@ -267,6 +275,43 @@ export async function submitReportHandle(
   input: AdminReportHandleInput,
 ): Promise<void> {
   await apiRequest(ADMIN_ROUTES.reportHandle(reportId), {
+    body: JSON.stringify(input),
+    method: 'POST',
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 意见反馈（#463）
+// ---------------------------------------------------------------------------
+
+export type AdminFeedbackFilters = Pick<AdminFeedbackQueueQuery, 'status' | 'type'>
+
+export function adminFeedbackPath(filters: AdminFeedbackFilters, cursor?: string): string {
+  return adminQueryPath(ADMIN_ROUTES.feedback, {
+    status: filters.status,
+    type: filters.type,
+    cursor,
+    limit: ADMIN_PAGE_LIMIT,
+  })
+}
+
+export async function fetchAdminFeedback(
+  filters: AdminFeedbackFilters,
+  cursor?: string,
+): Promise<AdminFeedbackListResponse> {
+  return AdminFeedbackListResponseSchema.parse(await apiRequest(adminFeedbackPath(filters, cursor)))
+}
+
+export async function fetchAdminFeedbackDetail(feedbackId: string): Promise<AdminFeedbackItem> {
+  return AdminFeedbackItemSchema.parse(await apiRequest(ADMIN_ROUTES.feedbackDetail(feedbackId)))
+}
+
+/** 处理反馈：204 无 body。重复处理 → 409 `FEEDBACK_CONFLICT`（靠状态机拒绝）。 */
+export async function submitFeedbackHandle(
+  feedbackId: string,
+  input: AdminFeedbackHandleInput,
+): Promise<void> {
+  await apiRequest(ADMIN_ROUTES.feedbackHandle(feedbackId), {
     body: JSON.stringify(input),
     method: 'POST',
   })

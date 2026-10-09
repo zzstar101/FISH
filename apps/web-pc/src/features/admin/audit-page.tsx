@@ -10,6 +10,7 @@ import {
 } from '@fish/contracts/admin/schema'
 import {
   DisputeIdSchema,
+  FeedbackIdSchema,
   ListingIdSchema,
   ModerationRecordIdSchema,
   ReportIdSchema,
@@ -64,7 +65,7 @@ const AUDIT_ID_FILTERS: Record<'actorId' | 'targetId', PublicIdSpec> = {
   actorId: { label: '操作者 ID', prefix: 'usr_', schema: UserIdSchema },
   targetId: {
     label: '目标 ID',
-    prefix: 'usr_ / lst_ / mdr_ / rpt_ / dsp_ / rst_',
+    prefix: 'usr_ / lst_ / mdr_ / rpt_ / dsp_ / fbk_ / rst_',
     schema: AdminAuditTargetIdSchema,
   },
 }
@@ -75,6 +76,7 @@ const AUDIT_TARGET_ID_SPECS = {
   MODERATION_RECORD: { label: '目标 ID', prefix: 'mdr_', schema: ModerationRecordIdSchema },
   REPORT: { label: '目标 ID', prefix: 'rpt_', schema: ReportIdSchema },
   DISPUTE: { label: '目标 ID', prefix: 'dsp_', schema: DisputeIdSchema },
+  FEEDBACK: { label: '目标 ID', prefix: 'fbk_', schema: FeedbackIdSchema },
   USER_RESTRICTION: { label: '目标 ID', prefix: 'rst_', schema: UserRestrictionIdSchema },
 } as const satisfies Record<AdminAuditTargetType, PublicIdSpec>
 

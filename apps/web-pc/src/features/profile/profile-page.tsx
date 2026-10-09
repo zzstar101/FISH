@@ -13,6 +13,7 @@ import {
   Heart,
   History,
   MessageSquare,
+  MessageSquareText,
   PackageCheck,
   PackageOpen,
   Pencil,
@@ -221,6 +222,23 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
               <div>
                 <h2 className="font-semibold">我的举报</h2>
                 <p className="mt-0.5 text-ink-3 text-sm">查看你提交过的举报与处理进度</p>
+              </div>
+            </div>
+            <ChevronRight className="size-4 shrink-0 text-ink-3" />
+          </div>
+        </Card>
+      </Link>
+
+      <Link to="/feedback">
+        <Card className="gap-0 border border-line p-5 transition-colors hover:border-brand/40 hover:bg-brand-soft/30">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-xl bg-surface-2 text-brand">
+                <MessageSquareText className="size-5" />
+              </span>
+              <div>
+                <h2 className="font-semibold">意见反馈</h2>
+                <p className="mt-0.5 text-ink-3 text-sm">提交问题与建议，查看平台回复</p>
               </div>
             </div>
             <ChevronRight className="size-4 shrink-0 text-ink-3" />

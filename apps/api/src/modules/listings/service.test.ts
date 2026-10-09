@@ -1370,6 +1370,58 @@ describe('image confirmation', () => {
     expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
   })
 
+  // #476：换图后旧公开键会进待删台账；构造请求若在回收删对象之前把它重新引用回来，回收仍会删掉
+  // 对象、留下坏图。写路径因此必须拒绝"引用一个已在待删台账里的键"。
+  test('rejects referencing a pending-deletion key (#476)', async () => {
+    const asked: string[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'ALLOW' }]),
+      pendingImageDeletions: {
+        isPending: async (objectKey) => {
+          asked.push(objectKey)
+          return objectKey === CONFIRMED_KEY
+        },
+      },
+      store: fakeStore(),
+    })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, objectKeys: [CONFIRMED_KEY] }),
+    )
+
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(error.details).toEqual([{ field: 'objectKeys', message: '图片已不可用，请重新上传' }])
+    expect(asked).toEqual([CONFIRMED_KEY])
+  })
+
+  // 反向：多条商品共享同一个键时，一条摘除它（登记待删）、另一条仍持有它——后者编辑不能被误拒
+  // （那时该键仍被引用，回收本来也不会删）。`storedKeys` 豁免就是为了这一条。
+  test('does not reject a stored key that is also pending deletion (#476)', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'ALLOW' }]),
+      pendingImageDeletions: { isPending: async (objectKey) => objectKey === CONFIRMED_KEY },
+      store: fakeStore({
+        listImageKeys: async () => [CONFIRMED_KEY],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [CONFIRMED_KEY] }),
+        }),
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [CONFIRMED_KEY] })
+
+    expect(plans[0]).toMatchObject({ moderationStatus: 'APPROVED' })
+  })
+
   // #286 复审 blocker 1：人工放行后媒体行的有效结论是结算列 `ALLOW`。卖家下一次"不改图"的文本
   // 编辑必须读到 ALLOW —— 否则刚放行的商品会被压回人工队列（就是 Owner 复现的那条路径）。
   test('keeps a settled image out of the manual queue when the edit omits objectKeys', async () => {

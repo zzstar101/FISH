@@ -12,6 +12,7 @@ import type { UserPresence } from '@fish/contracts/users/schema'
 import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import { VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS } from '@fish/contracts/visual/schema'
 import { createDb } from '@fish/db/client'
+import { isListingImageKeyPendingDeletion } from '@fish/db/listing-image-deletions'
 import type {
   AiPolishEnv,
   ContentModerationEnv,
@@ -330,6 +331,11 @@ export function createApp(
     store: createSqlListingStore(db),
     storage,
     mediaObjects,
+    // #476：拒绝重新引用一个已被摘除、等待回收的公开键（构造请求在回收删对象前把它引用回来
+    // 会让回收留下坏图）。换图时登记待删键的写路径在 `listings/store.ts`。
+    pendingImageDeletions: {
+      isPending: (objectKey) => isListingImageKeyPendingDeletion(db, objectKey),
+    },
     // #228：Listing 文本审核走同一份 moderation env（`CONTENT_MODERATION_TRANSPORT=local|tencent`，
     // production 缺腾讯配置时由 env 层 fail-fast）。`loadImage` 不会被调用——图片审核在 uploads 的
     // confirm 里（#286），listings 只用 `moderateText`。
@@ -888,6 +894,10 @@ export function createApp(
   // 与管理端点共用 requireAdmin 守卫，但共享同一个 dispute service（可见性口径只有一套）。
   app.use('/disputes/*', auth.requireAuth)
   app.route('/disputes', admin.disputesRouter)
+
+  // 意见反馈（#463）同挂法。
+  app.use('/feedback/*', auth.requireAuth)
+  app.route('/feedback', admin.feedbackRouter)
 
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。

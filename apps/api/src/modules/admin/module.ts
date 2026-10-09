@@ -5,6 +5,9 @@ import type { AuthVariables } from '../auth/middleware'
 import { createDisputesRouter } from '../disputes/router'
 import { createDisputeService } from '../disputes/service'
 import { createSqlDisputeStore, type DisputeNotificationWriter } from '../disputes/store'
+import { createFeedbackRouter } from '../feedback/router'
+import { createFeedbackService } from '../feedback/service'
+import { createSqlFeedbackStore } from '../feedback/store'
 import type { RestrictionGuard } from '../governance/guard'
 import type { GovernanceService } from '../governance/service'
 import { createSqlModerationStore } from '../moderation/store'
@@ -65,6 +68,8 @@ export function createAdminModule(options: {
     store: createSqlDisputeStore(options.db, { notify: options.notifyDispute }),
     storage: options.storage,
   })
+  // 意见反馈（#463）同一姿态：用户端与管理端共用一个 service 实例。
+  const feedbackService = createFeedbackService(createSqlFeedbackStore(options.db))
   const router = createAdminRouter({
     service: createAdminService({
       store,
@@ -74,6 +79,7 @@ export function createAdminModule(options: {
     }),
     reportsService,
     disputesService,
+    feedbackService,
     requireAuth: options.requireAuth,
     requireAdmin,
     governance: options.governance,
@@ -99,6 +105,15 @@ export function createAdminModule(options: {
       getUserId: (c) => {
         const userId = c.get('userId')
         if (!userId) throw new Error('disputes 路由被调用时 userId 缺失（requireAuth 未生效）')
+        return String(userId)
+      },
+    }),
+    /** 用户端反馈路由（#463），由 app.ts 挂在 requireAuth 之后。 */
+    feedbackRouter: createFeedbackRouter({
+      service: feedbackService,
+      getUserId: (c) => {
+        const userId = c.get('userId')
+        if (!userId) throw new Error('feedback 路由被调用时 userId 缺失（requireAuth 未生效）')
         return String(userId)
       },
     }),

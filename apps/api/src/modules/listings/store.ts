@@ -32,6 +32,7 @@ import {
   sql,
 } from 'drizzle-orm'
 import type { ListingCardSeller } from './card'
+import { recordListingImageReplacement } from './image-cleanup'
 
 export type ListingRow = typeof listings.$inferSelect
 export type ListingImageRow = typeof listingImages.$inferSelect
@@ -843,6 +844,7 @@ export function createSqlListingStore(db: Db): ListingStore {
 
         if (input.objectKeys) {
           // 全量替换：先删后插，同一事务内保证不会出现"新图未写入但旧图已删"的中间态。
+          const previousKeys = updateTarget.objectKeys
           await tx.delete(listingImages).where(eq(listingImages.listingId, input.id))
           await tx.insert(listingImages).values(
             input.objectKeys.map((objectKey, index) => ({
@@ -851,6 +853,11 @@ export function createSqlListingStore(db: Db): ListingStore {
               sortOrder: index,
             })),
           )
+          // #476：被摘除的公开键登记进待删台账（与本事务原子），仍被引用的键取消登记。
+          await recordListingImageReplacement(tx, {
+            previousKeys,
+            nextKeys: input.objectKeys,
+          })
         }
 
         if (plan.moderation) {

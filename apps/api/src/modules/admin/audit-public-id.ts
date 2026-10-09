@@ -17,6 +17,7 @@ const targets = {
   REPORT: { prefix: PUBLIC_ID_PREFIX.report, table: 'reports' },
   USER_RESTRICTION: { prefix: PUBLIC_ID_PREFIX.userRestriction, table: 'user_restrictions' },
   DISPUTE: { prefix: PUBLIC_ID_PREFIX.dispute, table: 'disputes' },
+  FEEDBACK: { prefix: PUBLIC_ID_PREFIX.feedback, table: 'feedback' },
 } as const satisfies Record<AdminAuditTargetType, { prefix: PublicIdPrefix; table: string }>
 
 export function auditTargetInfo(type: AdminAuditTargetType) {
@@ -74,6 +75,8 @@ export async function projectAuditSnapshot(
     ['transactionId', PUBLIC_ID_PREFIX.transaction, 'transactions'],
     ['initiatorId', PUBLIC_ID_PREFIX.user, 'users'],
     ['respondentId', PUBLIC_ID_PREFIX.user, 'users'],
+    // 反馈处理快照（#463）只带提交人。
+    ['submitterId', PUBLIC_ID_PREFIX.user, 'users'],
   ] as const) {
     if (key in result && result[key] !== null) {
       const publicId = await projectAuditId(prefix, table, result[key], resolveLegacy)

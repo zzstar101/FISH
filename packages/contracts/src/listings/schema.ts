@@ -86,6 +86,19 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 export const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const
 
 /**
+ * 被替换掉的公开商品图对象的保留期（#476）。
+ *
+ * 图片写路径是**全量替换**（`apps/api/src/modules/listings/store.ts` 的 `updateListingAtomic`）：
+ * 每次换图，旧 `listings/…` 对象都会从 `listing_images` 摘除，但对象本体留在对象存储里。所以
+ * 换图时把旧键登记进 `listing_image_deletions`，worker 在「距最后一次被引用（`removed_at`）
+ * 超过本保留期、且确认无任何 `listing_images` 再引用它」之后才真正删除对象。
+ *
+ * 保留期是给并发/时钟偏移留的安全边际，不是硬承诺；真正的误删防线是删除前的引用复核
+ * （见 `apps/worker/src/jobs/listing-image-cleanup.ts`）。
+ */
+export const LISTING_IMAGE_RETAIN_MS = 24 * 60 * 60 * 1000
+
+/**
  * 对象键前缀。presign 生成对象键与 create 校验归属必须调用同一个函数：
  * 两侧各写一遍字符串模板，就会演化成"生成的键通不过自己的校验"。
  * 前缀里带 userId，是不新增表就能防住"引用他人图片"的关键。

@@ -14,6 +14,7 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as BlockedRouteImport } from './routes/blocked'
 import { Route as CommentsRouteImport } from './routes/comments'
 import { Route as FavoritesRouteImport } from './routes/favorites'
+import { Route as FeedbackRouteImport } from './routes/feedback'
 import { Route as FollowingRouteImport } from './routes/following'
 import { Route as HistoryRouteImport } from './routes/history'
 import { Route as LoginRouteImport } from './routes/login'
@@ -30,6 +31,7 @@ import { Route as WishRouteImport } from './routes/wish'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
 import { Route as AdminDisputesRouteImport } from './routes/admin.disputes'
+import { Route as AdminFeedbackRouteImport } from './routes/admin.feedback'
 import { Route as AdminListingsRouteImport } from './routes/admin.listings'
 import { Route as AdminMetricsRouteImport } from './routes/admin.metrics'
 import { Route as AdminModerationRouteImport } from './routes/admin.moderation'
@@ -47,6 +49,8 @@ import { Route as WishWishIdRouteImport } from './routes/wish.$wishId'
 import { Route as AdminAuditIndexRouteImport } from './routes/admin.audit.index'
 import { Route as AdminDisputesIndexRouteImport } from './routes/admin.disputes.index'
 import { Route as AdminDisputesDisputeIdRouteImport } from './routes/admin.disputes.$disputeId'
+import { Route as AdminFeedbackIndexRouteImport } from './routes/admin.feedback.index'
+import { Route as AdminFeedbackFeedbackIdRouteImport } from './routes/admin.feedback.$feedbackId'
 import { Route as AdminListingsIndexRouteImport } from './routes/admin.listings.index'
 import { Route as AdminListingsListingIdRouteImport } from './routes/admin.listings.$listingId'
 import { Route as AdminModerationIndexRouteImport } from './routes/admin.moderation.index'
@@ -80,6 +84,11 @@ const CommentsRoute = CommentsRouteImport.update({
 const FavoritesRoute = FavoritesRouteImport.update({
   id: '/favorites',
   path: '/favorites',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FeedbackRoute = FeedbackRouteImport.update({
+  id: '/feedback',
+  path: '/feedback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FollowingRoute = FollowingRouteImport.update({
@@ -160,6 +169,11 @@ const AdminAuditRoute = AdminAuditRouteImport.update({
 const AdminDisputesRoute = AdminDisputesRouteImport.update({
   id: '/disputes',
   path: '/disputes',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminFeedbackRoute = AdminFeedbackRouteImport.update({
+  id: '/feedback',
+  path: '/feedback',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminListingsRoute = AdminListingsRouteImport.update({
@@ -247,6 +261,16 @@ const AdminDisputesDisputeIdRoute = AdminDisputesDisputeIdRouteImport.update({
   path: '/$disputeId',
   getParentRoute: () => AdminDisputesRoute,
 } as any)
+const AdminFeedbackIndexRoute = AdminFeedbackIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminFeedbackRoute,
+} as any)
+const AdminFeedbackFeedbackIdRoute = AdminFeedbackFeedbackIdRouteImport.update({
+  id: '/$feedbackId',
+  path: '/$feedbackId',
+  getParentRoute: () => AdminFeedbackRoute,
+} as any)
 const AdminListingsIndexRoute = AdminListingsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -299,6 +323,7 @@ export interface FileRoutesByFullPath {
   '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
+  '/feedback': typeof FeedbackRoute
   '/following': typeof FollowingRoute
   '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
@@ -314,6 +339,7 @@ export interface FileRoutesByFullPath {
   '/wish': typeof WishRouteWithChildren
   '/admin/audit': typeof AdminAuditRouteWithChildren
   '/admin/disputes': typeof AdminDisputesRouteWithChildren
+  '/admin/feedback': typeof AdminFeedbackRouteWithChildren
   '/admin/listings': typeof AdminListingsRouteWithChildren
   '/admin/metrics': typeof AdminMetricsRoute
   '/admin/moderation': typeof AdminModerationRouteWithChildren
@@ -330,12 +356,14 @@ export interface FileRoutesByFullPath {
   '/orders/': typeof OrdersIndexRoute
   '/wish/': typeof WishIndexRoute
   '/admin/disputes/$disputeId': typeof AdminDisputesDisputeIdRoute
+  '/admin/feedback/$feedbackId': typeof AdminFeedbackFeedbackIdRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit/': typeof AdminAuditIndexRoute
   '/admin/disputes/': typeof AdminDisputesIndexRoute
+  '/admin/feedback/': typeof AdminFeedbackIndexRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
@@ -347,6 +375,7 @@ export interface FileRoutesByTo {
   '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
+  '/feedback': typeof FeedbackRoute
   '/following': typeof FollowingRoute
   '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
@@ -368,12 +397,14 @@ export interface FileRoutesByTo {
   '/orders': typeof OrdersIndexRoute
   '/wish': typeof WishIndexRoute
   '/admin/disputes/$disputeId': typeof AdminDisputesDisputeIdRoute
+  '/admin/feedback/$feedbackId': typeof AdminFeedbackFeedbackIdRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit': typeof AdminAuditIndexRoute
   '/admin/disputes': typeof AdminDisputesIndexRoute
+  '/admin/feedback': typeof AdminFeedbackIndexRoute
   '/admin/listings': typeof AdminListingsIndexRoute
   '/admin/moderation': typeof AdminModerationIndexRoute
   '/admin/reports': typeof AdminReportsIndexRoute
@@ -387,6 +418,7 @@ export interface FileRoutesById {
   '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
+  '/feedback': typeof FeedbackRoute
   '/following': typeof FollowingRoute
   '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
@@ -402,6 +434,7 @@ export interface FileRoutesById {
   '/wish': typeof WishRouteWithChildren
   '/admin/audit': typeof AdminAuditRouteWithChildren
   '/admin/disputes': typeof AdminDisputesRouteWithChildren
+  '/admin/feedback': typeof AdminFeedbackRouteWithChildren
   '/admin/listings': typeof AdminListingsRouteWithChildren
   '/admin/metrics': typeof AdminMetricsRoute
   '/admin/moderation': typeof AdminModerationRouteWithChildren
@@ -418,12 +451,14 @@ export interface FileRoutesById {
   '/orders/': typeof OrdersIndexRoute
   '/wish/': typeof WishIndexRoute
   '/admin/disputes/$disputeId': typeof AdminDisputesDisputeIdRoute
+  '/admin/feedback/$feedbackId': typeof AdminFeedbackFeedbackIdRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit/': typeof AdminAuditIndexRoute
   '/admin/disputes/': typeof AdminDisputesIndexRoute
+  '/admin/feedback/': typeof AdminFeedbackIndexRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
@@ -438,6 +473,7 @@ export interface FileRouteTypes {
     | '/blocked'
     | '/comments'
     | '/favorites'
+    | '/feedback'
     | '/following'
     | '/history'
     | '/login'
@@ -453,6 +489,7 @@ export interface FileRouteTypes {
     | '/wish'
     | '/admin/audit'
     | '/admin/disputes'
+    | '/admin/feedback'
     | '/admin/listings'
     | '/admin/metrics'
     | '/admin/moderation'
@@ -469,12 +506,14 @@ export interface FileRouteTypes {
     | '/orders/'
     | '/wish/'
     | '/admin/disputes/$disputeId'
+    | '/admin/feedback/$feedbackId'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit/'
     | '/admin/disputes/'
+    | '/admin/feedback/'
     | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
@@ -486,6 +525,7 @@ export interface FileRouteTypes {
     | '/blocked'
     | '/comments'
     | '/favorites'
+    | '/feedback'
     | '/following'
     | '/history'
     | '/login'
@@ -507,12 +547,14 @@ export interface FileRouteTypes {
     | '/orders'
     | '/wish'
     | '/admin/disputes/$disputeId'
+    | '/admin/feedback/$feedbackId'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit'
     | '/admin/disputes'
+    | '/admin/feedback'
     | '/admin/listings'
     | '/admin/moderation'
     | '/admin/reports'
@@ -525,6 +567,7 @@ export interface FileRouteTypes {
     | '/blocked'
     | '/comments'
     | '/favorites'
+    | '/feedback'
     | '/following'
     | '/history'
     | '/login'
@@ -540,6 +583,7 @@ export interface FileRouteTypes {
     | '/wish'
     | '/admin/audit'
     | '/admin/disputes'
+    | '/admin/feedback'
     | '/admin/listings'
     | '/admin/metrics'
     | '/admin/moderation'
@@ -556,12 +600,14 @@ export interface FileRouteTypes {
     | '/orders/'
     | '/wish/'
     | '/admin/disputes/$disputeId'
+    | '/admin/feedback/$feedbackId'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit/'
     | '/admin/disputes/'
+    | '/admin/feedback/'
     | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
@@ -575,6 +621,7 @@ export interface RootRouteChildren {
   BlockedRoute: typeof BlockedRoute
   CommentsRoute: typeof CommentsRoute
   FavoritesRoute: typeof FavoritesRoute
+  FeedbackRoute: typeof FeedbackRoute
   FollowingRoute: typeof FollowingRoute
   HistoryRoute: typeof HistoryRoute
   LoginRoute: typeof LoginRoute
@@ -627,6 +674,13 @@ declare module '@tanstack/react-router' {
       path: '/favorites'
       fullPath: '/favorites'
       preLoaderRoute: typeof FavoritesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/feedback': {
+      id: '/feedback'
+      path: '/feedback'
+      fullPath: '/feedback'
+      preLoaderRoute: typeof FeedbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/following': {
@@ -739,6 +793,13 @@ declare module '@tanstack/react-router' {
       path: '/disputes'
       fullPath: '/admin/disputes'
       preLoaderRoute: typeof AdminDisputesRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/feedback': {
+      id: '/admin/feedback'
+      path: '/feedback'
+      fullPath: '/admin/feedback'
+      preLoaderRoute: typeof AdminFeedbackRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/listings': {
@@ -860,6 +921,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminDisputesDisputeIdRouteImport
       parentRoute: typeof AdminDisputesRoute
     }
+    '/admin/feedback/': {
+      id: '/admin/feedback/'
+      path: '/'
+      fullPath: '/admin/feedback/'
+      preLoaderRoute: typeof AdminFeedbackIndexRouteImport
+      parentRoute: typeof AdminFeedbackRoute
+    }
+    '/admin/feedback/$feedbackId': {
+      id: '/admin/feedback/$feedbackId'
+      path: '/$feedbackId'
+      fullPath: '/admin/feedback/$feedbackId'
+      preLoaderRoute: typeof AdminFeedbackFeedbackIdRouteImport
+      parentRoute: typeof AdminFeedbackRoute
+    }
     '/admin/listings/': {
       id: '/admin/listings/'
       path: '/'
@@ -952,6 +1027,20 @@ const AdminDisputesRouteWithChildren = AdminDisputesRoute._addFileChildren(
   AdminDisputesRouteChildren,
 )
 
+interface AdminFeedbackRouteChildren {
+  AdminFeedbackFeedbackIdRoute: typeof AdminFeedbackFeedbackIdRoute
+  AdminFeedbackIndexRoute: typeof AdminFeedbackIndexRoute
+}
+
+const AdminFeedbackRouteChildren: AdminFeedbackRouteChildren = {
+  AdminFeedbackFeedbackIdRoute: AdminFeedbackFeedbackIdRoute,
+  AdminFeedbackIndexRoute: AdminFeedbackIndexRoute,
+}
+
+const AdminFeedbackRouteWithChildren = AdminFeedbackRoute._addFileChildren(
+  AdminFeedbackRouteChildren,
+)
+
 interface AdminListingsRouteChildren {
   AdminListingsListingIdRoute: typeof AdminListingsListingIdRoute
   AdminListingsIndexRoute: typeof AdminListingsIndexRoute
@@ -1022,6 +1111,7 @@ const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
 interface AdminRouteChildren {
   AdminAuditRoute: typeof AdminAuditRouteWithChildren
   AdminDisputesRoute: typeof AdminDisputesRouteWithChildren
+  AdminFeedbackRoute: typeof AdminFeedbackRouteWithChildren
   AdminListingsRoute: typeof AdminListingsRouteWithChildren
   AdminMetricsRoute: typeof AdminMetricsRoute
   AdminModerationRoute: typeof AdminModerationRouteWithChildren
@@ -1034,6 +1124,7 @@ interface AdminRouteChildren {
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditRoute: AdminAuditRouteWithChildren,
   AdminDisputesRoute: AdminDisputesRouteWithChildren,
+  AdminFeedbackRoute: AdminFeedbackRouteWithChildren,
   AdminListingsRoute: AdminListingsRouteWithChildren,
   AdminMetricsRoute: AdminMetricsRoute,
   AdminModerationRoute: AdminModerationRouteWithChildren,
@@ -1090,6 +1181,7 @@ const rootRouteChildren: RootRouteChildren = {
   BlockedRoute: BlockedRoute,
   CommentsRoute: CommentsRoute,
   FavoritesRoute: FavoritesRoute,
+  FeedbackRoute: FeedbackRoute,
   FollowingRoute: FollowingRoute,
   HistoryRoute: HistoryRoute,
   LoginRoute: LoginRoute,
