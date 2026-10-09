@@ -632,3 +632,29 @@
 .uhome__navreport-ic {
   display: block;
 }
+
+/* ---------------------------------------------------------------- 拉黑入口
+   (#466 端上批次 / #473)：资料卡内、数据行下方的安静文字行。右对齐、
+   中性色（入口本身不是危险按钮，危险感交给确认弹窗）；已拉黑态换品牌深色
+   以示「有关系存在」，busy 半透明。 */
+
+.uhome__blockrow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.uhome__block {
+  padding: 10px 24px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+
+  &.is-on {
+    color: var(--brand-deep);
+  }
+
+  &.is-busy {
+    opacity: 0.5;
+  }
+}

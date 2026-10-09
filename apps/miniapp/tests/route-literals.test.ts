@@ -269,7 +269,7 @@ const CONCAT_ROUTE_ROOTS: string[] = []
  * **且**路径出现在本清单里；只加标记不生效（下面有测试核对），所以改的人必须在 diff
  * 里显式写下文件名，删守卫时也藏不住。
  */
-const ROUTE_SCAN_OPT_OUT = new Set(['tests/route-literals.test.ts'])
+const ROUTE_SCAN_OPT_OUT = new Set(['tests/route-literals.test.ts', 'tests/blocks-wiring.test.ts'])
 
 /** 整文件豁免的标记（放在文件注释里即可，允许 JSDoc 的 ` * ` 前缀与行尾说明）。 */
 const ROUTE_SCAN_OPT_OUT_MARKER = /^[ \t]*(?:\*[ \t]*)?\/\/[ \t]*route-guard:[ \t]*skip-file\b/m
@@ -459,8 +459,8 @@ function pageDirsOnDisk(): { route: string; file: string }[] {
 }
 
 describe('路由字面量守卫（分包后）', () => {
-  test('解析器没取空：app.config 声明了 38 个页面（5 主包 + 33 分包）', () => {
-    expect(declared.length).toBe(38)
+  test('解析器没取空：app.config 声明了 39 个页面（5 主包 + 34 分包）', () => {
+    expect(declared.length).toBe(39)
   })
 
   test('扫描器没取空：代码里确实抓到路由字面量', () => {

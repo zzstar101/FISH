@@ -44,4 +44,10 @@ describe('describeCreateConversationFailure —— 404 只说不存在，不说�
     )
     expect(describeCreateConversationFailure(new Error('boom'))).toBe('发起会话失败，请重试')
   })
+
+  test('拉黑守卫（#466 / #473）：CONVERSATION_UNAVAILABLE 给中性文案，不暴露黑名单', () => {
+    expect(describeCreateConversationFailure(apiError('CONVERSATION_UNAVAILABLE', 403))).toBe(
+      '会话当前不可用',
+    )
+  })
 })

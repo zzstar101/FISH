@@ -36,6 +36,13 @@ const CONVERSATION_LIMIT = 50
 const MESSAGE_PAGE_LIMIT = 100
 
 /**
+ * 拉黑守卫（#466）的中性文案：双方同码同文，**不暴露「谁拉黑了谁」**（#466 验收：
+ * 报错不暴露对方黑名单）。建会话（`describeCreateConversationFailure`）与聊一聊 /
+ * 想要匹配等入口共用这一份，别各写一份漂移。
+ */
+export const CONVERSATION_UNAVAILABLE_TEXT = '会话当前不可用'
+
+/**
  * 一页会话列表。`cursor` 传上一页的 `nextCursor`（不透明字符串，只能原样回传）。
  * 返回整个响应：Chat 页要「加载更多」就必须拿到游标。
  */
@@ -213,8 +220,8 @@ export async function markNotificationRead(id: string): Promise<void> {
 }
 
 /**
- * **第一步**（建会话）失败的展示文案 —— 只认 `LISTING_NOT_FOUND`，其余（网络 / 未识别码）
- * 一律「发起会话失败，请重试」。
+ * **第一步**（建会话）失败的展示文案 —— 只认 `LISTING_NOT_FOUND` 与拉黑守卫的
+ * `CONVERSATION_UNAVAILABLE`，其余（网络 / 未识别码）一律「发起会话失败，请重试」。
  *
  * `LISTING_NOT_FOUND` 只说「商品不存在 / 已删除」，**不含「已下架」**：
  *
@@ -235,6 +242,9 @@ export async function markNotificationRead(id: string): Promise<void> {
  * 由调用方隐藏入口，不在这里给文案。
  */
 export function describeCreateConversationFailure(error: unknown): string {
+  if (isApiError(error) && error.code === 'CONVERSATION_UNAVAILABLE') {
+    return CONVERSATION_UNAVAILABLE_TEXT
+  }
   if (isApiError(error) && error.code === 'LISTING_NOT_FOUND') return '商品不存在或已删除'
   return '发起会话失败，请重试'
 }

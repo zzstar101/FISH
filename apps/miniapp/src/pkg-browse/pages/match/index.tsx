@@ -9,10 +9,11 @@ import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
-import { createConversation } from '@/features/chat/api'
+import { CONVERSATION_UNAVAILABLE_TEXT, createConversation } from '@/features/chat/api'
 import { loadWishMatches } from '@/features/fetchers'
 import type { MatchView } from '@/features/match/adapt'
 import { formatAmount } from '@/lib/money'
+import { isApiError } from '@/lib/request'
 import type { MockWish } from '@/mock/api'
 import {
   type ChatTask,
@@ -285,10 +286,17 @@ export default function Match() {
       if (!isCurrentTask()) return
       setConversations((prev) => ({ ...prev, [listingId]: conversation.id }))
       await Taro.navigateTo({ url: `/pkg-social/pages/conversation/index?id=${conversation.id}` })
-    } catch {
+    } catch (error: unknown) {
       // 旧任务的失败不能弹给新账号。
       if (!isCurrentTask()) return
-      void Taro.showToast({ title: '会话发起失败，请重试', icon: 'none' })
+      void Taro.showToast({
+        title:
+          isApiError(error) && error.code === 'CONVERSATION_UNAVAILABLE'
+            ? // 拉黑守卫（#466）中性文案：不暴露「谁拉黑了谁」
+              CONVERSATION_UNAVAILABLE_TEXT
+            : '会话发起失败，请重试',
+        icon: 'none',
+      })
     } finally {
       release()
     }
