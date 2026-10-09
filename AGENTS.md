@@ -2,9 +2,9 @@
 
 给 AI coding agent 的操作手册。**人看的协作规则在 [CONTRIBUTING.md](CONTRIBUTING.md)，架构在 [docs/architecture.md](docs/architecture.md)** —— 本文件不重复它们，只写 agent 最容易做错的部分。
 
-> **⚠️ 涉及 `apps/miniapp`（小程序端）前端的任何改动，先读 [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) 与 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md)**：一批页面一条分支一个 PR、同一时间只开一个小程序 PR、**合并前**必须到微信开发者工具逐页演示并经 Owner 认可。该端上流程**只适用于 `apps/miniapp`**，不适用于 `apps/web`（移动端 PWA）与 `apps/web-pc`（PC 站）—— 这两个按本文件的通用纪律走，一个 PR 同样可以包含多个页面。
+> **⚠️ 涉及 `apps/miniapp`（小程序端）前端的任何改动，先读 [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) 与 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md)**：一批页面一条分支一个 PR、**合并前**必须到微信开发者工具逐页演示并经 Owner 认可。该端上流程**只适用于 `apps/miniapp`**，不适用于 `apps/web-pc`（PC 站）—— 它按本文件的通用纪律走，一个 PR 同样可以包含多个页面。原移动端 PWA `apps/web` 已随 [#325](https://github.com/zzstar101/FISH/issues/325) 移除。
 
-本项目是**微信小程序 + PC Web**（广应科校内二手交易平台 FISH），monorepo + Bun。
+本项目是**微信小程序 + PC Web**（广应科校内二手交易平台 FISH），monorepo + Bun：`apps/api`、`apps/worker`、`apps/miniapp`、`apps/web-pc` 与 `packages/*`。
 
 ## 1. 命令
 
@@ -14,13 +14,18 @@ cp .env.example .env        # 首次；.env 不进版本库
 bun run db:up               # 启动本地依赖（Postgres + MinIO）
 bun run dev:api             # API   :3000
 bun run dev:worker          # Worker（常驻，无端口）
+bun run dev:web-pc          # PC Web（Vite :5174，basepath /pc/）
+bun run dev:miniapp         # 小程序（Taro，产物用微信开发者工具打开）
+bun run db:migrate          # 应用迁移（集成测试前必需）
+bun run db:seed             # 灌演示数据
 
 bun run typecheck           # TypeScript 7 全仓类型检查
 bun run lint                # Biome 检查
 bun run format              # Biome 格式化
-bun test --isolate          # 全仓测试（每个测试文件独立全局/模块注册表）
+bun test --isolate          # 全仓测试（每个测试文件独立全局/模块注册表；集成测试要求先 db:up + db:migrate）
 bun run build               # 构建
 bun run ws:smoke            # WebSocket 连通性冒烟
+bun run core:smoke          # 核心链路冒烟
 ```
 
 不要用 `npm` / `pnpm` / `yarn`，不要用 `npx` 替代 `bunx`。
@@ -68,7 +73,7 @@ bun run ws:smoke            # WebSocket 连通性冒烟
 4. `bun test --isolate`
 5. 涉及运行时行为时，按 README 的最小启动路径实际跑起来验证（不要只靠静态检查下结论）。
 
-> **小程序端（`apps/miniapp`）另有一条端上门禁**：见 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) —— 一批页面一个 PR、同一时间只开一个小程序 PR、**合并前**必须在微信开发者工具里逐页演示并经 Owner 认可，不能被本节的静态检查替代。该门禁**只约束 `apps/miniapp`**。
+> **小程序端（`apps/miniapp`）另有一条端上门禁**：见 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) —— 一批页面一个 PR、**合并前**必须在微信开发者工具里逐页演示并经 Owner 认可，不能被本节的静态检查替代。该门禁**只约束 `apps/miniapp`**。
 
 CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都不得声称完成。
 
@@ -125,6 +130,6 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Issue 认领协议与 state label、分支/提交/PR、zzstar101 审核、Contract、DB 变更说明 |
 | [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) | 小程序目录内的端上门禁入口（指向 `docs/miniapp-dev-workflow.md`） |
 | [packages/db/AGENTS.md](packages/db/AGENTS.md) | 迁移与 seed 纪律：`drizzle-kit` 生成、tag = UTC+8 时间戳、不手改历史、`postgres` devDependency 例外 |
-| [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) | **小程序端上验证工作流**：一批页面一条分支一个 PR、同一时间只开一个 PR、**合并前**开发者工具逐页演示 + Owner 认可（**只约束 `apps/miniapp`**，不适用于 `apps/web` / `apps/web-pc`） |
+| [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) | **小程序端上验证工作流**：一批页面一条分支一个 PR、**合并前**开发者工具逐页演示 + Owner 认可（**只约束 `apps/miniapp`**，不适用于 `apps/web-pc`） |
 | [docs/architecture.md](docs/architecture.md) | 系统形态、运行时拓扑、链路、端口 |
 | [README.md](README.md) | 最小启动路径与常用命令 |
