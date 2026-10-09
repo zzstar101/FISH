@@ -10,8 +10,6 @@ import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
-import { fetchBlockState, setBlock } from '@/features/blocks/api'
-import { blockConfirmModal, blockEntryView, describeBlockFailure } from '@/features/blocks/view'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
@@ -429,93 +427,6 @@ export default function UserHome() {
         if (followKeyRef.current === key) setFollowBusy(false)
       })
   }
-
-  /**
-   * 拉黑入口（#466 端上批次 / #473）：**真实接线**。
-   *
-   * - 资格与关注钮同一条（`canFollow`：已登录 且 非本人主页）；读到状态之前不渲染、
-   *   读失败保持 `null` 整块隐藏（同关注钮「不猜状态」的口径，PC 站是禁用 + 提示，
-   *   端上跟同一页的关注钮保持一致更顺）。
-   * - 拉黑先过原生确认弹窗（后果说明与 PC 确认弹窗同文，见 `blockConfirmModal`）；
-   *   解除是恢复性动作，直接执行。
-   * - 成功以服务端 `{blocked}` 为准回填，不本地翻转；epoch 守卫与关注钮同一把钥匙
-   *   （`blockKeyRef` 与 `followKeyRef` 同形状：账号|页主，换账号 / 换页主即作废）。
-   * - 写失败给域内稳定文案（`describeBlockFailure`），401 给登录文案。
-   */
-  const [blockRead, setBlockRead] = useState<{ blocked: boolean } | null>(null)
-  const [blockBusy, setBlockBusy] = useState(false)
-  const blockKeyRef = useRef(followKey)
-  blockKeyRef.current = followKey
-
-  useEffect(() => {
-    setBlockRead(null)
-    setBlockBusy(false)
-    if (!canFollow) return
-
-    const key = followKey
-    const run = cancellable(
-      () => fetchBlockState(userId),
-      () => true,
-    )
-    void run.promise
-      .then((state) => {
-        if (blockKeyRef.current !== key || state === null) return
-        setBlockRead({ blocked: state.blocked })
-      })
-      .catch((error: unknown) => {
-        // 读失败保持隐藏（同关注钮「不猜状态」）；401 守卫已在跳登录，不再弹文案
-        if (blockKeyRef.current !== key || isUnauthenticatedError(error)) return
-        console.debug('[miniapp] 他人主页：拉黑状态读取失败', error)
-      })
-    return run.cancel
-  }, [canFollow, followKey, userId])
-
-  const runBlockWrite = (key: string, nextBlocked: boolean) => {
-    setBlockBusy(true)
-    const run = cancellable(
-      () => setBlock(userId, nextBlocked),
-      () => true,
-    )
-    void run.promise
-      .then((state) => {
-        if (blockKeyRef.current !== key || state === null) return
-        setBlockRead({ blocked: state.blocked })
-        void Taro.showToast({ title: state.blocked ? '已拉黑' : '已解除拉黑', icon: 'none' })
-      })
-      .catch((error: unknown) => {
-        if (blockKeyRef.current !== key) return
-        void Taro.showToast({
-          title: isUnauthenticatedError(error)
-            ? '登录已失效，请重新登录'
-            : describeBlockFailure(error),
-          icon: 'none',
-        })
-      })
-      .finally(() => {
-        if (blockKeyRef.current === key) setBlockBusy(false)
-      })
-  }
-
-  const toggleBlock = () => {
-    if (blockBusy || blockRead === null || !canFollow) return
-    const key = followKey
-    if (blockRead.blocked) {
-      runBlockWrite(key, false)
-      return
-    }
-    void Taro.showModal({
-      ...blockConfirmModal(profile?.nickname ?? '该用户'),
-      cancelText: '取消',
-    })
-      .then((res) => {
-        // 用户看弹窗的这几秒里可能已经换了账号：这个「确认」不属于新账号，直接丢掉
-        if (res.confirm && blockKeyRef.current === key) runBlockWrite(key, true)
-      })
-      .catch(() => undefined)
-  }
-
-  const blockEntry = blockEntryView({ read: blockRead, pending: blockBusy })
-
   /** 展开态点击收起 / 折叠态点击展开；短签名（`!signHasMore`）点击无效果 */
   const toggleSign = () => {
     if (!signHasMore) return
@@ -805,21 +716,6 @@ export default function UserHome() {
                     <Text className="uhome__stat-label">好评率</Text>
                   </View>
                 </View>
-
-                {/* 拉黑入口（#466 端上批次 / #473）：读到我与页主的拉黑关系后才渲染；
-                    拉黑先过确认弹窗、解除直接执行。匿名访客 / 本人主页 / 读失败都不渲染。 */}
-                {blockEntry.visible ? (
-                  <View className="uhome__blockrow">
-                    <Text
-                      className={`uhome__block${blockEntry.blocked ? ' is-on' : ''}${
-                        blockEntry.busy ? ' is-busy' : ''
-                      }`}
-                      onClick={toggleBlock}
-                    >
-                      {blockEntry.label}
-                    </Text>
-                  </View>
-                ) : null}
               </View>
             ) : (
               /* 资料没拿到之前先给页头骨架：头像盘 + 昵称条 + 关注钮占位 + 数据行条
