@@ -225,6 +225,7 @@ describe('ListingDetailSchema', () => {
     createdAt: '2026-09-12T03:40:10.000Z',
     updatedAt: '2026-09-12T03:40:10.000Z',
     wants: 0,
+    views: 0,
     images: [],
     seller: {
       id: USER_ID,
@@ -254,6 +255,12 @@ describe('ListingDetailSchema', () => {
     expect(ListingDetailSchema.safeParse(withoutWants).success).toBe(false)
   })
 
+  // 浏览量同理：详情页把「浏览 N · 想要 N」画在同一行，少一个数那一行就只剩半边
+  test('缺 views 同样被拒（必填由 ListingCardSchema.extend 继承）', () => {
+    const { views: _omitted, ...withoutViews } = detail
+    expect(ListingDetailSchema.safeParse(withoutViews).success).toBe(false)
+  })
+
   test('carries every card field so the two shapes cannot drift', () => {
     for (const key of Object.keys(ListingCardSchema.shape)) {
       expect(key in ListingDetailSchema.shape).toBe(true)
@@ -276,6 +283,7 @@ describe('ListingCardSchema', () => {
     createdAt: '2026-09-12T03:40:10.000Z',
     moderationStatus: null,
     wants: 0,
+    views: 0,
   }
 
   test('rejects an unknown status (DRAFT does not exist in the state machine)', () => {
@@ -293,6 +301,17 @@ describe('ListingCardSchema', () => {
     expect(ListingCardSchema.safeParse(withoutWants).success).toBe(false)
     // 拒收的理由必须是「少了这个数」：错误要落在 wants 上，而不是别的字段被带崩
     expect(issuePaths(ListingCardSchema, withoutWants)).toContainEqual(['wants'])
+  })
+
+  /*
+   * `views` 同样必填（= 近 30 天去重浏览人数，唯一实现在 `@fish/db/listing-views`）。
+   * 与 `wants` 的理由一字不差：`0`（窗口内没有去重访客）是事实，键缺席是「没查/漏带」。
+   * 放行缺席就等于允许服务端漏带这个数字，客户端只能画成「0 浏览」——编造出来的市场信号。
+   */
+  test('缺 views 必须被拒（0 是事实，缺席不是）', () => {
+    const { views: _omitted, ...withoutViews } = card
+    expect(ListingCardSchema.safeParse(withoutViews).success).toBe(false)
+    expect(issuePaths(ListingCardSchema, withoutViews)).toContainEqual(['views'])
   })
 
   test('携带审核态：null（非本人视角）与三档枚举合法，其余值拒收', () => {

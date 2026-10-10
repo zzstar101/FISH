@@ -24,6 +24,7 @@ const listingCard = {
   createdAt: '2026-09-12T01:00:00.000Z',
   moderationStatus: null,
   wants: 0,
+  views: 0,
 }
 
 const item = { listing: listingCard, viewedAt: '2026-09-12T03:00:00.000Z' }

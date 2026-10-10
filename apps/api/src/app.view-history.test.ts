@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { listings } from '@fish/db/schema/listings'
@@ -334,5 +335,46 @@ describe('view history API (#415 M1)', () => {
         ),
       )
     expect(events.length).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * #192：商品「浏览量」= 最近 30 天内浏览过该商品的去重人数，来源就是上面这条 DETAIL_VIEW 上报链。
+ *
+ * 这条用例证明的是**接线**（`@fish/db/listing-views` 的谓词语义本身由
+ * `packages/db/src/listing-views.test.ts` 覆盖）：详情与 Feed 卡片上并排画的
+ * 「浏览 N」必须真的来自这些事件，而不是映射层漏带字段后静默变成 0 ——
+ * 那正是这个字段进契约之前两个计数整块画不出来的失效形态。
+ */
+describe('商品浏览量 API（#192）', () => {
+  test('上报 DETAIL_VIEW 后，详情与 Feed 卡片都带出同一个去重人数', async () => {
+    const seller = await registerUser('16')
+    const viewerA = await registerUser('17')
+    const viewerB = await registerUser('18')
+    const listing = await createListing(seller.id, '浏览量验收商品')
+
+    // 用**相对**当前时刻的时间：写死日期的夹具会随 30 天窗口滚出去，把用例变成定时炸弹。
+    const occurredAt = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    for (const cookie of [viewerA.cookie, viewerA.cookie, viewerB.cookie]) {
+      expect(await postDetailView({ listingPublicId: listing, occurredAt, cookie })).toBe(202)
+    }
+
+    const detail = await app.request(LISTING_ROUTES.detail(listing), {
+      headers: { cookie: viewerA.cookie },
+    })
+    expect(detail.status).toBe(200)
+    const detailBody = (await detail.json()) as { views: number; wants: number }
+    // 同一个人点开两次 + 另一个人一次 = 2 个**人**（不是 3 次）
+    expect(detailBody.views).toBe(2)
+    // 「想要」= 已建会话的买家数：本用例没人开过会话，是事实上的 0
+    expect(detailBody.wants).toBe(0)
+
+    const feed = await app.request(`${LISTING_ROUTES.base}?limit=50`, {
+      headers: { cookie: viewerA.cookie },
+    })
+    expect(feed.status).toBe(200)
+    const feedBody = (await feed.json()) as { items: { id: string; views: number }[] }
+    // 卡片与详情同源：同一个数，不允许两处各算一遍
+    expect(feedBody.items.find((item) => item.id === listing)?.views).toBe(2)
   })
 })

@@ -1,5 +1,6 @@
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
+import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { favorites } from '@fish/db/schema/favorites'
 import { listings } from '@fish/db/schema/listings'
@@ -146,6 +147,8 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
             >`(SELECT li.object_key FROM listing_images li WHERE li.listing_id = ${listings.id} AND li.sort_order = 0 LIMIT 1)`,
             // 想要数（= 已建会话的买家数）：卡片契约的必填字段，主查询一次算完（见 `@fish/db/listing-wants`）。
             wants: listingWantsCount(listings.id),
+            // 浏览量（近 30 天去重浏览人数）：同一张卡上与「想要数」并排画，同样主查询一次算完。
+            views: listingViewsCount(listings.id),
             // 毫秒给契约、微秒给游标：JS `Date` 只有毫秒，而 `created_at` 是 timestamptz（微秒），
             // 游标必须保留微秒才不重不漏；对外那个字段反过来只需要毫秒（`z.iso.datetime()` 的形状）。
             favoritedAt: sql<string>`to_char(${favorites.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`,
