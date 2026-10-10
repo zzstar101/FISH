@@ -27,6 +27,7 @@ import {
   viewTargetOf,
 } from '@/features/comments/mine'
 import { deleteMyTransactionReview } from '@/features/transaction/api'
+import { createImageReloadState, noteImageFailure } from '@/features/transaction/image-reload'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -108,12 +109,8 @@ export default function MyComments() {
   const userIdRef = useRef<string | null>(userId)
   userIdRef.current = userId
   const [showTop, setShowTop] = useState(false)
-  /**
-   * 已因 `onError` 补读过列表的图片地址（评价配图，见下方 `retryImageOnce`）。
-   * 同一地址只补一次：评价图是 900 秒的签名 URL（`REVIEW_MEDIA_URL_TTL_SECONDS`），
-   * 过期后重读能拿到新签名；但真 404 的图不该把页面拖进「加载→失败→再加载」的死循环。
-   */
-  const retriedImageRef = useRef<Set<string>>(new Set())
+  /** 评价配图签名 URL 失效后的补读判据（按 URL + 次数双上限，见 `@/features/transaction/image-reload`） */
+  const imageReloadRef = useRef(createImageReloadState())
 
   /** 真实模式的续页游标（`nextCursor`；`null` = 到底了）。 */
   const [cursor, setCursor] = useState<string | null>(null)
@@ -278,11 +275,11 @@ export default function MyComments() {
    * 评价配图是服务端签发的 900 秒 capability URL（`REVIEW_MEDIA_URL_TTL_SECONDS`）：
    * 页面挂后台超过 15 分钟再回来，图会全部裂掉，重读列表能拿到重新签发的地址。
    * 契约不带 `expiresAt`（端上无从预判何时过期），只能按 `onError` 兜底 ——
-   * 每个地址只补读一次，别让真 404 的图把页面拖进死循环。演示档不补读（fixture 不是签名 URL）。
+   * 是否真发这次补读由 `noteImageFailure` 判定（同一 URL 不重复、总次数有上限；
+   * 只按 URL 去重挡不住「每次补读都换一批签名」造成的无界重读）。演示档不补读（fixture 不是签名 URL）。
    */
   const retryImageOnce = (url: string) => {
-    if (demo || retriedImageRef.current.has(url)) return
-    retriedImageRef.current.add(url)
+    if (demo || !noteImageFailure(imageReloadRef.current, url)) return
     void read(segmentRef.current, true)
   }
 

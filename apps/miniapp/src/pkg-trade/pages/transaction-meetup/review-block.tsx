@@ -3,6 +3,7 @@ import Taro from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import ReviewDialog from '@/components/review-dialog'
 import { fetchTransactionReviews } from '@/features/transaction/api'
+import { createImageReloadState, noteImageFailure } from '@/features/transaction/image-reload'
 import { type ReviewRowView, ratingViewOf, splitReviews } from './review-block-view'
 
 /**
@@ -15,8 +16,9 @@ import { type ReviewRowView, ratingViewOf, splitReviews } from './review-block-v
  * 直接渲染即可；点缩略图进 `previewImage` 看大图。
  *
  * **签名 URL 只有 900 秒**（`REVIEW_MEDIA_URL_TTL_SECONDS`）：评价页挂在后台超过
- * 15 分钟再回来看，图会全部裂掉。契约不带 `expiresAt`，所以端上只能按 `onError`
- * 兜底 —— 同一个地址只补读一次（`retriedRef`），避免真 404 的图把页面拖进死循环。
+ * 15 分钟再回来看，图会全部裂掉。契约不带 `expiresAt`，端上只能按 `onError` 兜底 ——
+ * 判据在 `@/features/transaction/image-reload`（按 URL + 次数双上限，见那里的注释：
+ * 只按 URL 去重挡不住「每次补读都换一批签名」造成的无界重读）。
  *
  * 我这一侧还没评过时给「写评价」入口，打开 `components/review-dialog`（与订单卡
  * 同一个弹层）；提交成功后本块自重读，入口随已评状态消失。
@@ -30,9 +32,12 @@ import { type ReviewRowView, ratingViewOf, splitReviews } from './review-block-v
  * 正是演示清单里「提交后切后台 → 回前台」那一步。
  *
  * 所以渲染拆成两层：**卡片区**自己承担 loading / failed / ready 三态，
- * `MeetupReviewSections` 把弹层当**兄弟**无条件画（只由 `dialogOpen` 决定），
- * 页面组件只负责取数与状态、不再对渲染做任何分支。渲染级用例见
- * `apps/miniapp/tests/review-block-render.test.tsx`。
+ * `MeetupReviewSections` 把弹层当**兄弟**无条件画（只由 `dialogOpen` 决定）。
+ * 两半各有一道断言：`MeetupReviewSections` 由 `apps/miniapp/tests/review-block-render.test.ts`
+ * 真渲染（loading / failed 两态下弹层必须还在），default export 由同一文件钉住
+ * 「渲染体只有一处、无条件调用 `MeetupReviewSections`」—— 那正是原始 bug 的形态
+ * （早退发生在承载 `dialogOpen` 的那个组件里）。两道网都做过变异验证：在两处分别加回
+ * `if (state.state === 'loading') return null`，对应用例各自变红。
  *
  * 加载失败**不吞**：本块是完成态的主要对账信息（「对方评了没」），给一行可重试的
  * 说明，而不是静默消失让人误以为「对方还没评」。加载中先不画卡（避免闪一帧空卡）。
@@ -168,8 +173,8 @@ export default function MeetupReviewBlock({
   const [state, setState] = useState<BlockState>({ state: 'loading' })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [refreshTick, setRefreshTick] = useState(0)
-  /** 已因 onError 补读过的图片地址：同一地址只补一次，别让真 404 的图把页面拖进死循环 */
-  const retriedRef = useRef<Set<string>>(new Set())
+  /** 配图签名 URL 失效后的补读判据（按 URL + 次数双上限，见 `@/features/transaction/image-reload`） */
+  const imageReloadRef = useRef(createImageReloadState())
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadSignal/refreshTick 是刻意的重读信号，不是体内读到的值
   useEffect(() => {
@@ -193,12 +198,11 @@ export default function MeetupReviewBlock({
   }, [transactionId, myRole, reloadSignal, refreshTick])
 
   /**
-   * 签名 URL 过期（或图真的没了）时补读一次：重读会拿到重新签发的 URL。
-   * 只对**没见过**的地址补读，且同一地址只补一次。
+   * 签名 URL 过期（或图真的没了）时补读：重读会拿到重新签发的 URL。
+   * 是否真发这次补读由 `noteImageFailure` 判定（同一 URL 不重复、总次数有上限）。
    */
   const retryImageOnce = (url: string) => {
-    if (retriedRef.current.has(url)) return
-    retriedRef.current.add(url)
+    if (!noteImageFailure(imageReloadRef.current, url)) return
     setRefreshTick((prev) => prev + 1)
   }
 

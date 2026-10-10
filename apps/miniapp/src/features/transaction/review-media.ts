@@ -15,8 +15,10 @@
  *    不信选图器报的数）。
  *
  * `isActive` 是调用方的在途判据：三步里**每一次**发请求前都会问一遍。弹层被关闭 /
- * 配图被移除后立刻中止，不再发出后续请求（confirm 出一个永不引用的公开对象就是孤儿）。
- * 中止抛 `UploadAbortedError`（./active 的既定哨兵），调用方按「条目已不在表里」静默吞掉。
+ * 配图被移除 / 账号切换后立刻中止，不再发出后续请求（confirm 出一个永不引用的公开对象就是孤儿）。
+ * 中止抛 `UploadAbortedError`（./active 的既定哨兵）；调用方按中止原因分别处理 ——
+ * 条目已不在表里时什么都不做，身份已变时把槽位标成失败（见 `components/review-dialog` 的
+ * `abandonSlot`，不让槽位永久停在「上传中」）。
  */
 import { TRANSACTION_REVIEW_ROUTES } from '@fish/contracts/transaction-reviews/routes'
 import {

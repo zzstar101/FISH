@@ -114,20 +114,26 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
   /** 槽位还在表里、身份未变、仍是「上传中」才算数 —— 移除/换号后的迟到结果一律丢弃 */
   const slotActive = (id: string) =>
     aliveRef.current &&
-    (ownerRef.current === null || userRef.current === ownerRef.current) &&
+    userRef.current === ownerRef.current &&
     imagesRef.current.some((slot) => slot.id === id)
 
   /**
    * 上传链中途失效时的收尾：槽位还在表里就标成失败，别让它永久停在「上传中」
    * （闸门文案会一直卡在「请稍候」，用户既提交不了也看不出为什么）。槽位已被移除、
    * 或弹层已卸载时不写任何状态。
+   *
+   * 能走到这里的只有**身份已变**这一种（`aliveRef` 与「还在表里」在开头就返回了），
+   * 所以文案说的是换号。已经 confirm 出来的 final 对象端上删不掉（评价媒体没有 delete
+   * 端点），归 #493 的回收范围。
    */
-  const abandonSlot = (id: string, reason: string) => {
+  const abandonSlot = (id: string) => {
     if (!aliveRef.current) return
     if (!imagesRef.current.some((slot) => slot.id === id)) return
     commitImages(
       imagesRef.current.map((slot) =>
-        slot.id === id ? { ...slot, status: 'failed', objectKey: null, error: reason } : slot,
+        slot.id === id
+          ? { ...slot, status: 'failed', objectKey: null, error: '账号已切换，这张图未采用' }
+          : slot,
       ),
     )
   }
@@ -136,7 +142,7 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
     return uploadReviewImage(transactionId, photo, () => slotActive(id))
       .then((objectKey) => {
         if (!slotActive(id)) {
-          abandonSlot(id, '上传已取消，请重新选择图片')
+          abandonSlot(id)
           return
         }
         commitImages(
@@ -148,7 +154,7 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
       .catch((caught: unknown) => {
         // 条目已移除 / 弹层已关：上传链已在下一步边界自停，这里不再写任何状态
         if (!slotActive(id)) {
-          abandonSlot(id, '上传已取消，请重新选择图片')
+          abandonSlot(id)
           return
         }
         const message = caught instanceof Error ? caught.message : '图片上传失败，请重试'
@@ -225,8 +231,10 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
       void Taro.showToast({ title: '请先选好评 / 中评 / 差评', icon: 'none' })
       return
     }
-    // 身份锚点：弹层打开时的账号必须仍是当前账号（评价提交后不可修改，不能记到别人头上）
-    if (ownerRef.current !== null && userRef.current !== ownerRef.current) {
+    // 身份锚点：弹层打开时的账号必须仍是当前账号（评价提交后不可修改，不能记到别人头上）。
+    // 严格比较两个 ref（不写 `ownerRef.current !== null &&`）：两个都是 null 时相等即放行，
+    // 「打开时无身份、现在有身份」同样是一次身份变化，不该放过去。
+    if (userRef.current !== ownerRef.current) {
       void Taro.showToast({ title: '账号已切换，请重新打开评价', icon: 'none' })
       onClose()
       return
