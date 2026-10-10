@@ -120,8 +120,10 @@ export type MockListing = {
    * - `views` = 近 30 天去重浏览人数（`ListingCardSchema.views`，#192）；
    * - `wants` = 该商品已建会话的买家数（`ListingCardSchema.wants`）。
    *
-   * 保留可空（而不是跟着契约写死 `number`）是因为**演示 fixture 与旧记录**仍可能没有这两个数，
-   * 而少数页面（收藏列表）按自己的读模型另行决定是否显示。
+   * 保留可空（而不是跟着契约写死 `number`）是**类型层的防御**，不是「今天真的会拿到 null」：
+   * 演示 fixture 的 `SPECS.views` / `SPECS.wants`（`mock/catalog.ts`）是必填，真实接口由契约
+   * 保证非空，`fetchers` 的详情分支也不覆盖这两个键。可空只对**手写的 `MockListing` 字面量**
+   * 成立（全仓只有 `fetchers.ts:301` 一处，且它是 `...base` 展开、两个键都来自契约投影）。
    *
    * 为什么可空而不是照旧 `number`：留成必填就等于默认真数据一定有值，
    * 页面会把 `null` 渲染成「0 人想要」——那是编造出来的市场信号。可空强制渲染层
