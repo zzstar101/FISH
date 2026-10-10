@@ -27,6 +27,7 @@ import {
   viewTargetOf,
 } from '@/features/comments/mine'
 import { deleteMyTransactionReview } from '@/features/transaction/api'
+import { createImageReloadState, noteImageFailure } from '@/features/transaction/image-reload'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -108,6 +109,8 @@ export default function MyComments() {
   const userIdRef = useRef<string | null>(userId)
   userIdRef.current = userId
   const [showTop, setShowTop] = useState(false)
+  /** 评价配图签名 URL 失效后的补读判据（按 URL + 次数双上限，见 `@/features/transaction/image-reload`） */
+  const imageReloadRef = useRef(createImageReloadState())
 
   /** 真实模式的续页游标（`nextCursor`；`null` = 到底了）。 */
   const [cursor, setCursor] = useState<string | null>(null)
@@ -268,6 +271,18 @@ export default function MyComments() {
     void Taro.showToast({ title, icon: 'none' })
   }
 
+  /**
+   * 评价配图是服务端签发的 900 秒 capability URL（`REVIEW_MEDIA_URL_TTL_SECONDS`）：
+   * 页面挂后台超过 15 分钟再回来，图会全部裂掉，重读列表能拿到重新签发的地址。
+   * 契约不带 `expiresAt`（端上无从预判何时过期），只能按 `onError` 兜底 ——
+   * 是否真发这次补读由 `noteImageFailure` 判定（同一 URL 不重复、总次数有上限；
+   * 只按 URL 去重挡不住「每次补读都换一批签名」造成的无界重读）。演示档不补读（fixture 不是签名 URL）。
+   */
+  const retryImageOnce = (url: string) => {
+    if (demo || !noteImageFailure(imageReloadRef.current, url)) return
+    void read(segmentRef.current, true)
+  }
+
   const demoCounts = countBySegment(items)
   const countOf = (key: CommentSegment): number | null => (demo ? demoCounts[key] : counts[key])
 
@@ -387,6 +402,24 @@ export default function MyComments() {
           <View className="cmt__bar" />
           <View className="cmt__fmain">
             {item.text !== '' ? <Text className="cmt__ctext">{item.text}</Text> : null}
+            {/*
+              评价配图（#475）：签名 URL 直渲，点按进 previewImage 看大图。
+              商品留言没有图片字段（恒为空数组），整块不渲染。
+            */}
+            {item.images.length > 0 ? (
+              <View className="cmt__imgs">
+                {item.images.map((url) => (
+                  <Image
+                    key={url}
+                    className="cmt__img"
+                    src={url}
+                    mode="aspectFill"
+                    onError={() => retryImageOnce(url)}
+                    onClick={() => void Taro.previewImage({ urls: item.images, current: url })}
+                  />
+                ))}
+              </View>
+            ) : null}
             <View className="cmt__cmeta">
               <Text className={`cmt__kind${trade ? ' cmt__kind--trade' : ''}`}>
                 {kindLabel(item.kind)}

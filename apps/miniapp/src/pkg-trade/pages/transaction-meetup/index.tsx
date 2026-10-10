@@ -19,6 +19,7 @@ import {
 } from '@/features/transaction/api'
 import { qrDataUrl } from '@/features/transaction/qr'
 import { isApiError } from '@/lib/request'
+import MeetupReviewBlock from './review-block'
 import {
   canAcquire,
   classifyConfirmFailure,
@@ -151,6 +152,12 @@ export default function TransactionMeetup() {
   const [confirmPending, setConfirmPending] = useState(false)
   /** 完成动效只播一次（本会话内刚完成），见 FxPhase */
   const [fxPhase, setFxPhase] = useState<FxPhase>('off')
+  /**
+   * 返回本页的 show 代次：`useDidShow` 每次真实返回自增（首次 show 不算）。
+   * 驱动「交易评价」块重读 —— 评价落库**不 touch** `transactions.updated_at`，
+   * 交易快照刷不刷都看不出「对方刚评了」，只能用显式的代次信号（审查 P1-3）。
+   */
+  const [showTick, setShowTick] = useState(0)
   /** 扫到的 QR 凭证在 useLoad 里解释一次，命令式流程经 scanRef 读取 */
   const scanRef = useRef<MeetupQrPayload | null>(null)
   /** bootstrap 代次：身份切换 / 重试后，旧账号或旧一轮的迟到响应一律作废 */
@@ -617,6 +624,8 @@ export default function TransactionMeetup() {
     })
     skipFirstShow.current = false
     if (decision === 'skip') return
+    // 真实返回（含在飞写入被挂起的那次）：评价对账块随之重读（见 showTick 的说明）
+    setShowTick((tick) => tick + 1)
     if (decision === 'defer') {
       pendingSync.current = true
       return
@@ -931,6 +940,19 @@ export default function TransactionMeetup() {
                 本单交易码 <Text className="meetup__dead-code">已失效</Text>
               </Text>
             </View>
+
+            {/* 交易评价（#195 两方读路径 + #475 写入口）：完成态的对账块。
+                与吸底栏一样放在震屏包裹层**之外**：`.meetup__hit` 永久保留末帧
+                transform，会把内部元素的 position:fixed 弹层拽成相对内容列定位
+                （见上面关于包含块的说明），而本块的「写评价」要弹共享评价弹层。
+                `reloadSignal` 是返回本页时自增的 show 代次 —— 评价落库不 touch
+                transactions.updated_at，离页期间对方刚评的情况只能靠它触发重读。 */}
+            <MeetupReviewBlock
+              transactionId={tx.id}
+              myRole={tx.role}
+              listingTitle={tx.listing.title}
+              reloadSignal={showTick}
+            />
 
             {/* 吸底栏在震屏包裹层**之外**：见上面关于 `position: fixed` 包含块的说明 */}
             <View className={`meetup__bar${fxPhase === 'on' ? ' is-enter' : ''}`}>
