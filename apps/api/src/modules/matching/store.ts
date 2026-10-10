@@ -1,6 +1,7 @@
 import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
 import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { Db } from '@fish/db/client'
+import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
@@ -154,6 +155,8 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           listingCreatedAt: listings.createdAt,
           // 想要数（= 已建会话的买家数）：卡片契约的必填字段，主查询一次算完（见 `@fish/db/listing-wants`）。
           wants: listingWantsCount(listings.id),
+          // 浏览量（近 30 天去重浏览人数）：与「想要数」同一取舍，主查询一次算完。
+          views: listingViewsCount(listings.id),
           seller: {
             id: users.id,
             nickname: users.nickname,
@@ -198,6 +201,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           createdAt: row.listingCreatedAt,
           seller: row.seller,
           wants: row.wants,
+          views: row.views,
         },
       }))
     },

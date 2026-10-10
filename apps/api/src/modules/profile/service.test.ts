@@ -96,6 +96,7 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
   seller: { id: USER_ID, nickname: '小明', avatarUrl: null, authStatus: 'VERIFIED' },
   // 想要数（已建会话的买家数）：卡片契约的必填字段，fake 行给 0（本用例不关心它）。
   wants: 0,
+  views: 0,
   ...overrides,
 })
 

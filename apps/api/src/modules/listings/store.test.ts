@@ -14,6 +14,7 @@ import { listingNumbers } from '@fish/db/schema/listing-numbers'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { messages } from '@fish/db/schema/messages'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
+import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
@@ -1835,6 +1836,102 @@ describe('想要数（已建会话的买家数）', () => {
         .onConflictDoNothing()
 
       expect((await store.findDetail(listingId))?.wants).toBe(1)
+    })
+  })
+})
+
+/*
+ * 浏览量（`ListingCardSchema.views`）= 最近 30 天浏览过该商品的**去重人数**（#192，
+ * Owner 2026-10-10 拍板的口径，来源是 `recommendation_events` 的 `DETAIL_VIEW`）。
+ *
+ * 与上面「想要数」完全同一处境：各读路径在 SQL 里各塞一个 `listingViewsCount` 子查询，
+ * 漏一处不会报错，只会让那个页面上的数字悄悄变成 0 —— 而契约把 `views` 定成必填非空，
+ * 正是为了让「0（窗口内真没人看）」与「没查」不再长得一样。谓词本身的语义（去重身份 /
+ * 30 天窗口 / 只认 DETAIL_VIEW）由 `packages/db/src/listing-views.test.ts` 覆盖，
+ * 这组用例钉的是**三条读路径真的把它查出来了**。
+ */
+describe('浏览量（近 30 天去重浏览人数）', () => {
+  /** 直插一条在售商品（本组测读路径的计数，不走 service）。 */
+  async function insertActiveListing(sellerId: string): Promise<string> {
+    const id = newId()
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: '浏览量测试商品',
+      description: '浏览量',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+    })
+    return id
+  }
+
+  /** 一条详情页浏览事件（`recommendation_events` 随商品级联删除，不需要单独清）。 */
+  async function addView(listingId: string, userId: string): Promise<void> {
+    await db.insert(recommendationEvents).values({
+      eventId: newId(),
+      userId,
+      listingId,
+      eventType: 'DETAIL_VIEW',
+      occurredAt: new Date(),
+    })
+  }
+
+  test('三个读路径都算出同一件商品的去重浏览人数；没人看过的商品是 0（不是「没查」）', async () => {
+    await withSeller(async (sellerId, otherSellerId) => {
+      const listingId = await insertActiveListing(sellerId)
+      const untouched = await insertActiveListing(sellerId)
+      // 同一个人点两次 + 另一个人一次 = 2 个人
+      await addView(listingId, sellerId)
+      await addView(listingId, sellerId)
+      await addView(listingId, otherSellerId)
+
+      const feed = await store.listFeed({
+        limit: 10,
+        cursor: null,
+        sort: 'newest',
+        status: 'ACTIVE',
+      })
+      const viewsOfFeed = (id: string) => feed.find((entry) => entry.listing.id === id)?.views
+      const [fromIds] = await store.findCardsByIds([listingId], { viewerUserId: null })
+      const detail = await store.findDetail(listingId)
+
+      expect(viewsOfFeed(listingId)).toBe(2)
+      expect(fromIds?.views).toBe(2)
+      expect(detail?.views).toBe(2)
+      // 类型也是契约的一部分：`count(...)` 少了 `::int` 会变成字符串，页面会画成空白
+      expect(typeof fromIds?.views).toBe('number')
+
+      // 一件没人点开过的商品必须是 0 —— 这正是「计数没查」与「确实没人看过」的分界
+      expect(viewsOfFeed(untouched)).toBe(0)
+      expect((await store.findDetail(untouched))?.views).toBe(0)
+    })
+  })
+
+  test('曝光与长读不算浏览：只有 DETAIL_VIEW 进这个数', async () => {
+    await withSeller(async (sellerId) => {
+      const listingId = await insertActiveListing(sellerId)
+      await db.insert(recommendationEvents).values([
+        {
+          eventId: newId(),
+          userId: sellerId,
+          listingId,
+          eventType: 'LONG_VIEW',
+          occurredAt: new Date(),
+        },
+        {
+          eventId: newId(),
+          userId: sellerId,
+          listingId,
+          eventType: 'IMPRESSION',
+          requestId: newId(),
+          position: 0,
+          occurredAt: new Date(),
+        },
+      ])
+
+      expect((await store.findDetail(listingId))?.views).toBe(0)
     })
   })
 })

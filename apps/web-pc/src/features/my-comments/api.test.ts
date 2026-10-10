@@ -25,6 +25,7 @@ function listingCardFixture() {
     coverUrl: null,
     // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0。
     wants: 0,
+    views: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     moderationStatus: null,
   }

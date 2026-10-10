@@ -116,11 +116,12 @@ export type MockListing = {
    */
   seller: MockUser | null
   /**
-   * mock 专属：浏览量 / 想要数。两者的处境**不一样**，别一并读：
-   * - `wants` 已有契约字段（`ListingCardSchema.wants` = 该商品已建会话的买家数），
-   *   `toMockListing` 默认就从卡片透传；这里保留可空是因为演示 fixture 直接给出数字，
-   *   而少数页面（收藏列表）按自己的读模型另行决定是否显示。
-   * - `views` **契约里没有**（Issue #192），真实接口给不出来，恒 `null`。
+   * 浏览量 / 想要数 —— 两者今天**都**有契约字段，都由 `toMockListing` 从卡片原样透传：
+   * - `views` = 近 30 天去重浏览人数（`ListingCardSchema.views`，#192）；
+   * - `wants` = 该商品已建会话的买家数（`ListingCardSchema.wants`）。
+   *
+   * 保留可空（而不是跟着契约写死 `number`）是因为**演示 fixture 与旧记录**仍可能没有这两个数，
+   * 而少数页面（收藏列表）按自己的读模型另行决定是否显示。
    *
    * 为什么可空而不是照旧 `number`：留成必填就等于默认真数据一定有值，
    * 页面会把 `null` 渲染成「0 人想要」——那是编造出来的市场信号。可空强制渲染层

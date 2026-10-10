@@ -1503,8 +1503,9 @@ export default function ListingDetail() {
               <View className="detail__stats">
                 <Text className="detail__posted">{postedLabel(listing.createdHoursAgo)}</Text>
                 <View className="detail__metrics">
-                  {/* 浏览量仍不在契约里（#192），为 null 时整块不画、不显示 0；
-                      「想要」来自契约 `ListingCardSchema.wants`（已建会话的买家数），真数据下恒有值 */}
+                  {/* 两个计数都来自契约：`views` = 近 30 天去重浏览人数、`wants` = 已建会话的买家数
+                      （口径见 `ListingCardSchema` 上各自的注释）。真数据下两者恒有值；
+                      保留 `null` 分支是为了演示 fixture 与旧记录 —— 宁可整块不画，也不显示 0。 */}
                   {listing.views === null ? null : (
                     <Text className="detail__metric">
                       <Text className="detail__metric-num">{listing.views}</Text>

@@ -1,6 +1,7 @@
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import type { Db } from '@fish/db/client'
+import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
@@ -64,6 +65,8 @@ export interface PublicListingRow {
   seller: ListingCardSeller
   /** 想要数（= 已建会话的买家数，见 `@fish/db/listing-wants`）：卡片契约的必填字段。 */
   wants: number
+  /** 浏览量（近 30 天去重浏览人数，见 `@fish/db/listing-views`）：与「想要数」并排画，同样必填。 */
+  views: number
 }
 
 /** 游标在 store 层是**已解码**结构；合法性由 service 校验后才走到这里。 */
@@ -174,6 +177,8 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
           createdAtCursor: sql<string>`to_char(${listings.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
           // 想要数（= 已建会话的买家数）：卡片契约的必填字段，主查询一次算完（见 `@fish/db/listing-wants`）。
           wants: listingWantsCount(listings.id),
+          // 浏览量（近 30 天去重浏览人数）：与「想要数」并排画，同一取舍主查询一次算完。
+          views: listingViewsCount(listings.id),
           seller: {
             id: users.id,
             nickname: users.nickname,

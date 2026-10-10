@@ -167,8 +167,9 @@ function fingerprint(listing: MockListing): string {
 /**
  * 「综合」排序的热度分：想要数权重是浏览量的 3 倍。
  *
- * 契约里没有 `views` / `wants`，真实数据下两者都是 `null`，所以比较时按 0 计，
- * 保证排序仍然是全序（缺值商品之间不会因为比较返回 0 而顺序不定）。
+ * 只用于**演示 fixture**（真实接口的排序由服务端 `popularityScore` 决定，见
+ * `features/listing/api.ts`）。`views` / `wants` 现在都是契约字段，但演示 fixture 可以不带，
+ * 所以比较时按 0 计，保证排序仍然是全序（缺值商品之间不会因为比较返回 0 而顺序不定）。
  */
 function heat(item: MockListing): number {
   return (item.wants ?? 0) * 3 + (item.views ?? 0)

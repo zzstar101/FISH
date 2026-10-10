@@ -9,6 +9,7 @@ import { pruneStaleEmbeddings } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { newListingNo } from '@fish/db/listing-no'
+import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { visibleListingConditions } from '@fish/db/recall-store'
 import { jobs } from '@fish/db/schema/jobs'
@@ -99,6 +100,11 @@ export type FeedEntry = {
    * `listing` 行本身没有这一列（`listings` 表不存计数），所以单独放在 entry 上。
    */
   wants: number
+  /**
+   * 浏览量（近 30 天去重浏览人数）：同样由主查询带出（`@fish/db/listing-views`），
+   * 与 `wants` 并列画在同一行，所以两列在**所有**卡片读路径上都必填。
+   */
+  views: number
 }
 
 /** `findCardsByIds` 的过滤口径。 */
@@ -266,6 +272,8 @@ export interface ListingStore {
      * 而 `listings` 表不存计数，所以与列表读路径一样在同一次查询里算出来带回来。
      */
     wants: number
+    /** 浏览量（近 30 天去重浏览人数），与 `wants` 同一次查询带出、同一处渲染。 */
+    views: number
   } | null>
 
   /**
@@ -624,7 +632,12 @@ export function createSqlListingStore(db: Db): ListingStore {
 
     async findDetail(id) {
       const rows = await db
-        .select({ listing: listings, seller: users, wants: listingWantsCount(listings.id) })
+        .select({
+          listing: listings,
+          seller: users,
+          wants: listingWantsCount(listings.id),
+          views: listingViewsCount(listings.id),
+        })
         .from(listings)
         .innerJoin(users, eq(users.id, listings.sellerId))
         .where(eq(listings.id, id))
@@ -639,7 +652,13 @@ export function createSqlListingStore(db: Db): ListingStore {
         .where(eq(listingImages.listingId, id))
         .orderBy(asc(listingImages.sortOrder))
 
-      return { listing: row.listing, seller: row.seller, images, wants: row.wants }
+      return {
+        listing: row.listing,
+        seller: row.seller,
+        images,
+        wants: row.wants,
+        views: row.views,
+      }
     },
 
     async listImageKeys(id) {
@@ -727,6 +746,9 @@ export function createSqlListingStore(db: Db): ListingStore {
           // 与卖家 / 封面同一取舍 —— 主查询里一次算完，不给每张卡补一次往返。
           // 关联子查询走 `conversations_listing_id_buyer_id_uq` 的首列，是索引探测。
           wants: listingWantsCount(listings.id),
+          // 浏览量（近 30 天去重浏览人数）：与「想要数」同一取舍 —— 主查询里一次算完，
+          // 不给每张卡补一次往返（见 `@fish/db/listing-views`）。
+          views: listingViewsCount(listings.id),
         })
         .from(listings)
         .innerJoin(users, eq(users.id, listings.sellerId))
@@ -752,6 +774,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         coverObjectKey: coverByListing.get(row.listing.id) ?? null,
         seller: row.seller,
         wants: row.wants,
+        views: row.views,
       }))
     },
 
@@ -769,6 +792,9 @@ export function createSqlListingStore(db: Db): ListingStore {
             authStatus: users.authStatus,
           },
           wants: listingWantsCount(listings.id),
+          // 浏览量（近 30 天去重浏览人数）：与「想要数」同一取舍 —— 主查询里一次算完，
+          // 不给每张卡补一次往返（见 `@fish/db/listing-views`）。
+          views: listingViewsCount(listings.id),
         })
         .from(listings)
         .innerJoin(users, eq(users.id, listings.sellerId))
@@ -794,6 +820,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         coverObjectKey: coverByListing.get(row.listing.id) ?? null,
         seller: row.seller,
         wants: row.wants,
+        views: row.views,
       }))
     },
 

@@ -248,15 +248,17 @@ export function createListingService(deps: {
     coverObjectKey: string | null,
     seller: ListingCardSeller,
     wants: number,
+    views: number,
     moderationStatus: ListingModerationStatus | null = null,
     governanceDelisted: boolean | null = null,
     moderationReason: string | null = null,
   ): ListingCard | null {
     // `ListingRow` 不带卖家列；feed 的 join 结果里单独取（见 `store.listFeed`），
     // 与 matching / profile / users 三处经 `ListingCardSource.seller` 同一形状。
-    // `wants` 同理：`listings` 表不存计数，由主查询带出来（见 store 里的 `listingWantsCount`）。
+    // `wants` / `views` 同理：`listings` 表不存计数，由主查询带出来
+    //（见 store 里的 `listingWantsCount` / `listingViewsCount`）。
     return toListingCard(
-      { ...listing, seller, wants },
+      { ...listing, seller, wants, views },
       coverObjectKey,
       storage,
       moderationStatus,
@@ -333,6 +335,7 @@ export function createListingService(deps: {
     }
     images: ListingImageRow[]
     wants: number
+    views: number
     viewerId: string | null
   }): Promise<ListingDetail> {
     // 封面只认 0 号图（#6 契约 §1「下标即 sortOrder（0 = 封面）」），与 feed / profile /
@@ -359,6 +362,9 @@ export function createListingService(deps: {
       // 想要数对**所有**视角都出（不像审核态那样只给本人）：它是公开的市场信号，
       // 买家的详情页也要画「N 人想要」（见契约 `ListingCardSchema.wants`）。
       wants: input.wants,
+      // 浏览量同理对**所有**视角都出：与「想要数」并排画在同一行（稿「218 浏览 · 34 想要」），
+      // 少一个数那一行就只剩半边。口径与「30 天滚动窗口」的代价见契约 `ListingCardSchema.views`。
+      views: input.views,
       description: input.listing.description,
       images: await toDetailImages(input.images, isOwner ? input.listing.sellerId : null),
       seller: toSeller(input.seller),
@@ -407,6 +413,7 @@ export function createListingService(deps: {
       seller: found.seller,
       images: found.images,
       wants: found.wants,
+      views: found.views,
       viewerId,
     })
   }
@@ -602,6 +609,7 @@ export function createListingService(deps: {
           entry.coverObjectKey,
           entry.seller,
           entry.wants,
+          entry.views,
           ownSellerQuery ? entry.listing.moderationStatus : null,
           ownSellerQuery ? entry.listing.governanceDelistedAt !== null : null,
           ownSellerQuery && entry.listing.moderationStatus === 'BLOCKED'
@@ -633,7 +641,13 @@ export function createListingService(deps: {
       for (const id of ids) {
         const entry = byId.get(id)
         if (entry === undefined) continue
-        const card = toCard(entry.listing, entry.coverObjectKey, entry.seller, entry.wants)
+        const card = toCard(
+          entry.listing,
+          entry.coverObjectKey,
+          entry.seller,
+          entry.wants,
+          entry.views,
+        )
         if (card) cards.set(id, card)
       }
       return cards

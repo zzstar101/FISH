@@ -9,11 +9,12 @@
  *
  * ## 三条铁律
  *
- * 1. **绝不编造业务数据。** `views` / `originalPriceCents` / `spec` 契约没有，一律 `null`。
+ * 1. **绝不编造业务数据。** `originalPriceCents` / `spec` 契约没有，一律 `null`。
  *    `wants` **取契约的 `card.wants`**（= 该商品已建会话的买家数，Owner 2026-10-04 拍板
  *    商品卡上的「N 人想要」就取这个口径，与卖家在「想要的人」页看到的人数同源）；
- *    契约现在恒给这个数，所以这里不再有「拿不到」的分支。页面仍保留 null 守卫 ——
- *    手写的演示 fixture 与老客户端 mock 记录可以不带这个字段，缺席时不渲染比编一个 0 诚实。
+ *    `views` **取契约的 `card.views`**（= 近 30 天去重浏览人数，#192 / Owner 2026-10-10）。
+ *    契约现在恒给这两个数，所以这里不再有「拿不到」的分支。页面仍保留 null 守卫 ——
+ *    手写的演示 fixture 与老客户端 mock 记录可以不带这些字段，缺席时不渲染比编一个 0 诚实。
  * 2. **绝不编造卖家。** #191 起契约卡片带 `seller`（公开四字段），用它投影成真值；
  *    字段缺席（老客户端 mock 记录）时 `sellerId` 是**空串**哨兵 `NO_SELLER`、`seller` 是
  *    `null`，页面据此不渲染卖家行。这一条尤其要紧：`mock/users.ts` 的 `getUser()` 对未知 id
@@ -133,8 +134,9 @@ export function toMockListing(card: ListingCard, now: number = Date.now()): Mock
     // 卖家公开资料：契约 `seller` 同源投影，缺席为 null（页面不渲染卖家行）
     seller: toMockCardSeller(card),
     // 想要数：全站一个口径 —— 契约的 `card.wants`（已建会话的买家数）。
-    // `views` 全仓没有数据源（#192），恒 null。
-    views: null,
+    // 浏览量：契约的 `card.views`（近 30 天去重浏览人数，见 `ListingCardSchema.views`）。
+    // 两者并排画在同一行（详情页 / 我的发布行），所以都从卡片原样透传、不在端上另算。
+    views: card.views,
     wants: card.wants,
     // 卖家本人视角的两个内部状态：只在查自己时非 null（契约如是说），这里原样带过去，
     // 由「我的发布」判段与动作。公开 Feed / 他人视角拿到的是 null，页面据此按「已通过」渲染。
