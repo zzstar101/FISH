@@ -8,12 +8,14 @@ import { recommendationEvents } from './schema/recommendation-events'
 export const LISTING_VIEWS_WINDOW_DAYS = 30
 
 /**
- * 商品的「浏览量」——**最近 30 天内浏览过该商品的去重人数**，全仓唯一的 SQL 定义。
+ * 商品的「浏览量」——**最近 30 天内浏览过该商品的去重身份数**，全仓唯一的 SQL 定义。
  *
- * 口径由 Owner 2026-10-10 拍板（#192）：数据源是行为事件表 `recommendation_events` 的
- * `DETAIL_VIEW`（#323 R1 起「点进详情页」就上报一条），**不新增表、不新增列、不加迁移**。
+ * 口径由 Owner 2026-10-10 拍板（#192），裁决记录见
+ * <https://github.com/zzstar101/FISH/issues/192#issuecomment-6095408315>：数据源是行为事件表
+ * `recommendation_events` 的 `DETAIL_VIEW`（#323 R1 起「点进详情页」就上报一条），
+ * **不新增表、不新增列、不加迁移**。
  *
- * ## 为什么是「去重人数」而不是「次数」
+ * ## 为什么是「去重」而不是「次数」
  *
  * 商品卡与详情页上并排画的是「浏览 N」与「想要 N」，而「想要」= 已建会话的**买家数**
  * （`@fish/db/listing-wants`）。两个数同量纲，卖家一眼看不出哪个是人数哪个是次数 ——
@@ -21,11 +23,11 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  * （小程序在事件入队时固化它，见 `apps/miniapp/src/features/recommendation/track.ts`）。
  * 同一个人反复点开同一件商品只算一次；刷新页面不会把数字刷高。
  *
- * `COALESCE` 是**逐行**取身份，不是「把同一个人的两种身份合并起来」：一行里两列都有时取
- * `user_id`（客户端登录后仍沿用同一个 `anonymous_session_id`，见
- * `apps/miniapp/src/features/recommendation/session.ts`），但**匿名那一次与登录后那一次是两行、
- * 两个不同的值**（`S` 与 `U`），`count(DISTINCT)` 会把它们算成 **2 个人** —— 也就是
- * 「先匿名逛、再登录看」这条很常见的路径会**高估 1 人**。实测：
+ * **「去重人数」是 Owner 裁决的用词，实现上是「去重身份数」**：身份是**逐行**取的，
+ * 不是「把同一个人的两种身份合并起来」。一行里两列都有时取 `user_id`（客户端登录后仍沿用同一个
+ * `anonymous_session_id`，见 `apps/miniapp/src/features/recommendation/session.ts`），但
+ * **匿名那一次与登录后那一次是两行、两个不同的值**（`S` 与 `U`），去重会把它们算成 **2 个人**
+ * —— 也就是「先匿名逛、再登录看」这条很常见的路径会**高估 1 人**。实测：
  *
  * ```sql
  * select count(distinct coalesce(u, s)) from (values (null::text,'S'), ('U','S')) t(u,s);  -- 2
@@ -34,6 +36,12 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  * 换成 session 优先（`coalesce(anonymous_session_id, user_id)`）能把这种情况合并成 1，代价是
  * **同一账号换设备会被算成 2**。两条路都只能合并一侧，取舍归 Owner；当前实现按拍板的
  * 「登录按 user_id、匿名按 anonymous_session_id」执行。
+ *
+ * ## 去重域要按身份类型分开（`'u:'` / `'s:'` 前缀）
+ *
+ * `user_id` 与 `anonymous_session_id` 都是 uuid 列，但**匿名 id 由客户端自选** ——
+ * 把它填成某个真实用户的 uuid，就会与该用户自己的浏览合并成同一个值、**少计一个人**。
+ * 加前缀把两个命名空间分开，等价于 `row(user_id, session_id)` 的结构化比较。
  *
  * **三条要去认的边界**（都是"人数"这个口径自带的，不是实现缺陷）：
  * - **两列全空的事件不计**：`count(DISTINCT NULL)` 是 0。事件表刻意收这种行（"这件商品被曝光过
@@ -52,6 +60,8 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  *   `anonymous_session_id` 就能给某件商品刷出一个"新访客"。要防刷得在**写入口**做限流/校验
  *   （属 #323 埋点域，不在本 PR 范围）；这里只把它记成已知暴露面 —— 本 PR 之前这些事件只喂
  *   推荐训练，现在会变成公开可见的数字，暴露面因此变大。
+ *   **因此这个数只作展示用的弱信号：不参与任何排序、推荐或风控判定**（全仓对 `views` 的
+ *   消费点只有卡片投影与两个展示页面；要拿它做任何决策，先解决上面这条可伪造性）。
  *
  * ## 为什么是 30 天滚动窗口，不是累计
  *
@@ -59,12 +69,18 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  * 可依赖的来源；窗口取 30 天既留得下"这个商品最近热不热"的信息，也让数字有明确边界。
  * **代价要认**：数字会随旧浏览滚出窗口而下降，这是口径本身，不是 bug。
  *
+ * 窗口是**闭区间 `[now() - 30 天, now()]`**：上界同样必要 —— 事件入站允许 10 分钟内的
+ * 客户端时钟偏差（`apps/api/src/modules/recommendation/service.ts` 的 `MAX_CLOCK_SKEW_MS`），
+ * 不设上界的话"未来"的事件会立刻计入，且数字会在事件时刻到来前就变大（一个可以被写入口
+ * 无成本放大的窗口）。上了上界之后，时钟快几分钟的客户端上报的那一条要等它的时间戳过去
+ * 才进数，属可接受的自我纠正延迟。
+ *
  * ## 只按 `listing_id` + 时间窗过滤，不筛身份
  *
- * 卖家自己点开自己的商品也计入 —— 它是商品级的公开市场信号，与「想要数」同一取向
- * （不按视角给不同的数，否则同一件商品在买家和卖家眼里会出现两个「浏览」）。
- *
- * ## 与 `listingWantsCount` 相同的三条实现约束
+ * 卖家自己点开自己的商品也计入 —— 这是 Owner 2026-10-10 裁决确认的口径：浏览数是
+ * **商品级的公开市场信号**，一个商品只有一个数（与「想要数」同一取向；按 `seller_id`
+ * 排除也能做到视角无关，但裁决选了"计入"）。**已知副作用**：发布成功会自动跳详情页，
+ * 所以新商品一上架底数天然是「1 浏览」。
  *
  * 1. `::int` 不是装饰：`count(...)` 是 bigint，少了这个 cast，驱动交回来的不是 JS number。
  * 2. `listingId` 必须由调用方给出**带限定**的列引用。理由与全部踩坑记录见
@@ -77,14 +93,22 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  *    会直接报 `missing FROM-clause entry for table "l"`。
  * 3. 关联子查询走 `recommendation_events_listing_id_occurred_at_idx` 的
  *    `(listing_id, occurred_at)` 前缀，每行一次索引区间扫描；`event_type` 是区间内的残余过滤。
- *    与「想要数」（唯一索引上的 `count(*)`）的差别是：这里多一次 **DISTINCT 去重排序**，成本随
- *    该商品窗口内的事件数增长。当前 10 个调用点都在各读路径的**主查询**里，一条 SQL 带出整页
- *    计数，不逐卡补查（与「想要数」同一取舍）。
+ *    与「想要数」（唯一索引上的 `count(*)`）的差别是：这里多一次 **DISTINCT 去重排序**，
+ *    成本随该商品窗口内的事件数增长。**回表放大是内在成本**：`event_type` 是回表后的残余过滤，
+ *    单次代价是 O(该商品窗口内的全部事件行数)，索引只能压常数、压不掉渐近 —— 是否补
+ *    `(listing_id, occurred_at) INCLUDE (user_id, anonymous_session_id) WHERE event_type = 'DETAIL_VIEW'`
+ *    的 partial covering index，等生产规模实测后另提 DB CHANGE REQUEST（见 PR #492 的裁定）。
+ *    当前 10 个调用点都在各读路径的**主查询**里，一条 SQL 带出整页计数，不逐卡补查
+ *    （与「想要数」同一取舍）。
  */
 export function listingViewsCount(listingId: SQLWrapper): SQL<number> {
-  return sql<number>`(SELECT count(DISTINCT COALESCE(e.user_id::text, e.anonymous_session_id::text))::int
+  return sql<number>`(SELECT count(DISTINCT CASE
+      WHEN e.user_id IS NOT NULL THEN 'u:' || e.user_id::text
+      ELSE 's:' || e.anonymous_session_id::text
+    END)::int
     FROM ${recommendationEvents} e
     WHERE e.listing_id = ${listingId}
       AND e.event_type = 'DETAIL_VIEW'
-      AND e.occurred_at >= now() - make_interval(days => ${LISTING_VIEWS_WINDOW_DAYS}))`
+      AND e.occurred_at >= now() - make_interval(days => ${LISTING_VIEWS_WINDOW_DAYS})
+      AND e.occurred_at <= now())`
 }

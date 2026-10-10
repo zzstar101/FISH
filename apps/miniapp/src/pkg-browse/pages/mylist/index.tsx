@@ -1034,8 +1034,11 @@ export default function MyList() {
                             市场计数行（稿 `.rstats`）：`浏览 N · 想要 N`。
                             两个数今天都来自契约（`ListingCardSchema.views` = 近 30 天去重浏览人数、
                             `.wants` = 该商品已建会话的买家数），与点进去那页同源。
-                            `?? 0` 只是演示 fixture / 旧记录的安全网（`MockListing.views` 可空）：
-                            真实接口下契约必填，这里恒拿到真数。
+                            已核：**没有任何运行期路径会产出 `null`** —— 演示 fixture 的
+                            `SPECS.views` 是必填（`mock/catalog.ts`），真实接口由
+                            `toMockListing` 透传契约的必填值，`fetchers` 的详情分支只覆盖
+                            描述 / 图集 / 卖家，不碰这两个键。`?? 0` 只是 `MockListing.views`
+                            类型可空（手写字面量构造）留下的安全网，不是真实数据的呈现。
                           */}
                           <View className="ml__rstats">
                             <Text className="ml__rstat num">

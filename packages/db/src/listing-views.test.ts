@@ -18,9 +18,10 @@ import { reserveTestListingNo } from './testing/listing-no'
  * 1. `::int` 不是装饰 —— `count(...)` 是 bigint，少了这个 cast，驱动交回来的不是 JS number；
  * 2. 子查询有没有真的按**当前行**的 listing 过滤。把限定列写丢（裸 `id` 会被解析成外层查询里
  *    同名的另一张表）会让每一条都恒为 0，而类型检查与打桩都看不出来；
- * 3. `COALESCE(user_id, anonymous_session_id)` 的去重语义：同一个人反复点开只算一次、
- *    登录后同一账号换会话仍算一次；
- * 4. 时间窗是**滚动 30 天**：窗口外的行必须消失（这是"数字会下降"的口径本身，不是 bug）；
+ * 3. 身份去重语义：同一个人反复点开只算一次、登录后同一账号换会话仍算一次，
+ *    且匿名会话 id 与 `user_id` 分属两个命名空间（客户端可以把会话 id 填成别人的 user_id）；
+ * 4. 时间窗是**滚动 30 天**：窗口外的行必须消失（这是"数字会下降"的口径本身，不是 bug），
+ *    且上界同样生效（入站允许 10 分钟时钟偏差，"未来"的行不能提前计入）；
  * 5. `event_type` 过滤：曝光/长读/收藏等其它事件类型不能混进"浏览"。
  *
  * 只断言"库里取出什么"，页面/契约层由各自的用例覆盖（`packages/contracts` 断言必填，
@@ -179,7 +180,7 @@ describe('listingViewsCount', () => {
     expect(rows[0]?.views).toBe(2)
   })
 
-  test('同一账号换会话仍算一个人（COALESCE 取 user_id，不按会话重复计）', async () => {
+  test('同一账号换会话仍算一个人（两列都有时按 user_id，不按会话重复计）', async () => {
     const sellerId = await createUser()
     const viewer = await createUser()
     const listing = await createListing(sellerId)
@@ -196,6 +197,53 @@ describe('listingViewsCount', () => {
       .where(eq(listings.id, listing))
 
     expect(rows[0]?.views).toBe(1)
+  })
+
+  test('窗口有上界：时钟快出来的「未来」事件在它的时刻到来前不算数', async () => {
+    const sellerId = await createUser()
+    const viewerA = await createUser()
+    const viewerB = await createUser()
+    const listing = await createListing(sellerId)
+
+    // 入站允许 MAX_CLOCK_SKEW_MS = 10 分钟的客户端时钟偏差，所以「未来」的行会真实落库。
+    // 没有上界的话，一个可以把事件时刻写向未来的客户端就能立刻放大这个公开数字。
+    await addEvent({
+      listingId: listing,
+      userId: viewerA,
+      occurredAt: new Date(Date.now() + 5 * 60 * 1000),
+    })
+    await addEvent({
+      listingId: listing,
+      userId: viewerB,
+      occurredAt: new Date(Date.now() - 60 * 1000),
+    })
+
+    const rows = await db
+      .select({ views: listingViewsCount(listings.id) })
+      .from(listings)
+      .innerJoin(users, eq(users.id, listings.sellerId))
+      .where(eq(listings.id, listing))
+
+    expect(rows[0]?.views).toBe(1)
+  })
+
+  test('匿名身份与登录身份各有命名空间：匿名会话 id 冒充某个 user_id 不会并成一个人', async () => {
+    const sellerId = await createUser()
+    const viewer = await createUser()
+    const listing = await createListing(sellerId)
+
+    // 匿名会话 id 由客户端自选（契约只校验是 uuid），可以恰好等于某个真实用户的 id。
+    // 不做命名空间分隔的话，这两行会去重成同一个值 → 少计一个人。
+    await addEvent({ listingId: listing, userId: viewer })
+    await addEvent({ listingId: listing, anonymousSessionId: viewer })
+
+    const rows = await db
+      .select({ views: listingViewsCount(listings.id) })
+      .from(listings)
+      .innerJoin(users, eq(users.id, listings.sellerId))
+      .where(eq(listings.id, listing))
+
+    expect(rows[0]?.views).toBe(2)
   })
 
   test(`滚动 ${LISTING_VIEWS_WINDOW_DAYS} 天：窗口内的算、窗口外的不算`, async () => {

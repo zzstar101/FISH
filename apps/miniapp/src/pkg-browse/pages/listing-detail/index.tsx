@@ -1505,11 +1505,14 @@ export default function ListingDetail() {
                 <View className="detail__metrics">
                   {/* 两个计数都来自契约：`views` = 近 30 天去重浏览人数、`wants` = 已建会话的买家数
                       （口径见 `ListingCardSchema` 上各自的注释）。真数据下两者恒有值；
-                      保留 `null` 分支是为了演示 fixture 与旧记录 —— 宁可整块不画，也不显示 0。 */}
+                      保留 `null` 分支是为了演示 fixture 与旧记录 —— 宁可整块不画，也不显示 0。
+                      「近 30 天」必须画出来：`wants` 是累计、`views` 是滚动窗口，同一行并排
+                      （例「浏览 3 · 想要 12」）只有标出窗口才不会被读成同一个量纲。 */}
                   {listing.views === null ? null : (
                     <Text className="detail__metric">
                       <Text className="detail__metric-num">{listing.views}</Text>
                       <Text> 浏览</Text>
+                      <Text className="detail__metric-win">（近 30 天）</Text>
                     </Text>
                   )}
                   {listing.wants === null ? null : (
