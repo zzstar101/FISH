@@ -21,11 +21,21 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  * （小程序在事件入队时固化它，见 `apps/miniapp/src/features/recommendation/track.ts`）。
  * 同一个人反复点开同一件商品只算一次；刷新页面不会把数字刷高。
  *
- * `COALESCE` 而不是「两个都 count 再相加」：同一台设备先匿名浏览、登录后再看一次，
- * 两行会被算成 1 个人（`user_id` 优先）——这与 `recommendation_events` 的身份列语义一致
- * （两列可同时非空，见 `schema/recommendation-events.ts` 的表注释）。
+ * `COALESCE` 是**逐行**取身份，不是「把同一个人的两种身份合并起来」：一行里两列都有时取
+ * `user_id`（客户端登录后仍沿用同一个 `anonymous_session_id`，见
+ * `apps/miniapp/src/features/recommendation/session.ts`），但**匿名那一次与登录后那一次是两行、
+ * 两个不同的值**（`S` 与 `U`），`count(DISTINCT)` 会把它们算成 **2 个人** —— 也就是
+ * 「先匿名逛、再登录看」这条很常见的路径会**高估 1 人**。实测：
  *
- * **两条要去认的边界**（都是"人数"这个口径自带的，不是实现缺陷）：
+ * ```sql
+ * select count(distinct coalesce(u, s)) from (values (null::text,'S'), ('U','S')) t(u,s);  -- 2
+ * ```
+ *
+ * 换成 session 优先（`coalesce(anonymous_session_id, user_id)`）能把这种情况合并成 1，代价是
+ * **同一账号换设备会被算成 2**。两条路都只能合并一侧，取舍归 Owner；当前实现按拍板的
+ * 「登录按 user_id、匿名按 anonymous_session_id」执行。
+ *
+ * **三条要去认的边界**（都是"人数"这个口径自带的，不是实现缺陷）：
  * - **两列全空的事件不计**：`count(DISTINCT NULL)` 是 0。事件表刻意收这种行（"这件商品被曝光过
  *   多少次"是商品级统计），但它归不到任何一个人身上，所以进不了"去重人数"。
  *   **这种行是会出现的**：`anonymous_session_id` 只在拿到推荐 Feed 响应后才稳定存在
@@ -36,6 +46,12 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  * - **匿名身份是「设备会话」，不是自然人**：`anonymous_session_id` 是本地存储里 180 天 TTL 的
  *   随机 id，所以同一个人换设备 / 清缓存会被算成两个人；反过来，同一台设备上的两个人算一个人。
  *   这是本仓既有的匿名身份口径，不是这里新引入的近似。
+ * - **匿名事件可以被伪造，本谓词不承担防刷**：`POST /recommendations/events` 匿名可写、
+ *   `eventId` 由客户端自生成（换一个 UUID 就绕过去），#323 R1 **刻意不做限流**（见
+ *   `schema/recommendation-events.ts` 里曝光唯一索引那段说明）。所以换一个
+ *   `anonymous_session_id` 就能给某件商品刷出一个"新访客"。要防刷得在**写入口**做限流/校验
+ *   （属 #323 埋点域，不在本 PR 范围）；这里只把它记成已知暴露面 —— 本 PR 之前这些事件只喂
+ *   推荐训练，现在会变成公开可见的数字，暴露面因此变大。
  *
  * ## 为什么是 30 天滚动窗口，不是累计
  *
