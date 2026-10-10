@@ -41,7 +41,9 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  *
  * `user_id` 与 `anonymous_session_id` 都是 uuid 列，但**匿名 id 由客户端自选** ——
  * 把它填成某个真实用户的 uuid，就会与该用户自己的浏览合并成同一个值、**少计一个人**。
- * 加前缀把两个命名空间分开，等价于 `row(user_id, session_id)` 的结构化比较。
+ * 加前缀把两个命名空间分开。注意这**不是** `row(user_id, session_id)` 的结构化比较：
+ * `row()` 会把「同一账号换会话」的两行算成 2 个人（实测 `(U,S)` 与 `(U,NULL)` → 2），
+ * 而本谓词按「登录后只看 `user_id`」的口径要算成 1 —— 两者语义相反，别改成 `row()`。
  *
  * **三条要去认的边界**（都是"人数"这个口径自带的，不是实现缺陷）：
  * - **两列全空的事件不计**：`count(DISTINCT NULL)` 是 0。事件表刻意收这种行（"这件商品被曝光过
@@ -55,9 +57,10 @@ export const LISTING_VIEWS_WINDOW_DAYS = 30
  *   随机 id，所以同一个人换设备 / 清缓存会被算成两个人；反过来，同一台设备上的两个人算一个人。
  *   这是本仓既有的匿名身份口径，不是这里新引入的近似。
  * - **匿名事件可以被伪造，本谓词不承担防刷**：`POST /recommendations/events` 匿名可写、
- *   `eventId` 由客户端自生成（换一个 UUID 就绕过去），#323 R1 **刻意不做限流**（见
- *   `schema/recommendation-events.ts` 里曝光唯一索引那段说明）。所以换一个
- *   `anonymous_session_id` 就能给某件商品刷出一个"新访客"。要防刷得在**写入口**做限流/校验
+ *   `eventId` 由客户端自生成（换一个 UUID 就绕过去）。写入口**有限流**（#323 R6 起：
+ *   `RECOMMENDATION_EVENT_RATE_LIMIT` = 容量 120 / 2·s⁻¹，`recommendation/router.ts` 每次
+ *   `POST /events` 都 `takeTokens`），但它只压得住突发刷量、**挡不住慢速伪造** —— 换一个
+ *   `anonymous_session_id` 就能给某件商品刷出一个"新访客"。真要挡住在**写入口**做更严的身份校验
  *   （属 #323 埋点域，不在本 PR 范围）；这里只把它记成已知暴露面 —— 本 PR 之前这些事件只喂
  *   推荐训练，现在会变成公开可见的数字，暴露面因此变大。
  *   **因此这个数只作展示用的弱信号：不参与任何排序、推荐或风控判定**（全仓对 `views` 的

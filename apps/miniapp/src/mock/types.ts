@@ -6,8 +6,9 @@
  * 换成真实 fetch 时，页面的数据形状不需要改。
  *
  * 与契约的刻意差异（都已在上游记录）：
- * - `ListingDetail` 多一个 `views` / `wants`：设计稿详情页要显示「218 浏览 · 34 想要」，
- *   而契约里没有这两个计数（上游无此字段）。属于 mock 才有的展示数据。
+ * - `views` / `wants` 现在**都有**契约字段（`ListingCardSchema.views` / `.wants`），
+ *   `toMockListing` 从卡片原样透传；本类型仍把它们写成可空只为兜手写字面量
+ *   （见下方字段注释）。设计稿详情页的「218 浏览 · 34 想要」即取这两个数。
  * - `Comment`（`MockComment`）是页面展示形状：真实数据由 #111 的 `CommentDto`
  *   投影而来，`authorInitial` / `timeLabel` 是页面排版量，契约里没有。
  */

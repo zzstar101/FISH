@@ -27,7 +27,7 @@ import { reserveTestListingNo } from './testing/listing-no'
  * 只断言"库里取出什么"，页面/契约层由各自的用例覆盖（`packages/contracts` 断言必填，
  * `apps/miniapp/tests/listing-adapt.test.ts` 断言端上原样透传）。
  *
- * 两个用例都按**真实调用形状**写：谓词是关联子查询，里面那个列引用由 drizzle 按查询上下文
+ * 全部用例都按**真实调用形状**写：谓词是关联子查询，里面那个列引用由 drizzle 按查询上下文
  * 渲染 —— 多表查询（真实调用点大多是 `.from(...).innerJoin(...)`）渲染成 `"listings"."id"`；
  * 单表 / 裸 SQL 调用点必须传 `sql.raw('l.id')`（理由与踩坑记录见 `./listing-views.ts`）。
  */
@@ -244,6 +244,25 @@ describe('listingViewsCount', () => {
       .where(eq(listings.id, listing))
 
     expect(rows[0]?.views).toBe(2)
+  })
+
+  test('两列身份都空的事件归不到人：不计入（浏览 0 同时兼容"真没人看"与"有访客但都没身份"）', async () => {
+    const sellerId = await createUser()
+    const viewer = await createUser()
+    const listing = await createListing(sellerId)
+
+    // 未登录 + 从分享卡片/扫码直接进详情（推荐 Feed 从未挂载因而没有会话 id）就会上报这种行。
+    // `count(DISTINCT NULL)` 是 0，所以它有事件、有曝光价值，但进不了"去重人数"。
+    await addEvent({ listingId: listing })
+    await addEvent({ listingId: listing, userId: viewer })
+
+    const rows = await db
+      .select({ views: listingViewsCount(listings.id) })
+      .from(listings)
+      .innerJoin(users, eq(users.id, listings.sellerId))
+      .where(eq(listings.id, listing))
+
+    expect(rows[0]?.views).toBe(1)
   })
 
   test(`滚动 ${LISTING_VIEWS_WINDOW_DAYS} 天：窗口内的算、窗口外的不算`, async () => {

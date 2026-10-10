@@ -167,8 +167,10 @@ function fingerprint(listing: MockListing): string {
 /**
  * 「综合」排序的热度分：想要数权重是浏览量的 3 倍。
  *
- * 只用于**演示 fixture**（真实接口的排序由服务端 `popularityScore` 决定，见
- * `features/listing/api.ts`）。`views` / `wants` 现在都是契约字段，但演示 fixture 可以不带，
+ * **只用于演示 fixture**：真实列表的排序由服务端决定（`sort=default` 即最新，见
+ * `features/listing/api.ts` 的 `toListingSort`），端上没有热度分这个概念
+ * （`popularityScore` 是 `apps/api/src/modules/visual-search` 的识图排序量，与列表无关）。
+ * `views` / `wants` 现在都是契约字段，但演示 fixture 可以不带，
  * 所以比较时按 0 计，保证排序仍然是全序（缺值商品之间不会因为比较返回 0 而顺序不定）。
  */
 function heat(item: MockListing): number {
