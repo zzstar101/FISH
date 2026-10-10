@@ -34,9 +34,25 @@ import './index.scss'
  * - **原子槽位预留**：满槽时 `appendWithinLimit` 返回 null，绝不为它发起上传
  *   （否则 confirm 出一个没有任何条目可挂的孤儿对象）。
  *
- * 上传中的关闭/移除：`uploadReviewImage` 在每一步发请求前问 `isActive`，
- * 弹层卸载（`aliveRef`）或条目被移除后立刻中止 —— staging 侧的残留对象由 #476
- * 的孤儿回收兜底，与 PC 端 abort 的语义一致。
+ * ## 身份锚点（#485 审查 P1：切号能提交错误的评价）
+ *
+ * 弹层是**账号作用域**的：组件随弹层挂载，`ownerRef` 在挂载时铸定当时的账号，
+ * 此后每一步（上传的 `slotActive`、提交前的比对）都拿**当前**账号（`userRef`，
+ * 每次渲染同步）与它比。三处都读渲染闭包里的 `user` 是错的 —— 切号后闭包里的
+ * `A === A` 仍成立，而 `apiRequest` 取的是**调用那一刻**的会话 cookie（`lib/request.ts`），
+ * 于是 presign / PUT / confirm / 提交评价都会带着新账号的身份发出去。
+ *
+ * 上传链的在途收口：`uploadReviewImage` 在每一步发请求前问 `isActive`，翻假就抛
+ * `UploadAbortedError`；本组件据此**把槽位标成失败**（`abandonSlot`），不让它永久停在
+ * 「上传中」—— 已经 confirm 出来的那个 final 对象端上删不掉（评价媒体没有 delete 端点），
+ * 属 #493 的回收范围。
+ *
+ * ## 残留对象归谁
+ *
+ * - staging 键（`transaction-review-media/…`）：由 ILM 规则 `transaction-review-media-expire-1d`
+ *   （`infra/minio-ilm.json`，1 天过期）兜底 —— **不是**清扫器，是时间兜底。
+ * - final 键（`reviews/…`）：选图后又放弃 / 提交被 422 挡下会留下无人引用的公开对象，
+ *   `reviews/` 前缀当前**没有任何回收规则**，见 #493（与 listing 域的 #476 不是一件事）。
  */
 
 /** 评价的三档（#195 冻结口径：好评 / 中评 / 差评，不是 1–5 星）；订单卡的内联表单已随 #475 下沉到本组件 */
@@ -69,11 +85,21 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
   const imagesRef = useRef<ReviewImageSlot[]>([])
   /** 卸载哨兵：关层后在途上传的迟到结果不再发后续请求 */
   const aliveRef = useRef(true)
-  /** 上传链所属的账号（第一次选图时铸定）：每一步发请求前都要求身份未变（#170/#208 口径） */
   const { user } = useAuth()
-  const ownerRef = useRef<string | null>(null)
+  /**
+   * 当前账号的 ref（与 `imagesRef` 同一手法：每次渲染同步写）。
+   *
+   * 槽位与提交的身份判据必须读它，不能读渲染闭包里的 `user` —— 上传链跨多次渲染存活，
+   * 闭包捕获的是发起那次渲染的账号（#485 审查 P1-3）。
+   */
+  const userRef = useRef<string | null>(user?.id ?? null)
+  userRef.current = user?.id ?? null
+  /** 弹层打开时铸定的账号锚点（组件随弹层挂载/卸载，所以初值就是「打开时」的账号） */
+  const ownerRef = useRef<string | null>(user?.id ?? null)
   /** 原生选图面板的在飞哨：连点加图位不并发第二扇 */
   const pickingRef = useRef(false)
+  /** 提交在飞哨（同步）：`busy` 要等一次渲染才生效，连点两下会双发（#485 审查 S5） */
+  const submitInFlightRef = useRef(false)
   useEffect(() => {
     return () => {
       aliveRef.current = false
@@ -88,13 +114,31 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
   /** 槽位还在表里、身份未变、仍是「上传中」才算数 —— 移除/换号后的迟到结果一律丢弃 */
   const slotActive = (id: string) =>
     aliveRef.current &&
-    (ownerRef.current === null || user?.id === ownerRef.current) &&
+    (ownerRef.current === null || userRef.current === ownerRef.current) &&
     imagesRef.current.some((slot) => slot.id === id)
+
+  /**
+   * 上传链中途失效时的收尾：槽位还在表里就标成失败，别让它永久停在「上传中」
+   * （闸门文案会一直卡在「请稍候」，用户既提交不了也看不出为什么）。槽位已被移除、
+   * 或弹层已卸载时不写任何状态。
+   */
+  const abandonSlot = (id: string, reason: string) => {
+    if (!aliveRef.current) return
+    if (!imagesRef.current.some((slot) => slot.id === id)) return
+    commitImages(
+      imagesRef.current.map((slot) =>
+        slot.id === id ? { ...slot, status: 'failed', objectKey: null, error: reason } : slot,
+      ),
+    )
+  }
 
   const runUpload = (id: string, photo: ReviewPhoto) => {
     return uploadReviewImage(transactionId, photo, () => slotActive(id))
       .then((objectKey) => {
-        if (!slotActive(id)) return
+        if (!slotActive(id)) {
+          abandonSlot(id, '上传已取消，请重新选择图片')
+          return
+        }
         commitImages(
           imagesRef.current.map((slot) =>
             slot.id === id ? { ...slot, status: 'uploaded', objectKey, error: null } : slot,
@@ -103,19 +147,18 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
       })
       .catch((caught: unknown) => {
         // 条目已移除 / 弹层已关：上传链已在下一步边界自停，这里不再写任何状态
-        if (!slotActive(id)) return
+        if (!slotActive(id)) {
+          abandonSlot(id, '上传已取消，请重新选择图片')
+          return
+        }
+        const message = caught instanceof Error ? caught.message : '图片上传失败，请重试'
         commitImages(
           imagesRef.current.map((slot) =>
-            slot.id === id
-              ? {
-                  ...slot,
-                  status: 'failed',
-                  objectKey: null,
-                  error: caught instanceof Error ? caught.message : '图片上传失败，请重试',
-                }
-              : slot,
+            slot.id === id ? { ...slot, status: 'failed', objectKey: null, error: message } : slot,
           ),
         )
+        // 失败原因也要让用户看见：槽位上只有「重传」两个字，分不清网络抖动与永久拒绝（#485 审查 S8）
+        void Taro.showToast({ title: message, icon: 'none' })
       })
   }
 
@@ -125,7 +168,6 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
     if (room <= 0 || busy) return
     if (pickingRef.current) return // 原生选图面板还开着：连点不并发第二扇
     pickingRef.current = true
-    if (ownerRef.current === null) ownerRef.current = user?.id ?? null
     void pickPhotos(room)
       .then(({ photos, rejected }) => {
         if (rejected !== null) void Taro.showToast({ title: rejected, icon: 'none' })
@@ -177,9 +219,16 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
 
   /** 提交。有在途 / 失败的配图时不许提交（闸门文案给 toast，不许静默丢图）。 */
   const submit = () => {
-    if (busy) return
+    // 同步在飞哨：`busy` 要等一次渲染才生效，两次连点会都过 `if (busy)` 而双发
+    if (submitInFlightRef.current) return
     if (tier === null) {
       void Taro.showToast({ title: '请先选好评 / 中评 / 差评', icon: 'none' })
+      return
+    }
+    // 身份锚点：弹层打开时的账号必须仍是当前账号（评价提交后不可修改，不能记到别人头上）
+    if (ownerRef.current !== null && userRef.current !== ownerRef.current) {
+      void Taro.showToast({ title: '账号已切换，请重新打开评价', icon: 'none' })
+      onClose()
       return
     }
     const blocked = reviewSubmitBlockedReason(imagesRef.current)
@@ -187,6 +236,7 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
       void Taro.showToast({ title: blocked, icon: 'none' })
       return
     }
+    submitInFlightRef.current = true
     setBusy(true)
     const trimmed = body.trim()
     const imageObjectKeys = uploadedObjectKeys(imagesRef.current)
@@ -207,6 +257,7 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
         })
       })
       .finally(() => {
+        submitInFlightRef.current = false
         if (aliveRef.current) setBusy(false)
       })
   }
@@ -231,7 +282,12 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
               className={`rvw__tier rvw__tier--${item.key.toLowerCase()}${
                 tier === item.key ? ' is-on' : ''
               }`}
-              onClick={() => setTier(item.key)}
+              onClick={() => {
+                // 提交在飞期间锁住档位：请求已把当时的档位快照走了，之后改动只会让
+                // 「看到的」与「提交的」不一致（#485 审查 S7）
+                if (busy) return
+                setTier(item.key)
+              }}
             >
               <Text>{item.label}</Text>
             </View>
@@ -243,7 +299,11 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
             maxlength={REVIEW_BODY_MAX}
             placeholder="写点想说的（可不填，最多 200 字）"
             value={body}
-            onInput={(event) => setBody(event.detail.value)}
+            disabled={busy}
+            onInput={(event) => {
+              if (busy) return
+              setBody(event.detail.value)
+            }}
           />
         </View>
 

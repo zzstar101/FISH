@@ -108,6 +108,12 @@ export default function MyComments() {
   const userIdRef = useRef<string | null>(userId)
   userIdRef.current = userId
   const [showTop, setShowTop] = useState(false)
+  /**
+   * 已因 `onError` 补读过列表的图片地址（评价配图，见下方 `retryImageOnce`）。
+   * 同一地址只补一次：评价图是 900 秒的签名 URL（`REVIEW_MEDIA_URL_TTL_SECONDS`），
+   * 过期后重读能拿到新签名；但真 404 的图不该把页面拖进「加载→失败→再加载」的死循环。
+   */
+  const retriedImageRef = useRef<Set<string>>(new Set())
 
   /** 真实模式的续页游标（`nextCursor`；`null` = 到底了）。 */
   const [cursor, setCursor] = useState<string | null>(null)
@@ -268,6 +274,18 @@ export default function MyComments() {
     void Taro.showToast({ title, icon: 'none' })
   }
 
+  /**
+   * 评价配图是服务端签发的 900 秒 capability URL（`REVIEW_MEDIA_URL_TTL_SECONDS`）：
+   * 页面挂后台超过 15 分钟再回来，图会全部裂掉，重读列表能拿到重新签发的地址。
+   * 契约不带 `expiresAt`（端上无从预判何时过期），只能按 `onError` 兜底 ——
+   * 每个地址只补读一次，别让真 404 的图把页面拖进死循环。演示档不补读（fixture 不是签名 URL）。
+   */
+  const retryImageOnce = (url: string) => {
+    if (demo || retriedImageRef.current.has(url)) return
+    retriedImageRef.current.add(url)
+    void read(segmentRef.current, true)
+  }
+
   const demoCounts = countBySegment(items)
   const countOf = (key: CommentSegment): number | null => (demo ? demoCounts[key] : counts[key])
 
@@ -399,6 +417,7 @@ export default function MyComments() {
                     className="cmt__img"
                     src={url}
                     mode="aspectFill"
+                    onError={() => retryImageOnce(url)}
                     onClick={() => void Taro.previewImage({ urls: item.images, current: url })}
                   />
                 ))}

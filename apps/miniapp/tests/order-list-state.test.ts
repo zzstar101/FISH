@@ -306,13 +306,30 @@ describe('openReview —— 读评价边（订单卡写路径）', () => {
 describe('submitReview —— 提交评价（#475 起在 components/review-dialog）', () => {
   test('没选档位不静默：先 toast 再 return，且这一步不发请求', async () => {
     const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
-    expect(body).toContain('if (busy) return')
+    // 重入守卫必须是**同步 ref**：`busy` 要等一次渲染才生效，连点两下会双发
+    // （第二发必然 409，其 catch 还可能在第一发成功关层之后弹出一条错误 toast）
+    expect(body).toContain('if (submitInFlightRef.current) return')
     const tierAt = body.indexOf('if (tier === null) {')
     expect(tierAt, '没选档位必须显式判断').toBeGreaterThanOrEqual(0)
     const guard = body.slice(tierAt, body.indexOf('setBusy(true)', tierAt))
     expect(guard).toContain("title: '请先选好评 / 中评 / 差评'")
     expect(guard).toContain('return')
     expect(guard).not.toContain('createTransactionReview')
+  })
+
+  test('身份锚点：弹层打开时的账号已变则不提交，关层并要求重新评价', async () => {
+    const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
+    const anchorAt = body.indexOf('userRef.current !== ownerRef.current')
+    expect(anchorAt, '提交前必须比对弹层打开时的账号').toBeGreaterThanOrEqual(0)
+    // 必须在发请求之前
+    expect(anchorAt).toBeLessThan(body.indexOf('createTransactionReview('))
+    const guard = body.slice(anchorAt, body.indexOf('setBusy(true)', anchorAt))
+    expect(guard).toContain('return')
+    expect(guard).not.toContain('createTransactionReview')
+    // 身份判据读的是 ref（闭包里的 `user` 在切号后仍是旧值，判不出变化）
+    const slot = await sliceDialog('const slotActive = (id: string) =>', 'const abandonSlot = (')
+    expect(slot).toContain('userRef.current === ownerRef.current')
+    expect(slot).not.toContain('user?.id')
   })
 
   test('闸门：有在途 / 失败的配图时不提交（不许静默丢图），在 setBusy 之前', async () => {
@@ -334,6 +351,17 @@ describe('submitReview —— 提交评价（#475 起在 components/review-dialo
     expect(body).toContain('...(imageObjectKeys.length > 0 ? { imageObjectKeys } : {})')
   })
 
+  test('提交在飞期间锁住表单：档位与评语都不可改（快照已发走，改了只会「看到的≠提交的」）', async () => {
+    const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
+    expect(body).toContain('submitInFlightRef.current = false')
+    // 档位点击与评语输入各有一道 busy 闸
+    const tierClick = await sliceDialog('onClick={() => {', 'setTier(item.key)')
+    expect(tierClick).toContain('if (busy) return')
+    const bodyInput = await sliceDialog('onInput={(event) => {', 'setBody(event.detail.value)')
+    expect(bodyInput).toContain('if (busy) return')
+    expect(flat(codeOnly(await reviewDialogSource()))).toContain('disabled={busy}')
+  })
+
   test('提交成功才关弹层：toast + onSubmitted；失败不关（评语不能因为一次抖动就丢）', async () => {
     const body = await sliceDialog(DIALOG_SUBMIT, DIALOG_CLOSE)
     const thenAt = body.indexOf('.then(() => {')
@@ -346,7 +374,9 @@ describe('submitReview —— 提交评价（#475 起在 components/review-dialo
     const failure = body.slice(catchAt, finallyAt)
     expect(failure).toContain('Taro.showToast(')
     expect(failure).not.toContain('onSubmitted()')
-    expect(body.slice(finallyAt)).toContain('setBusy(false)')
+    const tail = body.slice(finallyAt)
+    expect(tail).toContain('submitInFlightRef.current = false')
+    expect(tail).toContain('setBusy(false)')
   })
 })
 
