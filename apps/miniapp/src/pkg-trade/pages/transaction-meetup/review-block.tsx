@@ -3,7 +3,11 @@ import Taro from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import ReviewDialog from '@/components/review-dialog'
 import { fetchTransactionReviews } from '@/features/transaction/api'
-import { createImageReloadState, noteImageFailure } from '@/features/transaction/image-reload'
+import {
+  createImageReloadState,
+  finishImageReload,
+  noteImageFailure,
+} from '@/features/transaction/image-reload'
 import { type ReviewRowView, ratingViewOf, splitReviews } from './review-block-view'
 
 /**
@@ -17,8 +21,9 @@ import { type ReviewRowView, ratingViewOf, splitReviews } from './review-block-v
  *
  * **签名 URL 只有 900 秒**（`REVIEW_MEDIA_URL_TTL_SECONDS`）：评价页挂在后台超过
  * 15 分钟再回来看，图会全部裂掉。契约不带 `expiresAt`，端上只能按 `onError` 兜底 ——
- * 判据在 `@/features/transaction/image-reload`（按 URL + 次数双上限，见那里的注释：
- * 只按 URL 去重挡不住「每次补读都换一批签名」造成的无界重读）。
+ * 闸门在 `@/features/transaction/image-reload`（一批只发一个请求、同一 URL 不重复、
+ * 批次有上限；见那里的注释：只按 URL 去重挡不住「每次补读都换一批签名」造成的无界重读）。
+ * 本块的补读就是重读这一笔交易的两方评价，所以闸门在读的 `finally` 里释放。
  *
  * 我这一侧还没评过时给「写评价」入口，打开 `components/review-dialog`（与订单卡
  * 同一个弹层）；提交成功后本块自重读，入口随已评状态消失。
@@ -173,24 +178,49 @@ export default function MeetupReviewBlock({
   const [state, setState] = useState<BlockState>({ state: 'loading' })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [refreshTick, setRefreshTick] = useState(0)
-  /** 配图签名 URL 失效后的补读判据（按 URL + 次数双上限，见 `@/features/transaction/image-reload`） */
+  /**
+   * 配图签名 URL 失效后的补读闸门（同一批只发一个请求、同一 URL 不重复、批次有上限；
+   * 见 `@/features/transaction/image-reload`）。
+   */
   const imageReloadRef = useRef(createImageReloadState())
+  /**
+   * 本次重读是不是**配图补读**触发的（#485 审查 P3-5）。
+   *
+   * 补读是「图过期了，顺手换一批地址」，不是「用户要看新数据」：它**不该**把卡换成
+   * loading（整张评价卡连同两行正文一起消失一帧），也不该在失败时把读得好好的数据
+   * 换成「交易评价加载失败」——那正是审查 P2 在评论页要避免的事，这里同一原则。
+   * 非补读的重读（进页面 / 重试 / 提交成功后）照旧走 loading + failed 两态。
+   */
+  const silentReloadRef = useRef(false)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadSignal/refreshTick 是刻意的重读信号，不是体内读到的值
   useEffect(() => {
     let cancelled = false
-    setState({ state: 'loading' })
+    let readOk = false
+    const silent = silentReloadRef.current
+    silentReloadRef.current = false
+    if (!silent) setState({ state: 'loading' })
     fetchTransactionReviews(transactionId)
       .then((response) => {
         if (cancelled) return
         const { mine, theirs } = splitReviews(response.items, myRole)
+        readOk = true
         setState({ state: 'ready', mine, theirs })
       })
       .catch((caught: unknown) => {
         if (cancelled) return
         // 失败态不吞：这里只补一条排障线索，UI 的语义仍是「给可重试入口」
         console.error('[meetup-review] 交易评价读取失败', caught)
-        setState({ state: 'failed' })
+        // 补读失败：屏上那两行还是好的，只是图暂时裂着 —— 保留原样，不换成错误态
+        if (!silent) setState({ state: 'failed' })
+      })
+      .finally(() => {
+        // 读落地就释放闸门：这一批过期图已经换过地址，下一批（含新地址又失效）才有机会补。
+        // 不释放的话 `noteImageFailure` 的 `inFlightUrl` 会让补读永久停在第一次。
+        // `cancelled`（本 effect 已被重读信号取代）时不释放 —— 取代它的那次读自己会释放，
+        // 提前放行只会让同一批过期图多插一次冗余重读。
+        // `readOk` 如实传：读失败时把触发地址从 `attempted` 里撤掉（那批没换来新地址）。
+        if (!cancelled) finishImageReload(imageReloadRef.current, readOk)
       })
     return () => {
       cancelled = true
@@ -199,10 +229,13 @@ export default function MeetupReviewBlock({
 
   /**
    * 签名 URL 过期（或图真的没了）时补读：重读会拿到重新签发的 URL。
-   * 是否真发这次补读由 `noteImageFailure` 判定（同一 URL 不重复、总次数有上限）。
+   * 是否真发这次补读由 `noteImageFailure` 判定（同一批只发一个请求、同一 URL 不重复、
+   * 批次有上限），闸门由上面那次读的 `finally` 释放；这次重读按 `silentReloadRef`
+   * 走静默档（不闪 loading、失败不换错误态）。
    */
   const retryImageOnce = (url: string) => {
     if (!noteImageFailure(imageReloadRef.current, url)) return
+    silentReloadRef.current = true
     setRefreshTick((prev) => prev + 1)
   }
 

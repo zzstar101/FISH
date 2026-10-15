@@ -9,6 +9,7 @@ import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { deleteMyComment, fetchMyComments } from '@/features/comments/api'
+import { mergeRefreshedImages, runImageRefresh } from '@/features/comments/image-refresh'
 import { DEMO_COMMENTS_ENABLED } from '@/features/comments/load'
 import {
   type CommentSegment,
@@ -27,7 +28,7 @@ import {
   viewTargetOf,
 } from '@/features/comments/mine'
 import { deleteMyTransactionReview } from '@/features/transaction/api'
-import { createImageReloadState, noteImageFailure } from '@/features/transaction/image-reload'
+import { createImageReloadState } from '@/features/transaction/image-reload'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -109,7 +110,10 @@ export default function MyComments() {
   const userIdRef = useRef<string | null>(userId)
   userIdRef.current = userId
   const [showTop, setShowTop] = useState(false)
-  /** 评价配图签名 URL 失效后的补读判据（按 URL + 次数双上限，见 `@/features/transaction/image-reload`） */
+  /**
+   * 评价配图签名 URL 失效后的补读闸门（一批只发一个请求、同一 URL 不重复、
+   * 批次有上限；见 `@/features/transaction/image-reload`）。
+   */
   const imageReloadRef = useRef(createImageReloadState())
 
   /** 真实模式的续页游标（`nextCursor`；`null` = 到底了）。 */
@@ -121,6 +125,11 @@ export default function MyComments() {
    */
   const loadingMoreRef = useRef(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  /**
+   * 已加载页数（首屏 = 1，每次续页 +1；首屏重读重置回 1）。
+   * 评价配图补读要按它回走列表才能覆盖用户已看到的每一页（见 `refreshImages`）。
+   */
+  const loadedPagesRef = useRef(1)
   /** 服务端三段计数（真实模式）；演示模式用 `countBySegment` 本地现算。 */
   const [counts, setCounts] = useState<SegmentCounts>(NO_COUNTS)
   /** 删除在飞行标记（行按钮转圈 / 挡连点）。 */
@@ -138,6 +147,7 @@ export default function MyComments() {
   if (prevUserId !== userId) {
     setPrevUserId(userId)
     loadEpoch.current += 1
+    loadedPagesRef.current = 1
     setItems(demo ? DEMO_MY_COMMENTS : [])
     setLoading(!demo)
     setError(null)
@@ -155,6 +165,7 @@ export default function MyComments() {
    */
   const read = useCallback(async (target: CommentSegment, silent = false) => {
     const epoch = ++loadEpoch.current
+    loadedPagesRef.current = 1
     if (!silent) setLoading(true)
     setError(null)
     try {
@@ -229,6 +240,7 @@ export default function MyComments() {
         ...response.items.map((row) => toMyCommentFromResponseItem(row, nowMs)),
       ])
       setCursor(response.nextCursor)
+      loadedPagesRef.current += 1
       setCounts((prev) => ({ ...prev, [segmentRef.current]: response.total }))
     } catch {
       // 续页失败不打断已有列表，给一句可重试的提示（再触底会自动重发）
@@ -273,14 +285,35 @@ export default function MyComments() {
 
   /**
    * 评价配图是服务端签发的 900 秒 capability URL（`REVIEW_MEDIA_URL_TTL_SECONDS`）：
-   * 页面挂后台超过 15 分钟再回来，图会全部裂掉，重读列表能拿到重新签发的地址。
-   * 契约不带 `expiresAt`（端上无从预判何时过期），只能按 `onError` 兜底 ——
-   * 是否真发这次补读由 `noteImageFailure` 判定（同一 URL 不重复、总次数有上限；
-   * 只按 URL 去重挡不住「每次补读都换一批签名」造成的无界重读）。演示档不补读（fixture 不是签名 URL）。
+   * 页面挂后台超过 15 分钟再回来图会全部裂掉，只有重读列表才能拿到重新签发的地址
+   * （契约不带 `expiresAt`，端上拼不出地址）。
+   *
+   * **补读不能走 `read()`**（#485 审查 P2）：`read()` 是首屏读，`setItems` 覆盖 + 重置
+   * cursor + 置 loading/error —— 用户翻到第 3 页时一张缩略图裂掉就会把列表打回页首、
+   * 后面已加载的行整片消失，补读失败还会把好端端的列表换成整页错误态。整屏缩略图一起裂
+   * 是常态，那时还会并发多份首屏读互相顶掉（`loadEpoch` 代次丢弃迟到响应）。
+   *
+   * 所以补读全部收在 `runImageRefresh`：一批只发**一个**请求（闸门在
+   * `@/features/transaction/image-reload` 的 `inFlight`），按已加载页数回走列表，
+   * 拿回「行 id → 新地址」后只 `setItems` 做按 id 合并 —— 行数、行序、cursor、
+   * loading/error 一个都不动。失败只在控制台留痕，不动列表。
+   * 演示档不补读（fixture 不是签名 URL）。
    */
-  const retryImageOnce = (url: string) => {
-    if (demo || !noteImageFailure(imageReloadRef.current, url)) return
-    void read(segmentRef.current, true)
+  const refreshImages = (url: string) => {
+    if (demo) return
+    const epoch = loadEpoch.current
+    void runImageRefresh({
+      state: imageReloadRef.current,
+      url,
+      loadedPages: loadedPagesRef.current,
+      fetchPage: (cursor) => fetchMyComments({ kind: kindOfSegment(segmentRef.current), cursor }),
+      mapItem: (row) => toMyCommentFromResponseItem(row, Date.now()),
+      isCurrent: () => epoch === loadEpoch.current,
+    }).then((fresh) => {
+      // 代次在最后一跳失守（换号 / 重读 / 切段）时同样不落地
+      if (fresh === null || epoch !== loadEpoch.current) return
+      setItems((prev) => mergeRefreshedImages(prev, fresh))
+    })
   }
 
   const demoCounts = countBySegment(items)
@@ -414,7 +447,7 @@ export default function MyComments() {
                     className="cmt__img"
                     src={url}
                     mode="aspectFill"
-                    onError={() => retryImageOnce(url)}
+                    onError={() => refreshImages(url)}
                     onClick={() => void Taro.previewImage({ urls: item.images, current: url })}
                   />
                 ))}

@@ -205,3 +205,52 @@ describe('MeetupReviewBlock（default export）—— 渲染体必须是唯一�
     expect(condition).not.toContain('state')
   })
 })
+
+/**
+ * 第三道网（#485 审查第三 / 四轮）：**配图补读的两条契约**，都只在 default export 里可见，
+ * 而且都不是渲染级用例能碰到的（重读信号由 state 驱动）。
+ *
+ * 1. **闸门必须释放**（`finishImageReload`）：不释放的话 `inFlightUrl` 永远非空，
+ *    表现是「第一批过期图能补，之后再裂就不补了」—— 删掉 `finally` 整段时
+ *    本组之外全部用例仍会全绿（实测），所以这里钉形状；
+ * 2. **补读触发的重读是静默档**：不闪 loading（整卡连正文消失一帧）、失败不换成
+ *    「交易评价加载失败」—— 与评论页 P2 的同一原则（图片恢复失败不升级成整块错误）。
+ */
+describe('MeetupReviewBlock —— 配图补读的释放闸门与静默档', () => {
+  async function codeOnlyBlock(): Promise<string> {
+    const source = await Bun.file(
+      new URL('../src/pkg-trade/pages/transaction-meetup/review-block.tsx', import.meta.url),
+    ).text()
+    return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  }
+
+  test('读落地释放闸门：finally 里 finishImageReload(state, readOk)，且被取消的那次不释放', async () => {
+    const code = await codeOnlyBlock()
+    const at = code.indexOf('.finally(() => {')
+    expect(at, '重读应带 finally 释放闸门').toBeGreaterThanOrEqual(0)
+    const close = code.indexOf('})', code.indexOf('finishImageReload', at))
+    const block = code.slice(at, close)
+    // 只有没被取消的那次读释放闸门（被取代的读由取代者释放）
+    expect(block).toContain('if (!cancelled) finishImageReload(imageReloadRef.current, readOk)')
+    // 成功标志如实传：false 时调用方会把触发地址从 attempted 里撤掉
+    expect(code).toContain('let readOk = false')
+    expect(code).toContain('readOk = true')
+  })
+
+  test('图片补读走静默档：不闪 loading、失败不换错误态（普通重读照旧两态）', async () => {
+    const code = await codeOnlyBlock()
+    // 补读入口先置静默标记，再推 tick
+    const entry = code.indexOf('const retryImageOnce = (url: string) => {')
+    expect(entry).toBeGreaterThanOrEqual(0)
+    const entryBlock = code.slice(entry, code.indexOf('\n  }', entry))
+    expect(entryBlock).toContain('noteImageFailure(imageReloadRef.current, url)')
+    expect(entryBlock).toContain('silentReloadRef.current = true')
+    expect(entryBlock).toContain('setRefreshTick((prev) => prev + 1)')
+    // effect 里读一次标记并复位（一次性，不跨请求残留）
+    expect(code).toContain('const silent = silentReloadRef.current')
+    expect(code).toContain('silentReloadRef.current = false')
+    // 静默档的两个分支：loading 与 failed 都要被 silent 挡住
+    expect(code).toContain("if (!silent) setState({ state: 'loading' })")
+    expect(code).toContain("if (!silent) setState({ state: 'failed' })")
+  })
+})
