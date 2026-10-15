@@ -293,8 +293,8 @@ export default function MyComments() {
    * 后面已加载的行整片消失，补读失败还会把好端端的列表换成整页错误态。整屏缩略图一起裂
    * 是常态，那时还会并发多份首屏读互相顶掉（`loadEpoch` 代次丢弃迟到响应）。
    *
-   * 所以补读全部收在 `runImageRefresh`：一批只发**一个**请求（闸门在
-   * `@/features/transaction/image-reload` 的 `inFlight`），按已加载页数回走列表，
+   * 所以补读全部收在 `runImageRefresh`：一批只跑**一个**补读周期（闸门在
+   * `@/features/transaction/image-reload` 的 `inFlightUrl`，周期内按已加载页数串行回走），
    * 拿回「行 id → 新地址」后只 `setItems` 做按 id 合并 —— 行数、行序、cursor、
    * loading/error 一个都不动。失败只在控制台留痕，不动列表。
    * 演示档不补读（fixture 不是签名 URL）。
