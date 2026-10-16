@@ -6,8 +6,9 @@
  * 换成真实 fetch 时，页面的数据形状不需要改。
  *
  * 与契约的刻意差异（都已在上游记录）：
- * - `ListingDetail` 多一个 `views` / `wants`：设计稿详情页要显示「218 浏览 · 34 想要」，
- *   而契约里没有这两个计数（上游无此字段）。属于 mock 才有的展示数据。
+ * - `views` / `wants` 现在**都有**契约字段（`ListingCardSchema.views` / `.wants`），
+ *   `toMockListing` 从卡片原样透传；本类型仍把它们写成可空只为兜手写字面量
+ *   （见下方字段注释）。设计稿详情页的「218 浏览 · 34 想要」即取这两个数。
  * - `Comment`（`MockComment`）是页面展示形状：真实数据由 #111 的 `CommentDto`
  *   投影而来，`authorInitial` / `timeLabel` 是页面排版量，契约里没有。
  */
@@ -116,11 +117,14 @@ export type MockListing = {
    */
   seller: MockUser | null
   /**
-   * mock 专属：浏览量 / 想要数。两者的处境**不一样**，别一并读：
-   * - `wants` 已有契约字段（`ListingCardSchema.wants` = 该商品已建会话的买家数），
-   *   `toMockListing` 默认就从卡片透传；这里保留可空是因为演示 fixture 直接给出数字，
-   *   而少数页面（收藏列表）按自己的读模型另行决定是否显示。
-   * - `views` **契约里没有**（Issue #192），真实接口给不出来，恒 `null`。
+   * 浏览量 / 想要数 —— 两者今天**都**有契约字段，都由 `toMockListing` 从卡片原样透传：
+   * - `views` = 近 30 天去重浏览人数（`ListingCardSchema.views`，#192）；
+   * - `wants` = 该商品已建会话的买家数（`ListingCardSchema.wants`）。
+   *
+   * 保留可空（而不是跟着契约写死 `number`）是**类型层的防御**，不是「今天真的会拿到 null」：
+   * 演示 fixture 的 `SPECS.views` / `SPECS.wants`（`mock/catalog.ts`）是必填，真实接口由契约
+   * 保证非空，`fetchers` 的详情分支也不覆盖这两个键。可空只对**手写的 `MockListing` 字面量**
+   * 成立（全仓只有 `fetchers.ts:301` 一处，且它是 `...base` 展开、两个键都来自契约投影）。
    *
    * 为什么可空而不是照旧 `number`：留成必填就等于默认真数据一定有值，
    * 页面会把 `null` 渲染成「0 人想要」——那是编造出来的市场信号。可空强制渲染层

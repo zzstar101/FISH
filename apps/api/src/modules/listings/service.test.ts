@@ -104,6 +104,7 @@ function feedEntry(
     // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
     // 真实的关联子查询由 store 集成测试覆盖（`listings/store.test.ts`）。
     wants: 0,
+    views: 0,
   }
 }
 
@@ -149,6 +150,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
       // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
       wants: 0,
+      views: 0,
     }),
     findState: async () => ({
       sellerId: SELLER_ID,
@@ -563,6 +565,7 @@ describe('getDetail', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
       }),
     })
@@ -600,6 +603,7 @@ describe('getDetail', () => {
         // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
         // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
         wants: 0,
+        views: 0,
       }),
     })
     const service = createListingService({ storage: fakeStorage(), store: offline })
@@ -625,6 +629,7 @@ describe('getDetail', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
       }),
     })
@@ -652,6 +657,7 @@ describe('getDetail', () => {
           seller: sellerRow(),
           images: [],
           wants: 0,
+          views: 0,
         }),
       }),
     })
@@ -702,6 +708,7 @@ describe('getDetail', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
       }),
     })
@@ -730,6 +737,7 @@ describe('getDetail', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
       }),
     })
@@ -762,6 +770,7 @@ describe('getDetail', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
       }),
     })
@@ -788,6 +797,7 @@ describe('getDetail', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
       }),
     })
@@ -1622,6 +1632,7 @@ describe('transition', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
         setStatus: async () => {
           wrote = true
@@ -1718,6 +1729,7 @@ describe('transition', () => {
           // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
           // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
           wants: 0,
+          views: 0,
         }),
       }),
     })

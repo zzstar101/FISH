@@ -753,6 +753,7 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
                 coverUrl: null,
                 moderationStatus: null,
                 wants: 0,
+                views: 0,
                 createdAt: new Date().toISOString(),
               },
             ]),

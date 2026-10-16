@@ -355,6 +355,7 @@ function feedCard(id: string) {
     // #460 起 `ListingCardSchema.wants` 必填（"已建会话的买家数"）：假卡片也要给，
     // 本用例只关心"客户端真正收到了哪几张"，值恒为 0。
     wants: 0,
+    views: 0,
     createdAt: NOW.toISOString(),
   }
 }

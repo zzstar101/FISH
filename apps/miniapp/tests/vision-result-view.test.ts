@@ -38,6 +38,7 @@ function card(overrides: Partial<ListingCard> = {}): ListingCard {
     createdAt: '2026-09-20T00:00:00.000Z',
     // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0（本用例不关心它）。
     wants: 0,
+    views: 0,
     moderationStatus: null,
     ...overrides,
   } as ListingCard

@@ -95,6 +95,17 @@ beforeAll(async () => {
     INSERT INTO conversations (id, listing_id, buyer_id, seller_id, last_message_at)
     VALUES ('01990000-0000-7000-8000-000000000071', ${listingA}, ${other}, ${me}, now())
   `)
+  /*
+   * 浏览量（= 最近 30 天浏览过该商品的去重人数）：同一个 `ownListings` 裸 SQL 里的
+   * `${listingViewsCount(sql.raw('l.id'))}`，风险与 `wants` 一模一样（别名写错只会静默出 0）。
+   * listingA 插两条**不同用户**的 DETAIL_VIEW → 期望 2；listingB 一条都没有 → 期望 0。
+   */
+  await db.execute(sql`
+    INSERT INTO recommendation_events (id, event_id, listing_id, user_id, event_type, occurred_at)
+    VALUES
+      ('01990000-0000-7000-8000-000000000081', '01990000-0000-7000-8000-000000000091', ${listingA}, ${me}, 'DETAIL_VIEW', now()),
+      ('01990000-0000-7000-8000-000000000082', '01990000-0000-7000-8000-000000000092', ${listingA}, ${other}, 'DETAIL_VIEW', now())
+  `)
 })
 
 afterAll(async () => {
@@ -133,6 +144,10 @@ describe('profile store (integration)', () => {
     // 两个值都要断言：只断 listingA 的话，「恒等于某个常数」的实现也能过。
     expect(rows[0]?.wants).toBe(0) // rows[0] 是 listingB（时间倒序在前）
     expect(rows[1]?.wants).toBe(1)
+    // 浏览量（近 30 天去重浏览人数）：listingA 两个不同用户各看过一次 → 2，listingB 没人看过 → 0。
+    // 同样两个值都断，理由同上。
+    expect(rows[0]?.views).toBe(0)
+    expect(rows[1]?.views).toBe(2)
   })
 
   test('ownListings does not include other users listings (只返回本人可见数据)', async () => {

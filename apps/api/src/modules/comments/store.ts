@@ -1,5 +1,6 @@
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { comments } from '@fish/db/schema/comments'
 import { listings } from '@fish/db/schema/listings'
@@ -137,6 +138,8 @@ const myCommentColumns = {
   >`(SELECT li.object_key FROM listing_images li WHERE li.listing_id = ${listings.id} AND li.sort_order = 0 LIMIT 1)`,
   // 想要数（= 已建会话的买家数）：卡片契约的必填字段，主查询一次算完（见 `@fish/db/listing-wants`）。
   wants: listingWantsCount(listings.id),
+  // 浏览量（近 30 天去重浏览人数）：同一张卡上与「想要数」并排画，同样主查询一次算完。
+  views: listingViewsCount(listings.id),
   commentId: comments.id,
   commentParentId: comments.parentId,
   commentContent: comments.content,

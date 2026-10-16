@@ -25,6 +25,7 @@ function row(overrides: Partial<FavoriteRow> = {}): FavoriteRow {
     seller: { id: seller, nickname: '卖家', avatarUrl: null, authStatus: 'VERIFIED' },
     // 想要数（已建会话的买家数）：卡片契约的必填字段，fake 行给 0（本用例不关心它）。
     wants: 0,
+    views: 0,
     coverObjectKey: null,
     favoritedAt: '2026-09-12T03:00:00.123Z',
     favoritedAtCursor: '2026-09-12T03:00:00.123456Z',

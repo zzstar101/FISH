@@ -1,5 +1,6 @@
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
+import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { users } from '@fish/db/schema/users'
 import { eq, sql } from 'drizzle-orm'
@@ -24,6 +25,8 @@ export interface ProfileListingRow {
   seller: ListingCardSeller
   /** 想要数（= 已建会话的买家数，见 `@fish/db/listing-wants`）：卡片契约的必填字段。 */
   wants: number
+  /** 浏览量（近 30 天去重浏览人数，见 `@fish/db/listing-views`）：与「想要数」并排画，同样必填。 */
+  views: number
 }
 
 /** 我的愿望行：形状对齐 wishes 模块的 WishRow（复用其导出的 toWishDto，避免映射漂移）。 */
@@ -143,6 +146,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
                  WHERE li.listing_id = l.id AND li.sort_order = 0 LIMIT 1)
                  AS cover_object_key,
                ${listingWantsCount(sql.raw('l.id'))} AS wants,
+               ${listingViewsCount(sql.raw('l.id'))} AS views,
                u.id AS seller_id, u.nickname AS seller_nickname,
                u.avatar_url AS seller_avatar_url, u.auth_status::text AS seller_auth_status
         FROM listings l
@@ -166,6 +170,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         createdAt: new Date(row.created_at as string | Date),
         coverObjectKey: (row.cover_object_key as string | null) ?? null,
         wants: Number(row.wants),
+        views: Number(row.views),
         seller: {
           id: row.seller_id as string,
           nickname: row.seller_nickname as string,

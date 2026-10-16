@@ -411,6 +411,7 @@ describe('createVisualSearchStore', () => {
       // 建会话，所以是 0 —— 它证明的是「列存在且为数值」，不是「有会话时为 N」（那条在
       // listings/store.test.ts 的专用用例里覆盖）。
       wants: 0,
+      views: 0,
     })
 
     // 真的喂给下游映射函数：字段缺失/类型不对会让 ListingCardSchema 解析失败返回 null。

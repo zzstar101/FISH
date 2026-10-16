@@ -54,6 +54,7 @@ const DELETABLE: ListingCard = {
   moderationStatus: 'BLOCKED',
   governanceDelisted: null,
   wants: 0,
+  views: 0,
 }
 
 function card(overrides: Partial<ListingCard>): ListingCard {

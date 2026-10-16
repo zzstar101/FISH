@@ -38,6 +38,7 @@ const detail = {
   isOwner: false,
   moderationStatus: null,
   wants: 0,
+  views: 0,
 } satisfies ListingDetail
 
 function fakeService(overrides: Partial<ListingService> = {}): ListingService {

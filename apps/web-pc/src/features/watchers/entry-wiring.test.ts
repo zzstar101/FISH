@@ -41,6 +41,7 @@ const LISTING: ListingCard = {
   createdAt: '2026-09-28T00:00:00.000Z',
   moderationStatus: 'APPROVED',
   wants: 0,
+  views: 0,
 }
 
 async function renderMyList(listings: ListingCard[]): Promise<string> {

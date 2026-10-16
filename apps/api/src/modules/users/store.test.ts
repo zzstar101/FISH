@@ -4,6 +4,7 @@ import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { createDb } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
@@ -221,7 +222,7 @@ test('listActiveListings 只出 ACTIVE + APPROVED，时间倒序，且与 stats 
       { status: 'ACTIVE', createdAt: new Date('2026-09-06T00:00:00.000Z') },
       { status: 'ACTIVE', createdAt: new Date('2026-09-05T00:00:00.000Z') },
     ],
-    async ({ sellerId, listingIds }) => {
+    async ({ sellerId, buyerId, listingIds }) => {
       const rows = await store.listActiveListings(sellerId, 20, null)
 
       expect(rows.map((row) => row.id)).toEqual([listingIds[3] as string, listingIds[4] as string])
@@ -235,6 +236,31 @@ test('listActiveListings 只出 ACTIVE + APPROVED，时间倒序，且与 stats 
         avatarUrl: null,
         authStatus: 'UNVERIFIED',
       })
+
+      // 浏览量（近 30 天去重浏览人数）：卡片上与「想要数」并列的另一个计数，同一个主查询带出。
+      // 两个**不同**用户看过 listingIds[3] → 2；另一件在售商品没人看过 → 0（0 是事实，不是没查）。
+      const viewed = listingIds[3] as string
+      const untouched = listingIds[4] as string
+      await db.insert(recommendationEvents).values([
+        {
+          eventId: newId(),
+          userId: sellerId,
+          listingId: viewed,
+          eventType: 'DETAIL_VIEW',
+          occurredAt: new Date(),
+        },
+        {
+          eventId: newId(),
+          userId: buyerId,
+          listingId: viewed,
+          eventType: 'DETAIL_VIEW',
+          occurredAt: new Date(),
+        },
+      ])
+      const after = await store.listActiveListings(sellerId, 20, null)
+      const viewsOf = (id: string) => after.find((row) => row.id === id)?.views
+      expect(viewsOf(viewed)).toBe(2)
+      expect(viewsOf(untouched)).toBe(0)
     },
   )
 })
