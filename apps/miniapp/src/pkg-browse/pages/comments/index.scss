@@ -328,6 +328,22 @@
   color: var(--muted);
 }
 
+/* 评价配图条（#475）：签名 URL 直渲，点按看大图。商品留言恒为空、整块不渲染 */
+.cmt__imgs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.cmt__img {
+  width: 120px;
+  height: 120px;
+  border-radius: 16px;
+  border: 2px solid var(--border);
+  background: var(--grad-ph);
+}
+
 /*
  * 两种评论类型各一色：商品留言走品牌蓝、交易评价走薄荷（ok），一眼能分出
  * 「我在别人商品下问的一句」与「我交易后给的评价」。

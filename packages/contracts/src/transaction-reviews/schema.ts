@@ -10,10 +10,10 @@
  * - 评价**不可修改**；本人可物理删除（删除幂等）；
  * - 评价时间用服务端 `created_at`，端上不本地造假时间。
  *
- * 配图：**读模型保留 `images[{url}]`，写契约暂不收图**。main 上没有能产出评价可引用键的
- * 上传路径（uploads 的 presign/confirm 是 listing 审核专用、`chat-media/` 是会话域），
- * 接受任意 `objectKey` 等于允许引用别人的对象。等 `transaction-review-media` 上传链落地
- * 后，写契约加可选 `imageObjectKeys` 即可，读侧不用改。
+ * 配图（#475 起）：读模型 `images[{url}]`，写契约收**可选**的 `imageObjectKeys`。键**只能**来自
+ * `POST /transactions/:id/review/media/confirm` 固化的 final 键（`reviews/{usr_…}/…`，见下方
+ * `ReviewMediaPresignRequestSchema` 一段），服务端按前缀与归属复核 —— 直接接受任意 `objectKey`
+ * 等于允许引用别人的对象。数组下标即 `sort_order`（0 = 第一张）。读侧形状未变，不用改。
  */
 
 import { ALLOWED_IMAGE_MIME, MAX_IMAGE_BYTES } from '@fish/contracts/listings/schema'

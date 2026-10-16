@@ -198,6 +198,21 @@ describe('我的评论 · 真实数据适配器', () => {
     expect(row.timeLabel).toBe('今天 10:00')
   })
 
+  test('评价行：配图地址原样透传（#475 的签名 URL，端上不拼地址）', () => {
+    const withImages = {
+      ...reviewItem,
+      review: {
+        ...reviewItem.review,
+        images: [{ url: 'https://api.example.com/api/uploads/media/tok1' }],
+      },
+    } as unknown as TransactionReviewItem
+    const row = toMyCommentFromReviewItem(withImages, NOW_MS)
+    expect(row.images).toEqual(['https://api.example.com/api/uploads/media/tok1'])
+    // 商品留言没有图片字段：恒为空数组，页面整块不渲染
+    const commentRow = toMyCommentFromCommentItem(commentItem, NOW_MS)
+    expect(commentRow.images).toEqual([])
+  })
+
   test('评价行：跳订单、删评价边、成交价不是挂价、空评语是空串', () => {
     const row = toMyCommentFromReviewItem(reviewItem, NOW_MS)
     expect(row.kind).toBe('TRADE')

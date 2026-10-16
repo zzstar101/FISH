@@ -1,21 +1,14 @@
-import {
-  REVIEW_BODY_MAX,
-  type TransactionReviewRating,
-} from '@fish/contracts/transaction-reviews/schema'
-import { Image, Text, Textarea, View } from '@tarojs/components'
+import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop from '@/components/back-top'
 import LoadError from '@/components/load-error'
+import ReviewDialog from '@/components/review-dialog'
 import TopBar from '@/components/top-bar'
 import type { FailureKind } from '@/features/load-failure'
 import type { OrderCardView } from '@/features/transaction/adapt'
-import {
-  cancelTransaction,
-  createTransactionReview,
-  fetchMyTransactionReview,
-} from '@/features/transaction/api'
+import { cancelTransaction, fetchMyTransactionReview } from '@/features/transaction/api'
 import {
   conversationUrlOf,
   DEMO_ORDER_HINT,
@@ -81,12 +74,10 @@ const STATUS_META: Record<
   CANCELLED: { label: '已取消', cls: 'is-cancel', note: '取消交易', noteNoTime: '已取消交易' },
 }
 
-/** 评价的三档（#195 冻结口径：好评 / 中评 / 差评，不是 1–5 星） */
-const REVIEW_TIERS: { key: TransactionReviewRating; label: string }[] = [
-  { key: 'POSITIVE', label: '好评' },
-  { key: 'NEUTRAL', label: '中评' },
-  { key: 'NEGATIVE', label: '差评' },
-]
+/**
+ * 评价的三档（#195 冻结口径：好评 / 中评 / 差评，不是 1–5 星）已随弹层下沉到
+ * `components/review-dialog`；本组件只负责「哪张卡可以评」。
+ */
 
 type Props = {
   /** 顶栏标题的黑色前段与品牌色尾段：两页各传自己的视角词（我 + 买到的 / 卖出的） */
@@ -134,11 +125,8 @@ export default function OrderList({
 
   /** 取消交易在飞（挡连点；showModal 的确认回调是跨帧的，用状态而不是 ref 才能画出来） */
   const [cancelBusyId, setCancelBusyId] = useState<string | null>(null)
-  /** 评价弹层的目标（null = 关闭） */
+  /** 评价弹层的目标（null = 关闭）。表单状态（档位/评语/配图）由弹层组件自持 */
   const [reviewTarget, setReviewTarget] = useState<OrderCardView | null>(null)
-  const [reviewTier, setReviewTier] = useState<TransactionReviewRating | null>(null)
-  const [reviewBody, setReviewBody] = useState('')
-  const [reviewBusy, setReviewBusy] = useState(false)
   /** 本次会话里已提交过评价的交易（本地提示位；权威状态以点开时的 GET 评价边为准） */
   const [reviewedIds, setReviewedIds] = useState<string[]>([])
   /** 点「评价」后正在查评价边（挡连点） */
@@ -179,7 +167,7 @@ export default function OrderList({
    *
    * 拦在**点击时**而不是把按钮藏掉：藏了用户会以为功能没了；点一下被告知「这是演示数据」，
    * 才知道自己看的是一份不会被后端承认的列表。（评价弹层的目标只由 `openReview` 设置，
-   * 那里已拦，所以 `submitReview` 不必再判一次。）
+   * 那里已拦，所以弹层内的提交（`ReviewDialog`）不必再判一次。）
    *
    * `openListing`（商品详情）不拦：Owner 决策只点了「二维码 / 交易码」与「查看会话」两条
    * 交易入口，而商品详情本来就有自己的演示兜底 —— 假 `l-*` 会先打一次真实
@@ -258,11 +246,12 @@ export default function OrderList({
   /**
    * 「评价」：先读评价边 —— 已评过（200）就说明，不再弹层（评价不可修改，
    * 重复提交会被 409 `TRANSACTION_REVIEW_EXISTS` 拒，与其撞墙不如先问）；
-   * 没有（404 `REVIEW_NOT_FOUND`）才弹评价卡。
+   * 没有（404 `REVIEW_NOT_FOUND`）才弹评价卡（表单状态在 `ReviewDialog` 内自持，
+   * 每次挂载都是干净的一份，不需要在这里重置）。
    */
   const openReview = (item: OrderCardView) => {
     if (blockIfDemo(item)) return
-    if (reviewCheckingId !== null || reviewBusy) return
+    if (reviewCheckingId !== null) return
     setReviewCheckingId(item.id)
     fetchMyTransactionReview(item.id)
       .then(() => {
@@ -272,8 +261,6 @@ export default function OrderList({
       })
       .catch((caught: unknown) => {
         if (isApiError(caught) && caught.code === 'REVIEW_NOT_FOUND') {
-          setReviewTier(null)
-          setReviewBody('')
           setReviewTarget(item)
           return
         }
@@ -283,36 +270,6 @@ export default function OrderList({
         })
       })
       .finally(() => setReviewCheckingId(null))
-  }
-
-  /** 提交评价。评语 trim 后为空 = 「只打分没写字」（契约明说的正常形态），省略字段。 */
-  const submitReview = () => {
-    if (reviewTarget === null || reviewBusy) return
-    // 没选档位：按钮只是降了透明度（`is-off`），点下去不能静默什么都不发生 ——
-    // 本页其它写操作都会给一句 toast，这里补齐同一口径
-    if (reviewTier === null) {
-      void Taro.showToast({ title: '请先选好评 / 中评 / 差评', icon: 'none' })
-      return
-    }
-    setReviewBusy(true)
-    const trimmed = reviewBody.trim()
-    createTransactionReview(reviewTarget.id, {
-      rating: reviewTier,
-      ...(trimmed === '' ? {} : { body: trimmed }),
-    })
-      .then(() => {
-        void Taro.showToast({ title: '评价已提交', icon: 'none' })
-        setReviewedIds((prev) => [...prev, reviewTarget.id])
-        setReviewTarget(null)
-      })
-      .catch((caught: unknown) => {
-        // 422 REVIEW_CONTENT_BLOCKED / 409 已评过等服务端可读文案原样透出
-        void Taro.showToast({
-          title: isApiError(caught) ? caught.message : '提交没成功，请重试',
-          icon: 'none',
-        })
-      })
-      .finally(() => setReviewBusy(false))
   }
 
   const backToTop = () => {
@@ -573,61 +530,22 @@ export default function OrderList({
           : null}
 
         {/*
-          评价卡（#195）：三档评分（好评/中评/差评，契约冻结口径）+ 可空评语。
-          先读评价边再弹（已评过 409 会被服务端拒，与其撞墙不如先问）；
-          提交成功后本地把该卡转「已评价」，权威状态以服务端为准。
+          评价卡（#195，#475 起换共享组件）：三档评分 + 可空评语 + 配图（最多 3 张），
+          表单与上传编排都在 `components/review-dialog` 里；提交成功后本地把该卡转
+          「已评价」，权威状态以服务端为准。
         */}
         {reviewTarget !== null ? (
-          <>
-            <View
-              className="orders__scrim"
-              onClick={() => {
-                if (!reviewBusy) setReviewTarget(null)
-              }}
-            />
-            <View className="orders__dialog">
-              <Text className="orders__dlg-title">评价这笔交易</Text>
-              <Text className="orders__dlg-sub">{reviewTarget.listing.title}</Text>
-              <View className="orders__dlg-tiers">
-                {REVIEW_TIERS.map((tier) => (
-                  <View
-                    key={tier.key}
-                    className={`orders__tier orders__tier--${tier.key.toLowerCase()}${
-                      reviewTier === tier.key ? ' is-on' : ''
-                    }`}
-                    onClick={() => setReviewTier(tier.key)}
-                  >
-                    <Text>{tier.label}</Text>
-                  </View>
-                ))}
-              </View>
-              <View className="orders__dlg-bodywrap">
-                <Textarea
-                  className="orders__dlg-body"
-                  maxlength={REVIEW_BODY_MAX}
-                  placeholder="写点想说的（可不填，最多 200 字）"
-                  value={reviewBody}
-                  onInput={(event) => setReviewBody(event.detail.value)}
-                />
-              </View>
-              <View className="orders__dlg-acts">
-                <View
-                  className="orders__dlg-cancel"
-                  onClick={() => {
-                    if (!reviewBusy) setReviewTarget(null)
-                  }}
-                >
-                  <Text>再想想</Text>
-                </View>
-                <View
-                  className={`orders__dlg-ok${reviewTier === null ? ' is-off' : ''}`}
-                  onClick={submitReview}
-                >
-                  <Text>{reviewBusy ? '提交中…' : '提交评价'}</Text>
-                </View>
-              </View>
-            </View>
-          </>
+          <ReviewDialog
+            transactionId={reviewTarget.id}
+            listingTitle={reviewTarget.listing.title}
+            onClose={() => setReviewTarget(null)}
+            onSubmitted={() => {
+              setReviewedIds((prev) =>
+                prev.includes(reviewTarget.id) ? prev : [...prev, reviewTarget.id],
+              )
+              setReviewTarget(null)
+            }}
+          />
         ) : null}
 
         {/*

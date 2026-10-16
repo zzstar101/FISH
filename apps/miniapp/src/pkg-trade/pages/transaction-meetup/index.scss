@@ -664,6 +664,146 @@
 }
 
 /*
+ * 「交易评价」块（`review-block.tsx`，#195 两方读路径 + #475 写入口）。
+ * 完成态摘要卡之后的对账区：我的评价 / 对方的评价各一块，三档胶囊沿用
+ * 订单卡与「我的评论」页的红绿灯语义（ok / warn / danger）。
+ */
+.meetup__rvcard {
+  position: relative;
+  z-index: 1;
+  margin: 44px 40px 0;
+  padding: 28px 24px;
+  border-radius: 36px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.meetup__rv-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.meetup__rv-title {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.meetup__rv-note {
+  font-size: var(--fs-2xs);
+  color: var(--muted-2);
+}
+
+.meetup__rv-row {
+  margin-top: 24px;
+}
+
+.meetup__rv-rowhead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.meetup__rv-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.meetup__rv-chip {
+  padding: 2px 14px;
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+
+  &.is-pos {
+    background: var(--ok-weak);
+    color: var(--ok-ink);
+  }
+
+  &.is-mid {
+    background: var(--warn-weak);
+    color: var(--warn-ink);
+  }
+
+  &.is-neg {
+    background: var(--danger-weak);
+    color: var(--danger-ink);
+  }
+}
+
+.meetup__rv-text {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--fg);
+}
+
+/* 评价配图：签名 URL 直渲（无会话 capability 地址），点按看大图 */
+.meetup__rv-imgs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.meetup__rv-img {
+  width: 132px;
+  height: 132px;
+  border-radius: 16px;
+  border: 2px solid var(--border);
+  background: var(--grad-ph);
+}
+
+/* 我还没评过：给写评价的入口（弹层与订单卡共用同一个组件） */
+.meetup__rv-write {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  border-radius: 36px;
+  background: var(--brand-deep);
+  color: var(--surface);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.meetup__rv-empty {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--fs-sm);
+  color: var(--muted-2);
+}
+
+.meetup__rv-hair {
+  height: 2px;
+  margin-top: 28px;
+  background: var(--border);
+  opacity: 0.6;
+}
+
+/* 加载失败的一行重试入口：评价是完成态的对账信息，失败不能被误读成「还没评」 */
+.meetup__rvretry {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88px;
+  margin: 44px 40px 0;
+  border-radius: 28px;
+  border: 2px dashed var(--line);
+  background: var(--ice);
+  font-size: var(--fs-sm);
+  color: var(--muted-2);
+}
+
+/*
  * 完成动效的唯一开关（稿 `.content.is-hit`）。
  *
  * 所有「入场」动画都挂在这个类下面 —— 它只在**刚完成**那一刻由 `fxPhase` 加上，

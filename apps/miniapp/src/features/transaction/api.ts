@@ -19,6 +19,8 @@ import {
   type TransactionReviewCreateInput,
   TransactionReviewDeleteResponseSchema,
   TransactionReviewResponseSchema,
+  type TransactionReviewsResponse,
+  TransactionReviewsResponseSchema,
 } from '@fish/contracts/transaction-reviews/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
@@ -229,6 +231,15 @@ export async function createTransactionReview(
 export async function deleteMyTransactionReview(id: string): Promise<number> {
   const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id), { method: 'DELETE' })
   return TransactionReviewDeleteResponseSchema.parse(payload).deleted
+}
+
+/**
+ * 读一笔交易的**两方**评价（`GET /transactions/:id/reviews`，面交页完成态的对账块用）。
+ * 至多两行（buyer / seller 各一），不分页；作者身份由每行的 `authorRole` 承载。
+ */
+export async function fetchTransactionReviews(id: string): Promise<TransactionReviewsResponse> {
+  const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.ofTransaction(id))
+  return TransactionReviewsResponseSchema.parse(payload)
 }
 
 /*

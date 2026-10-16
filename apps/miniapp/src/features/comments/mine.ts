@@ -62,6 +62,11 @@ export type MyComment = {
   coverUrl: string | null
   /** 我写的那句话。评价行可能是空串（「只打分没写字」是契约明说的正常形态）。 */
   text: string
+  /**
+   * 评价配图的展示地址（#475，服务端签好的短期 capability URL）。
+   * 商品留言在契约里就没有图片字段，恒为空数组、整块不渲染。
+   */
+  images: string[]
   timeLabel: string
   /** 三档评分，**只有交易评价有**；商品留言恒为 `null`（见文件头）。 */
   rating: TransactionReviewRating | null
@@ -89,6 +94,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 76000,
     coverUrl: null,
     text: '还在吗？我今晚下课顺路，能帮我留到八点吗',
+    images: [],
     timeLabel: '2 小时前',
     rating: null,
     to: null,
@@ -103,6 +109,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 8900,
     coverUrl: null,
     text: '球是室内打过还是室外打的？气还足吗',
+    images: [],
     timeLabel: '昨天 19:40',
     rating: null,
     to: null,
@@ -117,6 +124,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 42000,
     coverUrl: null,
     text: '车在哪栋楼？周末方便试骑一下吗',
+    images: [],
     timeLabel: '3 天前',
     rating: null,
     to: null,
@@ -131,6 +139,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 12000,
     coverUrl: null,
     text: '色温有几档？宿舍桌面用会不会太亮',
+    images: [],
     timeLabel: '上周',
     rating: null,
     to: null,
@@ -145,6 +154,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 4500,
     coverUrl: null,
     text: '准时到了面交点，验完直接确认，很好沟通的一位同学。',
+    images: [],
     timeLabel: '8 月 21 日',
     rating: 'POSITIVE',
     to: '周予安',
@@ -159,6 +169,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 16000,
     coverUrl: null,
     text: '验货很仔细，但确认得很爽快，全程没有压价。',
+    images: [],
     timeLabel: '8 月 14 日',
     rating: 'POSITIVE',
     to: '许澈',
@@ -173,6 +184,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 46000,
     coverUrl: null,
     text: '书收到啦，包得很仔细，成色比描述的还好。',
+    images: [],
     timeLabel: '5 月 20 日',
     rating: 'POSITIVE',
     to: '橙子',
@@ -187,6 +199,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     priceCents: 52000,
     coverUrl: null,
     text: '瓶身完好、日期也新，就是见面时间来回改了两回。',
+    images: [],
     timeLabel: '4 月 28 日',
     rating: 'NEUTRAL',
     to: '苏打水',
@@ -210,6 +223,7 @@ export function toMyCommentFromCommentItem(item: MyCommentItem, nowMs: number): 
     priceCents: item.listing.priceCents,
     coverUrl: item.listing.coverUrl,
     text: item.comment.content,
+    images: [],
     timeLabel: dayLabelOf(item.comment.createdAt, nowMs),
     rating: null,
     to: null,
@@ -231,6 +245,7 @@ export function toMyCommentFromReviewItem(item: TransactionReviewItem, nowMs: nu
     priceCents: item.transaction.amountCents,
     coverUrl: item.transaction.listing.coverUrl,
     text: item.review.body ?? '',
+    images: item.review.images.map((image) => image.url),
     timeLabel: dayLabelOf(item.review.createdAt, nowMs),
     rating: item.review.rating,
     to: item.transaction.counterpart.nickname,
