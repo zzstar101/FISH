@@ -137,6 +137,7 @@ describe('runImageRefresh —— 多图同时过期只补一次（已加载多�
       runImageRefresh({
         state,
         url: urlOf(id),
+        rowId: id,
         loadedPages: 3,
         fetchPage: server.fetchPage,
         mapItem,
@@ -165,6 +166,7 @@ describe('runImageRefresh —— 多图同时过期只补一次（已加载多�
     const fresh = await runImageRefresh({
       state,
       url: rows[0]?.images[0] ?? '',
+      rowId: 'rv1',
       loadedPages: 3,
       fetchPage: server.fetchPage,
       mapItem,
@@ -241,6 +243,7 @@ describe('runImageRefresh —— 多图同时过期只补一次（已加载多�
     const fresh = await runImageRefresh({
       state,
       url: rows[0]?.images[0] ?? '',
+      rowId: 'rv1',
       loadedPages: 5, // 页数上限给了 5，但列表只有 2 页
       fetchPage: server.fetchPage,
       mapItem,
@@ -257,6 +260,7 @@ describe('runImageRefresh —— 多图同时过期只补一次（已加载多�
     const fresh = await runImageRefresh({
       state,
       url: rows[0]?.images[0] ?? '',
+      rowId: 'rv1',
       loadedPages: 2, // 用户只翻了两页（第三页的 rv5 还没上屏）
       fetchPage: server.fetchPage,
       mapItem,
@@ -286,12 +290,15 @@ describe('runImageRefresh —— 失败与失守都不动列表', () => {
     const failed = await runImageRefresh({
       state,
       url: staleUrl,
+      rowId: 'rv1',
       loadedPages: 2,
       fetchPage: flaky,
       mapItem,
       isCurrent: () => true,
     })
     expect(failed).toBeNull()
+    // 失败自动重试了一次（仍失败就停）：两批，没有无界循环
+    expect(state.count).toBe(2)
     // 失败也留了排障线索（与列表失败同一口径）
     expect(errorSpy).toHaveBeenCalled()
     // 闸门必须释放：否则这一页的配图永远补不了第二次
@@ -303,6 +310,7 @@ describe('runImageRefresh —— 失败与失守都不动列表', () => {
     const second = await runImageRefresh({
       state,
       url: staleUrl,
+      rowId: 'rv1',
       loadedPages: 1,
       fetchPage: flaky,
       mapItem,
@@ -325,6 +333,7 @@ describe('runImageRefresh —— 失败与失守都不动列表', () => {
     const result = await runImageRefresh({
       state,
       url: rows[0]?.images[0] ?? '',
+      rowId: 'rv1',
       loadedPages: 3,
       fetchPage: fetchAndFlip,
       mapItem,
@@ -344,6 +353,7 @@ describe('runImageRefresh —— 失败与失守都不动列表', () => {
     const first = runImageRefresh({
       state,
       url: rows[0]?.images[0] ?? '',
+      rowId: 'rv1',
       loadedPages: 1,
       fetchPage: server.fetchPage,
       mapItem,
@@ -352,6 +362,7 @@ describe('runImageRefresh —— 失败与失守都不动列表', () => {
     const second = await runImageRefresh({
       state,
       url: otherUrl,
+      rowId: 'rv3',
       loadedPages: 1,
       fetchPage: server.fetchPage,
       mapItem,
@@ -374,10 +385,11 @@ describe('runImageRefresh —— 失败与失守都不动列表', () => {
       if (failing) throw new Error('网络炸了')
       return server.fetchPage(cursor)
     }
-    const run = (url: string) =>
+    const run = (index: number) =>
       runImageRefresh({
         state,
-        url,
+        url: rows[index]?.images[0] ?? '',
+        rowId: rows[index]?.id ?? '',
         loadedPages: 1,
         fetchPage: flaky,
         mapItem,
@@ -385,21 +397,132 @@ describe('runImageRefresh —— 失败与失守都不动列表', () => {
       })
 
     // 同一 tick 三张图裂掉：只有第一张起批，另两张并入；这一批失败
-    const [a, b, c] = await Promise.all([
-      run(rows[0]?.images[0] ?? ''),
-      run(rows[2]?.images[0] ?? ''),
-      run(rows[4]?.images[0] ?? ''),
-    ])
+    const [a, b, c] = await Promise.all([run(0), run(2), run(4)])
     expect(a).toBeNull()
     expect(b).toBeNull()
     expect(c).toBeNull()
-    expect(state.count).toBe(1)
+    // 起批的那张失败后自动重试了一次（仍失败）：两批，不是一批也不是无界
+    expect(state.count).toBe(2)
 
     failing = false
     // 并入的两张现在各自能起批（旧实现把它们记进 attempted，从此再也不补）
-    const retry = await run(rows[2]?.images[0] ?? '')
+    const retry = await run(2)
     expect(retry).not.toBeNull()
+    expect(state.count).toBe(3)
+  })
+})
+
+describe('runImageRefresh —— 一次性 onError 不能因批次失败而丢（审查第四轮 P2）', () => {
+  test('只触发一次 onError、第一次补读失败：无需再次调用，自动受限重试一次并恢复', async () => {
+    const server = makeServer(THREE_PAGES)
+    const rows = screenRows(THREE_PAGES)
+    const state = createImageReloadState()
+    let failures = 1
+    const flakyOnce = async (cursor: string | undefined): Promise<MyCommentsResponse> => {
+      if (failures > 0) {
+        failures -= 1
+        throw new Error('网络炸了')
+      }
+      return server.fetchPage(cursor)
+    }
+
+    // 整个测试里 runImageRefresh（= 一次 onError）只调用这一回
+    const fresh = await runImageRefresh({
+      state,
+      url: rows[0]?.images[0] ?? '',
+      rowId: 'rv1',
+      loadedPages: 1,
+      fetchPage: flakyOnce,
+      mapItem,
+      isCurrent: () => true,
+    })
+    expect(fresh?.has('rv1')).toBe(true)
     expect(state.count).toBe(2)
+    expect(state.inFlightUrl).toBeNull()
+  })
+
+  test('持续失败：只重试一次就停（批次计数 2，不无界）', async () => {
+    const rows = screenRows(THREE_PAGES)
+    const state = createImageReloadState()
+    let calls = 0
+    const down = async (): Promise<MyCommentsResponse> => {
+      calls += 1
+      throw new Error('断网')
+    }
+    const fresh = await runImageRefresh({
+      state,
+      url: rows[0]?.images[0] ?? '',
+      rowId: 'rv1',
+      loadedPages: 1,
+      fetchPage: down,
+      mapItem,
+      isCurrent: () => true,
+    })
+    expect(fresh).toBeNull()
+    expect(calls).toBe(2)
+    expect(state.count).toBe(2)
+    expect(state.retried).toBe(false)
+  })
+})
+
+describe('runImageRefresh —— 成功必须覆盖触发行（审查第四轮 P2）', () => {
+  test('分页成员位移：前面新增一行把触发行挤到已加载页数之外时，继续走到它', async () => {
+    // 用户屏上 2 页（rv1..rv4，每页 2 行）；之后前面新增了 rvNew，rv4 被挤到服务端第 3 页
+    const shifted: Spec[][] = [
+      [
+        { id: 'rvNew', images: [] },
+        { id: 'rv1', images: ['k1'] },
+      ],
+      [
+        { id: 'rv2', images: [] },
+        { id: 'rv3', images: ['k3'] },
+      ],
+      [
+        { id: 'rv4', images: ['k4'] },
+        { id: 'rv5', images: [] },
+      ],
+    ]
+    const server = makeServer(shifted)
+    const state = createImageReloadState()
+    const triggerUrl = 'https://api.example.com/media/k4?sig=0'
+    const fresh = await runImageRefresh({
+      state,
+      url: triggerUrl,
+      rowId: 'rv4',
+      loadedPages: 2,
+      fetchPage: server.fetchPage,
+      mapItem,
+      isCurrent: () => true,
+    })
+    expect(fresh?.get('rv4')).toEqual(['https://api.example.com/media/k4?sig=3'])
+    expect(server.calls).toEqual([undefined, '1', '2'])
+    // 触发行拿到了替换地址：批次成功，URL 留在 attempted
+    expect(state.attempted.has(triggerUrl)).toBe(true)
+  })
+
+  test('触发行超出页数上限：不算成功、不消耗该 URL 的恢复资格、不白重试；其余行地址照常交出', async () => {
+    const many: Spec[][] = [1, 2, 3, 4, 5].map((n) => [{ id: `rv${n}`, images: [`k${n}`] }])
+    const server = makeServer(many)
+    const state = createImageReloadState()
+    const triggerUrl = 'https://api.example.com/media/k5?sig=0'
+    const fresh = await runImageRefresh({
+      state,
+      url: triggerUrl,
+      rowId: 'rv5',
+      loadedPages: 3,
+      maxPages: 3, // 上限 3 页，触发行在第 5 页
+      fetchPage: server.fetchPage,
+      mapItem,
+      isCurrent: () => true,
+    })
+    expect(server.calls).toEqual([undefined, '1', '2'])
+    // 前三页的行照常拿到新地址
+    expect([...(fresh?.keys() ?? [])]).toEqual(['rv1', 'rv2', 'rv3'])
+    // 触发行没被覆盖：不记成功，URL 不进 attempted；这是确定性结果，不重试（只起了一批）
+    expect(state.attempted.has(triggerUrl)).toBe(false)
+    expect(state.count).toBe(1)
+    expect(state.inFlightUrl).toBeNull()
+    expect(state.retried).toBe(false)
   })
 })
 

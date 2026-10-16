@@ -231,7 +231,10 @@ describe('MeetupReviewBlock —— 配图补读的释放闸门与静默档', () 
     const close = code.indexOf('})', code.indexOf('finishImageReload', at))
     const block = code.slice(at, close)
     // 只有没被取消的那次读释放闸门（被取代的读由取代者释放）
-    expect(block).toContain('if (!cancelled) finishImageReload(imageReloadRef.current, readOk)')
+    expect(block).toContain('if (cancelled) return')
+    // 静默补读失败时拿到触发地址，重走一遍补读（onError 是一次性的，不重发就没有第二次事件）
+    expect(block).toContain('finishImageReload(imageReloadRef.current, readOk, silent)')
+    expect(block).toContain('if (retryUrl !== null) retryImageOnce(retryUrl)')
     // 成功标志如实传：false 时调用方会把触发地址从 attempted 里撤掉
     expect(code).toContain('let readOk = false')
     expect(code).toContain('readOk = true')

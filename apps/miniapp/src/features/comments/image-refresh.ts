@@ -80,6 +80,13 @@ export type ImageRefreshArgs = {
   state: ImageReloadState
   /** 刚裂掉的那张图的地址（判据：同一 URL 不重复补读） */
   url: string
+  /**
+   * 触发这次补读的**行 id**。批次只有在补读结果里**确实带回这一行**时才算成功：
+   * 列表是 newest-first 的 keyset 分页，屏上加载 N 页后前面若新增了行，原第 N 页末尾的
+   * 可见行会挪到第 N+1 页；只回放前 N 页会漏掉它，却把批次记成功、把它的 URL 留在
+   * `attempted` 里 —— 这张图从此再也补不了（#485 审查第四轮 P2）。
+   */
+  rowId: string
   /** 当前列表已加载的页数（首屏 = 1，每次续页 +1） */
   loadedPages: number
   /** 取一页；`cursor` 为 `undefined` = 首屏，其余原样回传服务端 `nextCursor` */
@@ -91,26 +98,24 @@ export type ImageRefreshArgs = {
   maxPages?: number
 }
 
-/**
- * 一次完整的补读：闸门 → 按页回走 → 返回「行 id → 新地址」；不该补读 / 中途失守 /
- * 请求失败都回 `null`（调用方据此不做任何状态更新）。
- *
- * 闸门一定在**本函数返回前**释放（`finally`），并如实带成功标志：失败 / 中止时
- * `finishImageReload(state, false)` 会把触发地址从 `attempted` 里撤掉 ——
- * 否则「这一批补读失败」会被记成「这些图补过了」，在本页实例里永远不再自动补。
- */
-export async function runImageRefresh(
-  args: ImageRefreshArgs,
-): Promise<Map<string, string[]> | null> {
-  if (!noteImageFailure(args.state, args.url)) return null
-  let fresh: Map<string, string[]> | null = null
+type Attempt =
+  | { outcome: 'ok'; fresh: Map<string, string[]> }
+  /** 回走完了（到底 / 到页数上限）但没见到触发行：别的行的新地址照样可用，但本批不算成功 */
+  | { outcome: 'missed'; fresh: Map<string, string[]> }
+  | { outcome: 'stale' }
+  | { outcome: 'failed' }
+
+async function attemptRefresh(args: ImageRefreshArgs): Promise<Attempt> {
   try {
-    const pages = imageRefreshPages(args.loadedPages, args.maxPages)
+    const max = args.maxPages ?? IMAGE_REFRESH_MAX_PAGES
+    const pages = imageRefreshPages(args.loadedPages, max)
     const collected = new Map<string, string[]>()
     let cursor: string | undefined
-    for (let page = 0; page < pages; page += 1) {
+    // 回走 `pages` 页；触发行还没见到就**继续走**，直到页数上限（分页成员位移时
+    // 它可能落在已加载页数之外的下一页）。见到触发行且走满 `pages` 页就停。
+    for (let page = 0; page < pages || (!collected.has(args.rowId) && page < max); page += 1) {
       const response = await args.fetchPage(cursor)
-      if (!args.isCurrent()) return null
+      if (!args.isCurrent()) return { outcome: 'stale' }
       for (const item of response.items) {
         const row = args.mapItem(item)
         collected.set(row.id, row.images)
@@ -118,14 +123,42 @@ export async function runImageRefresh(
       if (response.nextCursor === null) break
       cursor = response.nextCursor
     }
-    fresh = collected
-    return collected
+    return { outcome: collected.has(args.rowId) ? 'ok' : 'missed', fresh: collected }
   } catch (caught) {
     // 补读失败**不升级**成列表错误态（列表本身还是好的，只是图暂时裂着）；
     // 留一行排障线索，与 `features/comments/index.tsx` 的失败日志同款。
     console.error('[my-comments] 评价配图补读失败', caught)
-    return null
-  } finally {
-    finishImageReload(args.state, fresh !== null)
+    return { outcome: 'failed' }
+  }
+}
+
+/**
+ * 一次完整的补读：闸门 → 按页回走 → 返回「行 id → 新地址」；不该补读 / 中途失守 /
+ * 请求失败都回 `null`（调用方据此不做任何状态更新）。
+ *
+ * 闸门一定在拿到结局后释放，并如实带成功标志：失败 / 中止时 `finishImageReload`
+ * 会把触发地址从 `attempted` 里撤掉 —— 否则「这一批补读失败」会被记成「这些图补过了」。
+ *
+ * **失败后自动重试一次**（审查第四轮 P2）：`<Image>` 的 `onError` 是一次性的，
+ * 在飞期间并入的裂图与触发这一批的那张图都不会再发第二次事件，所以请求失败时由闸门
+ * 给出触发地址、这里重走一遍（吃批次预算，一条失败链最多一次）。代次失守不重试
+ * （重读 / 切段 / 换号已经换了一批行，新行自己会发 `onError`）；触发行没被覆盖也不重试
+ * （确定性结果，重试只是白花请求）—— 这两种只撤销记账，且仍把已拿到的其余行地址交给调用方合并。
+ */
+export async function runImageRefresh(
+  args: ImageRefreshArgs,
+): Promise<Map<string, string[]> | null> {
+  let url = args.url
+  for (;;) {
+    if (!noteImageFailure(args.state, url)) return null
+    const attempt = await attemptRefresh(args)
+    const retryUrl = finishImageReload(
+      args.state,
+      attempt.outcome === 'ok',
+      attempt.outcome === 'failed',
+    )
+    if (attempt.outcome === 'ok' || attempt.outcome === 'missed') return attempt.fresh
+    if (retryUrl === null) return null
+    url = retryUrl
   }
 }

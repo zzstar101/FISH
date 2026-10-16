@@ -36,10 +36,12 @@ export type ImageReloadState = {
   count: number
   /** 在飞的那一批由哪个地址触发；`null` = 没有在飞（新失败可以另起一批） */
   inFlightUrl: string | null
+  /** 当前这条失败链已经自动重试过一次（成功 / 重试仍失败后复位） */
+  retried: boolean
 }
 
 export function createImageReloadState(): ImageReloadState {
-  return { attempted: new Set(), count: 0, inFlightUrl: null }
+  return { attempted: new Set(), count: 0, inFlightUrl: null, retried: false }
 }
 
 /**
@@ -60,7 +62,11 @@ export function noteImageFailure(
 ): boolean {
   if (state.attempted.has(url)) return false
   if (state.inFlightUrl !== null) return false
-  if (state.count >= max) return false
+  if (state.count >= max) {
+    // 预算耗尽：待发的重试起不来了，别让 `retried` 悬在 true 上
+    state.retried = false
+    return false
+  }
   state.attempted.add(url)
   state.count += 1
   state.inFlightUrl = url
@@ -73,8 +79,30 @@ export function noteImageFailure(
  * `succeeded = false`（请求失败 / 中止）时把本批触发地址从 `attempted` 里撤掉：
  * 补读没换来新地址，这些图不该被记成「补过了」。批次计数不回退 ——
  * 单调计数才是「永久失败的图不会无界重读」的那道闸。
+ *
+ * **返回值 = 该自动重试的触发地址**（审查第四轮 P2）：`<Image>` 的 `onError` 是一次性的，
+ * `src` 没变就不会再触发 —— 在飞期间并入的裂图、以及触发这一批的那张图，批次一失败就
+ * 再没有事件能把它们拉回来。所以失败后由调用方用返回的地址**重新走一遍**
+ * `noteImageFailure`（照常吃批次预算）。一条失败链最多自动重试**一次**（`retried`），
+ * 重试仍失败就停，等下一个真实的 `onError`。`retry = false`（代次失守 / 触发行没被覆盖这类
+ * 重试也无益的结局）只撤销记账，不重试。
  */
-export function finishImageReload(state: ImageReloadState, succeeded: boolean): void {
-  if (!succeeded && state.inFlightUrl !== null) state.attempted.delete(state.inFlightUrl)
+export function finishImageReload(
+  state: ImageReloadState,
+  succeeded: boolean,
+  retry: boolean = true,
+): string | null {
+  const url = state.inFlightUrl
   state.inFlightUrl = null
+  if (succeeded || url === null) {
+    state.retried = false
+    return null
+  }
+  state.attempted.delete(url)
+  if (!retry || state.retried) {
+    state.retried = false
+    return null
+  }
+  state.retried = true
+  return url
 }

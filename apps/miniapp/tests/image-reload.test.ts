@@ -103,6 +103,30 @@ describe('finishImageReload —— 失败不留后患', () => {
     expect(state.count).toBe(2)
   })
 
+  test('失败返回触发地址供重试一次；重试仍失败就停，成功 / retry=false 不重试', () => {
+    const state = createImageReloadState()
+    expect(noteImageFailure(state, 'https://api/u/1', 10)).toBe(true)
+    expect(finishImageReload(state, false)).toBe('https://api/u/1')
+    // 重试：再走一遍闸门，仍失败 → 这条失败链到此为止
+    expect(noteImageFailure(state, 'https://api/u/1', 10)).toBe(true)
+    expect(finishImageReload(state, false)).toBeNull()
+    // 链已复位：下一次失败又有一次重试机会
+    expect(noteImageFailure(state, 'https://api/u/2', 10)).toBe(true)
+    expect(finishImageReload(state, true)).toBeNull()
+    expect(noteImageFailure(state, 'https://api/u/3', 10)).toBe(true)
+    expect(finishImageReload(state, false, false)).toBeNull()
+    expect(state.retried).toBe(false)
+  })
+
+  test('重试被批次上限挡掉时 retried 不悬空', () => {
+    const state = createImageReloadState()
+    expect(noteImageFailure(state, 'https://api/u/1', 1)).toBe(true)
+    expect(finishImageReload(state, false)).toBe('https://api/u/1')
+    expect(state.retried).toBe(true)
+    expect(noteImageFailure(state, 'https://api/u/1', 1)).toBe(false)
+    expect(state.retried).toBe(false)
+  })
+
   test('永久失败的图仍被批次上限挡住（撤 attempted 不等于放开无界重读）', () => {
     const state = createImageReloadState()
     // 每次都换新签名（地址永远没见过）+ 每次请求都失败 → 只有批次计数能拦住

@@ -299,12 +299,13 @@ export default function MyComments() {
    * loading/error 一个都不动。失败只在控制台留痕，不动列表。
    * 演示档不补读（fixture 不是签名 URL）。
    */
-  const refreshImages = (url: string) => {
+  const refreshImages = (url: string, rowId: string) => {
     if (demo) return
     const epoch = loadEpoch.current
     void runImageRefresh({
       state: imageReloadRef.current,
       url,
+      rowId,
       loadedPages: loadedPagesRef.current,
       fetchPage: (cursor) => fetchMyComments({ kind: kindOfSegment(segmentRef.current), cursor }),
       mapItem: (row) => toMyCommentFromResponseItem(row, Date.now()),
@@ -447,7 +448,7 @@ export default function MyComments() {
                     className="cmt__img"
                     src={url}
                     mode="aspectFill"
-                    onError={() => refreshImages(url)}
+                    onError={() => refreshImages(url, item.id)}
                     onClick={() => void Taro.previewImage({ urls: item.images, current: url })}
                   />
                 ))}

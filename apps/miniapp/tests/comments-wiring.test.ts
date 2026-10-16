@@ -54,7 +54,7 @@ describe('我的评论：配图补读不碰列表状态（#485 审查 P2）', ()
   /** 取 `refreshImages` 的整个函数体（到下一条顶层 `const` 为止） */
   async function refreshBlock(): Promise<string> {
     const code = await source()
-    const start = code.indexOf('const refreshImages = (url: string) => {')
+    const start = code.indexOf('const refreshImages = (url: string, rowId: string) => {')
     expect(start, '页面里应有 refreshImages').toBeGreaterThanOrEqual(0)
     const end = code.indexOf('\n  const demoCounts', start)
     expect(end, 'refreshImages 之后应跟着 demoCounts').toBeGreaterThan(start)
@@ -64,7 +64,7 @@ describe('我的评论：配图补读不碰列表状态（#485 审查 P2）', ()
   test('图片 onError 走 refreshImages，不走 read / setRefreshTick 之类会重置列表的路径', async () => {
     const code = await source()
     // 渲染处接线：onError 调 refreshImages
-    expect(code).toContain('onError={() => refreshImages(url)}')
+    expect(code).toContain('onError={() => refreshImages(url, item.id)}')
     // 旧写法（补读直接调首屏 read）不许回来
     expect(code).not.toContain('void read(segmentRef.current, true)\n  }')
   })

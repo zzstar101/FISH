@@ -220,7 +220,11 @@ export default function MeetupReviewBlock({
         // `cancelled`（本 effect 已被重读信号取代）时不释放 —— 取代它的那次读自己会释放，
         // 提前放行只会让同一批过期图多插一次冗余重读。
         // `readOk` 如实传：读失败时把触发地址从 `attempted` 里撤掉（那批没换来新地址）。
-        if (!cancelled) finishImageReload(imageReloadRef.current, readOk)
+        // 静默补读失败时返回触发地址：`onError` 是一次性的，不重发就没有第二次事件了，
+        // 这里按闸门的规则（一条失败链最多一次、仍吃批次预算）重走一遍。
+        if (cancelled) return
+        const retryUrl = finishImageReload(imageReloadRef.current, readOk, silent)
+        if (retryUrl !== null) retryImageOnce(retryUrl)
       })
     return () => {
       cancelled = true
