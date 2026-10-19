@@ -78,7 +78,14 @@ export function StartDisputeDialog({
   }
 
   return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
+    <Dialog
+      onOpenChange={(next) => {
+        // 提交中忽略 X / Esc / 遮罩关闭：避免请求在途时弹窗消失、结果无处安放。
+        if (!next && isPending) return
+        onOpenChange(next)
+      }}
+      open={open}
+    >
       <DialogContent className="sm:max-w-lg">
         <form className="space-y-5" onSubmit={handleSubmit}>
           <DialogHeader>
@@ -94,8 +101,10 @@ export function StartDisputeDialog({
           </DialogHeader>
 
           <Field>
-            <FieldLabel>争议类型</FieldLabel>
+            <FieldLabel id="dispute-type-label">争议类型</FieldLabel>
             <RadioGroup
+              aria-describedby="dispute-type-hint"
+              aria-labelledby="dispute-type-label"
               onValueChange={(value) => setType(DisputeTypeSchema.parse(value))}
               value={type ?? ''}
             >
@@ -110,6 +119,9 @@ export function StartDisputeDialog({
                 </label>
               ))}
             </RadioGroup>
+            <p className="text-ink-3 text-xs" id="dispute-type-hint">
+              选择最接近的一项；选择「其他」时必须填写说明。
+            </p>
           </Field>
 
           <Field>

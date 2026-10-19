@@ -63,8 +63,9 @@ export function NotificationsPage() {
     // 不需要先确认存在；争议通知的收件人必然是当事人）；商品与愿望目标要先确认还可见，
     // 避免跳进一个已删/不属于该账号的资源页。
     if (target.kind === 'dispute') {
-      // 通知只说「有更新」：先让详情缓存失效，否则会先渲染 60s 轮询前的旧状态。
+      // 通知只说「有更新」：先让详情与列表缓存失效，否则会先渲染 60s 轮询前的旧状态。
       await queryClient.invalidateQueries({ queryKey: disputeKeys.detail(target.disputeId) })
+      await queryClient.invalidateQueries({ queryKey: disputeKeys.mine })
       await navigate({
         to: '/disputes/$disputeId',
         params: { disputeId: target.disputeId },

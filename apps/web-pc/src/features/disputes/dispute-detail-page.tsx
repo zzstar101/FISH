@@ -125,7 +125,7 @@ function DisputeDetailContent({ disputeId, viewerId }: { disputeId: string; view
         <p className="text-ink-3 text-xs">争议编号 {shortDisputeId(detail.id)}</p>
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)] items-start gap-6">
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(340px,0.8fr)]">
         <div className="space-y-6">
           <TradeSummaryCard dispute={detail} viewerId={viewerId} />
           <DetailTextCard detailText={detail.detailText} type={detail.type} />
@@ -321,7 +321,7 @@ function AttachmentCard({
         </p>
       ) : (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {attachments.map((attachment) => (
+          {attachments.map((attachment, index) => (
             <a
               className="group block overflow-hidden rounded-xl border border-line"
               href={attachment.url}
@@ -330,7 +330,7 @@ function AttachmentCard({
               target="_blank"
             >
               <img
-                alt="争议附件"
+                alt={`争议附件 ${index + 1}（${attachment.mimeType}）`}
                 className="aspect-square w-full object-cover transition-transform group-hover:scale-[1.02]"
                 src={attachment.url}
               />
@@ -345,7 +345,7 @@ function AttachmentCard({
       {canAdd ? (
         <div className="mt-4 space-y-2">
           <input
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
             className="hidden"
             onChange={handleFile}
             ref={inputRef}
@@ -361,10 +361,12 @@ function AttachmentCard({
             {upload.isPending ? '正在上传…' : '上传图片'}
           </Button>
           <p className="text-ink-3 text-xs leading-5">
-            支持 JPG / PNG / WebP，单张不超过 5MB，最多 {MAX_DISPUTE_ATTACHMENTS} 张。
+            支持 JPG / PNG / WebP / HEIC，单张不超过 5MB，最多 {MAX_DISPUTE_ATTACHMENTS} 张。
           </p>
           {uploadErrorMessage !== null ? (
-            <p className="text-danger text-xs">{uploadErrorMessage}</p>
+            <p className="text-danger text-xs" role="alert">
+              {uploadErrorMessage}
+            </p>
           ) : null}
         </div>
       ) : null}
@@ -391,6 +393,19 @@ function ConclusionCard({ detail }: { detail: DisputeDetail }) {
           </div>
           <p className="text-ink-3 text-xs leading-5">
             处理期间可以继续补充图片与聊天证据；结论会作为最终结论展示在这里。
+          </p>
+        </div>
+      ) : null}
+
+      {detail.status === 'RESOLVED' && resolution === null ? (
+        <div className="mt-4 space-y-3">
+          <Badge shape="pill" variant={status.variant}>
+            {status.label}
+          </Badge>
+          <p className="text-ink-2 text-sm leading-6">平台已处理，未提供结论说明。</p>
+          <p className="text-ink-3 text-xs">
+            {detail.handledBy === null ? '平台' : detail.handledBy.nickname} ·{' '}
+            {detail.handledAt === null ? '已处理' : `${formatRelativeTimeAt(detail.handledAt)}处理`}
           </p>
         </div>
       ) : null}

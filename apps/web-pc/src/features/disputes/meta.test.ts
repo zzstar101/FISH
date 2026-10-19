@@ -39,6 +39,18 @@ describe('dispute type options', () => {
     }
     expect(disputeTypeLabel('OTHER')).toBe('其他')
   })
+
+  test('OTHER 缺说明被契约拒绝（端上按钮禁用同一条规则）', () => {
+    expect(
+      DisputeCreateInputSchema.safeParse({ transactionId: TRANSACTION_ID, type: 'OTHER' }).success,
+    ).toBe(false)
+    expect(
+      DisputeCreateInputSchema.safeParse({
+        transactionId: TRANSACTION_ID,
+        type: 'ITEM_MISMATCH',
+      }).success,
+    ).toBe(true)
+  })
 })
 
 describe('status / resolution meta', () => {

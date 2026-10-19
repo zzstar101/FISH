@@ -1,9 +1,9 @@
+import type { QueryClient } from '@tanstack/react-query'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '../../lib/api-client'
 import { currentSessionGeneration } from '../../lib/session-cache'
 import {
   addDisputeEvidence,
-  type DisputeConversation,
   fetchDispute,
   fetchDisputeConversation,
   fetchMyDisputes,
@@ -21,6 +21,33 @@ export const disputeKeys = {
 }
 
 const DISPUTE_DETAIL_STALE_MS = 15_000
+
+/**
+ * 「写入时才发现争议已是终态」的错误：本地详情已陈旧，失效让页面重取权威状态
+ * （撤回被管理员处理抢先、7 天窗口内被处理、附件配额刚被另一标签页用满）。
+ */
+const TERMINAL_DISPUTE_WRITE_CODES = new Set<string>([
+  'DISPUTE_NOT_PENDING',
+  'DISPUTE_CONFLICT',
+  'DISPUTE_ATTACHMENT_LIMIT',
+])
+
+/**
+ * 撤回 / 补附件 / 补证据失败后的公共收尾：终态错误 → 详情失效。
+ *
+ * 单独导出便于直接单测（不为 mutation hook 引入渲染层测试基建）；
+ * 会话代际不一致（已切号）时不做任何缓存操作，与成功路径同一条纪律。
+ */
+export function invalidateDisputeAfterWriteFailure(
+  queryClient: QueryClient,
+  disputeId: string,
+  generation: number | undefined,
+  error: unknown,
+): void {
+  if (generation !== currentSessionGeneration()) return
+  if (!(error instanceof ApiError) || !TERMINAL_DISPUTE_WRITE_CODES.has(error.code)) return
+  void queryClient.invalidateQueries({ queryKey: disputeKeys.detail(disputeId) })
+}
 
 /**
  * 「我的争议」列表（游标分页）。
@@ -93,13 +120,7 @@ export function useWithdrawDispute(disputeId: string) {
       void queryClient.invalidateQueries({ queryKey: disputeKeys.mine })
     },
     onError: (error, _variables, generation) => {
-      if (generation !== currentSessionGeneration()) return
-      if (
-        error instanceof ApiError &&
-        (error.code === 'DISPUTE_NOT_PENDING' || error.code === 'DISPUTE_CONFLICT')
-      ) {
-        void queryClient.invalidateQueries({ queryKey: disputeKeys.detail(disputeId) })
-      }
+      invalidateDisputeAfterWriteFailure(queryClient, disputeId, generation, error)
     },
   })
 }
@@ -109,33 +130,49 @@ export function useUploadDisputeAttachment(disputeId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (file: File) => uploadDisputeAttachment(disputeId, file),
-    onSuccess: () => {
+    onMutate: () => currentSessionGeneration(),
+    onSuccess: (_result, _variables, generation) => {
+      if (generation !== currentSessionGeneration()) return
       void queryClient.invalidateQueries({ queryKey: disputeKeys.detail(disputeId) })
+    },
+    onError: (error, _variables, generation) => {
+      invalidateDisputeAfterWriteFailure(queryClient, disputeId, generation, error)
     },
   })
 }
 
-/** 关联聊天证据：成功后刷新详情。 */
+/** 关联聊天证据：成功后刷新详情；终态错误同样失效详情。 */
 export function useAddDisputeEvidence(disputeId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (messageId: string) => addDisputeEvidence(disputeId, messageId),
-    onSuccess: () => {
+    onMutate: () => currentSessionGeneration(),
+    onSuccess: (_result, _variables, generation) => {
+      if (generation !== currentSessionGeneration()) return
       void queryClient.invalidateQueries({ queryKey: disputeKeys.detail(disputeId) })
+    },
+    onError: (error, _variables, generation) => {
+      invalidateDisputeAfterWriteFailure(queryClient, disputeId, generation, error)
     },
   })
 }
 
 /**
- * 证据选择器的数据源（交易会话最新一页消息）。
+ * 证据选择器的数据源：交易会话消息（`before` 游标向更早翻页）。
  *
- * `enabled` 只在弹层打开且当前查看者可补材料时给 true —— 非发起人没有这个入口，
- * 不该为他发一次无用的交易/会话请求。
+ * 服务端历史按 `(createdAt, id)` 升序返回一页，`nextCursor` 指向更早一页；首屏只是
+ * 最新一页，所以用 infinite query 保留「加载更早的消息」——此前只取最新 100 条，
+ * 更早的证据选不到（第二轮审查 B1）。`enabled` 只在弹层打开且查看者可补材料时为 true。
+ *
+ * 只支持文本 / 系统消息：聊天读接口排除 `type='MEDIA'`，争议证据契约也没有媒体投影，
+ * 聊天图片证据属后端 + 契约扩展，由 #500 跟踪，这里不接 MEDIA。
  */
 export function useDisputeConversation(transactionId: string, enabled: boolean) {
-  return useQuery<DisputeConversation | null>({
+  return useInfiniteQuery({
     queryKey: disputeKeys.conversation(transactionId),
-    queryFn: () => fetchDisputeConversation(transactionId),
+    queryFn: ({ pageParam }) => fetchDisputeConversation(transactionId, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage?.nextCursor ?? undefined,
     enabled,
     staleTime: 30_000,
   })

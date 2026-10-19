@@ -24,22 +24,22 @@ export type DisputableTransaction = {
 }
 
 /**
- * 能否对这笔交易发起争议。**镜像服务端规则**：`PENDING_MEETUP` 没有时限；
- * 已成交 / 已取消只在终态时间起 30 天内可发起（服务端以 `now - closedAt > 窗口` 拒绝，
- * 所以恰好第 30 天仍在窗口内）。
+ * 能否对这笔交易发起争议。**镜像服务端规则**（`isWindowClosed`）：
+ * `PENDING_MEETUP` 没有时限；终态时间（`completedAt ?? cancelledAt`）起 30 天内可发起
+ * （服务端以 `now - closedAt > 窗口` 拒绝，所以恰好第 30 天仍在窗口内）。
  *
- * 终态时间缺失（历史脏数据 / 契约外 DTO）时不放行 —— 端上无法证明在窗口内，
- * 让服务端兜底比给一个必然被 409 的入口好。
+ * 终态时间缺失时**放行**：服务端 `isWindowClosed` 对 `!closedAt` 直接返回 false（窗口开放），
+ * 端上擅自关窗口会挡掉服务端本会受理的请求。契约的 status↔timestamp refine 已让这种 DTO
+ * 不可达，这里只防御契约外输入，语义与后端保持一致（无法解析的时间同理，交给服务端判定）。
  */
 export function canStartDispute(transaction: DisputableTransaction, now: number): boolean {
   if (transaction.status === 'PENDING_MEETUP') return true
-  const closedAt = transaction.status === 'COMPLETED' ? transaction.completedAt : null
-  const terminalAt =
-    closedAt ?? (transaction.status === 'CANCELLED' ? transaction.cancelledAt : null)
-  if (terminalAt === null) return false
-  const terminalMs = Date.parse(terminalAt)
-  if (Number.isNaN(terminalMs)) return false
-  return now - terminalMs <= DISPUTE_WINDOW_MS
+  // 与服务端同源：completedAt ?? cancelledAt，而不是按 status 二选一。
+  const closedAt = transaction.completedAt ?? transaction.cancelledAt
+  if (closedAt === null) return true
+  const closedMs = Date.parse(closedAt)
+  if (Number.isNaN(closedMs)) return true
+  return now - closedMs <= DISPUTE_WINDOW_MS
 }
 
 /** 订单详情上争议入口旁的一句解释：为什么可发起 / 为什么不可发起。 */

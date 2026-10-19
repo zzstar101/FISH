@@ -5,6 +5,7 @@ import {
   addDisputeEvidence,
   DISPUTE_PAGE_LIMIT,
   fetchDispute,
+  fetchDisputeConversation,
   fetchMyDisputes,
   myDisputesPath,
   startDispute,
@@ -282,6 +283,7 @@ describe('uploadDisputeAttachment', () => {
   })
 
   test('PUT 成功但 confirm 响应丢失：下次上传先幂等确认同一个 objectKey', async () => {
+    installSessionStorage()
     const RETRY_DISPUTE_ID = 'dsp_01jc000000e00800000000000b'
     const first = mockFetchCalls((_call, index) => {
       if (index === 0) {
@@ -312,9 +314,11 @@ describe('uploadDisputeAttachment', () => {
     expect(second.map((call) => [call.url, call.method])).toEqual([
       [`/api/disputes/${RETRY_DISPUTE_ID}/attachments`, 'POST'],
     ])
+    uninstallSessionStorage()
   })
 
   test('暂存键被服务端判定不可用时丢弃并重新走 presign', async () => {
+    installSessionStorage()
     const STALE_DISPUTE_ID = 'dsp_01jc000000e00800000000000c'
     mockFetchCalls((_call, index) => {
       if (index === 0) {
@@ -358,6 +362,7 @@ describe('uploadDisputeAttachment', () => {
       ['https://storage.example/dispute-media/key-2.png', 'PUT'],
       [`/api/disputes/${STALE_DISPUTE_ID}/attachments`, 'POST'],
     ])
+    uninstallSessionStorage()
   })
 
   test('本地预校验失败时不发任何请求', async () => {
@@ -366,5 +371,234 @@ describe('uploadDisputeAttachment', () => {
     const error = await uploadDisputeAttachment(DISPUTE_ID, file).catch((reason: unknown) => reason)
     expect(error instanceof Error ? error.message : null).toBe('仅支持 JPG / PNG / WebP 图片')
     expect(calls).toHaveLength(0)
+  })
+})
+
+const CONVERSATION_ID = 'cnv_01jc000000e00800000000000d' as const
+const MESSAGE_ID_PREFIX = '01jc000000e0080000000000'
+const ID_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz'
+
+/** 生成合法 `msg_` 公开 id（26 位 crockford 后缀，按序号唯一）。 */
+function messageId(index: number): string {
+  return `msg_${MESSAGE_ID_PREFIX}${ID_ALPHABET[Math.floor(index / 32)]}${ID_ALPHABET[index % 32]}`
+}
+
+const TRANSACTION = {
+  id: TRANSACTION_ID,
+  conversationId: CONVERSATION_ID,
+  listingId: LISTING_ID,
+  buyerId: BUYER_ID,
+  sellerId: SELLER_ID,
+  role: 'buyer' as const,
+  listing: {
+    id: LISTING_ID,
+    title: '宿舍护眼台灯',
+    priceCents: 2800,
+    status: 'ACTIVE' as const,
+    coverUrl: null,
+  },
+  counterpart: { id: SELLER_ID, nickname: '小北', avatarUrl: null },
+  amountCents: 2800,
+  status: 'PENDING_MEETUP' as const,
+  buyerConfirmedAt: null,
+  sellerConfirmedAt: null,
+  completedAt: null,
+  cancelledAt: null,
+  createdAt: '2026-10-01T00:00:00.000Z',
+  updatedAt: '2026-10-01T00:00:00.000Z',
+}
+
+function chatMessage(id: string) {
+  return {
+    id,
+    conversationId: CONVERSATION_ID,
+    senderId: BUYER_ID,
+    sender: { id: BUYER_ID, nickname: '阿岚', avatarUrl: null },
+    type: 'TEXT' as const,
+    content: `消息 ${id.slice(-2)}`,
+    listing: null,
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-10-01T08:00:00.000Z',
+  }
+}
+
+describe('fetchDisputeConversation（证据选择器分页）', () => {
+  test('首屏最新一页带 nextCursor，before 透传可翻到更早一页', async () => {
+    const latestPage = Array.from({ length: 100 }, (_, index) => chatMessage(messageId(index)))
+    const oldestOnLatestPage = latestPage[0]?.id ?? ''
+    const calls = mockFetchCalls((call) => {
+      if (call.url.startsWith('/api/transactions/')) return Response.json(TRANSACTION)
+      if (!call.url.includes('before=')) {
+        return Response.json({ items: latestPage, nextCursor: oldestOnLatestPage })
+      }
+      return Response.json({ items: [chatMessage(messageId(100))], nextCursor: null })
+    })
+
+    const latest = await fetchDisputeConversation(TRANSACTION_ID)
+    expect(latest?.conversationId).toBe(CONVERSATION_ID)
+    expect(latest?.messages).toHaveLength(100)
+    expect(latest?.nextCursor).toBe(oldestOnLatestPage)
+
+    const older = await fetchDisputeConversation(TRANSACTION_ID, oldestOnLatestPage)
+    expect(older?.messages).toHaveLength(1)
+    // null = 已到最早一页：调用方（infinite query）据此停止继续请求。
+    expect(older?.nextCursor).toBeNull()
+
+    expect(calls.map((call) => call.url)).toEqual([
+      `/api/transactions/${TRANSACTION_ID}`,
+      `/api/conversations/${CONVERSATION_ID}/messages?limit=100`,
+      `/api/transactions/${TRANSACTION_ID}`,
+      `/api/conversations/${CONVERSATION_ID}/messages?limit=100&before=${oldestOnLatestPage}`,
+    ])
+  })
+
+  test('交易不可见时返回 null 且不再请求会话消息', async () => {
+    const calls = mockFetchCalls(() =>
+      Response.json(
+        { error: { code: 'TRANSACTION_NOT_FOUND', message: '交易不存在' } },
+        { status: 404 },
+      ),
+    )
+    const conversation = await fetchDisputeConversation(TRANSACTION_ID)
+    expect(conversation).toBeNull()
+    expect(calls.map((call) => call.url)).toEqual([`/api/transactions/${TRANSACTION_ID}`])
+  })
+})
+
+describe('startDispute 错误映射', () => {
+  test('窗口关闭 409 与校验失败 422 都原样保留契约错误码', async () => {
+    mockFetchCalls(() =>
+      Response.json(
+        { error: { code: 'DISPUTE_WINDOW_CLOSED', message: '交易结束已超过 30 天' } },
+        { status: 409 },
+      ),
+    )
+    const windowClosed = await startDispute({
+      transactionId: TRANSACTION_ID,
+      type: 'ITEM_MISMATCH',
+    }).catch((reason: unknown) => reason)
+    expect(windowClosed instanceof ApiError ? windowClosed.code : null).toBe(
+      'DISPUTE_WINDOW_CLOSED',
+    )
+    expect(windowClosed instanceof ApiError ? windowClosed.status : null).toBe(409)
+
+    mockFetchCalls(() =>
+      Response.json(
+        { error: { code: 'VALIDATION_FAILED', message: '请求体不合法' } },
+        { status: 422 },
+      ),
+    )
+    const validation = await startDispute({
+      transactionId: TRANSACTION_ID,
+      type: 'OTHER',
+      detailText: '说明',
+    }).catch((reason: unknown) => reason)
+    expect(validation instanceof ApiError ? validation.code : null).toBe('VALIDATION_FAILED')
+    expect(validation instanceof ApiError ? validation.status : null).toBe(422)
+  })
+})
+
+class MemoryStorage implements Storage {
+  private readonly map = new Map<string, string>()
+
+  get length(): number {
+    return this.map.size
+  }
+
+  clear(): void {
+    this.map.clear()
+  }
+
+  getItem(key: string): string | null {
+    return this.map.get(key) ?? null
+  }
+
+  key(index: number): string | null {
+    return [...this.map.keys()][index] ?? null
+  }
+
+  removeItem(key: string): void {
+    this.map.delete(key)
+  }
+
+  setItem(key: string, value: string): void {
+    this.map.set(key, value)
+  }
+}
+
+function installSessionStorage(): MemoryStorage {
+  const storage = new MemoryStorage()
+  ;(globalThis as unknown as { sessionStorage: Storage }).sessionStorage = storage
+  return storage
+}
+
+function uninstallSessionStorage(): void {
+  delete (globalThis as unknown as { sessionStorage?: Storage }).sessionStorage
+}
+
+describe('uploadDisputeAttachment 暂存 key 指纹', () => {
+  const OLD_KEY = 'dispute-media/dsp-old/proof-a.png'
+  const NEW_KEY = 'dispute-media/dsp-new/proof-b.png'
+
+  test('改选不同文件后绝不确认旧 key，而是重新 presign → PUT → confirm', async () => {
+    installSessionStorage()
+    try {
+      const fileA = new File([new Uint8Array([1, 2, 3])], 'proof.png', {
+        lastModified: 1,
+        type: 'image/png',
+      })
+      const fileB = new File([new Uint8Array([1, 2, 3, 4])], 'proof.png', {
+        lastModified: 2,
+        type: 'image/png',
+      })
+      let objectKeySequence = 0
+      const calls = mockFetchCalls((call, index) => {
+        if (call.url.endsWith('/attachments/presign')) {
+          objectKeySequence += 1
+          const objectKey = objectKeySequence === 1 ? OLD_KEY : NEW_KEY
+          return Response.json({
+            uploadUrl: `https://storage.example/put/${objectKeySequence}`,
+            objectKey,
+            headers: { 'content-type': 'image/png' },
+            expiresAt: '2026-10-02T01:00:00.000Z',
+          })
+        }
+        if (call.method === 'PUT') return new Response(null, { status: 200 })
+        // 第一次 confirm 网络失败：旧 key 暂存，等待同一文件重试。
+        if (index === 2) throw new TypeError('fetch failed')
+        return Response.json(
+          {
+            attachment: {
+              id: 'med_01jc000000e00800000000000d',
+              url: 'https://media.example/dispute.png',
+              mimeType: 'image/png',
+              sizeBytes: 4,
+              width: 1,
+              height: 1,
+              uploadedBy: buyer,
+              createdAt: '2026-10-02T00:00:00.000Z',
+            },
+            created: true,
+          },
+          { status: 201 },
+        )
+      })
+
+      await uploadDisputeAttachment(DISPUTE_ID, fileA).catch((reason: unknown) => reason)
+
+      // 用户改选了另一张图（size/lastModified 不同）：旧 key 必须被丢弃。
+      await uploadDisputeAttachment(DISPUTE_ID, fileB)
+
+      const confirmKeys = calls
+        .filter((call) => call.url.endsWith('/attachments'))
+        .map((call) => (call.body as { objectKey?: string }).objectKey)
+      expect(confirmKeys).toEqual([OLD_KEY, NEW_KEY])
+      // 第二次上传的第一步是 presign，而不是对旧 key 的幂等 confirm。
+      expect(calls[3]?.url).toBe(`/api/disputes/${DISPUTE_ID}/attachments/presign`)
+      expect(calls.filter((call) => call.url.endsWith('/attachments/presign'))).toHaveLength(2)
+    } finally {
+      uninstallSessionStorage()
+    }
   })
 })

@@ -47,12 +47,13 @@ describe('canStartDispute', () => {
     expect(canStartDispute(cancelled, COMPLETED_MS + 31 * DAY_MS)).toBe(false)
   })
 
-  test('终态时间缺失或不可解析时不放行，交给服务端兜底', () => {
-    expect(canStartDispute(transaction('COMPLETED'), COMPLETED_MS)).toBe(false)
-    expect(canStartDispute(transaction('CANCELLED'), COMPLETED_MS)).toBe(false)
+  test('终态时间缺失 / 不可解析时与服务端一致：窗口视为开放', () => {
+    // 服务端 isWindowClosed：`if (!closedAt) return false`，缺时间即不关窗口。
+    expect(canStartDispute(transaction('COMPLETED'), COMPLETED_MS)).toBe(true)
+    expect(canStartDispute(transaction('CANCELLED'), COMPLETED_MS)).toBe(true)
     expect(
       canStartDispute(transaction('COMPLETED', { completedAt: 'not-a-date' }), COMPLETED_MS),
-    ).toBe(false)
+    ).toBe(true)
   })
 })
 
