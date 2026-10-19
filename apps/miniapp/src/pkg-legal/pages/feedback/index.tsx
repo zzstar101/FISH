@@ -1,41 +1,69 @@
+import {
+  FEEDBACK_CONTACT_MAX,
+  FEEDBACK_CONTENT_MAX,
+  FEEDBACK_CONTENT_MIN,
+  type FeedbackType,
+  FeedbackTypeSchema,
+} from '@fish/contracts/feedback/schema'
 import { Image, Input, Text, Textarea, View } from '@tarojs/components'
 import Taro, { usePageScroll } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS, type IconName } from '@/assets/lib-icons'
+import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { useAuthGuard } from '@/features/auth/guard'
+import { useAuth } from '@/features/auth/store'
+import { submitFeedback } from '@/features/feedback/api'
 import {
-  FEEDBACK_DRAFT_KEY,
-  type FeedbackDraft,
-  type FeedbackTypeKey,
-  parseFeedbackDraft,
-} from './draft'
-import { SHEET_BODY, sheetVariant } from './sheet'
+  DEMO_SUBMITTED_FEEDBACK_ID,
+  type FeedbackRecord,
+  rememberDemoFeedback,
+} from '@/features/feedback/demo'
+import { DEMO_FEEDBACK_ENABLED } from '@/features/feedback/load'
+import { feedbackToRecord, shortFeedbackId } from '@/features/feedback/map'
+import {
+  FEEDBACK_TYPE_COPY,
+  type FeedbackSubmitOutcome,
+  submitFailureText,
+  submitOutcome,
+  submitResultCopy,
+} from '@/features/feedback/meta'
+import { readNavMetrics } from '@/lib/nav-metrics'
+import { isApiError } from '@/lib/request'
+import { randomUuidV4 } from '@/lib/uuid'
+import { acceptDraft, FEEDBACK_DRAFT_KEY, type FeedbackDraft, parseFeedbackDraft } from './draft'
 import './index.scss'
 
 /**
- * 意见反馈（稿 `小程序1版意见反馈.html`，入口：我的 → 帮助与设置「意见反馈」）。
+ * 意见反馈（稿 `小程序1版意见反馈.html`；入口：我的 → 帮助与设置「意见反馈」、设置 → 关于）。
  *
- * ## 本页的实际内容由 zzstar 决策（未定内容页面）
+ * ## 提交是真的（#463）
  *
- * 稿是设计演示，**反馈类型清单、各类型引导文案、客服邮箱**都还没有 Owner 决策定稿。
- * 所以本文件照稿落地，并**原样保留所有「待定 / 待填」占位**：
- * - 客服邮箱 `SUPPORT_MAIL` 是**空串**（稿里用虚线 `.ph` 标出的那一处），页面照稿渲染
- *   「待填」，**没有编造任何邮箱**；空值时「复制」只提示待定，不把占位符当邮箱复制走。
- * - 6 个反馈类型的 label 与 hint 逐字取自稿内 `TYPES`；它们是待 Owner 确认的内容，
- *   不是已经拍板的枚举（后端也没有对应枚举 —— 见下）。
- * 待 zzstar 定稿后只改这些常量，不动结构。
+ * 页面把填好的内容 `POST /feedback` 交给后端（契约 `@fish/contracts/feedback/*`）：
+ * - 成功 / 同一 `clientRequestId` 的重放 → 结果弹层说「已提交」，并给「查看我的反馈」；
+ * - 失败 → **表单原样保留**（草稿也在本机），只给一行错误文案，重试沿用同一个
+ *   `clientRequestId` —— 网络抖动时不会在服务端落两条（后端按它做幂等）。
  *
- * ## 后端不存在，**不假装提交成功**（稿注释 ⑤ / ⚠️ 上线前必须替换）
+ * 这里不再有「客服邮箱 / 待接入」兜底弹层：那是后端不存在时的权宜方案，`SUPPORT_MAIL`
+ * 与 `sheet.ts` 一并删除（`POST /feedback` 早已上线，PR #488）。
  *
- * `apps/api` 里没有 feedback 模块（稿注释原文：`apps/api/src/modules/feedback/` 不存在），
- * 所以提交动线是：**校验 → 「提交中…」短暂态 → 结果弹层**。弹层说的是实话：
- * 「后端反馈接口尚未上线 / 你的内容已暂存在本机 / 可复制客服邮箱发给我们」，
- * 并给出「清空本机暂存的内容」。等真有了 `POST /feedback`，这一段换成成功态即可。
+ * ## 反馈类型来自契约，不是稿里的占位
  *
- * 弹层正文按**实际成立的事**分三档（见 `stored` / `hasMail`）：暂存失败时不说「已暂存在本机」；
- * 客服邮箱未定时不提「复制后发给客服邮箱」，那一段的复制钮也一并**不渲染** ——
- * 唯一的送达渠道还没定，就不能把用户指去一个做不到的动作。
+ * 6 个类型的枚举值、label、hint 分别来自契约 `FeedbackTypeSchema` 与 `features/feedback/meta.ts`：
+ * 契约是唯一真源（后端与 PC 端都按它落地）。本页只负责把枚举映射成稿里的 6 枚胶囊与图标。
+ *
+ * ## 草稿按账号隔离
+ *
+ * 草稿 key 仍是 `fish:feedback:draft`（隐私政策的数据清单照旧），但记录里带 `ownerId`：
+ * 同一台手机上换账号后，上一个账号未提交的内容不会被下一个账号看到（`./draft` 的 `acceptDraft`）。
+ * 记录里还带 `submitId`（上次提交的幂等键）：请求超时 / 响应落地前离开页面时，恢复草稿后
+ * 沿用旧键重试，服务端不会把同一份内容落成两条。提交成功后立即删除草稿。
+ *
+ * ## 演示构建
+ *
+ * `TARO_APP_MOCK=1` 的演示构建里没有真会话（`features/auth/demo.ts`），真实提交必然 401；
+ * 这时按「请求没到过后端」的同一判据模拟成功并把记录放进进程内存（`features/feedback/demo.ts`），
+ * 让演示动线「提交 → 我的反馈」走得通。真实构建永远不模拟 —— 失败就是失败。
  *
  * ## 与稿的差异（稿是「模拟微信原生栏」的演示壳，不照搬）
  *
@@ -49,128 +77,128 @@ import './index.scss'
  *
  * ## 图标映射（稿的内联 SVG 描边图标 → `ICONS`；库里没有一一对应的，按语义就近取）
  *
- * `ic-alert`→`warnInk`（行内错误 / 弹层警示）、`ic-edit`→`editAccent`（页头 kicker）、
+ * `ic-alert`→`warnInk`（行内错误）、`ic-edit`→`editAccent`（页头 kicker）、
  * `ic-chat`→`chatInk`（交易纠纷）、`ic-shield`→`safeAccent`（违规举报 / 隐私提示）、
- * `ic-phone`→`serviceMuted`（账号与认证 / 联系方式输入框）、`ic-mail`→`mail`（其他 / 客服邮箱行）、
- * `ic-copy`→`docMuted`（复制）、`ic-trash`→`delete`（清空本机暂存）、
- * `ic-clock`→`clockMuted`（暂存恢复提示）、`ic-check`→`checkAccent`（知道了）。
- * 稿里没有 `ic-chevron` 这个 symbol（返回箭头由 `components/nav-bar` 自绘），
- * 所以 `chevronRightMuted` 本页用不到。
+ * `ic-phone`→`serviceMuted`（账号与认证 / 联系方式输入框）、`ic-mail`→`mail`（其他）。
+ * `ic-check`→`checkAccent`（提交成功 / 「知道了」）。
  *
  * ⚠️ **已知色偏（记录，不修）**：稿的图标是内联 SVG 描边、走 `currentColor`，所以
  * `.err .ic-line` 能被染成稿要求的 `--danger` 红；仓内 `ICONS` 是固定色 PNG、不可染色，
- * `warnInk` 实测是 **#17233D（墨色）**。所以行内错误图标与弹层警示图标比稿「暗一档」。
+ * `warnInk` 实测是 **#17233D（墨色）**。所以行内错误图标比稿「暗一档」。
  * 要严格对齐得往图标生成器里加一个 danger 红变体，不是在本页调色。
  *
  * ## 行为口径（照稿）
  *
  * - 6 个类型胶囊：选中后**描述框 placeholder 与副标题文案跟着变**
- *   （交易纠纷 / 违规举报换成「需要能核对的信息」那一段）—— 稿注释 ②，本页最值钱的一处设计。
+ *   （交易纠纷 / 违规举报换成「需要能核对的信息」那一段）—— 稿注释 ②。
  * - 描述框 `maxlength=600`（多留 100 让用户写完再看到超限），**上限判 500 字**、
  *   计数 `n / 500`、少于 5 字算不合格；超限时计数变警示色并拦住提交（稿注释 ⑦）。
  * - 提交按钮**在表单末尾、不吸底**：textarea 聚焦后键盘会顶起页面（稿注释 ③）。
- * - 内容本机暂存 `fish:feedback:draft`（与 `fish:settings` 同一命名风格），
- *   恢复时顶部给一行「已恢复上次未提交的内容 · 清空」；存储失败静默、不崩页面（稿注释 ⑥）。
+ * - 内容本机暂存 `fish:feedback:draft`，恢复时顶部给一行「已恢复上次未提交的内容 · 清空」；
+ *   存储失败静默、不崩页面（稿注释 ⑥）。
  * - 校验不过**不弹层**：标红对应卡片 + 滚动到第一个出错处 + `Taro.showToast` 提示。
  * - 页面级滚动（`usePageScroll`）：根节点**不写 `overflow`**，否则页面自身成了滚动容器，
  *   `Taro.pageScrollTo` 会失真（见 `pages/favorites/index.scss` 的同类说明）。
  */
 
-/** 反馈类型：label 给胶囊，hint 给 placeholder（见文件头「本页的实际内容由 zzstar 决策」） */
-type FeedbackType = {
-  key: FeedbackTypeKey
-  label: string
-  /** 图标只从 `ICONS` 取；稿的内联 SVG 描边图标按语义就近映射（见本页实现说明） */
-  icon: IconName
-  hint: string
+/** 反馈类型 → 稿内联图标的语义映射（图标只从 `ICONS` 取） */
+const TYPE_ICON: Record<FeedbackType, IconName> = {
+  BUG: 'warnInk',
+  UX: 'editAccent',
+  DISPUTE: 'chatInk',
+  REPORT: 'safeAccent',
+  ACCOUNT: 'serviceMuted',
+  OTHER: 'mail',
 }
 
-/**
- * hint 的写法直接决定运营方能拿到什么：举报与纠纷必须点名「商品名 / 对方昵称 / 时间」，
- * 否则用户只会写一句「有人骗我」，无法核查（稿注释 ②）。
- */
-const TYPES: readonly FeedbackType[] = [
-  {
-    key: 'bug',
-    label: '功能异常',
-    icon: 'warnInk',
-    hint: '请描述出现问题的页面、你的操作步骤，以及你期望的结果，便于我们复现',
-  },
-  {
-    key: 'ux',
-    label: '体验建议',
-    icon: 'editAccent',
-    hint: '请描述你觉得不顺手的地方，以及你希望改成什么样',
-  },
-  {
-    key: 'dispute',
-    label: '交易纠纷',
-    icon: 'chatInk',
-    hint: '请提供商品名称、对方昵称与大致交易时间，便于我们核对交易记录',
-  },
-  {
-    key: 'report',
-    label: '违规举报',
-    icon: 'safeAccent',
-    hint: '请提供违规内容的位置（商品 / 会话 / 用户昵称）与具体情形，我们会尽快核查',
-  },
-  {
-    key: 'account',
-    label: '账号与认证',
-    icon: 'serviceMuted',
-    hint: '请描述你遇到的问题，例如收不到验证码、认证状态异常、无法登录等',
-  },
-  {
-    key: 'other',
-    label: '其他',
-    icon: 'mail',
-    hint: '请描述你遇到的问题或建议，包含出现的位置、操作步骤与期望结果，便于我们定位',
-  },
-]
-
-const DEFAULT_HINT = '请描述你遇到的问题或建议，包含出现的位置、操作步骤与期望结果，便于我们定位'
+const DEFAULT_HINT = FEEDBACK_TYPE_COPY.OTHER.hint
 const DESC_SUB_DEFAULT = '请尽量写清出现的位置与操作步骤，越具体越容易定位。'
 /** 交易纠纷 / 违规举报：这两类没有可核对的信息就无法处理（稿 `syncDescHint`） */
 const DESC_SUB_CHECKABLE = '这一类需要能核对的信息：请写清商品名称、对方昵称与大致时间。'
 const ERR_TYPE = '请先选择反馈类型'
-const ERR_DESC_SHORT = '请至少填写 5 个字，便于我们定位问题'
-const ERR_DESC_LONG = '描述不能超过 500 字，请精简后再提交'
+const DESC_ERR_SHORT = '请至少填写 5 个字，便于我们定位问题'
+const DESC_ERR_LONG = `描述不能超过 ${FEEDBACK_CONTENT_MAX} 字，请精简后再提交`
 
 /** 上限判 500（计数与拦截都用它）；输入框多留 100，让用户写完再看到超限（稿注释 ⑦） */
-const DESC_MAX = 500
-const DESC_MIN = 5
-const DESC_MAXLENGTH = 600
-const CONTACT_MAXLENGTH = 40
-
+const DESC_MAX = FEEDBACK_CONTENT_MAX
+const DESC_MIN = FEEDBACK_CONTENT_MIN
+const DESC_MAXLENGTH = FEEDBACK_CONTENT_MAX + 100
 /**
- * 客服邮箱：**待 zzstar 决策后填写**（稿里用虚线 `.ph` 标出的占位）。
- * 留空 = 还没定，页面照稿渲染「待填」，复制按钮只提示待定。
+ * 联系方式输入框的 UI 上限 40 字。契约 `FEEDBACK_CONTACT_MAX` 是 100，
+ * 这里按稿收紧（微信号 / 手机号 / 邮箱都远小于 40），超长内容没有实际用途。
  */
-const SUPPORT_MAIL = ''
+const CONTACT_MAXLENGTH = Math.min(40, FEEDBACK_CONTACT_MAX)
 
-function hintOf(key: FeedbackTypeKey | ''): string {
-  const hit = TYPES.find((item) => item.key === key)
-  return hit ? hit.hint : DEFAULT_HINT
+function hintOf(type: FeedbackType | ''): string {
+  return type === '' ? DEFAULT_HINT : FEEDBACK_TYPE_COPY[type].hint
 }
 
 /**
- * 读本机暂存。**存储不可用 / 内容为空都当作「没有草稿」**，不该让页面崩。
+ * 读本机暂存。**存储不可用 / 内容为空 / 不属于当前账号都当作「没有草稿」**。
  *
- * 解析本身（两种存储形态、字段级容错、空草稿判据）在 `./draft`，是纯函数、有单测；
- * 这里只剩「取 → 解析」这一步必须碰 Taro 的部分。
+ * 草稿记录里带 `ownerId`（换账号后不能看到上一个账号未提交的内容）；
+ * 解析本身（两种存储形态、字段级容错、空草稿判据）在 `./draft`，是纯函数、有单测。
  */
-function readStoredDraft(): FeedbackDraft | null {
+function readStoredDraft(ownerId: string): FeedbackDraft | null {
+  let parsed: FeedbackDraft | null
   try {
-    return parseFeedbackDraft(Taro.getStorageSync(FEEDBACK_DRAFT_KEY))
+    parsed = parseFeedbackDraft(Taro.getStorageSync(FEEDBACK_DRAFT_KEY))
   } catch {
     return null
   }
+  const accepted = acceptDraft(parsed, ownerId)
+  if (accepted === null && parsed !== null) {
+    // 上一个账号留下的草稿 / 旧格式（无 ownerId）：内容对当前账号是别人的隐私，顺手清掉
+    try {
+      Taro.removeStorageSync(FEEDBACK_DRAFT_KEY)
+    } catch {
+      // 清不掉也不展示；下次进来还会走到这里
+    }
+  }
+  return accepted
+}
+
+/** 这次提交失败能不能按演示口径模拟成功（判据与 `pages/report-listing` 相同） */
+function canSimulateSubmit(error: unknown): boolean {
+  if (!DEMO_FEEDBACK_ENABLED) return false
+  // 只有「请求根本没到过后端」才可以：网络层失败、契约解析失败，以及演示构建里
+  // 假会话必然拿到的 UNAUTHENTICATED。服务端给了业务错误码就说明请求真的到达了后端。
+  return !isApiError(error) || error.code === 'UNAUTHENTICATED'
+}
+
+/** 提交结果弹层的数据 */
+type SubmitResult = {
+  outcome: FeedbackSubmitOutcome
+  /** 服务端返回的那条（重放时是此前已存在的那条；演示构建是本地模拟的那条） */
+  record: FeedbackRecord
+  /** 记录来自本地模拟，而不是服务端 */
+  simulated: boolean
 }
 
 export default function Feedback() {
-  /** 冷启动读一次本机暂存；`null` = 没有可恢复的内容 */
-  const [draft] = useState(readStoredDraft)
-  const [type, setType] = useState<FeedbackTypeKey | ''>(draft?.type ?? '')
+  const authStatus = useAuthGuard()
+  const { user } = useAuth()
+  const nav = useMemo(() => readNavMetrics(), [])
+
+  // 未登录 / 登录态未就绪：先不渲染表单（守卫的跳转是异步的，渲染一帧别人的草稿不合适）
+  if (authStatus !== 'authed' || user === null) {
+    return (
+      <View className="fb">
+        <NavBar glass title="意见反馈" titleAlign="center" />
+        <View style={{ height: `${nav.totalHeight}px` }} />
+        <AuthRequired restoring={authStatus === 'unknown'} />
+      </View>
+    )
+  }
+
+  // key=账号：换账号时整页重挂，草稿 / 在飞请求 / 成功态都不跨账号
+  return <FeedbackForm key={user.id} userId={user.id} />
+}
+
+function FeedbackForm({ userId }: { userId: string }) {
+  /** 冷启动读一次本机暂存（只认属于当前账号的）；`null` = 没有可恢复的内容 */
+  const [draft] = useState(() => readStoredDraft(userId))
+  const [type, setType] = useState<FeedbackType | ''>(draft?.type ?? '')
   const [desc, setDesc] = useState(draft?.desc ?? '')
   const [contact, setContact] = useState(draft?.contact ?? '')
   /** 顶部「已恢复上次未提交的内容」提示条（稿注释 ⑥） */
@@ -183,96 +211,106 @@ export default function Feedback() {
   const [contactFocus, setContactFocus] = useState(false)
   /** 提交在飞：防重复提交，按钮显示「提交中…」 */
   const [busy, setBusy] = useState(false)
-  /** 结果弹层（兜底渠道）是否打开 */
-  const [sheetOpen, setSheetOpen] = useState(false)
+  /** 失败文案（服务端错误码映射，或网络层失败）；`null` = 没有错误 */
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  /** 提交结果弹层；`null` = 关闭 */
+  const [result, setResult] = useState<SubmitResult | null>(null)
   /**
-   * 本次提交有没有真的落进本机暂存（`null` = 还没提交过）。
+   * 幂等键：失败重试沿用同一个；每次拿到响应（成功 / 重放）后换新。
+   * 换新必须发生在新一轮提交之前，否则下一次提交会被服务端当成同一请求的重放。
    *
-   * 弹层正文与它绑定：`false` 时不能说「你的内容已暂存在本机」（存储失败，说了就是假话）。
+   * 初始值优先取草稿里持久化的那个：请求超时 / 响应落地前离开页面时，服务端可能已经落库，
+   * 恢复草稿后用旧键重放才会命中同一行，而不是再插一条（见 `./draft` 的 `submitId`）。
    */
-  const [stored, setStored] = useState<boolean | null>(null)
+  const [clientRequestId, setClientRequestId] = useState(() => draft?.submitId ?? randomUuidV4())
 
   const nav = useMemo(() => readNavMetrics(), [])
   const scrollTopRef = useRef(0)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** 提交在飞的**同步**闸门（见 `submit` 的说明；`busy` 只负责 UI） */
+  /** 提交在飞的**同步**闸门（`busy` 只负责 UI，同 `pages/login` 的 `wechatBusyRef`） */
   const submitBusyRef = useRef(false)
-  /**
-   * 表单当前值的**最新**快照（每次渲染同步刷新）。
-   *
-   * 「提交中…」那 700ms 里输入框没有禁用（用户还在打字，输入会即时落暂存），
-   * 而定时器回调是个**旧闭包**：直接读 `type/desc/contact` 拿到的是点击那一刻的值，
-   * 一旦用户在等待期间补了字，回调落地时会把新内容**覆盖回旧值** —— 恰好违背弹层那句
-   * 「你的内容已暂存在本机」。定时器里一律读这个 ref。
-   */
-  const stateRef = useRef({ type, desc, contact })
-  stateRef.current = { type, desc, contact }
+  /** 页面是否还活着：提交响应落地时页面可能已被卸载（换号 / 返回） */
+  const aliveRef = useRef(true)
+  useEffect(
+    () => () => {
+      aliveRef.current = false
+    },
+    [],
+  )
 
   usePageScroll(({ scrollTop }) => {
     scrollTopRef.current = scrollTop
   })
-
-  useEffect(
-    () => () => {
-      // 卸载作废「提交中…」的定时：迟到的回调不得写回已离开的页面
-      if (timerRef.current) clearTimeout(timerRef.current)
-    },
-    [],
-  )
 
   const toast = (title: string) => {
     void Taro.showToast({ title, icon: 'none' })
   }
 
   /**
-   * 写本机暂存。**失败不抛**（稿注释 ⑥「存储失败不致命」），但**要把成败回报给调用方** ——
-   * 提交结果弹层里那句「你的内容已暂存在本机」是页面对用户的承诺，存储失败时它就不是真的，
-   * 这时要换成「本机暂存失败，请先复制内容」。
+   * 写本机暂存。**失败不抛**（存储失败不致命），也**不再把成败回报给调用方** ——
+   * 新的结果弹层只说服务端真的发生了什么，不再承诺「内容已暂存在本机」。
    *
    * **必须显式传整份草稿**，不能在回调里读 state：`setState` 要下一轮渲染才生效，
    * 事件回调里读到的是**改动前**的值，那样刚输入的字不会进暂存。
+   *
+   * 每次都把当前 `clientRequestId` 一起写进去：跨页面 / 跨冷启动重试要沿用同一个幂等键。
    */
-  const persistDraft = (next: FeedbackDraft): boolean => {
+  const writeStoredDraft = (
+    next: { type: FeedbackType | ''; desc: string; contact: string },
+    submitId: string,
+  ) => {
     try {
-      Taro.setStorageSync(FEEDBACK_DRAFT_KEY, next)
-      return true
+      Taro.setStorageSync(FEEDBACK_DRAFT_KEY, { ownerId: userId, submitId, ...next })
     } catch {
-      // 存储失败不影响页面交互，只影响弹层怎么措辞
-      return false
+      // 存储失败不影响页面交互
     }
   }
 
-  /** 清空本机暂存并复位表单（提示条的「清空」与弹层的「清空本机暂存的内容」共用） */
-  const resetForm = () => {
+  const persistDraft = (next: { type: FeedbackType | ''; desc: string; contact: string }) => {
+    writeStoredDraft(next, clientRequestId)
+  }
+
+  const removeStoredDraft = () => {
     try {
       Taro.removeStorageSync(FEEDBACK_DRAFT_KEY)
     } catch {
       // 忽略：清不掉也只是留着一份草稿，不该让页面崩
     }
+  }
+
+  /** 清空草稿并复位表单（提示条的「清空」与提交成功后共用） */
+  const clearDraftAndForm = () => {
+    removeStoredDraft()
     setType('')
     setDesc('')
     setContact('')
     setTypeErr(false)
     setDescErr(null)
     setRestored(false)
-    setStored(null)
+    setSubmitError(null)
   }
 
-  const selectType = (key: FeedbackTypeKey) => {
-    setType(key)
+  const selectType = (next: FeedbackType) => {
+    // 提交在飞时不允许改：`sent` 快照已取，成功后清空表单，这些改动会被无提示抹掉
+    if (busy) return
+    setType(next)
     setTypeErr(false)
-    persistDraft({ type: key, desc, contact })
+    setSubmitError(null)
+    persistDraft({ type: next, desc, contact })
   }
 
   const onDescInput = (value: string) => {
+    if (busy) return
     setDesc(value)
     // 够 5 个字就撤掉行内错误（同稿 desc 的 input 处理）
     if (value.trim().length >= DESC_MIN) setDescErr(null)
+    setSubmitError(null)
     persistDraft({ type, desc: value, contact })
   }
 
   const onContactInput = (value: string) => {
+    if (busy) return
     setContact(value)
+    setSubmitError(null)
     persistDraft({ type, desc, contact: value })
   }
 
@@ -296,64 +334,99 @@ export default function Feedback() {
   }
 
   /**
-   * 提交：校验 → 「提交中…」→ 结果弹层。
+   * 提交：校验 → `POST /feedback` → 结果弹层。
    *
-   * 真实端点（`POST /feedback`）不存在，所以**不假装成功**：弹层把「内容没丢 + 怎么送到」
-   * 一次说清。校验不过时不弹层：标红对应卡片 + 滚到第一个出错处 + toast。
+   * 校验不过时不弹层：标红对应卡片 + 滚到第一个出错处 + toast。
    */
   const submit = () => {
     // 判 ref 而不是 state：`setState` 要下一轮渲染才可见，同一帧里的第二次点击读到的仍是
-    // 旧值，会起两个定时器（与 `pages/login` 的 `wechatBusyRef` 同一个理由，#198 P3-2）
+    // 旧值，会起两个请求
     if (submitBusyRef.current) return
     const missingType = type === ''
     const descTooLong = desc.length > DESC_MAX
     const descTooShort = desc.trim().length < DESC_MIN
     if (missingType || descTooShort || descTooLong) {
       if (missingType) setTypeErr(true)
-      if (descTooShort || descTooLong) setDescErr(descTooLong ? ERR_DESC_LONG : ERR_DESC_SHORT)
+      const message = descTooLong ? DESC_ERR_LONG : DESC_ERR_SHORT
+      if (descTooShort || descTooLong) setDescErr(message)
       scrollToCard(missingType ? '#fb-type' : '#fb-desc')
       toast('还有必填项没有填完')
       return
     }
     submitBusyRef.current = true
     setBusy(true)
-    // 清掉上一轮可能还在飞的定时器：卸载时只清得掉最后一个，两个定时器会各开一次弹层
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null
-      submitBusyRef.current = false
-      setBusy(false)
-      // 内容落本机暂存，弹层才敢说「你的内容已暂存在本机」（稿的 submit 同款顺序）。
-      // 读 `stateRef` 而不是闭包里的 state：这 700ms 内用户可能又补了字（见 stateRef 的说明）；
-      // 落盘成败一并记下，弹层据此换措辞（存储失败时那句话不能照说）
-      setStored(persistDraft(stateRef.current))
-      setSheetOpen(true)
-    }, 700)
-  }
-
-  /**
-   * 复制客服邮箱。
-   *
-   * 稿里复制的是 `.mail-txt b` 的可见文字（虚线占位「待填」）—— 邮箱还没定，
-   * 把占位符当邮箱复制走是假信息。所以**邮箱为空时这一行根本不渲染复制钮**
-   * （见下面的 `hasMail`），这里只处理「有邮箱」的那条路径；`SUPPORT_MAIL` 一旦填上，
-   * 弹层文案与复制钮自动恢复成稿的形态。
-   * 复制成功后微信自己会弹「内容已复制」，这里不再叠一层 toast（同 `pages/report-listing`）。
-   */
-  const copyMail = () => {
-    if (SUPPORT_MAIL === '') return
-    void Taro.setClipboardData({ data: SUPPORT_MAIL }).catch(() => toast('复制失败，请长按选中'))
+    setSubmitError(null)
+    // 发出去的内容取当前表单的裁剪值；成功后展示服务端返回的那条，不拿本次输入拼
+    const content = desc.trim()
+    const contactText = contact.trim()
+    // 重放判定要连联系方式一起比：只改了联系方式的话，服务端交回的是旧联系方式，
+    // 这次修改并没有送达，不能清空草稿当成已提交（见 `features/feedback/meta`）
+    const sent = { type, content, contact: contactText === '' ? null : contactText }
+    void (async () => {
+      try {
+        const res = await submitFeedback({
+          clientRequestId,
+          type,
+          content,
+          contact: contactText === '' ? undefined : contactText,
+        })
+        if (!aliveRef.current) return
+        const outcome = submitOutcome(sent, res)
+        const record = feedbackToRecord(res.feedback, Date.now())
+        // 拿到响应就换新键：万一这次是重放，下一次提交不能被继续当成同一条
+        const nextId = randomUuidV4()
+        setClientRequestId(nextId)
+        if (outcome === 'submitted') {
+          // 本次真的送达：草稿与幂等键一起清掉
+          clearDraftAndForm()
+        } else {
+          // 重放：草稿要留着，并把**新键**写回去 —— 留着旧键的话，下次重试会再次命中
+          // 同一条旧记录（内容永远对不上），用户会卡在「此前已提交」出不去
+          writeStoredDraft({ type, desc, contact }, nextId)
+        }
+        setResult({ outcome, record, simulated: false })
+      } catch (error) {
+        if (!aliveRef.current) return
+        if (canSimulateSubmit(error)) {
+          // 演示「落库」：放进进程内存，让「我的反馈」列表能看到它（见 features/feedback/demo.ts）
+          const demoRecord: FeedbackRecord = {
+            id: DEMO_SUBMITTED_FEEDBACK_ID,
+            type,
+            content,
+            reply: null,
+            status: 'PENDING',
+            timeLabel: '刚刚',
+          }
+          rememberDemoFeedback(demoRecord)
+          clearDraftAndForm()
+          setClientRequestId(randomUuidV4())
+          setResult({ outcome: 'submitted', record: demoRecord, simulated: true })
+        } else {
+          // 失败时表单与草稿都保留，重试沿用同一个 clientRequestId（服务端据此幂等）
+          setSubmitError(submitFailureText(isApiError(error) ? error.code : null))
+        }
+      } finally {
+        if (aliveRef.current) {
+          submitBusyRef.current = false
+          setBusy(false)
+        }
+      }
+    })()
   }
 
   const goPrivacy = () => {
     void Taro.navigateTo({ url: '/pkg-legal/pages/privacy/index' })
   }
 
+  const goMyFeedback = () => {
+    // redirectTo：把表单页换成列表页，返回键回到入口页，栈不加深
+    void Taro.redirectTo({ url: '/pkg-legal/pages/my-feedback/index' })
+  }
+
   const tooLong = desc.length > DESC_MAX
   const canSubmit = type !== '' && desc.trim().length >= DESC_MIN && !tooLong
-  const descSub = type === 'dispute' || type === 'report' ? DESC_SUB_CHECKABLE : DESC_SUB_DEFAULT
-  /** 客服邮箱定稿了没有（见 `SUPPORT_MAIL`）。没定就不渲染复制钮、弹层也不提「复制后发给我们」 */
-  const hasMail = SUPPORT_MAIL !== ''
+  const descSub = type === 'DISPUTE' || type === 'REPORT' ? DESC_SUB_CHECKABLE : DESC_SUB_DEFAULT
+  const resultCopy = result === null ? null : submitResultCopy(result.outcome)
 
   return (
     <View className="fb">
@@ -369,9 +442,9 @@ export default function Feedback() {
         </View>
         <Text className="fb__title">告诉我们哪里不对</Text>
         <Text className="fb__sub">
-          反馈内容当前
-          <Text className="fb__strong fb__strong--fg">保存在这台设备上</Text>
-          ，不会上传；反馈通道接入后，我们会逐条阅读，并通过你留下的联系方式与你联系。
+          反馈会提交给平台管理员，
+          <Text className="fb__strong fb__strong--fg">只有你与管理员</Text>
+          能看到内容与联系方式；处理结果和回复会显示在「我的反馈」里。
         </Text>
       </View>
 
@@ -379,13 +452,11 @@ export default function Feedback() {
       {restored ? (
         <View className="fb__draft">
           <Image className="fb__draft-ic" src={ICONS.clockMuted} mode="aspectFit" />
-          <Text className="fb__draft-tx">
-            已恢复上次未提交的内容。提交前它会一直保存在你的手机本地。
-          </Text>
+          <Text className="fb__draft-tx">已恢复上次未提交的内容。提交成功后它会从本机删除。</Text>
           <View
             className="fb__draft-clear"
             onClick={() => {
-              resetForm()
+              clearDraftAndForm()
               toast('已清空')
             }}
           >
@@ -395,6 +466,16 @@ export default function Feedback() {
       ) : null}
 
       <View className="fb__form">
+        {/* ══ 「我的反馈」入口：提交过的记录与回复都在列表页 ══ */}
+        <View className="fb__mine" onClick={goMyFeedback}>
+          <Image className="fb__mine-ic" src={ICONS.docMuted} mode="aspectFit" />
+          <View className="fb__mine-txt">
+            <Text className="fb__mine-t">我的反馈</Text>
+            <Text className="fb__mine-s">查看处理进度与管理员回复</Text>
+          </View>
+          <Image className="fb__mine-arrow" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
+
         {/* ══ 反馈类型（必填） ══ */}
         <View className={`fb__card${typeErr ? ' is-err' : ''}`} id="fb-type">
           <View className="fb__card-hd">
@@ -404,14 +485,14 @@ export default function Feedback() {
           </View>
           <Text className="fb__card-sub">选择最接近的一项，我们会转给对应的同学处理。</Text>
           <View className="fb__pills">
-            {TYPES.map((item) => (
+            {FeedbackTypeSchema.options.map((item) => (
               <View
-                key={item.key}
-                className={`fb__pill${type === item.key ? ' is-on' : ''}`}
-                onClick={() => selectType(item.key)}
+                key={item}
+                className={`fb__pill${type === item ? ' is-on' : ''}`}
+                onClick={() => selectType(item)}
               >
-                <Image className="fb__pill-ic" src={ICONS[item.icon]} mode="aspectFit" />
-                <Text>{item.label}</Text>
+                <Image className="fb__pill-ic" src={ICONS[TYPE_ICON[item]]} mode="aspectFit" />
+                <Text>{FEEDBACK_TYPE_COPY[item].label}</Text>
               </View>
             ))}
           </View>
@@ -439,6 +520,7 @@ export default function Feedback() {
             <Textarea
               className="fb__ta"
               value={desc}
+              disabled={busy}
               maxlength={DESC_MAXLENGTH}
               placeholder={hintOf(type)}
               onInput={(event) => onDescInput(event.detail.value)}
@@ -475,6 +557,7 @@ export default function Feedback() {
             <Input
               className="fb__input"
               value={contact}
+              disabled={busy}
               maxlength={CONTACT_MAXLENGTH}
               placeholder="微信号 / 手机号 / 邮箱"
               onInput={(event) => onContactInput(event.detail.value)}
@@ -496,6 +579,13 @@ export default function Feedback() {
           </Text>
         </View>
 
+        {submitError === null ? null : (
+          <View className="fb__submiterr">
+            <Image className="fb__submiterr-ic" src={ICONS.warnInk} mode="aspectFit" />
+            <Text className="fb__submiterr-tx">{submitError}</Text>
+          </View>
+        )}
+
         <View
           className={`fb__submit${busy ? ' is-busy' : canSubmit ? '' : ' is-off'}`}
           onClick={submit}
@@ -507,70 +597,48 @@ export default function Feedback() {
         </Text>
       </View>
 
-      {/* ══ 提交结果 · 兜底渠道弹层（后端不存在，这里不假装成功） ══ */}
-      {sheetOpen ? (
+      {/* ══ 提交结果弹层（成功 / 上一次重放） ══ */}
+      {result !== null && resultCopy !== null ? (
         <>
-          <View className="fb__scrim" onClick={() => setSheetOpen(false)} />
+          <View className="fb__scrim" onClick={() => setResult(null)} />
           <View className="fb__sheet">
             <View className="fb__sheet-grip" />
-            <View className="fb__sheet-ic">
-              <Image className="fb__sheet-ic-img" src={ICONS.warnInk} mode="aspectFit" />
+            <View
+              className={`fb__sheet-ic${result.outcome === 'submitted' ? ' is-ok' : ' is-warn'}`}
+            >
+              <Image
+                className="fb__sheet-ic-img"
+                src={result.outcome === 'submitted' ? ICONS.checkAccent : ICONS.clockMuted}
+                mode="aspectFit"
+              />
             </View>
-            <Text className="fb__sheet-title">提交功能待接入</Text>
-            {/*
-              正文三档，**每一档都只说成立的话**（档位判定与文案在 `./sheet`，有单测）：
-              - 暂存失败：不能再说「已暂存在本机」（`persistDraft` 的返回值说了算）；
-              - 邮箱已定：稿的原文；
-              - 邮箱未定：不能指引用户去「复制后发给客服邮箱」—— 那个按钮这一档根本不渲染。
-            */}
-            <Text className="fb__sheet-text">
-              {SHEET_BODY[sheetVariant(stored, hasMail)].map((run) => (
-                <Text key={run.t} className={run.b ? 'fb__strong fb__strong--fg' : undefined}>
-                  {run.t}
-                </Text>
-              ))}
-            </Text>
+            <Text className="fb__sheet-title">{resultCopy.title}</Text>
+            <Text className="fb__sheet-text">{resultCopy.text}</Text>
 
-            <View className="fb__mailrow">
-              <Image className="fb__mail-ic" src={ICONS.mail} mode="aspectFit" />
-              <View className="fb__mail-txt">
-                <Text className="fb__mail-em">客服邮箱</Text>
-                <Text className="fb__mail-b">
-                  {hasMail ? SUPPORT_MAIL : <Text className="fb__ph">待填</Text>}
-                </Text>
-              </View>
-              {/* 邮箱未定时不渲染复制钮：画一个点不动的按钮比不画更让人困惑 */}
-              {hasMail ? (
-                <View className="fb__mail-copy" onClick={copyMail}>
-                  <Image className="fb__copy-ic" src={ICONS.docMuted} mode="aspectFit" />
-                  <Text>复制</Text>
-                </View>
-              ) : null}
+            <View className="fb__result-meta">
+              <Text className="fb__result-k">反馈编号</Text>
+              <Text className="fb__result-v num">{shortFeedbackId(result.record.id)}</Text>
             </View>
+
+            {result.simulated ? (
+              <Text className="fb__result-demo">
+                当前是演示构建，这条反馈只存在于本机内存，不会上传。
+              </Text>
+            ) : null}
 
             <View className="fb__sheet-acts">
-              <View className="fb__btn-ghost" onClick={() => setSheetOpen(false)}>
-                <Image className="fb__btn-ic" src={ICONS.checkAccent} mode="aspectFit" />
-                <Text>知道了，我稍后再发</Text>
+              <View className="fb__btn-primary" onClick={goMyFeedback}>
+                <Text>查看我的反馈</Text>
               </View>
-              {/*
-                暂存失败那一档**不给清空钮**：这一档刚告诉用户「内容没落盘、先复制再走」，
-                而 `resetForm()` 会把表单里唯一一份内容也清掉 —— 按下去等于亲手毁掉
-                刚被劝住的东西；何况此时本机根本没有暂存，「已清空本机暂存」也是假的。
-              */}
-              {stored === false ? null : (
-                <View
-                  className="fb__btn-link"
-                  onClick={() => {
-                    resetForm()
-                    setSheetOpen(false)
-                    toast('已清空本机暂存')
-                  }}
-                >
-                  <Image className="fb__btn-ic" src={ICONS.delete} mode="aspectFit" />
-                  <Text>清空本机暂存的内容</Text>
-                </View>
-              )}
+              <View
+                className="fb__btn-link"
+                onClick={() => {
+                  setResult(null)
+                  // 重放时草稿还在，用户确认后可改内容重新提交（已换新 clientRequestId）
+                }}
+              >
+                <Text>{result.outcome === 'submitted' ? '知道了' : '继续修改'}</Text>
+              </View>
             </View>
           </View>
         </>

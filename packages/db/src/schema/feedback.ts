@@ -3,8 +3,8 @@ import { primaryKey, timestamps, timestamptz } from './common'
 import { users } from './users'
 
 /**
- * 反馈类型（#463）。与小程序反馈页 `pkg-legal/pages/feedback/draft.ts` 的 `FEEDBACK_TYPE_KEYS`
- * 一一对应（大写化）。清单本身的定稿归 #399；改清单时同步这里、契约与小程序常量。
+ * 反馈类型（#463）。与契约 `@fish/contracts/feedback/schema` 的 `FeedbackTypeSchema`
+ * 一一对应。清单本身的定稿归 #399；改清单时同步这里与契约。
  */
 export const feedbackTypeEnum = pgEnum('feedback_type', [
   'BUG',

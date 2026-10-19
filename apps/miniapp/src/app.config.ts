@@ -46,6 +46,7 @@ export default defineAppConfig({
         'pages/privacy/index',
         'pages/terms/index',
         'pages/feedback/index',
+        'pages/my-feedback/index',
         'pages/about/index',
       ],
     },

@@ -4,9 +4,12 @@
  * 意见反馈（稿 `小程序1版意见反馈.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
  * 结构：NavBar glass（吸顶玻璃栏，居中标题，本页只补内容顶部的等高让位）
- * → 渐变页头（随内容滚走）→ 本机暂存恢复提示条 → 反馈类型卡（6 枚胶囊 3×2）
- * → 问题描述卡（500 字计数）→ 联系方式卡（选填）→ 隐私提示 + 表单末尾的提交钮
- * → 结果 · 兜底渠道弹层（scrim + 吸底 sheet）。
+ * → 渐变页头（随内容滚走）→ 本机暂存恢复提示条 → 「我的反馈」入口行
+ * → 反馈类型卡（6 枚胶囊 3×2）→ 问题描述卡（500 字计数）→ 联系方式卡（选填）
+ * → 隐私提示 + 表单末尾的提交钮 → 服务端提交结果弹层（scrim + 吸底 sheet）。
+ *
+ * 提交结果弹层里不再有客服邮箱 / 「提交功能待接入」：`POST /feedback` 已接线（#463），
+ * 弹层只说服务端真的发生了什么（提交成功 / 上一次的重放）。
  *
  * 稿里被丢掉的外壳（见 index.tsx 文件头）：状态栏 / 灵动岛 / 机身侧键 /
  * home indicator / **模拟原生栏 `.mp-nav` 与假胶囊 `.mp-capsule`** / 机身外演示控制条 /
@@ -25,8 +28,7 @@
  * | 控件 | 视觉高度 | 稿内出处 |
  * | --- | --- | --- |
  * | 反馈类型胶囊 `.fb__pill` | 36pt | `.pill{height:36pt}` |
- * | 弹层「知道了，我稍后再发」`.fb__btn-ghost` | 42pt | `.btn-ghost{height:42pt}` |
- * | 弹层「清空本机暂存的内容」`.fb__btn-link` | 34pt | `.btn-link{height:34pt}` |
+ * | 弹层「知道了 / 继续修改」`.fb__btn-link` | 34pt | `.btn-link{height:34pt}` |
  * | 暂存提示条「清空」`.fb__draft-clear` | ≈18pt | `.draft-clear`（无显式高度） |
  *
  * **这里没有做任何补偿**：相邻元素之间的 `gap` 与父级 `padding` 都不属于子元素的命中盒，
@@ -143,6 +145,55 @@
 
 .fb__form {
   padding: 28px 40px 0;
+}
+
+/* ──────────────────────────────── 「我的反馈」入口行 */
+
+.fb__mine {
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 24px 28px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 32px;
+  box-shadow: var(--shadow-card);
+
+  &:active {
+    transform: translateY(2px);
+  }
+}
+
+.fb__mine-ic {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+}
+
+.fb__mine-txt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fb__mine-t {
+  display: block;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.fb__mine-s {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.fb__mine-arrow {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
 }
 
 .fb__card {
@@ -383,6 +434,34 @@
   text-underline-offset: 4px;
 }
 
+/* ──────────────────────────────── 提交失败（表单保留，只给一行错误） */
+
+.fb__submiterr {
+  margin-bottom: 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 24px;
+  border-radius: 28px;
+  background: var(--danger-weak);
+  border: 2px solid var(--danger-line);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--danger-ink);
+}
+
+.fb__submiterr-ic {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.fb__submiterr-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .fb__submit {
   display: flex;
   align-items: center;
@@ -427,7 +506,7 @@
   color: var(--muted);
 }
 
-/* ──────────────────────────────── 结果 · 兜底渠道弹层 */
+/* ──────────────────────────────── 提交结果弹层 */
 
 .fb__scrim {
   @include scrim;
@@ -454,6 +533,7 @@
   margin: 20px auto 0;
 }
 
+/* 结果图标：成功 = 绿色对勾，重放 = 时钟（「此前已提交」） */
 .fb__sheet-ic {
   width: 96px;
   height: 96px;
@@ -462,8 +542,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--warn-weak);
-  border: 2px solid var(--warn-line);
+
+  &.is-ok {
+    background: var(--ok-weak);
+    border: 2px solid var(--ok-line);
+  }
+
+  &.is-warn {
+    background: var(--warn-weak);
+    border: 2px solid var(--warn-line);
+  }
 }
 
 .fb__sheet-ic-img {
@@ -489,73 +577,42 @@
   color: var(--muted-2);
 }
 
-.fb__mailrow {
-  margin-top: 32px;
+/* 结果元信息：反馈编号（服务端返回的那条，重放时是此前已存在的那条） */
+.fb__result-meta {
+  margin-top: 28px;
   display: flex;
   align-items: center;
-  gap: 20px;
-  padding: 24px;
-  border-radius: 32px;
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: 28px;
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);
 }
 
-.fb__mail-ic {
-  width: 36px;
-  height: 36px;
+.fb__result-k {
   flex: 0 0 auto;
-}
-
-.fb__mail-txt {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.fb__mail-em {
-  display: block;
   font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
-.fb__mail-b {
-  display: block;
-  margin-top: 4px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
+.fb__result-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--brand-deep);
   word-break: break-all;
 }
 
-/* 待填占位（稿里那条虚线；客服邮箱定稿后由 TSX 的 SUPPORT_MAIL 顶上） */
-.fb__ph {
-  color: var(--warn-ink);
-  border-bottom: 3px dashed var(--warn);
-  padding-bottom: 2px;
-  font-weight: 600;
-}
-
-.fb__mail-copy {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  height: 64px;
-  padding: 0 24px;
-  border-radius: 999px;
-  background: var(--brand-deep);
-  color: #fff;
-  font-size: 24px;
-  font-weight: 600;
-
-  &:active {
-    background: var(--brand-deep-2);
-  }
-}
-
-.fb__copy-ic {
-  width: 28px;
-  height: 28px;
+/* 演示构建模拟成功时的说明带 */
+.fb__result-demo {
+  display: block;
+  margin-top: 20px;
+  text-align: center;
+  font-size: var(--fs-2xs);
+  line-height: 1.6;
+  color: var(--muted);
 }
 
 .fb__sheet-acts {
@@ -565,31 +622,31 @@
   gap: 16px;
 }
 
-.fb__btn-ghost {
+/* 主按钮（查看我的反馈）：与页尾提交钮同一视觉重量但矮一档 */
+.fb__btn-primary {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
   width: 100%;
-  height: 84px;
+  height: 88px;
   border-radius: 999px;
-  border: 2px solid var(--border);
-  background: var(--surface);
-  font-size: 26px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: var(--fs-body);
   font-weight: 600;
-  color: var(--fg);
+  box-shadow: var(--shadow-btn);
 
   &:active {
-    background: var(--accent-weak);
-    border-color: var(--line);
+    transform: translateY(2px);
   }
 }
 
+/* 次按钮（知道了 / 继续修改）：纯文字 */
 .fb__btn-link {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
   width: 100%;
   height: 68px;
   font-size: 24px;
@@ -597,16 +654,6 @@
   color: var(--muted-2);
 
   &:active {
-    color: var(--danger-ink);
+    color: var(--brand-deep);
   }
-}
-
-.fb__btn-ic {
-  width: 30px;
-  height: 30px;
-}
-
-.fb__btn-link .fb__btn-ic {
-  width: 28px;
-  height: 28px;
 }

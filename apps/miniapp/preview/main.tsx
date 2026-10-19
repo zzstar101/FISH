@@ -55,6 +55,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-legal/pages/terms/index': () => import('@/pkg-legal/pages/terms/index'),
   '/pkg-legal/pages/privacy/index': () => import('@/pkg-legal/pages/privacy/index'),
   '/pkg-legal/pages/feedback/index': () => import('@/pkg-legal/pages/feedback/index'),
+  '/pkg-legal/pages/my-feedback/index': () => import('@/pkg-legal/pages/my-feedback/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */
