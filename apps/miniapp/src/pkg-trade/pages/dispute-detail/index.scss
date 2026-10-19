@@ -340,13 +340,12 @@
   line-height: 1.7;
   color: var(--fg);
   word-break: break-word;
-}
 
-.dsd__evidence-recalled {
-  display: block;
-  margin-top: 6px;
-  font-size: var(--fs-xs);
-  color: var(--muted);
+  // 撤回态：不显示正文，只留一句灰色占位（与聊天页的撤回碑一致）
+  &.is-recalled {
+    font-size: var(--fs-xs);
+    color: var(--muted);
+  }
 }
 
 .dsd__note {

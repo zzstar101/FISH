@@ -2,7 +2,7 @@ import type { MessageDto } from '@fish/contracts/chat/schema'
 import type { DisputeDetail } from '@fish/contracts/disputes/schema'
 import { MAX_DISPUTE_ATTACHMENTS } from '@fish/contracts/disputes/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -34,6 +34,7 @@ import {
   canWithdrawDispute,
   disputeNotFoundCopy,
   disputeRoleOf,
+  evidenceMessageText,
 } from '@/features/disputes/view'
 import { UploadAbortedError } from '@/features/upload/active'
 import { pickPhotos } from '@/features/upload/api'
@@ -59,7 +60,13 @@ import './index.scss'
  * ## 附件链：选图 → presign → PUT 直传 → confirm
  *
  * 见 `features/disputes/upload.ts`。失败逐张提示并停手（同一原因连试只会刷屏）；
- * 页面卸载后（换号会重定向登录页并卸载本页）未发出的步骤由 `UploadAbortedError` 静默中止。
+ * 每一步前后都核对「页面仍挂载 + 仍是同一登录用户」（`alive` + `userIdRef`），
+ * 换号/卸载时由 `UploadAbortedError` 静默中止，不拿别人的会话去 confirm。
+ *
+ * ## 附件 URL 是 900s 的签名 URL
+ *
+ * 页面在后台放久了再回来、或预览大图前，先按 `ATTACHMENT_URL_TTL_MS` 判断签名是否过期，
+ * 过期就静默重读详情换新签名，否则 `<Image>` 裂、`previewImage` 空图。
  *
  * ## 聊天证据
  *
@@ -69,6 +76,12 @@ import './index.scss'
  */
 type PageState = 'loading' | 'ok' | 'notFound' | 'failed'
 type EvidenceState = 'idle' | 'loading' | 'ok' | 'failed'
+
+/**
+ * 附件 URL 是服务端签发的 capability URL（TTL 900s）。放后台超过这个时长再回来，
+ * `<Image>` 会裂、`previewImage` 会拿到空图 —— 所以回前台时先静默重读详情换新签名。
+ */
+const ATTACHMENT_URL_TTL_MS = 900_000
 
 export default function DisputeDetailPage() {
   const authStatus = useAuthGuard()
@@ -89,11 +102,16 @@ export default function DisputeDetailPage() {
   const [addingMessageId, setAddingMessageId] = useState<string | null>(null)
 
   const loadEpoch = useRef(0)
-  /**
-   * 页面卸载后不再发上传链的后半段（`assertUploadActive` 的判据）。
-   * 换号会重定向登录页并卸载本页，所以这里只认卸载，不单独跟踪 userId。
-   */
+  /** 页面卸载 / 换号后不再发上传链的后半段（`assertUploadActive` 的判据之一） */
   const alive = useRef(true)
+  /**
+   * 上传链在 await 之间的「当前登录用户」判据：与 `alive` 合用时，换号后即使页面还没卸载，
+   * 也不会拿别人的会话去 confirm 上一个账号的争议。
+   */
+  const userIdRef = useRef(userId)
+  userIdRef.current = userId
+  /** 当前 `detail` 里附件签名 URL 的签发时刻（判断是否过期，见 ATTACHMENT_URL_TTL_MS） */
+  const lastLoadedAt = useRef(0)
   const evidenceLoadingRef = useRef(false)
 
   useEffect(() => {
@@ -102,6 +120,24 @@ export default function DisputeDetailPage() {
       alive.current = false
     }
   }, [])
+
+  /**
+   * 换号：先在渲染期把上一账号的快照清掉，别让新账号看到上一账号的争议内容；
+   * 重新加载由下面的登录态 effect 负责（新账号若非当事人，服务端 404 → 友好态）。
+   */
+  const [prevUserId, setPrevUserId] = useState(userId)
+  if (prevUserId !== userId) {
+    setPrevUserId(userId)
+    loadEpoch.current += 1
+    setDetail(null)
+    setStale(false)
+    setUploading(false)
+    setSheetOpen(false)
+    setEvidenceState('idle')
+    setMessages([])
+    setAddingMessageId(null)
+    setState('loading')
+  }
 
   /** `silent`：保留当前内容（不闪骨架屏），用于 409 后重同步 */
   const read = useCallback(
@@ -116,6 +152,7 @@ export default function DisputeDetailPage() {
       if (epoch !== loadEpoch.current) return
       if (result.state === 'ok') {
         setDetail(result.detail)
+        lastLoadedAt.current = Date.now()
         setStale(false)
         setState('ok')
       } else {
@@ -137,9 +174,19 @@ export default function DisputeDetailPage() {
   }
 
   useEffect(() => {
-    if (authStatus !== 'authed') return
+    if (authStatus !== 'authed' || userId === null) return
     void read()
-  }, [authStatus, read])
+  }, [authStatus, userId, read])
+
+  /**
+   * 回前台时补一次：附件签名 900s 后就失效，页面在后台放久了再回来 `<Image>` 会裂。
+   * 只有距上次加载超过 TTL 才重读，避免「选完图/看完大图回来」这种同会话回前台白打一次请求。
+   */
+  useDidShow(() => {
+    if (detail === null) return
+    if (Date.now() - lastLoadedAt.current <= ATTACHMENT_URL_TTL_MS) return
+    void read(true)
+  })
 
   const runWithdraw = async () => {
     if (detail === null) return
@@ -208,7 +255,10 @@ export default function DisputeDetailPage() {
         for (const photo of picked.photos) {
           if (!current()) break
           try {
-            const attachment = await uploadDisputeAttachment(detail.id, photo, current)
+            const attachment = await uploadDisputeAttachment(detail.id, photo, {
+              isActive: current,
+              currentUserId: () => userIdRef.current,
+            })
             if (!current()) break
             setDetail((prev) =>
               prev === null ? prev : { ...prev, attachments: [...prev.attachments, attachment] },
@@ -282,12 +332,45 @@ export default function DisputeDetailPage() {
     }
   }
 
+  /**
+   * 附件 URL 是 900s TTL 的签名 URL：过期后 `<Image>` 已裂，直接 `previewImage` 只会弹空图。
+   * 所以先看上次加载距今是否超 TTL，超了就先静默重读详情换新签名再打开；重读失败仍按旧 URL
+   * 打开（至少给一次机会），不额外弹错。
+   */
   const previewAttachment = (index: number) => {
     if (detail === null || detail.attachments.length === 0) return
-    void Taro.previewImage({
-      urls: detail.attachments.map((attachment) => attachment.url),
-      current: detail.attachments[index]?.url,
-    })
+    const targets = detail.attachments
+    const picked = targets[index]
+    const openWith = (urls: string[], currentUrl: string | undefined) => {
+      void Taro.previewImage({ urls, current: currentUrl })
+    }
+    if (Date.now() - lastLoadedAt.current <= ATTACHMENT_URL_TTL_MS) {
+      openWith(
+        targets.map((attachment) => attachment.url),
+        picked?.url,
+      )
+      return
+    }
+    void (async () => {
+      const result = await loadDisputeDetail(detail.id)
+      if (!alive.current) return
+      if (result.state !== 'ok') {
+        openWith(
+          targets.map((attachment) => attachment.url),
+          picked?.url,
+        )
+        return
+      }
+      setDetail(result.detail)
+      lastLoadedAt.current = Date.now()
+      setStale(false)
+      const fresh = result.detail.attachments
+      // 以 id 对齐：刷新期间附件可能被别人补上，顺序不一定和旧快照一致
+      openWith(
+        fresh.map((attachment) => attachment.url),
+        fresh.find((attachment) => attachment.id === picked?.id)?.url,
+      )
+    })()
   }
 
   if (authStatus !== 'authed') {
@@ -502,10 +585,12 @@ export default function DisputeDetailPage() {
                           {dayLabelOf(item.message.createdAt, nowMs)}
                         </Text>
                       </View>
-                      <Text className="dsd__evidence-text">{item.message.content}</Text>
-                      {item.message.recalledAt !== null ? (
-                        <Text className="dsd__evidence-recalled">该消息已被撤回</Text>
-                      ) : null}
+                      {/* 撤回的消息不显示正文（与聊天页一致），否则「撤回」形同虚设 */}
+                      <Text
+                        className={`dsd__evidence-text${item.message.recalledAt !== null ? ' is-recalled' : ''}`}
+                      >
+                        {evidenceMessageText(item.message)}
+                      </Text>
                     </View>
                   ))}
                 </View>

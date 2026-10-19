@@ -26,7 +26,9 @@ import {
   disputeEntryOf,
   disputeNotFoundCopy,
   disputeRoleOf,
+  disputeSecondaryOf,
   disputeWindowClosed,
+  evidenceMessageText,
   pickDisputeForTransaction,
 } from '@/features/disputes/view'
 
@@ -143,42 +145,104 @@ describe('订单详情页的争议入口', () => {
     completedAt: new Date(NOW - 40 * DAY_MS).toISOString(),
     cancelledAt: null,
   }
+  const pendingRef = { id: 'dsp_p', status: 'PENDING' as const }
+  const withdrawnRef = { id: 'dsp_w', status: 'WITHDRAWN' as const }
+  const resolvedRef = { id: 'dsp_r', status: 'RESOLVED' as const }
 
-  test('已有争议时永远可查看，即使已出窗（终态争议也能回看）', () => {
-    expect(disputeEntryOf(staleTx, { id: 'dsp_a', status: 'WITHDRAWN' }, NOW)).toEqual({
+  // 矩阵来自后端语义：唯一索引只拦「同一发起人同交易的第二条 PENDING」，终态不占约束，
+  // 所以「被驳回 / 撤回后窗口内可重新发起」成立，对方有争议也不阻断本人发起。
+  test('① 本人有 PENDING → 查看（撤回/补材料都在详情里）', () => {
+    expect(disputeEntryOf(openTx, { mine: pendingRef, other: null }, NOW)).toEqual({
       kind: 'view',
-      dispute: { id: 'dsp_a', status: 'WITHDRAWN' },
+      dispute: pendingRef,
+    })
+    // 对方也有未决时不改变主入口
+    expect(disputeEntryOf(openTx, { mine: pendingRef, other: resolvedRef }, NOW)).toEqual({
+      kind: 'view',
+      dispute: pendingRef,
     })
   })
 
-  test('撤回过且仍在窗口内：给「重新发起」（后端只对未决去重），窗口外只回看', () => {
-    expect(disputeEntryOf(openTx, { id: 'dsp_w', status: 'WITHDRAWN' }, NOW)).toEqual({
-      kind: 'refile',
-      dispute: { id: 'dsp_w', status: 'WITHDRAWN' },
+  test('② 本人无 PENDING + 窗口开放 → 发起；对方有未决也不阻断本人发起', () => {
+    expect(disputeEntryOf(openTx, { mine: null, other: pendingRef }, NOW)).toEqual({
+      kind: 'file',
+      refileFrom: null,
+      other: pendingRef,
     })
-    // 已处理（RESOLVED）是最终结论，窗口内也不再给重新发起
-    expect(disputeEntryOf(openTx, { id: 'dsp_r', status: 'RESOLVED' }, NOW)).toEqual({
-      kind: 'view',
-      dispute: { id: 'dsp_r', status: 'RESOLVED' },
+    expect(disputeEntryOf(openTx, null, NOW)).toEqual({
+      kind: 'file',
+      refileFrom: null,
+      other: null,
     })
   })
 
-  test('没有争议时：窗口内可发起，出窗只给 closed 提示', () => {
-    expect(disputeEntryOf(openTx, null, NOW)).toEqual({ kind: 'file' })
+  test('③ 窗口关闭 + 有可见争议 → 只回看（优先本人那条）', () => {
+    expect(disputeEntryOf(staleTx, { mine: null, other: resolvedRef }, NOW)).toEqual({
+      kind: 'view',
+      dispute: resolvedRef,
+    })
+    expect(disputeEntryOf(staleTx, { mine: withdrawnRef, other: resolvedRef }, NOW)).toEqual({
+      kind: 'view',
+      dispute: withdrawnRef,
+    })
+  })
+
+  test('③ 窗口关闭 + 无可见争议 → closed 只读提示（不是静默不显示）', () => {
     expect(disputeEntryOf(staleTx, null, NOW)).toEqual({ kind: 'closed' })
+    expect(disputeEntryOf(staleTx, { mine: null, other: null }, NOW)).toEqual({ kind: 'closed' })
   })
 
-  test('窗口外要给出可读提示（不是静默不显示）：文案来自纯函数，页面只摆版式', () => {
+  test('④ 本人仅有终态争议 + 窗口开放 → 可重新发起，refileFrom 指向那条（后端允许终态后再发起）', () => {
+    expect(disputeEntryOf(openTx, { mine: withdrawnRef, other: null }, NOW)).toEqual({
+      kind: 'file',
+      refileFrom: withdrawnRef,
+      other: null,
+    })
+    // RESOLVED 也是终态、同样不占唯一索引，窗口内可以再发起（与 #465 的 30 天门禁一致）
+    expect(disputeEntryOf(openTx, { mine: resolvedRef, other: null }, NOW)).toEqual({
+      kind: 'file',
+      refileFrom: resolvedRef,
+      other: null,
+    })
+  })
+
+  test('「发起」旁边的次要入口：优先本人那条，其次对方那条；查看/只读形态没有次要入口', () => {
+    expect(
+      disputeSecondaryOf(disputeEntryOf(openTx, { mine: resolvedRef, other: pendingRef }, NOW)),
+    ).toEqual({ dispute: resolvedRef, label: '查看这条争议' })
+    expect(
+      disputeSecondaryOf(disputeEntryOf(openTx, { mine: null, other: pendingRef }, NOW)),
+    ).toEqual({ dispute: pendingRef, label: '查看对方争议' })
+    expect(disputeSecondaryOf({ kind: 'view', dispute: pendingRef })).toBeNull()
+    expect(disputeSecondaryOf({ kind: 'closed' })).toBeNull()
+  })
+
+  test('入口卡文案：普通发起 / 重新发起 / 窗口外只读提示', () => {
+    expect(disputeEntryCopyOf({ kind: 'file', refileFrom: null, other: null }).act).toBe('发起争议')
+    const refile = disputeEntryCopyOf({ kind: 'file', refileFrom: resolvedRef, other: null })
+    expect(refile.off).toBe(false)
+    expect(refile.act).toBe('重新发起')
+    expect(refile.sub).toContain('重新发起')
+
     const closed = disputeEntryCopyOf({ kind: 'closed' })
     expect(closed.off).toBe(true)
     expect(closed.title).toContain('30 天')
     expect(closed.sub).toContain('无法再发起争议')
-    const refile = disputeEntryCopyOf({
-      kind: 'refile',
-      dispute: { id: 'dsp_w', status: 'WITHDRAWN' },
+  })
+
+  test('后台过期的交易快照不能沿用旧判定：PENDING_MEETUP → 完成超 30 天 = closed', () => {
+    const before = { status: 'PENDING_MEETUP' as const, completedAt: null, cancelledAt: null }
+    const after = {
+      status: 'COMPLETED' as const,
+      completedAt: new Date(NOW - 40 * DAY_MS).toISOString(),
+      cancelledAt: null,
+    }
+    expect(disputeEntryOf(before, null, NOW)).toEqual({
+      kind: 'file',
+      refileFrom: null,
+      other: null,
     })
-    expect(refile.off).toBe(false)
-    expect(refile.act).toBe('重新发起')
+    expect(disputeEntryOf(after, null, NOW)).toEqual({ kind: 'closed' })
   })
 
   test('同一交易多条争议：优先 PENDING，否则取最新（列表倒序的第一条）', () => {
@@ -199,6 +263,17 @@ describe('订单详情页的争议入口', () => {
   })
 })
 
+describe('证据正文', () => {
+  test('撤回的消息只显示撤回碑（服务端撤回后仍可能保留原文，不能把正文再摆出来）', () => {
+    expect(evidenceMessageText({ content: '转账记录在下面', recalledAt: null })).toBe(
+      '转账记录在下面',
+    )
+    expect(
+      evidenceMessageText({ content: '转账记录在下面', recalledAt: '2026-10-03T02:00:00.000Z' }),
+    ).toBe('消息已撤回')
+  })
+})
+
 describe('附件额度与文案', () => {
   test('额度 = 6 - 已有张数，永不为负；满了直接说清楚而不是让用户点了才 422', () => {
     expect(attachmentSlotsLeft(0)).toBe(6)
@@ -211,6 +286,11 @@ describe('附件额度与文案', () => {
 })
 
 describe('契约枚举的文案完整性', () => {
+  // tone 是视觉语义（warn=处理中 / ok=最终结论为真 / off=已结束或驳回）：
+  // 拼错 tone 不会在 typecheck 里响（它只是字符串字面量），只会让胶囊颜色悄悄错，所以钉死。
+  const EXPECTED_STATUS_TONE = { PENDING: 'warn', RESOLVED: 'ok', WITHDRAWN: 'off' } as const
+  const EXPECTED_RESOLUTION_TONE = { UPHELD: 'ok', DISMISSED: 'off', INCONCLUSIVE: 'warn' } as const
+
   test('每种类型/状态/结论都有中文标签与 tone', () => {
     expect([...DISPUTE_TYPE_ORDER].sort()).toEqual([...DisputeTypeSchema.options].sort())
     for (const type of DisputeTypeSchema.options) {
@@ -218,9 +298,11 @@ describe('契约枚举的文案完整性', () => {
     }
     for (const status of DisputeStatusSchema.options) {
       expect(DISPUTE_STATUS_META[status].label.length).toBeGreaterThan(0)
+      expect(DISPUTE_STATUS_META[status].tone).toBe(EXPECTED_STATUS_TONE[status])
     }
     for (const resolution of DisputeResolutionSchema.options) {
       expect(DISPUTE_RESOLUTION_META[resolution].label.length).toBeGreaterThan(0)
+      expect(DISPUTE_RESOLUTION_META[resolution].tone).toBe(EXPECTED_RESOLUTION_TONE[resolution])
     }
   })
 

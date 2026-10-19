@@ -71,7 +71,8 @@ export async function loadDisputeDetail(disputeId: string): Promise<DisputeDetai
 }
 
 export type DisputeEntryLoad = {
-  dispute: DisputeRef | null
+  mine: DisputeRef | null
+  other: DisputeRef | null
   /** 请求失败：入口按「不确定」处理（不显示入口，也不谎称可发起） */
   failed: boolean
 }
@@ -80,29 +81,40 @@ export type DisputeEntryLoad = {
  * 这笔交易上「我可见的争议」—— 订单详情页的入口依据。
  *
  * 契约没有「按交易查争议」的端点，所以从 `/disputes/mine` 翻页找（命中通常在前几页）。
- * 找到未决的立刻收工；只找到终态的则继续翻，防止「终态之后又开了一条未决」被漏掉。
+ * 该接口同时返回「我发起的」与「我被诉的」，按 `initiator.id === viewerId` 分成 mine / other：
+ * 入口矩阵要区分二者（后端的唯一约束只管同一发起人的未决争议，对方有争议不阻碍本人发起）。
+ *
+ * 本人 PENDING 命中即可收工；否则继续翻，既为了「终态之后又开了一条未决」不漏，也为了把
+ * 对方那条可见争议捞出来给「查看对方争议」入口（列表按时间倒序，先到的就是最新的）。
  */
-export async function findDisputeForTransaction(transactionId: string): Promise<DisputeEntryLoad> {
-  let fallback: DisputeRef | null = null
+export async function findDisputeForTransaction(
+  transactionId: string,
+  viewerId: string | null,
+): Promise<DisputeEntryLoad> {
+  let mine: DisputeRef | null = null
+  let other: DisputeRef | null = null
   try {
     let cursor: string | undefined
     for (let page = 0; page < MY_DISPUTES_MAX_SCAN_PAGES; page += 1) {
       const parsed = await fetchMyDisputePage(cursor)
       for (const dispute of parsed.items) {
         if (dispute.transaction.id !== transactionId) continue
-        if (dispute.status === 'PENDING') {
-          return { dispute: { id: dispute.id, status: dispute.status }, failed: false }
+        const ref: DisputeRef = { id: dispute.id, status: dispute.status }
+        if (viewerId !== null && dispute.initiator.id === viewerId) {
+          if (dispute.status === 'PENDING') return { mine: ref, other, failed: false }
+          mine ??= ref
+        } else {
+          other ??= ref
         }
-        fallback ??= { id: dispute.id, status: dispute.status }
       }
       const next = parsed.nextCursor
-      if (next === null || next === cursor) return { dispute: fallback, failed: false }
+      if (next === null || next === cursor) return { mine, other, failed: false }
       cursor = next
     }
-    return { dispute: fallback, failed: false }
+    return { mine, other, failed: false }
   } catch (error) {
     reportFailure('订单争议入口读取', error, false)
-    return { dispute: null, failed: true }
+    return { mine: null, other: null, failed: true }
   }
 }
 

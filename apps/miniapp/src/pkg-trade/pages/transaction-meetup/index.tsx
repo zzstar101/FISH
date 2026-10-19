@@ -11,7 +11,12 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { findDisputeForTransaction } from '@/features/disputes/load'
 import { DISPUTE_STATUS_META } from '@/features/disputes/meta'
-import { type DisputeEntry, disputeEntryCopyOf, disputeEntryOf } from '@/features/disputes/view'
+import {
+  type DisputeEntry,
+  disputeEntryCopyOf,
+  disputeEntryOf,
+  disputeSecondaryOf,
+} from '@/features/disputes/view'
 import {
   confirmTransaction,
   fetchMeetupTokenStatus,
@@ -319,38 +324,43 @@ export default function TransactionMeetup() {
 
   /* --------------------------------------- 争议入口（#497） */
   /**
-   * 交易读回来之后再决定「发起争议 / 查看争议」：已有我可见的争议优先查看（终态也能看），
-   * 否则按 30 天窗口给发起入口。争议列表读不到（网络）就不展示 —— 宁缺，也不要给出一个
-   * 点进去必然 404 或重复发起的入口。
+   * 交易读回来之后再决定「发起争议 / 查看争议」：判定矩阵在 `features/disputes/view.ts`
+   * 的 `disputeEntryOf` 里（唯一实现，页面不重复 30 天窗口算法）。争议列表读不到（网络）
+   * 就不展示 —— 宁缺，也不要给出一个点进去必然 404 或重复发起的入口。
    *
-   * 依赖刻意只放「哪笔交易」与返回本页的代次 `showTick`：交易对象每次 `setTx` 都换引用，
-   * 直接进依赖会让每次重同步都多扫一遍列表；而从争议页返回时 `showTick` 会自增，入口随之重读。
+   * 依赖：交易**快照串**（id + 状态 + 终态时间）+ 登录用户 + 返回本页的代次 `showTick`。
+   * 只放 `loadedTxId` 会让「页面在后台被别的端改成了 COMPLETED/CANCELLED」的过期快照继续按
+   * PENDING_MEETUP 判定（窗口判定就会错）；而直接放整个 `tx` 对象又会在每次 `setTx` 换引用时
+   * 多扫一遍列表。所以用一个只含判定相关字段的串。
    */
   const txRef = useRef<TransactionDto | null>(null)
   txRef.current = tx
   const disputeEpoch = useRef(0)
-  const loadedTxId = tx?.id ?? null
+  const disputeSnapshotKey =
+    tx === null ? null : `${tx.id}|${tx.status}|${tx.completedAt ?? ''}|${tx.cancelledAt ?? ''}`
   // biome-ignore lint/correctness/useExhaustiveDependencies: showTick 是刻意的重读信号（从争议页返回时自增），不是体内读到的值
   useEffect(() => {
     const snapshot = txRef.current
-    if (loadedTxId === null || snapshot === null) {
+    if (disputeSnapshotKey === null || snapshot === null) {
       setDisputeEntry(null)
       return
     }
     const epoch = ++disputeEpoch.current
-    void findDisputeForTransaction(loadedTxId)
+    void findDisputeForTransaction(snapshot.id, userId)
       .then((result) => {
         if (epoch !== disputeEpoch.current) return
         if (result.failed) {
           setDisputeEntry(null)
           return
         }
-        setDisputeEntry(disputeEntryOf(snapshot, result.dispute, Date.now()))
+        setDisputeEntry(
+          disputeEntryOf(snapshot, { mine: result.mine, other: result.other }, Date.now()),
+        )
       })
       .catch(() => {
         if (epoch === disputeEpoch.current) setDisputeEntry(null)
       })
-  }, [loadedTxId, showTick])
+  }, [disputeSnapshotKey, userId, showTick])
 
   /* --------------------------------------- 卖家：取码（幂等 ensure/read） */
 
@@ -829,23 +839,30 @@ export default function TransactionMeetup() {
     </View>
   ) : null
 
-  /**
-   * 争议入口的落点：
-   * - `view` 进详情；`refile` / `file` 带订单 id 进发起页（撤回后重新发起走的就是这里）；
-   * - `closed`（窗口外）没有落点，只展示只读提示。
-   */
+  const openDisputeDetail = (disputeId: string) => {
+    void Taro.navigateTo({
+      url: `/pkg-trade/pages/dispute-detail/index?id=${encodeURIComponent(disputeId)}`,
+    })
+  }
+
   const openDispute = () => {
     const entry = disputeEntry
-    if (entry === null || entry.kind === 'closed' || tx === null) return
-    const url =
-      entry.kind === 'view'
-        ? `/pkg-trade/pages/dispute-detail/index?id=${encodeURIComponent(entry.dispute.id)}`
-        : `/pkg-trade/pages/dispute-create/index?transactionId=${encodeURIComponent(tx.id)}`
-    void Taro.navigateTo({ url })
+    if (entry === null || tx === null) return
+    if (entry.kind === 'view') {
+      openDisputeDetail(entry.dispute.id)
+      return
+    }
+    if (entry.kind === 'file') {
+      void Taro.navigateTo({
+        url: `/pkg-trade/pages/dispute-create/index?transactionId=${encodeURIComponent(tx.id)}`,
+      })
+      return
+    }
+    // closed（窗口外）：只读提示，没有落点
   }
 
   /**
-   * 入口卡文案（纯函数在 `features/disputes/view.ts`，四种形态都已穷尽）。
+   * 入口卡文案（纯函数在 `features/disputes/view.ts`，三种形态都已穷尽）。
    * 窗口判定只在 `disputeEntryOf` 里做一次 —— 页面不重复实现 30 天算法。
    */
   const disputeEntryCopy = disputeEntry === null ? null : disputeEntryCopyOf(disputeEntry)
@@ -853,6 +870,8 @@ export default function TransactionMeetup() {
     disputeEntry !== null && disputeEntry.kind === 'view'
       ? `${DISPUTE_STATUS_META[disputeEntry.dispute.status].label} · ${disputeEntryCopy?.sub ?? ''}`
       : disputeEntryCopy?.sub
+  /** 「发起」与「查看已有争议」可以同时存在：本人终态争议 / 对方争议都给一个查看落点 */
+  const disputeSecondary = disputeEntry === null ? null : disputeSecondaryOf(disputeEntry)
 
   return (
     <View className="meetup">
@@ -895,22 +914,32 @@ export default function TransactionMeetup() {
         {done ? null : dealCard}
       </View>
 
-      {/* ---------- 交易争议入口（#497）：已有争议优先「查看」，撤回后可在窗口内重新发起，
-          窗口外只给只读提示（不给点不动的入口） ---------- */}
+      {/* ---------- 交易争议入口（#497）：本人未决优先「查看」，窗口内都可发起（含撤回/驳回后
+          重新发起），窗口外只给只读提示（不给点不动的入口） ---------- */}
       {loadError === null && disputeEntryCopy !== null ? (
-        <View
-          className={`meetup__dispute${disputeEntryCopy.off ? ' is-off' : ''}`}
-          onClick={disputeEntryCopy.off ? undefined : openDispute}
-        >
-          <View className="meetup__dispute-ic">
-            <Image className="meetup__dispute-ic-img" src={ICONS.shieldLine} mode="aspectFit" />
+        <>
+          <View
+            className={`meetup__dispute${disputeEntryCopy.off ? ' is-off' : ''}`}
+            onClick={disputeEntryCopy.off ? undefined : openDispute}
+          >
+            <View className="meetup__dispute-ic">
+              <Image className="meetup__dispute-ic-img" src={ICONS.shieldLine} mode="aspectFit" />
+            </View>
+            <View className="meetup__dispute-main">
+              <Text className="meetup__dispute-title">{disputeEntryCopy.title}</Text>
+              <Text className="meetup__dispute-sub">{disputeEntrySub}</Text>
+            </View>
+            <Text className="meetup__dispute-act">{disputeEntryCopy.act}</Text>
           </View>
-          <View className="meetup__dispute-main">
-            <Text className="meetup__dispute-title">{disputeEntryCopy.title}</Text>
-            <Text className="meetup__dispute-sub">{disputeEntrySub}</Text>
-          </View>
-          <Text className="meetup__dispute-act">{disputeEntryCopy.act}</Text>
-        </View>
+          {disputeSecondary !== null ? (
+            <Text
+              className="meetup__dispute-sec"
+              onClick={() => openDisputeDetail(disputeSecondary.dispute.id)}
+            >
+              {disputeSecondary.label}
+            </Text>
+          ) : null}
+        </>
       ) : null}
 
       {/* ---------- 交易不存在 / 非参与者：404 不泄漏存在性 ---------- */}

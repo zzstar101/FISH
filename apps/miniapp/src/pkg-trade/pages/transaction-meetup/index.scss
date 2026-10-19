@@ -116,6 +116,18 @@
   }
 }
 
+/* 次要入口：「发起争议」与「查看已有争议」可以同时存在（本人终态争议 / 对方争议） */
+.meetup__dispute-sec {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin: 12px 40px 0;
+  text-align: right;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
 /* 状态胶囊 + 右侧 mono 备注（稿 `.statusrow`） */
 .meetup__statusrow {
   display: flex;

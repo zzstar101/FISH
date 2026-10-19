@@ -11,6 +11,11 @@ import { useAuth } from '@/features/auth/store'
 import { loadDisputePage } from '@/features/disputes/load'
 import type { DisputeRecord } from '@/features/disputes/map'
 import { shortDisputeId } from '@/features/disputes/meta'
+import {
+  appendDisputePage,
+  canApplyLoadMore,
+  type DisputeLoadMoreRequest,
+} from '@/features/disputes/paging'
 import './index.scss'
 
 /**
@@ -37,14 +42,19 @@ export default function MyDisputes() {
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
-  const loadingMoreRef = useRef(false)
+  /**
+   * 触底请求的锁/代次。不能只用一个布尔量：请求在途时用户下拉刷新（或从详情页返回触发重读），
+   * 旧请求回来会无条件解锁并追加，既可能把上一份快照的行拼进新列表（重复 id），也会提前放掉
+   * 新一轮请求的锁。锁里带 token，只有「仍是本次持锁且代次没变」才允许落地（见 paging.ts）。
+   */
+  const loadMoreLock = useRef<DisputeLoadMoreRequest | null>(null)
 
   const [prevUserId, setPrevUserId] = useState<string | null>(userId)
   const loadEpoch = useRef(0)
   if (prevUserId !== userId) {
     setPrevUserId(userId)
     loadEpoch.current += 1
-    loadingMoreRef.current = false
+    loadMoreLock.current = null
     setItems([])
     setNextCursor(null)
     setFailed(false)
@@ -59,7 +69,9 @@ export default function MyDisputes() {
   const read = useCallback(
     async (silent = false) => {
       const epoch = ++loadEpoch.current
-      loadingMoreRef.current = false
+      // 刷新让在途的触底请求作废：它回来时 canApplyLoadMore 会返回 false，不会污染新列表
+      loadMoreLock.current = null
+      setLoadingMore(false)
       if (!silent) {
         setLoading(true)
         setFailed(false)
@@ -111,21 +123,25 @@ export default function MyDisputes() {
   })
 
   const loadMore = useCallback(async () => {
-    if (loadingMoreRef.current || nextCursor === null || loading || failed) return
-    loadingMoreRef.current = true
-    setLoadingMore(true)
-    const epoch = loadEpoch.current
-    const result = await loadDisputePage(nextCursor, userId, Date.now())
-    if (epoch === loadEpoch.current) {
-      if (result.failed) {
-        void Taro.showToast({ title: '加载更多没成功，再往下拉试试', icon: 'none' })
-      } else {
-        setItems((prev) => [...prev, ...result.items])
-        setNextCursor(result.nextCursor)
-      }
+    if (loadMoreLock.current !== null || nextCursor === null || loading || failed) return
+    const request: DisputeLoadMoreRequest = {
+      epoch: loadEpoch.current,
+      token: Symbol('dispute-load-more'),
     }
-    loadingMoreRef.current = false
+    loadMoreLock.current = request
+    setLoadingMore(true)
+    const result = await loadDisputePage(nextCursor, userId, Date.now())
+    // 期间刷新过/换过号、或锁已经易主：整段丢弃，且**不要**去清别人的锁
+    if (!canApplyLoadMore(request, { epoch: loadEpoch.current, lock: loadMoreLock.current })) return
+    loadMoreLock.current = null
     setLoadingMore(false)
+    if (result.failed) {
+      void Taro.showToast({ title: '加载更多没成功，再往下拉试试', icon: 'none' })
+      return
+    }
+    // 按键去重：刷新期间分页边界会滑动，新第一页可能已经包含第二页的行
+    setItems((prev) => appendDisputePage(prev, result.items))
+    setNextCursor(result.nextCursor)
   }, [nextCursor, loading, failed, userId])
 
   useReachBottom(() => {
