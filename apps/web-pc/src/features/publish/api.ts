@@ -48,7 +48,14 @@ function allowedMime(file: File): UploadMime | null {
  * 转不了时返回 null，调用方给明确文案，不把注定 422 的文件送去上传。
  */
 export async function toUploadableFile(file: File): Promise<File | null> {
-  if (allowedMime(file) !== null) return file
+  const mime = allowedMime(file)
+  if (mime !== null) {
+    // 浏览器给不出 MIME（截图 / 部分 WebView）时 allowedMime 按扩展名兜底，
+    // 但下游按 `file.type` 选契约 contentType，空串会被当成不支持格式。
+    // 这里补成按扩展名认出的类型，其它四个上传入口一并受益。
+    if (file.type !== mime) return new File([file], file.name, { type: mime })
+    return file
+  }
   if (file.type !== 'image/heic' && extensionOf(file.name) !== 'heic') return null
 
   try {

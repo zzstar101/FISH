@@ -119,6 +119,7 @@ describe('fetchMyDisputes / fetchDispute', () => {
     )
     const page = await fetchMyDisputes('cur-1')
     expect(page.nextCursor).toBe('next-1')
+    expect(page.items[0]?.id).toBe(DISPUTE_ID)
     expect(calls[0]?.url).toBe(`/api/disputes/mine?limit=${DISPUTE_PAGE_LIMIT}&cursor=cur-1`)
   })
 
@@ -220,6 +221,12 @@ describe('uploadDisputeAttachment', () => {
       [`/api/disputes/${DISPUTE_ID}/attachments`, 'POST'],
     ])
     expect(calls[0]?.body).toEqual({ contentType: 'image/png', sizeBytes: 3 })
+    // PUT 必须带**所选文件本身**的字节与类型，而不是空 body / JSON。
+    const putBody = calls[1]?.body
+    expect(putBody).toBeInstanceOf(File)
+    const putFile = putBody as File
+    expect(putFile.type).toBe('image/png')
+    expect(new Uint8Array(await putFile.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })
 
   test('PUT 失败给出可读错误且不再 confirm（服务端无台账行）', async () => {
@@ -251,12 +258,106 @@ describe('uploadDisputeAttachment', () => {
     expect(calls).toHaveLength(0)
   })
 
-  test('空 MIME 文件与全站同文案，不靠扩展名冒充图片类型上传', async () => {
-    const calls = mockFetchCalls(() => Response.json({}))
-    const file = new File([new Uint8Array([1])], 'proof.jpg', { type: '' })
-    const error = await uploadDisputeAttachment(DISPUTE_ID, file).catch((reason: unknown) => reason)
-    expect(error instanceof Error ? error.message : null).toBe('仅支持 JPG / PNG / WebP 图片')
-    expect(calls).toHaveLength(0)
+  test('空 MIME 的合法图片按扩展名归一化后仍能上传', async () => {
+    const calls = mockFetchCalls((_call, index) => {
+      if (index === 0) {
+        return Response.json({
+          uploadUrl: 'https://storage.example/dispute-media/key.png',
+          objectKey: 'dispute-media/dsp/key.png',
+          headers: {},
+          expiresAt: '2026-10-02T00:10:00.000Z',
+        })
+      }
+      if (index === 1) return new Response(null, { status: 200 })
+      return Response.json({ attachment, created: true }, { status: 201 })
+    })
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'proof.jpg', { type: '' })
+    await uploadDisputeAttachment(DISPUTE_ID, file)
+
+    expect(calls[0]?.body).toEqual({ contentType: 'image/jpeg', sizeBytes: 3 })
+    const normalized = calls[1]?.body
+    expect(normalized).toBeInstanceOf(File)
+    expect((normalized as File).type).toBe('image/jpeg')
+  })
+
+  test('PUT 成功但 confirm 响应丢失：下次上传先幂等确认同一个 objectKey', async () => {
+    const RETRY_DISPUTE_ID = 'dsp_01jc000000e00800000000000b'
+    const first = mockFetchCalls((_call, index) => {
+      if (index === 0) {
+        return Response.json({
+          uploadUrl: 'https://storage.example/dispute-media/key.png',
+          objectKey: 'dispute-media/dsp/key.png',
+          headers: {},
+          expiresAt: '2026-10-02T00:10:00.000Z',
+        })
+      }
+      if (index === 1) return new Response(null, { status: 200 })
+      throw new TypeError('fetch failed')
+    })
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'proof.png', { type: 'image/png' })
+    const lost = await uploadDisputeAttachment(RETRY_DISPUTE_ID, file).catch(
+      (reason: unknown) => reason,
+    )
+    expect(lost instanceof Error).toBe(true)
+    expect(first).toHaveLength(3)
+
+    const second = mockFetchCalls((call) => {
+      expect(call.body).toEqual({ objectKey: 'dispute-media/dsp/key.png' })
+      return Response.json({ attachment, created: false })
+    })
+    await uploadDisputeAttachment(RETRY_DISPUTE_ID, file)
+
+    expect(second.map((call) => [call.url, call.method])).toEqual([
+      [`/api/disputes/${RETRY_DISPUTE_ID}/attachments`, 'POST'],
+    ])
+  })
+
+  test('暂存键被服务端判定不可用时丢弃并重新走 presign', async () => {
+    const STALE_DISPUTE_ID = 'dsp_01jc000000e00800000000000c'
+    mockFetchCalls((_call, index) => {
+      if (index === 0) {
+        return Response.json({
+          uploadUrl: 'https://storage.example/dispute-media/key.png',
+          objectKey: 'dispute-media/dsp/key.png',
+          headers: {},
+          expiresAt: '2026-10-02T00:10:00.000Z',
+        })
+      }
+      if (index === 1) return new Response(null, { status: 200 })
+      throw new TypeError('fetch failed')
+    })
+    const file = new File([new Uint8Array([1, 2, 3])], 'proof.png', { type: 'image/png' })
+    await uploadDisputeAttachment(STALE_DISPUTE_ID, file).catch(() => undefined)
+
+    const calls = mockFetchCalls((_call, index) => {
+      if (index === 0) {
+        // 上次暂存对象已被服务端删除：confirm 回「对象不可用」，应丢弃后继续上传。
+        return Response.json(
+          { error: { code: 'DISPUTE_ATTACHMENT_INVALID', message: '附件对象不可用' } },
+          { status: 422 },
+        )
+      }
+      if (index === 1) {
+        return Response.json({
+          uploadUrl: 'https://storage.example/dispute-media/key-2.png',
+          objectKey: 'dispute-media/dsp/key-2.png',
+          headers: {},
+          expiresAt: '2026-10-02T00:10:00.000Z',
+        })
+      }
+      if (index === 2) return new Response(null, { status: 200 })
+      return Response.json({ attachment, created: true }, { status: 201 })
+    })
+    await uploadDisputeAttachment(STALE_DISPUTE_ID, file)
+
+    expect(calls.map((call) => [call.url, call.method])).toEqual([
+      [`/api/disputes/${STALE_DISPUTE_ID}/attachments`, 'POST'],
+      [`/api/disputes/${STALE_DISPUTE_ID}/attachments/presign`, 'POST'],
+      ['https://storage.example/dispute-media/key-2.png', 'PUT'],
+      [`/api/disputes/${STALE_DISPUTE_ID}/attachments`, 'POST'],
+    ])
   })
 
   test('本地预校验失败时不发任何请求', async () => {

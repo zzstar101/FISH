@@ -3,7 +3,6 @@ import { DISPUTE_ROUTES } from '@fish/contracts/disputes/routes'
 import {
   type DisputeAttachmentConfirmRequest,
   DisputeAttachmentConfirmRequestSchema,
-  type DisputeAttachmentConfirmResponse,
   DisputeAttachmentConfirmResponseSchema,
   type DisputeAttachmentPresignRequest,
   DisputeAttachmentPresignRequestSchema,
@@ -22,7 +21,7 @@ import {
   DisputeListResponseSchema,
 } from '@fish/contracts/disputes/schema'
 import { ALLOWED_IMAGE_MIME } from '@fish/contracts/listings/schema'
-import { apiRequest } from '../../lib/api-client'
+import { ApiError, apiRequest } from '../../lib/api-client'
 import { fetchMessagePage } from '../chat/api'
 import { fetchTransaction } from '../profile/api'
 import { imagePreparationMessage, toUploadableFile, validateImageFile } from '../publish/api'
@@ -71,19 +70,84 @@ export async function withdrawDispute(disputeId: string): Promise<DisputeDetail>
 }
 
 /**
+ * confirm 阶段失败时，只有「对象明确不可用」才丢弃暂存键；网络错误要保留，
+ * 因为服务端可能已经登记成功、只是响应没回来，重试要做幂等确认而不是重新上传。
+ */
+const STAGED_KEY_UNUSABLE_CODES = new Set<string>([
+  'DISPUTE_ATTACHMENT_INVALID',
+  'DISPUTE_ATTACHMENT_LIMIT',
+  'DISPUTE_NOT_FOUND',
+  'DISPUTE_NOT_PENDING',
+])
+
+/** PUT 已成功但 confirm 响应丢失时，按争议暂存 objectKey（10 分钟内可幂等重试）。 */
+const stagedAttachmentKeys = new Map<string, { objectKey: string; expiresAt: number }>()
+const STAGED_KEY_TTL_MS = 10 * 60 * 1000
+
+function readStagedAttachmentKey(disputeId: string): string | null {
+  const staged = stagedAttachmentKeys.get(disputeId)
+  if (staged === undefined) return null
+  if (staged.expiresAt <= Date.now()) {
+    stagedAttachmentKeys.delete(disputeId)
+    return null
+  }
+  return staged.objectKey
+}
+
+function rememberStagedAttachmentKey(disputeId: string, objectKey: string): void {
+  stagedAttachmentKeys.set(disputeId, {
+    objectKey,
+    expiresAt: Date.now() + STAGED_KEY_TTL_MS,
+  })
+}
+
+function forgetStagedAttachmentKey(disputeId: string): void {
+  stagedAttachmentKeys.delete(disputeId)
+}
+
+async function confirmDisputeAttachment(disputeId: string, objectKey: string): Promise<void> {
+  const input: DisputeAttachmentConfirmRequest = DisputeAttachmentConfirmRequestSchema.parse({
+    objectKey,
+  })
+  DisputeAttachmentConfirmResponseSchema.parse(
+    await apiRequest(DISPUTE_ROUTES.attachmentConfirm(disputeId), {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  )
+}
+
+/**
  * 上传一张附件：HEIC→JPG 预处理 → presign → PUT 对象存储 → confirm 写台账。
  *
  * 预处理与其它四处图片上传入口**同一个 helper**（`toUploadableFile` /
  * `imagePreparationMessage`）：浏览器能展示的格式原样上传，HEIC 先转 JPG，
  * 转不了时给「HEIC 图片转换失败」的可区分文案，不把注定 422 的文件送去上传。
  *
- * 三步里任何一步失败都抛给调用方，但**PUT 失败与 confirm 失败要可区分**：
- * - 预校验 / presign 失败：`ApiError` 或本地校验 Error（配额、格式、尺寸）；
- * - PUT 失败：对象没写进去，服务端台账无行，提示用户重试即可；
- * - confirm 失败：对象可能已写入 staging，服务端失败路径会尽力回滚对象；用户重试会重新
- *   presign 拿到新键（本函数不缓存 staging 键）。
+ * 三步里任何一步失败都抛给调用方，且**配额/幂等要特别处理**：
+ * - 服务端 presign 按「该争议 + 该发起人前缀下的对象数」卡 6 张，重复 presign 会造孤儿对象；
+ * - confirm 本身是幂等的（`findAttachmentById` 命中返回 `created:false`）。
+ *
+ * 所以：每次上传**先**用上次 PUT 成功但 confirm 未确认的 objectKey 做一次 confirm；
+ * 成功即清暂存键直接返回；只有对象明确不可用（422/404/409）才丢弃并重新上传。
+ * PUT 成功后立刻暂存 key，confirm 网络失败时保留给下次重试。
  */
 export async function uploadDisputeAttachment(disputeId: string, file: File): Promise<void> {
+  const stagedObjectKey = readStagedAttachmentKey(disputeId)
+  if (stagedObjectKey !== null) {
+    try {
+      await confirmDisputeAttachment(disputeId, stagedObjectKey)
+      forgetStagedAttachmentKey(disputeId)
+      return
+    } catch (error) {
+      if (error instanceof ApiError && STAGED_KEY_UNUSABLE_CODES.has(error.code)) {
+        forgetStagedAttachmentKey(disputeId)
+      } else {
+        throw error
+      }
+    }
+  }
+
   const prepared = await toUploadableFile(file)
   if (prepared === null) throw new Error(imagePreparationMessage(file))
   const invalid = validateImageFile(prepared)
@@ -106,26 +170,30 @@ export async function uploadDisputeAttachment(disputeId: string, file: File): Pr
     }),
   )
 
-  const uploaded = await fetch(presign.uploadUrl, {
-    body: prepared,
-    headers: { ...presign.headers, 'content-type': contentType },
-    method: 'PUT',
-  })
+  let uploaded: Response
+  try {
+    uploaded = await fetch(presign.uploadUrl, {
+      body: prepared,
+      headers: { ...presign.headers, 'content-type': contentType },
+      method: 'PUT',
+    })
+  } catch {
+    throw new Error('图片上传失败，请重试')
+  }
   if (!uploaded.ok) throw new Error('图片上传失败，请重试')
 
-  const confirmInput: DisputeAttachmentConfirmRequest = DisputeAttachmentConfirmRequestSchema.parse(
-    {
-      objectKey: presign.objectKey,
-    },
-  )
-  const confirmed: DisputeAttachmentConfirmResponse = DisputeAttachmentConfirmResponseSchema.parse(
-    await apiRequest(DISPUTE_ROUTES.attachmentConfirm(disputeId), {
-      method: 'POST',
-      body: JSON.stringify(confirmInput),
-    }),
-  )
-  // 幂等命中（同一张图重复确认）也视为成功：台账行已存在、详情刷新后就在列表里。
-  void confirmed.created
+  // PUT 成功即暂存：此后 confirm 若网络失败，下一次上传先用这个 key 幂等确认，
+  // 不会再 presign 第二个对象白占配额。
+  rememberStagedAttachmentKey(disputeId, presign.objectKey)
+  try {
+    await confirmDisputeAttachment(disputeId, presign.objectKey)
+    forgetStagedAttachmentKey(disputeId)
+  } catch (error) {
+    if (error instanceof ApiError && STAGED_KEY_UNUSABLE_CODES.has(error.code)) {
+      forgetStagedAttachmentKey(disputeId)
+    }
+    throw error
+  }
 }
 
 /** 关联一条聊天消息作为证据（只提交 `msg_` 公开 ID，服务端校验消息归属）。 */
