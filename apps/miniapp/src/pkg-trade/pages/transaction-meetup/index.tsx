@@ -9,6 +9,9 @@ import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { findDisputeForTransaction } from '@/features/disputes/load'
+import { DISPUTE_STATUS_META } from '@/features/disputes/meta'
+import { type DisputeEntry, disputeEntryOf } from '@/features/disputes/view'
 import {
   confirmTransaction,
   fetchMeetupTokenStatus,
@@ -134,6 +137,11 @@ export default function TransactionMeetup() {
   const [tx, setTx] = useState<TransactionDto | null>(null)
   /** 交易加载失败：notFound = 不存在或非参与者（404，不泄漏）；failed = 网络/服务器 */
   const [loadError, setLoadError] = useState<'notFound' | 'failed' | null>(null)
+  /**
+   * 争议入口（#497）：这笔交易已有我可见的争议 → 查看；窗口内 → 发起；
+   * 窗口外或读不到争议列表 → 不展示（宁缺勿给出错报的入口）。
+   */
+  const [disputeEntry, setDisputeEntry] = useState<DisputeEntry | null>(null)
   const [token, setToken] = useState<TokenView | null>(null)
   const [scannedInvalid, setScannedInvalid] = useState(false)
   /** 手动输入：6 位数字的字符数组，索引即格子位置 */
@@ -308,6 +316,41 @@ export default function TransactionMeetup() {
     const epoch = bootEpoch.current
     void bootstrapRef.current(epoch)
   }, [authStatus, userId])
+
+  /* --------------------------------------- 争议入口（#497） */
+  /**
+   * 交易读回来之后再决定「发起争议 / 查看争议」：已有我可见的争议优先查看（终态也能看），
+   * 否则按 30 天窗口给发起入口。争议列表读不到（网络）就不展示 —— 宁缺，也不要给出一个
+   * 点进去必然 404 或重复发起的入口。
+   *
+   * 依赖刻意只放「哪笔交易」与返回本页的代次 `showTick`：交易对象每次 `setTx` 都换引用，
+   * 直接进依赖会让每次重同步都多扫一遍列表；而从争议页返回时 `showTick` 会自增，入口随之重读。
+   */
+  const txRef = useRef<TransactionDto | null>(null)
+  txRef.current = tx
+  const disputeEpoch = useRef(0)
+  const loadedTxId = tx?.id ?? null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showTick 是刻意的重读信号（从争议页返回时自增），不是体内读到的值
+  useEffect(() => {
+    const snapshot = txRef.current
+    if (loadedTxId === null || snapshot === null) {
+      setDisputeEntry(null)
+      return
+    }
+    const epoch = ++disputeEpoch.current
+    void findDisputeForTransaction(loadedTxId)
+      .then((result) => {
+        if (epoch !== disputeEpoch.current) return
+        if (result.failed) {
+          setDisputeEntry(null)
+          return
+        }
+        setDisputeEntry(disputeEntryOf(snapshot, result.dispute, Date.now()))
+      })
+      .catch(() => {
+        if (epoch === disputeEpoch.current) setDisputeEntry(null)
+      })
+  }, [loadedTxId, showTick])
 
   /* --------------------------------------- 卖家：取码（幂等 ensure/read） */
 
@@ -786,6 +829,17 @@ export default function TransactionMeetup() {
     </View>
   ) : null
 
+  /** 争议入口的两种落点：已有争议进详情，否则带订单 id 进发起页。 */
+  const openDispute = () => {
+    const entry = disputeEntry
+    if (entry === null || entry.kind === 'closed' || tx === null) return
+    const url =
+      entry.kind === 'view'
+        ? `/pkg-trade/pages/dispute-detail/index?id=${encodeURIComponent(entry.dispute.id)}`
+        : `/pkg-trade/pages/dispute-create/index?transactionId=${encodeURIComponent(tx.id)}`
+    void Taro.navigateTo({ url })
+  }
+
   return (
     <View className="meetup">
       <View className="meetup__bg" />
@@ -826,6 +880,28 @@ export default function TransactionMeetup() {
         {/* 完成页由摘要卡承担商品信息，其余状态都挂商品卡（稿：完成态摘掉页头商品卡） */}
         {done ? null : dealCard}
       </View>
+
+      {/* ---------- 交易争议入口（#497）：窗口外不展示，已有争议优先「查看」 ---------- */}
+      {loadError === null && disputeEntry !== null && disputeEntry.kind !== 'closed' ? (
+        <View className="meetup__dispute" onClick={openDispute}>
+          <View className="meetup__dispute-ic">
+            <Image className="meetup__dispute-ic-img" src={ICONS.shieldLine} mode="aspectFit" />
+          </View>
+          <View className="meetup__dispute-main">
+            <Text className="meetup__dispute-title">
+              {disputeEntry.kind === 'view' ? '这笔交易有一条争议' : '交易出了问题？'}
+            </Text>
+            <Text className="meetup__dispute-sub">
+              {disputeEntry.kind === 'view'
+                ? `${DISPUTE_STATUS_META[disputeEntry.dispute.status].label} · 查看处理进度与材料`
+                : '发起争议，由管理员介入核查，结论为最终结论'}
+            </Text>
+          </View>
+          <Text className="meetup__dispute-act">
+            {disputeEntry.kind === 'view' ? '查看争议' : '发起争议'}
+          </Text>
+        </View>
+      ) : null}
 
       {/* ---------- 交易不存在 / 非参与者：404 不泄漏存在性 ---------- */}
       {loadError === 'notFound' ? (

@@ -124,9 +124,10 @@ function decorateNotification(
     }
   }
   if (item.type === 'DISPUTE') {
-    // 争议进展（#465）：小程序用户侧争议页属 PR C，本分支只保证**通知本身可读**
-    // （不再落到末尾的「新通知」+ 空描述），不给跳转目标 —— 页面还不存在，
-    // 给 `target` 只会造出一个点不动的入口。
+    // 争议进展（#465 通知 / #497 用户侧页面）：FILED / WITHDRAWN / RESOLVED 三个事件
+    // 都落到同一条争议详情（`/pkg-trade/pages/dispute-detail`），文案只负责说清「发生了什么」。
+    // `disputeId` 缺失（历史通知或契约可选）时不给 target：点不动的入口比没有入口更糟。
+    const disputeId = item.payload.disputeId
     return {
       ...item,
       title: '交易争议有更新',
@@ -139,7 +140,7 @@ function decorateNotification(
               ? '争议已处理，该结论为最终结论'
               : '这笔交易的争议状态有变化',
       tone: item.payload.disputeEvent === 'RESOLVED' ? 'mint' : 'warn',
-      target: null,
+      target: disputeId === undefined ? null : { kind: 'dispute', disputeId },
     }
   }
   return { ...item, title: '新通知', description: '', tone: 'warn', target: null }
