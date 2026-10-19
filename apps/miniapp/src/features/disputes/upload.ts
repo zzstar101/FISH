@@ -17,7 +17,8 @@
  * PUT 成功后对象已经在桶里、预算已经花了；若 confirm 撞上网络抖动，别把 `objectKey` 丢掉重走
  * 整条链（用户重试时又要选图、又要占一次 presign 配额）。这里在模块级记一份
  * `disputeId → objectKey`（10 分钟，和服务端附件签名 TTL 同量级）：
- * - 进入上传先尝试用记住的 key confirm（服务端 confirm 幂等，成功会清掉缓存）；
+ * - 进入上传先尝试用记住的 key confirm（服务端 confirm 幂等，成功会清掉缓存），但**只认同一张图**
+ *   （见 `fingerprintOf`：换图后旧 key 直接作废，重新 presign + PUT）；
  * - PUT 成功后立刻记住 key；confirm 成功后清除；
  * - **明确不可用**的错误（422 附件失效 / 额度满、409 已非 PENDING、404 争议不在）清掉缓存，
  *   因为重试同一个 key 只会同样失败；网络/5xx 保留，用户再点一次就能续上。
@@ -34,15 +35,36 @@ import { confirmDisputeAttachment, presignDisputeAttachment } from './api'
 /** 记住的 objectKey 多久后作废（与服务端附件签名 900s TTL 同量级）。 */
 const PENDING_CONFIRM_TTL_MS = 10 * 60 * 1000
 
-type PendingConfirm = { objectKey: string; expiresAt: number }
+type PendingConfirm = {
+  objectKey: string
+  expiresAt: number
+  /** 这次上传的是哪一张图（`chooseMedia` 的临时路径 + 大小 + 类型）；换一张图就不许复用旧 key */
+  fingerprint: string
+}
+
+/**
+ * 选图指纹：只用来区分「同一张图的重试」与「用户换了另一张图」。
+ *
+ * `tempFilePath` 在同一个 `chooseMedia` 选择里稳定；换图/重选会拿到新路径，大小与类型再兜一层。
+ * 只存 `objectKey` 不够 —— 旧实现会把「换图后的第一次 confirm」误当成续传，把上一张图挂到
+ * 这条争议上（B1）。
+ */
+function fingerprintOf(photo: PickedPhoto): string {
+  return `${photo.path}|${photo.sizeBytes}|${photo.mime}`
+}
 
 /** 模块级：页面在「PUT 成功、confirm 失败」之间重新挂载时也能续上（key 与 disputeId 绑定）。 */
 const pendingConfirms = new Map<string, PendingConfirm>()
 
-function readPendingConfirm(disputeId: string, nowMs: number): string | null {
+function readPendingConfirm(disputeId: string, photo: PickedPhoto, nowMs: number): string | null {
   const pending = pendingConfirms.get(disputeId)
   if (pending === undefined) return null
   if (pending.expiresAt <= nowMs) {
+    pendingConfirms.delete(disputeId)
+    return null
+  }
+  // 指纹不一致 = 用户换了另一张图：旧 key 属于上一张图，不能拿来 confirm，清掉走整条链
+  if (pending.fingerprint !== fingerprintOf(photo)) {
     pendingConfirms.delete(disputeId)
     return null
   }
@@ -86,7 +108,7 @@ export async function uploadDisputeAttachment(
   assertSame()
 
   // 1) 上次 PUT 成功但 confirm 没回来的：先用同一个 key 续 confirm（服务端幂等）
-  const remembered = readPendingConfirm(disputeId, Date.now())
+  const remembered = readPendingConfirm(disputeId, photo, Date.now())
   if (remembered !== null) {
     try {
       const confirmed = await confirmDisputeAttachment(disputeId, remembered)
@@ -126,6 +148,7 @@ export async function uploadDisputeAttachment(
   pendingConfirms.set(disputeId, {
     objectKey: presign.objectKey,
     expiresAt: Date.now() + PENDING_CONFIRM_TTL_MS,
+    fingerprint: fingerprintOf(photo),
   })
 
   // PUT 之后、confirm 之前再核一次归属：换号瞬间的极窄窗口里，confirm 会写到

@@ -432,8 +432,18 @@
   padding-bottom: 16px;
 }
 
+/*
+ * ScrollView 在微信里必须有确定高度才会滚（只给 max-height 时内容一多会撑开弹层、内部不滚）。
+ * 这里照 `components/legal-doc` 抽屉的写法：交给 flex 分配高度（父级是 flex 列 + max-height）。
+ * 端上滚动行为需 Owner 在开发者工具/真机演示确认。
+ */
 .dsd__sheet-list {
-  max-height: 52vh;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dsd__sheet-more {
+  margin-top: 16px;
 }
 
 .dsd__cand {

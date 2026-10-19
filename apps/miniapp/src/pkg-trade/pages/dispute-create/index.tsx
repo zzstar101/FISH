@@ -20,6 +20,7 @@ import {
 import { disputeNotFoundCopy, disputeWindowClosed } from '@/features/disputes/view'
 import { fetchTransaction } from '@/features/transaction/api'
 import { formatYuan } from '@/lib/money'
+import { goBackOrHome } from '@/lib/nav-back'
 import { isApiError } from '@/lib/request'
 import './index.scss'
 
@@ -160,9 +161,7 @@ export default function DisputeCreatePage() {
               text={notFound.text}
               icon={ICONS.shieldLine}
               actionText="返回"
-              onAction={() => {
-                void Taro.navigateBack()
-              }}
+              onAction={goBackOrHome}
             />
           </View>
         ) : loadState === 'failed' ? (
@@ -186,7 +185,7 @@ export default function DisputeCreatePage() {
             {/* 交易摘要：只读，由订单带入 */}
             <View className="dsc__card">
               <Text className="dsc__card-h">这笔交易</Text>
-              <Text className="dsc__title">{tx.listing?.title ?? '（未带出商品标题）'}</Text>
+              <Text className="dsc__title">{tx.listing.title}</Text>
               <View className="dsc__sub">
                 <Text className="num">{formatYuan(tx.amountCents)}</Text>
                 <Text className="dsc__sep">·</Text>

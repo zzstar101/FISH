@@ -29,7 +29,7 @@ import {
   disputeSecondaryOf,
   disputeWindowClosed,
   evidenceMessageText,
-  pickDisputeForTransaction,
+  keepDetailOnSilentFailure,
 } from '@/features/disputes/view'
 
 /**
@@ -244,23 +244,6 @@ describe('订单详情页的争议入口', () => {
     })
     expect(disputeEntryOf(after, null, NOW)).toEqual({ kind: 'closed' })
   })
-
-  test('同一交易多条争议：优先 PENDING，否则取最新（列表倒序的第一条）', () => {
-    const items = [
-      { id: 'dsp_new', status: 'RESOLVED' as const, transaction: { id: 'txn_1' } },
-      { id: 'dsp_old', status: 'WITHDRAWN' as const, transaction: { id: 'txn_1' } },
-      { id: 'dsp_pending', status: 'PENDING' as const, transaction: { id: 'txn_1' } },
-      { id: 'dsp_other', status: 'PENDING' as const, transaction: { id: 'txn_2' } },
-    ]
-    expect(pickDisputeForTransaction(items, 'txn_1')?.id).toBe('dsp_pending')
-    expect(
-      pickDisputeForTransaction(
-        items.filter((item) => item.status !== 'PENDING'),
-        'txn_1',
-      )?.id,
-    ).toBe('dsp_new')
-    expect(pickDisputeForTransaction(items, 'txn_404')).toBeNull()
-  })
 })
 
 describe('证据正文', () => {
@@ -341,7 +324,7 @@ describe('列表行映射与短号', () => {
     expect(mine.amountText).toBe('320')
 
     const theirs = disputeToRecord(dispute(), PEER, NOW)
-    expect(theirs.roleLabel).toBe('对方发起')
+    expect(theirs.roleLabel).toBe('我被诉')
     expect(theirs.counterpartNickname).toBe('买家小周')
   })
 
@@ -362,5 +345,15 @@ describe('查不到的文案', () => {
     expect(disputeNotFoundCopy('detail').title).not.toBe(disputeNotFoundCopy('create').title)
     expect(disputeNotFoundCopy('detail').text).toContain('参与人')
     expect(disputeNotFoundCopy('create').text).toContain('交易')
+  })
+})
+
+describe('静默刷新失败', () => {
+  test('手上已有详情时保留内容：断网不该把能看的详情页换成错误屏', () => {
+    expect(keepDetailOnSilentFailure(true, true)).toBe(true)
+    expect(keepDetailOnSilentFailure(true, false)).toBe(false)
+    // 非静默（首次进入 / 用户点重试）照常落错误态
+    expect(keepDetailOnSilentFailure(false, true)).toBe(false)
+    expect(keepDetailOnSilentFailure(false, false)).toBe(false)
   })
 })

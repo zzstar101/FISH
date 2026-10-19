@@ -16,7 +16,7 @@ export type DisputeRecord = {
   status: DisputeStatus
   statusLabel: string
   tone: DisputeTone
-  /** 我发起 / 对方发起 */
+  /** 我发起 / 我被诉 */
   roleLabel: string
   counterpartNickname: string
   listingTitle: string
@@ -41,7 +41,7 @@ export function disputeToRecord(
     status: dispute.status,
     statusLabel: statusMeta.label,
     tone: statusMeta.tone,
-    roleLabel: isInitiator ? '我发起' : '对方发起',
+    roleLabel: isInitiator ? '我发起' : '我被诉',
     counterpartNickname: counterpart.nickname,
     listingTitle: dispute.transaction.listingTitle,
     amountText: formatAmount(dispute.transaction.amountCents),

@@ -131,24 +131,27 @@ export async function loadDisputeConversationId(transactionId: string): Promise<
 
 export type EvidenceCandidatesLoad = {
   messages: MessageDto[]
+  /** `null` = 已经翻到最早一页；否则原样作为下一次 `before` 回传（契约要求不解析游标）。 */
+  nextCursor: string | null
   failed: boolean
 }
 
 /**
- * 可关联为证据的候选消息：该交易会话**最近一页**消息（升序返回，页面倒序展示）。
+ * 可关联为证据的候选消息：该交易会话的一页消息（升序返回，页面倒序展示）。
  *
- * 只取最近一页是刻意的：证据一般就是最近说过的几句话，做「往前翻更多」会让选证据变成一个
- * 独立的消息浏览器，超出本票范围。页面再从中只列**文字**消息 —— 契约的证据消息本身没有
- * 媒体地址，媒体证据的形态另开 issue 跟进。
+ * 第一页就是最近的消息；`before` 传上一页的 `nextCursor` 可以继续「加载更早」（#497 审查 N9）。
+ * 页面只把其中**文字 / 系统**消息列为候选 —— 契约的证据消息本身没有媒体地址，聊天图片
+ * 证据待 #500（媒体消息读接口当前不返回地址）。
  */
 export async function loadEvidenceCandidates(
   conversationId: string,
+  before?: string,
 ): Promise<EvidenceCandidatesLoad> {
   try {
-    const page = await fetchMessagePage(conversationId)
-    return { messages: page.items, failed: false }
+    const page = await fetchMessagePage(conversationId, before)
+    return { messages: page.items, nextCursor: page.nextCursor, failed: false }
   } catch (error) {
     reportFailure('争议证据候选读取', error, false)
-    return { messages: [], failed: true }
+    return { messages: [], nextCursor: null, failed: true }
   }
 }

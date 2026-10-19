@@ -35,10 +35,12 @@ import {
   disputeNotFoundCopy,
   disputeRoleOf,
   evidenceMessageText,
+  keepDetailOnSilentFailure,
 } from '@/features/disputes/view'
 import { UploadAbortedError } from '@/features/upload/active'
 import { pickPhotos } from '@/features/upload/api'
 import { formatYuan } from '@/lib/money'
+import { goBackOrHome } from '@/lib/nav-back'
 import { isApiError } from '@/lib/request'
 import { dayLabelOf } from '@/lib/time'
 import './index.scss'
@@ -81,7 +83,12 @@ type EvidenceState = 'idle' | 'loading' | 'ok' | 'failed'
  * 附件 URL 是服务端签发的 capability URL（TTL 900s）。放后台超过这个时长再回来，
  * `<Image>` 会裂、`previewImage` 会拿到空图 —— 所以回前台时先静默重读详情换新签名。
  */
-const ATTACHMENT_URL_TTL_MS = 900_000
+/**
+ * 附件/证据签名 URL 的端上有效期：服务端签发 900s，这里只用到 600s。
+ * 留 300s 余量是因为「判断未过期」与「`previewImage` 真正去取图」之间还有网络耗时，
+ * 卡在 900s 临界点必然偶发裂图。
+ */
+const ATTACHMENT_URL_TTL_MS = 600_000
 
 export default function DisputeDetailPage() {
   const authStatus = useAuthGuard()
@@ -99,8 +106,14 @@ export default function DisputeDetailPage() {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [evidenceState, setEvidenceState] = useState<EvidenceState>('idle')
   const [messages, setMessages] = useState<MessageDto[]>([])
+  /** 证据候选「加载更早」的游标（`null` = 已经到最早一页） */
+  const [evidenceCursor, setEvidenceCursor] = useState<string | null>(null)
+  const [loadingOlderEvidence, setLoadingOlderEvidence] = useState(false)
   const [addingMessageId, setAddingMessageId] = useState<string | null>(null)
 
+  /** 手上是否已有详情：静默刷新失败时据此决定「保留内容」还是落错误态 */
+  const detailRef = useRef<DisputeDetail | null>(null)
+  detailRef.current = detail
   const loadEpoch = useRef(0)
   /** 页面卸载 / 换号后不再发上传链的后半段（`assertUploadActive` 的判据之一） */
   const alive = useRef(true)
@@ -135,6 +148,8 @@ export default function DisputeDetailPage() {
     setSheetOpen(false)
     setEvidenceState('idle')
     setMessages([])
+    setEvidenceCursor(null)
+    setLoadingOlderEvidence(false)
     setAddingMessageId(null)
     setState('loading')
   }
@@ -155,6 +170,10 @@ export default function DisputeDetailPage() {
         lastLoadedAt.current = Date.now()
         setStale(false)
         setState('ok')
+      } else if (keepDetailOnSilentFailure(silent, detailRef.current !== null)) {
+        // 静默刷新（409 重同步 / 回前台签名过期重读）失败：保留手上已有的详情，
+        // 只提示一句；把能看的内容换成错误屏是净损失。
+        void Taro.showToast({ title: '刷新没成功，稍后再试', icon: 'none' })
       } else {
         setState(result.state)
       }
@@ -209,9 +228,14 @@ export default function DisputeDetailPage() {
     }
   }
 
-  /** 撤回要二次确认：它是不可逆的（撤回后不能恢复，只能重新发起）。 */
+  /**
+   * 撤回要二次确认：它是不可逆的（撤回后不能恢复，只能重新发起）。
+   * `withdrawConfirmingRef` 挡住「弹窗还没关又点一次」—— 否则会叠出两个确认框。
+   */
+  const withdrawConfirmingRef = useRef(false)
   const onWithdraw = () => {
-    if (detail === null || withdrawing) return
+    if (detail === null || withdrawing || withdrawConfirmingRef.current) return
+    withdrawConfirmingRef.current = true
     void Taro.showModal({
       title: '撤回这条争议？',
       content: '撤回后本次争议处理结束，不能恢复；如问题仍未解决，可以重新发起。',
@@ -223,6 +247,9 @@ export default function DisputeDetailPage() {
         if (result.confirm) void runWithdraw()
       })
       .catch(() => {})
+      .finally(() => {
+        withdrawConfirmingRef.current = false
+      })
   }
 
   const addAttachments = () => {
@@ -232,26 +259,28 @@ export default function DisputeDetailPage() {
       void Taro.showToast({ title: '附件最多 6 张', icon: 'none' })
       return
     }
+    // 先置「上传中」：`pickPhotos` 是异步拉起相册的，连点时第二次点击会再拉一次；
+    // 顺带让按钮立刻变成「上传中…」给出反馈。
+    setUploading(true)
     void (async () => {
-      let picked: Awaited<ReturnType<typeof pickPhotos>>
       try {
-        picked = await pickPhotos(slots)
-      } catch (error) {
-        void Taro.showToast({
-          title: error instanceof Error ? error.message : '无法选择图片，请稍后重试',
-          icon: 'none',
-        })
-        return
-      }
-      if (picked.rejected !== null) {
-        void Taro.showToast({ title: picked.rejected, icon: 'none' })
-      }
-      if (picked.photos.length === 0) return
+        let picked: Awaited<ReturnType<typeof pickPhotos>>
+        try {
+          picked = await pickPhotos(slots)
+        } catch (error) {
+          void Taro.showToast({
+            title: error instanceof Error ? error.message : '无法选择图片，请稍后重试',
+            icon: 'none',
+          })
+          return
+        }
+        if (picked.rejected !== null) {
+          void Taro.showToast({ title: picked.rejected, icon: 'none' })
+        }
+        if (picked.photos.length === 0) return
 
-      const epoch = loadEpoch.current
-      const current = () => alive.current && epoch === loadEpoch.current
-      setUploading(true)
-      try {
+        const epoch = loadEpoch.current
+        const current = () => alive.current && epoch === loadEpoch.current
         for (const photo of picked.photos) {
           if (!current()) break
           try {
@@ -260,9 +289,12 @@ export default function DisputeDetailPage() {
               currentUserId: () => userIdRef.current,
             })
             if (!current()) break
-            setDetail((prev) =>
-              prev === null ? prev : { ...prev, attachments: [...prev.attachments, attachment] },
-            )
+            setDetail((prev) => {
+              if (prev === null) return prev
+              // 幂等去重：confirm 响应丢了再补一次时服务端会回 `created:false` 的同一行
+              if (prev.attachments.some((item) => item.id === attachment.id)) return prev
+              return { ...prev, attachments: [...prev.attachments, attachment] }
+            })
           } catch (error) {
             if (error instanceof UploadAbortedError) break
             resyncIfConflict(error)
@@ -293,9 +325,38 @@ export default function DisputeDetailPage() {
       const result = await loadEvidenceCandidates(conversationId)
       if (!alive.current) return
       setMessages(result.messages)
+      setEvidenceCursor(result.nextCursor)
       setEvidenceState(result.failed ? 'failed' : 'ok')
     } finally {
       evidenceLoadingRef.current = false
+    }
+  }
+
+  /** 往前翻一页更早的消息（契约的 `before` 游标原样回传，拼在已加载数组之前）。 */
+  const loadOlderEvidence = async () => {
+    if (detail === null || evidenceCursor === null || loadingOlderEvidence) return
+    setLoadingOlderEvidence(true)
+    try {
+      const conversationId = await loadDisputeConversationId(detail.transaction.id)
+      if (conversationId === null) {
+        if (alive.current) {
+          void Taro.showToast({ title: '没读到这段会话，稍后再试', icon: 'none' })
+        }
+        return
+      }
+      const result = await loadEvidenceCandidates(conversationId, evidenceCursor)
+      if (!alive.current) return
+      if (result.failed) {
+        void Taro.showToast({ title: '更早的消息没读出来，再试一次', icon: 'none' })
+        return
+      }
+      setMessages((prev) => {
+        const known = new Set(prev.map((message) => message.id))
+        return [...result.messages.filter((message) => !known.has(message.id)), ...prev]
+      })
+      setEvidenceCursor(result.nextCursor)
+    } finally {
+      setLoadingOlderEvidence(false)
     }
   }
 
@@ -385,8 +446,13 @@ export default function DisputeDetailPage() {
   const canWithdraw = detail !== null && !stale && canWithdrawDispute(detail, userId)
   const attachmentCount = detail?.attachments.length ?? 0
   const evidenceIds = new Set((detail?.evidence ?? []).map((item) => item.message.id))
+  // 文字 + 系统消息：两者都能升格为证据（服务端只要求消息属于本交易会话）；媒体消息的
+  // 读接口当前不返回地址，聊天图片证据待 #500。
   const candidates = messages
-    .filter((message) => message.type === 'TEXT' && message.recalledAt === null)
+    .filter(
+      (message) =>
+        (message.type === 'TEXT' || message.type === 'SYSTEM') && message.recalledAt === null,
+    )
     .filter((message) => !evidenceIds.has(message.id))
     .slice()
     .reverse()
@@ -421,9 +487,7 @@ export default function DisputeDetailPage() {
               text={notFound.text}
               icon={ICONS.shieldLine}
               actionText="返回"
-              onAction={() => {
-                void Taro.navigateBack()
-              }}
+              onAction={goBackOrHome}
             />
           </View>
         ) : state === 'failed' ? (
@@ -630,7 +694,7 @@ export default function DisputeDetailPage() {
         )}
       </View>
 
-      {/* 选证据：底部弹层，列出该交易会话最近一页的文字消息 */}
+      {/* 选证据：底部弹层，从最近一页开始、可「加载更早」 */}
       {sheetOpen ? (
         <View className="dsd__sheetanchor">
           <View className="dsd__scrim" onClick={() => setSheetOpen(false)} />
@@ -641,8 +705,8 @@ export default function DisputeDetailPage() {
                 关闭
               </Text>
             </View>
-            {/* 说清范围：只列最近一页的文字消息，更早的请回会话里核对 */}
-            <Text className="dsd__sheet-note">只显示这段会话最近一页的文字消息。</Text>
+            {/* 说清范围：只列文字/系统消息，图片证据还没接（#500） */}
+            <Text className="dsd__sheet-note">仅文本/系统消息；聊天图片证据待 #500 支持。</Text>
             {evidenceState === 'loading' ? (
               <Text className="dsd__sheet-hint">正在读取最近消息…</Text>
             ) : evidenceState === 'failed' ? (
@@ -659,7 +723,7 @@ export default function DisputeDetailPage() {
               </View>
             ) : candidates.length === 0 ? (
               <Text className="dsd__sheet-hint">
-                最近的文字消息都已经是证据了，或这段会话还没有文字消息。
+                已加载的消息都已经是证据了，或这段会话还没有文字消息。
               </Text>
             ) : (
               <ScrollView scrollY className="dsd__sheet-list">
@@ -685,6 +749,16 @@ export default function DisputeDetailPage() {
                 ))}
               </ScrollView>
             )}
+            {evidenceState === 'ok' && evidenceCursor !== null ? (
+              <View
+                className={`dsd__btn dsd__btn--sec dsd__sheet-more${loadingOlderEvidence ? ' is-off' : ''}`}
+                onClick={() => {
+                  void loadOlderEvidence()
+                }}
+              >
+                <Text>{loadingOlderEvidence ? '正在加载…' : '加载更早的消息'}</Text>
+              </View>
+            ) : null}
           </View>
         </View>
       ) : null}

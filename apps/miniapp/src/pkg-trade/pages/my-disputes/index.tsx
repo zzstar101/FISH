@@ -16,6 +16,7 @@ import {
   canApplyLoadMore,
   type DisputeLoadMoreRequest,
 } from '@/features/disputes/paging'
+import { goBackOrHome } from '@/lib/nav-back'
 import './index.scss'
 
 /**
@@ -25,7 +26,7 @@ import './index.scss'
  *
  * 服务端一次返回两种身份的行（`listMine`），而分页是游标式的：在端上按身份过滤只会筛
  * 当前已加载的那几页，会出现「切到「我被诉」先空着、再往下拉才冒出来」的错觉。所以两种
- * 身份放在同一列，用行内的「我发起 / 对方发起」标签区分。
+ * 身份放在同一列，用行内的「我发起 / 我被诉」标签区分。
  *
  * ## 账号作用域（#170 A–D）
  *
@@ -83,7 +84,9 @@ export default function MyDisputes() {
           void Taro.showToast({ title: '刷新没成功，稍后再试', icon: 'none' })
           return
         }
-        setItems(result.items)
+        // 合并而不是替换：上一次可能已经翻了好几页，刷新只更新第一页会把已翻出的行砍掉。
+        // `appendDisputePage` 按 id 去重，新第一页在前（服务端按时间倒序）。
+        setItems((prev) => appendDisputePage(result.items, prev))
         setNextCursor(result.nextCursor)
         setFailed(false)
         setLoading(false)
@@ -194,9 +197,7 @@ export default function MyDisputes() {
               icon={ICONS.shieldLine}
               // 不按角色分流（买家/卖家都可能在这里）：留一个中性的返回
               actionText="返回"
-              onAction={() => {
-                void Taro.navigateBack()
-              }}
+              onAction={goBackOrHome}
             />
           </View>
         ) : (

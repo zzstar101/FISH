@@ -113,7 +113,12 @@ export function disputeEntryOf(
   return { kind: 'closed' }
 }
 
-/** 入口卡旁边的次要入口：「发起」与「查看已有争议」可以同时存在。 */
+/**
+ * 入口卡旁边的次要入口：「发起」与「查看已有争议」可以同时存在。
+ *
+ * 只给**一条**：本人终态争议优先（`refileFrom`），否则对方那条。两条同时存在时把两个
+ * 「查看」并排摆会让入口区变成操作面板，也分不清该点哪个 —— 页面注释同样写明这一点。
+ */
 export type DisputeSecondaryEntry = { dispute: DisputeRef; label: string }
 
 export function disputeSecondaryOf(entry: DisputeEntry): DisputeSecondaryEntry | null {
@@ -121,19 +126,6 @@ export function disputeSecondaryOf(entry: DisputeEntry): DisputeSecondaryEntry |
   if (entry.refileFrom !== null) return { dispute: entry.refileFrom, label: '查看这条争议' }
   if (entry.other !== null) return { dispute: entry.other, label: '查看对方争议' }
   return null
-}
-
-/**
- * 从「我的争议」列表里挑出这笔交易的那条：优先未决（列表按时间倒序，先到的是最新的），
- * 没有未决就取最新一条终态。同一交易在终态后可以再发起新争议，所以可能不止一条。
- */
-export function pickDisputeForTransaction<T extends DisputeRef & { transaction: { id: string } }>(
-  items: readonly T[],
-  transactionId: string,
-): T | null {
-  const matches = items.filter((item) => item.transaction.id === transactionId)
-  if (matches.length === 0) return null
-  return matches.find((item) => item.status === 'PENDING') ?? matches[0] ?? null
 }
 
 /** 「补附件」按钮文案：额度用完时直接写清楚，避免用户点了才被 422 挡下。 */
@@ -201,6 +193,16 @@ export function evidenceMessageText(message: {
   return message.recalledAt === null ? message.content : '消息已撤回'
 }
 
+/**
+ * 静默刷新失败（409 重同步、回前台签名过期重读）时的取舍：手上已有详情就不要切到错误屏。
+ *
+ * 这类刷新是「补一次」，用户并没有主动重试；断网时把已经读到的详情换成「加载失败」，
+ * 等于把一个能看的内容页砸掉。非静默（用户点重试/首次进入）或还没有内容时才落错误态。
+ */
+export function keepDetailOnSilentFailure(silent: boolean, hasDetail: boolean): boolean {
+  return silent && hasDetail
+}
+
 /** 详情页按场景给不同的「查不到」文案：非参与人 404 不能写成系统故障。 */
 export function disputeNotFoundCopy(scene: 'detail' | 'create'): {
   title: string
@@ -209,5 +211,6 @@ export function disputeNotFoundCopy(scene: 'detail' | 'create'): {
   if (scene === 'create') {
     return { title: '无法发起争议', text: '这笔交易不存在，或你不是交易参与人。' }
   }
-  return { title: '看不到这条争议', text: '它可能已被删除，或你不是这笔交易的参与人。' }
+  // 争议没有删除端点，所以只剩一种原因：不是参与人（服务端对非参与人返回 404，不泄漏存在性）
+  return { title: '看不到这条争议', text: '你不是这笔交易的参与人，看不到这条争议。' }
 }

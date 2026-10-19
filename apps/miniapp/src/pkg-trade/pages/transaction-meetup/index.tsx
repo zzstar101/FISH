@@ -870,7 +870,10 @@ export default function TransactionMeetup() {
     disputeEntry !== null && disputeEntry.kind === 'view'
       ? `${DISPUTE_STATUS_META[disputeEntry.dispute.status].label} · ${disputeEntryCopy?.sub ?? ''}`
       : disputeEntryCopy?.sub
-  /** 「发起」与「查看已有争议」可以同时存在：本人终态争议 / 对方争议都给一个查看落点 */
+  /**
+   * 「发起」与「查看已有争议」可以同时存在，但次要入口**只给一条**（纯函数
+   * `disputeSecondaryOf`）：本人终态争议优先，否则对方那条；两条同时摆会分不清点哪个。
+   */
   const disputeSecondary = disputeEntry === null ? null : disputeSecondaryOf(disputeEntry)
 
   return (

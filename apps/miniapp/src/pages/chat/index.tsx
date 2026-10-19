@@ -579,7 +579,7 @@ export default function Chat() {
     // 交易争议（#497）：FILED / WITHDRAWN / RESOLVED 三个事件都落到同一条争议详情
     if (item.target?.kind === 'dispute') {
       void Taro.navigateTo({
-        url: `/pkg-trade/pages/dispute-detail/index?id=${item.target.disputeId}`,
+        url: `/pkg-trade/pages/dispute-detail/index?id=${encodeURIComponent(item.target.disputeId)}`,
       })
       return
     }
