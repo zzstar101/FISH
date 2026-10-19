@@ -31,7 +31,7 @@ import {
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { randomUuidV4 } from '@/lib/uuid'
-import { FEEDBACK_DRAFT_KEY, type FeedbackDraft, parseFeedbackDraft } from './draft'
+import { acceptDraft, FEEDBACK_DRAFT_KEY, type FeedbackDraft, parseFeedbackDraft } from './draft'
 import './index.scss'
 
 /**
@@ -55,8 +55,9 @@ import './index.scss'
  * ## 草稿按账号隔离
  *
  * 草稿 key 仍是 `fish:feedback:draft`（隐私政策的数据清单照旧），但记录里带 `ownerId`：
- * 同一台手机上换账号后，上一个账号未提交的内容不会被下一个账号看到（`./draft` 的解析
- * 判据见 `readStoredDraft`）。提交成功后立即删除草稿。
+ * 同一台手机上换账号后，上一个账号未提交的内容不会被下一个账号看到（`./draft` 的 `acceptDraft`）。
+ * 记录里还带 `submitId`（上次提交的幂等键）：请求超时 / 响应落地前离开页面时，恢复草稿后
+ * 沿用旧键重试，服务端不会把同一份内容落成两条。提交成功后立即删除草稿。
  *
  * ## 演示构建
  *
@@ -145,17 +146,16 @@ function readStoredDraft(ownerId: string): FeedbackDraft | null {
   } catch {
     return null
   }
-  if (parsed === null) return null
-  if (parsed.ownerId !== null && parsed.ownerId !== ownerId) {
-    // 上一个账号留下的草稿：内容对当前账号是别人的隐私，顺手清掉
+  const accepted = acceptDraft(parsed, ownerId)
+  if (accepted === null && parsed !== null) {
+    // 上一个账号留下的草稿 / 旧格式（无 ownerId）：内容对当前账号是别人的隐私，顺手清掉
     try {
       Taro.removeStorageSync(FEEDBACK_DRAFT_KEY)
     } catch {
       // 清不掉也不展示；下次进来还会走到这里
     }
-    return null
   }
-  return parsed
+  return accepted
 }
 
 /** 这次提交失败能不能按演示口径模拟成功（判据与 `pages/report-listing` 相同） */
@@ -218,8 +218,11 @@ function FeedbackForm({ userId }: { userId: string }) {
   /**
    * 幂等键：失败重试沿用同一个；每次拿到响应（成功 / 重放）后换新。
    * 换新必须发生在新一轮提交之前，否则下一次提交会被服务端当成同一请求的重放。
+   *
+   * 初始值优先取草稿里持久化的那个：请求超时 / 响应落地前离开页面时，服务端可能已经落库，
+   * 恢复草稿后用旧键重放才会命中同一行，而不是再插一条（见 `./draft` 的 `submitId`）。
    */
-  const [clientRequestId, setClientRequestId] = useState(() => randomUuidV4())
+  const [clientRequestId, setClientRequestId] = useState(() => draft?.submitId ?? randomUuidV4())
 
   const nav = useMemo(() => readNavMetrics(), [])
   const scrollTopRef = useRef(0)
@@ -248,13 +251,22 @@ function FeedbackForm({ userId }: { userId: string }) {
    *
    * **必须显式传整份草稿**，不能在回调里读 state：`setState` 要下一轮渲染才生效，
    * 事件回调里读到的是**改动前**的值，那样刚输入的字不会进暂存。
+   *
+   * 每次都把当前 `clientRequestId` 一起写进去：跨页面 / 跨冷启动重试要沿用同一个幂等键。
    */
-  const persistDraft = (next: { type: FeedbackType | ''; desc: string; contact: string }) => {
+  const writeStoredDraft = (
+    next: { type: FeedbackType | ''; desc: string; contact: string },
+    submitId: string,
+  ) => {
     try {
-      Taro.setStorageSync(FEEDBACK_DRAFT_KEY, { ownerId: userId, ...next })
+      Taro.setStorageSync(FEEDBACK_DRAFT_KEY, { ownerId: userId, submitId, ...next })
     } catch {
       // 存储失败不影响页面交互
     }
+  }
+
+  const persistDraft = (next: { type: FeedbackType | ''; desc: string; contact: string }) => {
+    writeStoredDraft(next, clientRequestId)
   }
 
   const removeStoredDraft = () => {
@@ -278,6 +290,8 @@ function FeedbackForm({ userId }: { userId: string }) {
   }
 
   const selectType = (next: FeedbackType) => {
+    // 提交在飞时不允许改：`sent` 快照已取，成功后清空表单，这些改动会被无提示抹掉
+    if (busy) return
     setType(next)
     setTypeErr(false)
     setSubmitError(null)
@@ -285,6 +299,7 @@ function FeedbackForm({ userId }: { userId: string }) {
   }
 
   const onDescInput = (value: string) => {
+    if (busy) return
     setDesc(value)
     // 够 5 个字就撤掉行内错误（同稿 desc 的 input 处理）
     if (value.trim().length >= DESC_MIN) setDescErr(null)
@@ -293,6 +308,7 @@ function FeedbackForm({ userId }: { userId: string }) {
   }
 
   const onContactInput = (value: string) => {
+    if (busy) return
     setContact(value)
     setSubmitError(null)
     persistDraft({ type, desc, contact: value })
@@ -342,8 +358,10 @@ function FeedbackForm({ userId }: { userId: string }) {
     setSubmitError(null)
     // 发出去的内容取当前表单的裁剪值；成功后展示服务端返回的那条，不拿本次输入拼
     const content = desc.trim()
-    const sent = { type, content }
     const contactText = contact.trim()
+    // 重放判定要连联系方式一起比：只改了联系方式的话，服务端交回的是旧联系方式，
+    // 这次修改并没有送达，不能清空草稿当成已提交（见 `features/feedback/meta`）
+    const sent = { type, content, contact: contactText === '' ? null : contactText }
     void (async () => {
       try {
         const res = await submitFeedback({
@@ -356,9 +374,16 @@ function FeedbackForm({ userId }: { userId: string }) {
         const outcome = submitOutcome(sent, res)
         const record = feedbackToRecord(res.feedback, Date.now())
         // 拿到响应就换新键：万一这次是重放，下一次提交不能被继续当成同一条
-        setClientRequestId(randomUuidV4())
-        // 只有「本次真的送达」才清空草稿；重放时用户后来的修改没有提交，草稿要留着
-        if (outcome === 'submitted') clearDraftAndForm()
+        const nextId = randomUuidV4()
+        setClientRequestId(nextId)
+        if (outcome === 'submitted') {
+          // 本次真的送达：草稿与幂等键一起清掉
+          clearDraftAndForm()
+        } else {
+          // 重放：草稿要留着，并把**新键**写回去 —— 留着旧键的话，下次重试会再次命中
+          // 同一条旧记录（内容永远对不上），用户会卡在「此前已提交」出不去
+          writeStoredDraft({ type, desc, contact }, nextId)
+        }
         setResult({ outcome, record, simulated: false })
       } catch (error) {
         if (!aliveRef.current) return
@@ -495,6 +520,7 @@ function FeedbackForm({ userId }: { userId: string }) {
             <Textarea
               className="fb__ta"
               value={desc}
+              disabled={busy}
               maxlength={DESC_MAXLENGTH}
               placeholder={hintOf(type)}
               onInput={(event) => onDescInput(event.detail.value)}
@@ -531,6 +557,7 @@ function FeedbackForm({ userId }: { userId: string }) {
             <Input
               className="fb__input"
               value={contact}
+              disabled={busy}
               maxlength={CONTACT_MAXLENGTH}
               placeholder="微信号 / 手机号 / 邮箱"
               onInput={(event) => onContactInput(event.detail.value)}

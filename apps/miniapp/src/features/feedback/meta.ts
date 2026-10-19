@@ -77,17 +77,20 @@ export function submitFailureText(code: string | null): string {
  * 如果用户在失败后改过草稿再重试，服务端那条与本次发出的内容不同。此时不能清空草稿
  * 冒充「已提交」——改动没有送达。返回 `stale-replay` 让页面保留草稿并换新键。
  *
- * 判据与 PC 端（`apps/web-pc/src/features/feedback/feedback-page.tsx` 的 `submitOutcome`）
- * 逐字一致：两端必须对「这条到底算不算提交成功」给出同一个结论。
+ * `created: true` 的判定与 PC 端（`apps/web-pc/src/features/feedback/feedback-page.tsx`
+ * 的 `submitOutcome`）一致；重放时额外比较 `contact`（空值统一成 `null`）——只改了联系方式
+ * 的「重试」交回的是旧联系方式，这次修改同样没有送达，不能当成功把草稿清掉。
  */
 export function submitOutcome(
-  sent: { type: FeedbackType; content: string },
-  response: { created: boolean; feedback: Pick<Feedback, 'type' | 'content'> },
+  sent: { type: FeedbackType; content: string; contact: string | null },
+  response: { created: boolean; feedback: Pick<Feedback, 'type' | 'content' | 'contact'> },
 ): 'submitted' | 'stale-replay' {
   if (response.created) return 'submitted'
-  return response.feedback.type === sent.type && response.feedback.content === sent.content
-    ? 'submitted'
-    : 'stale-replay'
+  const delivered =
+    response.feedback.type === sent.type &&
+    response.feedback.content === sent.content &&
+    response.feedback.contact === sent.contact
+  return delivered ? 'submitted' : 'stale-replay'
 }
 
 /** 提交结果弹层要展示的内容：`submitted` = 本次真的送达；`stale-replay` = 只交回了旧的那条 */

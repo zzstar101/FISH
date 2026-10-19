@@ -30,32 +30,54 @@ describe('submitOutcome —— 同一 clientRequestId 的重放算不算提交�
   test('created: true 一定是本次新建', () => {
     expect(
       submitOutcome(
-        { type: 'BUG', content: '点不动' },
-        { created: true, feedback: { type: 'OTHER', content: '完全无关' } },
+        { type: 'BUG', content: '点不动', contact: null },
+        { created: true, feedback: { type: 'OTHER', content: '完全无关', contact: null } },
       ),
     ).toBe('submitted')
   })
 
-  test('created: false 且内容一致 → 视为成功（网络抖动后的重试命中了同一条）', () => {
+  test('created: false 且类型 / 正文 / 联系方式都一致 → 视为成功（重试命中了同一条）', () => {
     expect(
       submitOutcome(
-        { type: 'UX', content: '筛选条件丢了' },
-        { created: false, feedback: { type: 'UX', content: '筛选条件丢了' } },
+        { type: 'UX', content: '筛选条件丢了', contact: '微信 abc' },
+        { created: false, feedback: { type: 'UX', content: '筛选条件丢了', contact: '微信 abc' } },
+      ),
+    ).toBe('submitted')
+    expect(
+      submitOutcome(
+        { type: 'OTHER', content: '其他问题', contact: null },
+        { created: false, feedback: { type: 'OTHER', content: '其他问题', contact: null } },
       ),
     ).toBe('submitted')
   })
 
-  test('created: false 但内容不同 → 说明服务端交回的是更早那条，本次修改没送达', () => {
+  test('created: false 但类型 / 正文不同 → 服务端交回的是更早那条，本次修改没送达', () => {
     expect(
       submitOutcome(
-        { type: 'UX', content: '改过之后的正文' },
-        { created: false, feedback: { type: 'UX', content: '改之前的正文' } },
+        { type: 'UX', content: '改过之后的正文', contact: null },
+        { created: false, feedback: { type: 'UX', content: '改之前的正文', contact: null } },
       ),
     ).toBe('stale-replay')
     expect(
       submitOutcome(
-        { type: 'UX', content: '同一段正文' },
-        { created: false, feedback: { type: 'BUG', content: '同一段正文' } },
+        { type: 'UX', content: '同一段正文', contact: null },
+        { created: false, feedback: { type: 'BUG', content: '同一段正文', contact: null } },
+      ),
+    ).toBe('stale-replay')
+  })
+
+  test('created: false 只改了联系方式 → 服务端交回旧值，本次修改同样没送达', () => {
+    expect(
+      submitOutcome(
+        { type: 'UX', content: '同一段正文', contact: '微信 new' },
+        { created: false, feedback: { type: 'UX', content: '同一段正文', contact: '微信 old' } },
+      ),
+    ).toBe('stale-replay')
+    // 空联系方式在契约里是 null；用户清空后重试同样算「改过」
+    expect(
+      submitOutcome(
+        { type: 'UX', content: '同一段正文', contact: null },
+        { created: false, feedback: { type: 'UX', content: '同一段正文', contact: '微信 old' } },
       ),
     ).toBe('stale-replay')
   })
