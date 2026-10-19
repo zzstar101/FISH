@@ -1,0 +1,521 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 争议详情（#497）。尺寸 = 设计稿 pt × 2。
+ *
+ * 顶栏（返回 + 「争议详情」双色标题）→ 状态卡（状态胶囊 / 结论 / 撤回时间）→ 争议说明 →
+ * 关联交易摘要 → 附件（预览网格 + 补附件）→ 聊天证据（列表 + 选证据）→ 操作（撤回 / 只读说明）。
+ * 选证据走底部弹层（`components` 无现成选择器，用 `sheet` mixin 的固定层）。
+ */
+
+.dsd {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.dsd__bg {
+  @include page-hero(496px, 64px);
+}
+
+.dsd__body {
+  position: relative;
+  z-index: 1;
+  padding: 24px 40px 0;
+  box-sizing: border-box;
+}
+
+.dsd__content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── 通用卡 ── */
+.dsd__card {
+  @include card;
+
+  padding: 28px;
+}
+
+.dsd__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dsd__card-h {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dsd__card-count {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.dsd__hint {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+/* ── 状态卡 ── */
+.dsd__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dsd__chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+
+  &.is-warn {
+    background: var(--warn-weak);
+    border-color: var(--warn-line);
+    color: var(--warn-ink);
+  }
+
+  &.is-ok {
+    background: var(--ok-weak);
+    border-color: var(--ok-line);
+    color: var(--ok-ink);
+  }
+
+  &.is-off {
+    background: var(--ice);
+    border-color: var(--border);
+    color: var(--muted);
+  }
+}
+
+.dsd__chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.dsd__type {
+  font-size: var(--fs-sm);
+  color: var(--muted-2);
+}
+
+.dsd__statusnote {
+  display: block;
+  margin-top: 14px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* 结论块：三种基调与状态胶囊同一套颜色语言 */
+.dsd__verdict {
+  margin-top: 16px;
+  padding: 20px;
+  border-radius: 24px;
+  border: 2px solid transparent;
+
+  &.is-ok {
+    background: var(--ok-weak);
+    border-color: var(--ok-line);
+  }
+
+  &.is-warn {
+    background: var(--warn-weak);
+    border-color: var(--warn-line);
+  }
+
+  &.is-off {
+    background: var(--ice);
+    border-color: var(--border);
+  }
+}
+
+.dsd__verdict-label {
+  display: block;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dsd__verdict-note {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+  color: var(--muted-2);
+}
+
+.dsd__verdict-text {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--fg);
+  white-space: pre-wrap;
+}
+
+.dsd__verdict-time {
+  display: block;
+  margin-top: 10px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.dsd__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.dsd__meta-t {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ── 争议说明 ── */
+.dsd__detail-text {
+  display: block;
+  font-size: var(--fs-sm);
+  line-height: 1.75;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── 交易摘要行 ── */
+.dsd__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 12px 0;
+
+  & + & {
+    border-top: 2px solid var(--accent-faint);
+  }
+}
+
+.dsd__k {
+  flex: 0 0 140px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.dsd__v {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--fg);
+  word-break: break-word;
+}
+
+.dsd__link {
+  margin-top: 16px;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--brand-deep);
+  font-weight: 600;
+}
+
+/* ── 附件 ── */
+.dsd__thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.dsd__thumb {
+  @include pressable;
+
+  width: 180px;
+  height: 180px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--ice);
+}
+
+.dsd__thumb-img {
+  width: 100%;
+  height: 100%;
+}
+
+.dsd__inline-actions {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+/* ── 按钮 ── */
+.dsd__btn {
+  flex: 1 1 auto;
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  @include pressable;
+
+  &--sec {
+    background: var(--ice);
+    border: 2px solid var(--border);
+    color: var(--brand-deep);
+  }
+
+  &--danger {
+    background: var(--danger-weak);
+    border: 2px solid var(--danger-line);
+    color: var(--danger-ink);
+    margin-top: 4px;
+  }
+
+  &.is-off {
+    opacity: 0.55;
+  }
+}
+
+/* ── 聊天证据 ── */
+.dsd__evidences {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dsd__evidence {
+  padding: 18px;
+  border-radius: 20px;
+  background: var(--ice);
+}
+
+.dsd__evidence-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.dsd__evidence-type {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  color: var(--brand-deep);
+  background: var(--accent-weak);
+  border-radius: 999px;
+  padding: 2px 12px;
+}
+
+.dsd__evidence-sender {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.dsd__evidence-time {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.dsd__evidence-text {
+  display: block;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--fg);
+  word-break: break-word;
+
+  // 撤回态：不显示正文，只留一句灰色占位（与聊天页的撤回碑一致）
+  &.is-recalled {
+    font-size: var(--fs-xs);
+    color: var(--muted);
+  }
+}
+
+.dsd__note {
+  display: block;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.dsd__foot {
+  display: block;
+  padding: 8px 0 24px;
+  text-align: center;
+  font-size: 20px;
+  color: var(--muted);
+}
+
+/* ── 选证据底部弹层 ── */
+.dsd__sheetanchor {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+}
+
+.dsd__scrim {
+  @include scrim(rgba(23, 35, 61, 0.42));
+
+  position: absolute;
+  inset: 0;
+}
+
+.dsd__sheet {
+  @include sheet;
+
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-height: 72vh;
+  display: flex;
+  flex-direction: column;
+  padding: 32px 40px calc(24px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.dsd__sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.dsd__sheet-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dsd__sheet-close {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* 证据范围说明：只列最近一页文字消息（不提供翻更早） */
+.dsd__sheet-note {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.dsd__sheet-hint {
+  display: block;
+  padding: 24px 0;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.dsd__sheet-fail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 16px;
+}
+
+/*
+ * ScrollView 在微信里必须有确定高度才会滚（只给 max-height 时内容一多会撑开弹层、内部不滚）。
+ * 这里照 `components/legal-doc` 抽屉的写法：交给 flex 分配高度（父级是 flex 列 + max-height）。
+ * 端上滚动行为需 Owner 在开发者工具/真机演示确认。
+ */
+.dsd__sheet-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dsd__sheet-more {
+  margin-top: 16px;
+}
+
+.dsd__cand {
+  @include pressable;
+
+  padding: 20px;
+  border-radius: 20px;
+  background: var(--ice);
+  margin-bottom: 12px;
+
+  &.is-busy {
+    opacity: 0.6;
+  }
+}
+
+.dsd__cand-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.dsd__cand-sender {
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+  font-weight: 600;
+}
+
+.dsd__cand-time {
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.dsd__cand-text {
+  display: block;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--fg);
+  @include clamp(3);
+}
+
+.dsd__cand-busy {
+  display: block;
+  margin-top: 8px;
+  font-size: var(--fs-xs);
+  color: var(--brand-deep);
+}
+
+/* ── 骨架 / 空态 ── */
+.dsd__skeleton {
+  padding: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.dsd__skelbar {
+  @include skeleton(26px, 100%);
+
+  border-radius: 13px;
+}
+
+.dsd__skel-hint {
+  text-align: center;
+  font-size: 20px;
+  color: var(--muted);
+}
+
+.dsd__emptypad {
+  padding: 120px 40px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}

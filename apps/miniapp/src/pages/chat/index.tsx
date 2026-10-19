@@ -576,6 +576,13 @@ export default function Chat() {
       void Taro.navigateTo({ url: '/pkg-auth/pages/verify/index' })
       return
     }
+    // 交易争议（#497）：FILED / WITHDRAWN / RESOLVED 三个事件都落到同一条争议详情
+    if (item.target?.kind === 'dispute') {
+      void Taro.navigateTo({
+        url: `/pkg-trade/pages/dispute-detail/index?id=${encodeURIComponent(item.target.disputeId)}`,
+      })
+      return
+    }
     if (item.target?.kind === 'wish') void Taro.switchTab({ url: '/pages/wish/index' })
   }
 

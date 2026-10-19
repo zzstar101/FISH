@@ -9,6 +9,14 @@ import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { findDisputeForTransaction } from '@/features/disputes/load'
+import { DISPUTE_STATUS_META } from '@/features/disputes/meta'
+import {
+  type DisputeEntry,
+  disputeEntryCopyOf,
+  disputeEntryOf,
+  disputeSecondaryOf,
+} from '@/features/disputes/view'
 import {
   confirmTransaction,
   fetchMeetupTokenStatus,
@@ -134,6 +142,11 @@ export default function TransactionMeetup() {
   const [tx, setTx] = useState<TransactionDto | null>(null)
   /** 交易加载失败：notFound = 不存在或非参与者（404，不泄漏）；failed = 网络/服务器 */
   const [loadError, setLoadError] = useState<'notFound' | 'failed' | null>(null)
+  /**
+   * 争议入口（#497）：这笔交易已有我可见的争议 → 查看；窗口内 → 发起；
+   * 窗口外或读不到争议列表 → 不展示（宁缺勿给出错报的入口）。
+   */
+  const [disputeEntry, setDisputeEntry] = useState<DisputeEntry | null>(null)
   const [token, setToken] = useState<TokenView | null>(null)
   const [scannedInvalid, setScannedInvalid] = useState(false)
   /** 手动输入：6 位数字的字符数组，索引即格子位置 */
@@ -308,6 +321,46 @@ export default function TransactionMeetup() {
     const epoch = bootEpoch.current
     void bootstrapRef.current(epoch)
   }, [authStatus, userId])
+
+  /* --------------------------------------- 争议入口（#497） */
+  /**
+   * 交易读回来之后再决定「发起争议 / 查看争议」：判定矩阵在 `features/disputes/view.ts`
+   * 的 `disputeEntryOf` 里（唯一实现，页面不重复 30 天窗口算法）。争议列表读不到（网络）
+   * 就不展示 —— 宁缺，也不要给出一个点进去必然 404 或重复发起的入口。
+   *
+   * 依赖：交易**快照串**（id + 状态 + 终态时间）+ 登录用户 + 返回本页的代次 `showTick`。
+   * 只放 `loadedTxId` 会让「页面在后台被别的端改成了 COMPLETED/CANCELLED」的过期快照继续按
+   * PENDING_MEETUP 判定（窗口判定就会错）；而直接放整个 `tx` 对象又会在每次 `setTx` 换引用时
+   * 多扫一遍列表。所以用一个只含判定相关字段的串。
+   */
+  const txRef = useRef<TransactionDto | null>(null)
+  txRef.current = tx
+  const disputeEpoch = useRef(0)
+  const disputeSnapshotKey =
+    tx === null ? null : `${tx.id}|${tx.status}|${tx.completedAt ?? ''}|${tx.cancelledAt ?? ''}`
+  // biome-ignore lint/correctness/useExhaustiveDependencies: showTick 是刻意的重读信号（从争议页返回时自增），不是体内读到的值
+  useEffect(() => {
+    const snapshot = txRef.current
+    if (disputeSnapshotKey === null || snapshot === null) {
+      setDisputeEntry(null)
+      return
+    }
+    const epoch = ++disputeEpoch.current
+    void findDisputeForTransaction(snapshot.id, userId)
+      .then((result) => {
+        if (epoch !== disputeEpoch.current) return
+        if (result.failed) {
+          setDisputeEntry(null)
+          return
+        }
+        setDisputeEntry(
+          disputeEntryOf(snapshot, { mine: result.mine, other: result.other }, Date.now()),
+        )
+      })
+      .catch(() => {
+        if (epoch === disputeEpoch.current) setDisputeEntry(null)
+      })
+  }, [disputeSnapshotKey, userId, showTick])
 
   /* --------------------------------------- 卖家：取码（幂等 ensure/read） */
 
@@ -786,6 +839,43 @@ export default function TransactionMeetup() {
     </View>
   ) : null
 
+  const openDisputeDetail = (disputeId: string) => {
+    void Taro.navigateTo({
+      url: `/pkg-trade/pages/dispute-detail/index?id=${encodeURIComponent(disputeId)}`,
+    })
+  }
+
+  const openDispute = () => {
+    const entry = disputeEntry
+    if (entry === null || tx === null) return
+    if (entry.kind === 'view') {
+      openDisputeDetail(entry.dispute.id)
+      return
+    }
+    if (entry.kind === 'file') {
+      void Taro.navigateTo({
+        url: `/pkg-trade/pages/dispute-create/index?transactionId=${encodeURIComponent(tx.id)}`,
+      })
+      return
+    }
+    // closed（窗口外）：只读提示，没有落点
+  }
+
+  /**
+   * 入口卡文案（纯函数在 `features/disputes/view.ts`，三种形态都已穷尽）。
+   * 窗口判定只在 `disputeEntryOf` 里做一次 —— 页面不重复实现 30 天算法。
+   */
+  const disputeEntryCopy = disputeEntry === null ? null : disputeEntryCopyOf(disputeEntry)
+  const disputeEntrySub =
+    disputeEntry !== null && disputeEntry.kind === 'view'
+      ? `${DISPUTE_STATUS_META[disputeEntry.dispute.status].label} · ${disputeEntryCopy?.sub ?? ''}`
+      : disputeEntryCopy?.sub
+  /**
+   * 「发起」与「查看已有争议」可以同时存在，但次要入口**只给一条**（纯函数
+   * `disputeSecondaryOf`）：本人终态争议优先，否则对方那条；两条同时摆会分不清点哪个。
+   */
+  const disputeSecondary = disputeEntry === null ? null : disputeSecondaryOf(disputeEntry)
+
   return (
     <View className="meetup">
       <View className="meetup__bg" />
@@ -826,6 +916,34 @@ export default function TransactionMeetup() {
         {/* 完成页由摘要卡承担商品信息，其余状态都挂商品卡（稿：完成态摘掉页头商品卡） */}
         {done ? null : dealCard}
       </View>
+
+      {/* ---------- 交易争议入口（#497）：本人未决优先「查看」，窗口内都可发起（含撤回/驳回后
+          重新发起），窗口外只给只读提示（不给点不动的入口） ---------- */}
+      {loadError === null && disputeEntryCopy !== null ? (
+        <>
+          <View
+            className={`meetup__dispute${disputeEntryCopy.off ? ' is-off' : ''}`}
+            onClick={disputeEntryCopy.off ? undefined : openDispute}
+          >
+            <View className="meetup__dispute-ic">
+              <Image className="meetup__dispute-ic-img" src={ICONS.shieldLine} mode="aspectFit" />
+            </View>
+            <View className="meetup__dispute-main">
+              <Text className="meetup__dispute-title">{disputeEntryCopy.title}</Text>
+              <Text className="meetup__dispute-sub">{disputeEntrySub}</Text>
+            </View>
+            <Text className="meetup__dispute-act">{disputeEntryCopy.act}</Text>
+          </View>
+          {disputeSecondary !== null ? (
+            <Text
+              className="meetup__dispute-sec"
+              onClick={() => openDisputeDetail(disputeSecondary.dispute.id)}
+            >
+              {disputeSecondary.label}
+            </Text>
+          ) : null}
+        </>
+      ) : null}
 
       {/* ---------- 交易不存在 / 非参与者：404 不泄漏存在性 ---------- */}
       {loadError === 'notFound' ? (

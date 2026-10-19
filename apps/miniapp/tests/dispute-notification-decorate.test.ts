@@ -101,13 +101,21 @@ describe('DISPUTE 通知（#465）', () => {
     expect(item?.description).toBe('这笔交易的争议状态有变化')
   })
 
-  test('不给跳转目标：用户侧争议页属 PR C，小程序当前没有这个页面', () => {
+  test('三个事件都跳到同一条争议详情（#497 用户侧页面）', () => {
     for (const disputeEvent of ['FILED', 'WITHDRAWN', 'RESOLVED'] as const) {
       const [item] = decorateNotifications(
         [dto({ type: 'DISPUTE', payload: { disputeId, transactionId, disputeEvent } })],
         null,
       )
-      expect(item?.target).toBeNull()
+      expect(item?.target).toEqual({ kind: 'dispute', disputeId })
     }
+  })
+
+  test('payload 里没有 disputeId（历史行）时不给跳转目标：点不动的入口比没有更糟', () => {
+    const [item] = decorateNotifications(
+      [dto({ type: 'DISPUTE', payload: { transactionId, disputeEvent: 'FILED' } })],
+      null,
+    )
+    expect(item?.target).toBeNull()
   })
 })
