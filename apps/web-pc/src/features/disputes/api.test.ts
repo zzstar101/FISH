@@ -9,6 +9,7 @@ import {
   myDisputesPath,
   startDispute,
   uploadDisputeAttachment,
+  withdrawDispute,
 } from './api'
 
 const DISPUTE_ID = 'dsp_01jc000000e00800000000000a' as const
@@ -140,6 +141,23 @@ describe('fetchMyDisputes / fetchDispute', () => {
   })
 })
 
+describe('withdrawDispute', () => {
+  test('POST /disputes/:id/withdraw 并解析撤回后的详情', async () => {
+    const withdrawn = {
+      ...DISPUTE_DETAIL,
+      status: 'WITHDRAWN' as const,
+      withdrawnAt: '2026-10-03T00:00:00.000Z',
+    }
+    const calls = mockFetchCalls(() => Response.json(withdrawn))
+    const detail = await withdrawDispute(DISPUTE_ID)
+    expect(detail.status).toBe('WITHDRAWN')
+    expect(detail.withdrawnAt).toBe('2026-10-03T00:00:00.000Z')
+    expect(calls).toEqual([
+      { url: `/api/disputes/${DISPUTE_ID}/withdraw`, method: 'POST', body: null },
+    ])
+  })
+})
+
 describe('addDisputeEvidence', () => {
   test('POST evidence-messages，body 只带 messageId', async () => {
     const evidence = {
@@ -221,6 +239,24 @@ describe('uploadDisputeAttachment', () => {
     const error = await uploadDisputeAttachment(DISPUTE_ID, file).catch((reason: unknown) => reason)
     expect(error instanceof Error ? error.message : null).toBe('图片上传失败，请重试')
     expect(calls).toHaveLength(2)
+  })
+
+  test('HEIC 转换失败给可区分文案，且不发任何请求', async () => {
+    const calls = mockFetchCalls(() => Response.json({}))
+    const file = new File([new Uint8Array([1])], 'IMG_0001.HEIC', { type: 'image/heic' })
+    const error = await uploadDisputeAttachment(DISPUTE_ID, file).catch((reason: unknown) => reason)
+    expect(error instanceof Error ? error.message : null).toBe(
+      'HEIC 图片转换失败，请改用 JPG / PNG / WebP',
+    )
+    expect(calls).toHaveLength(0)
+  })
+
+  test('空 MIME 文件与全站同文案，不靠扩展名冒充图片类型上传', async () => {
+    const calls = mockFetchCalls(() => Response.json({}))
+    const file = new File([new Uint8Array([1])], 'proof.jpg', { type: '' })
+    const error = await uploadDisputeAttachment(DISPUTE_ID, file).catch((reason: unknown) => reason)
+    expect(error instanceof Error ? error.message : null).toBe('仅支持 JPG / PNG / WebP 图片')
+    expect(calls).toHaveLength(0)
   })
 
   test('本地预校验失败时不发任何请求', async () => {

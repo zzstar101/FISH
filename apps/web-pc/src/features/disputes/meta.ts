@@ -2,6 +2,7 @@ import {
   type DisputeResolution,
   type DisputeStatus,
   type DisputeType,
+  DisputeTypeSchema,
   MAX_DISPUTE_ATTACHMENTS,
   MAX_DISPUTE_DETAIL_LENGTH,
 } from '@fish/contracts/disputes/schema'
@@ -40,10 +41,11 @@ const DISPUTE_TYPE_COPY: Record<DisputeType, { label: string; hint: string }> = 
   },
 }
 
-/** 发起弹窗的类型选项；顺序由契约枚举顺序决定。 */
-export const DISPUTE_TYPE_OPTIONS: DisputeTypeOption[] = (
-  ['ITEM_MISMATCH', 'NOT_COMPLETED', 'PAYMENT_ISSUE', 'OTHER'] as const
-).map((key) => ({ key, ...DISPUTE_TYPE_COPY[key] }))
+/** 发起弹窗的类型选项；**从契约枚举派生**，契约加类型时这里自动出现并强制补文案。 */
+export const DISPUTE_TYPE_OPTIONS: DisputeTypeOption[] = DisputeTypeSchema.options.map((key) => ({
+  key,
+  ...DISPUTE_TYPE_COPY[key],
+}))
 
 export function disputeTypeLabel(type: DisputeType): string {
   return DISPUTE_TYPE_COPY[type].label
@@ -73,12 +75,12 @@ export const DISPUTE_RESOLUTION_META: Record<
   UPHELD: {
     label: '反馈成立',
     variant: 'success',
-    description: '平台核查后认定你反映的问题成立。',
+    description: '平台核查后认定本次反馈成立。',
   },
   DISMISSED: {
     label: '反馈不成立',
     variant: 'danger',
-    description: '平台核查后认为本次反映的问题不成立。',
+    description: '平台核查后认为本次反馈不成立。',
   },
   INCONCLUSIVE: {
     label: '无法认定',

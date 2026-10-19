@@ -1,6 +1,17 @@
 import { describe, expect, test } from 'bun:test'
+import type { DisputeStatus } from '@fish/contracts/disputes/schema'
 import type { TransactionStatus } from '@fish/contracts/transactions/schema'
-import { canStartDispute, disputeFailureText, disputeMessagePreview, shortDisputeId } from './view'
+import {
+  canAddDisputeAttachment,
+  canStartDispute,
+  canSupplementDispute,
+  canWithdrawDispute,
+  disputeCounterpart,
+  disputeFailureText,
+  disputeMessagePreview,
+  disputeViewerRole,
+  shortDisputeId,
+} from './view'
 
 const COMPLETED_AT = '2026-10-12T00:00:00.000Z'
 const COMPLETED_MS = Date.parse(COMPLETED_AT)
@@ -55,9 +66,11 @@ describe('disputeFailureText', () => {
       '这条消息不属于本交易的会话，无法作为证据',
     )
     expect(disputeFailureText('DISPUTE_WINDOW_CLOSED')).toContain('30 天')
+    expect(disputeFailureText('DISPUTE_CONFLICT')).toBe('争议状态刚发生变化，请刷新后再试')
     expect(disputeFailureText('DISPUTE_ATTACHMENT_LIMIT')).toBe('最多上传 6 张图片')
     expect(disputeFailureText('DISPUTE_ATTACHMENT_INVALID')).toContain('图片校验失败')
     expect(disputeFailureText('DISPUTE_NOT_PENDING')).toBe('争议已处理或已撤回，不能再补充材料')
+    expect(disputeFailureText('VALIDATION_FAILED')).toBe('填写的内容不合法，请检查后重试')
     expect(disputeFailureText('UNAUTHENTICATED')).toContain('登录已过期')
     // 非 ApiError（网络 / 契约解析失败）与未知 code
     expect(disputeFailureText(null)).toBe('操作失败，请稍后再试')
@@ -113,5 +126,40 @@ describe('disputeMessagePreview', () => {
     expect(disputeMessagePreview({ type: 'TEXT', content: '   ', recalledAt: null })).toBe(
       '（无文字内容）',
     )
+  })
+})
+
+const INITIATOR = { id: 'usr_initiator', nickname: '阿岚' } as const
+const RESPONDENT = { id: 'usr_respondent', nickname: '小北' } as const
+
+function dispute(status: DisputeStatus) {
+  return { status, initiator: INITIATOR }
+}
+
+describe('viewer role / counterpart / 可操作权限', () => {
+  test('角色与「对方」按查看者是谁切换', () => {
+    expect(disputeViewerRole(dispute('PENDING'), INITIATOR.id)).toBe('initiator')
+    expect(disputeViewerRole(dispute('PENDING'), RESPONDENT.id)).toBe('respondent')
+
+    const both = { initiator: INITIATOR, respondent: RESPONDENT }
+    expect(disputeCounterpart(both, INITIATOR.id)).toEqual(RESPONDENT)
+    expect(disputeCounterpart(both, RESPONDENT.id)).toEqual(INITIATOR)
+  })
+
+  test('撤回 / 补材料只属于发起人，且只在 PENDING', () => {
+    expect(canWithdrawDispute(dispute('PENDING'), INITIATOR.id)).toBe(true)
+    expect(canWithdrawDispute(dispute('PENDING'), RESPONDENT.id)).toBe(false)
+    expect(canWithdrawDispute(dispute('RESOLVED'), INITIATOR.id)).toBe(false)
+
+    expect(canSupplementDispute(dispute('PENDING'), INITIATOR.id)).toBe(true)
+    expect(canSupplementDispute(dispute('PENDING'), RESPONDENT.id)).toBe(false)
+    expect(canSupplementDispute(dispute('WITHDRAWN'), INITIATOR.id)).toBe(false)
+  })
+
+  test('附件配额在 6 张处关闭，被诉方永远不能加', () => {
+    const pending = dispute('PENDING')
+    expect(canAddDisputeAttachment(pending, INITIATOR.id, 5)).toBe(true)
+    expect(canAddDisputeAttachment(pending, INITIATOR.id, 6)).toBe(false)
+    expect(canAddDisputeAttachment(pending, RESPONDENT.id, 0)).toBe(false)
   })
 })

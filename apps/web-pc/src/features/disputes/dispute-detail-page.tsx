@@ -455,7 +455,14 @@ function ActionCard({
       ) : (
         <div className="mt-4 space-y-3">
           {canWithdraw ? (
-            <AlertDialog onOpenChange={setConfirmOpen} open={confirmOpen}>
+            <AlertDialog
+              onOpenChange={(open) => {
+                setConfirmOpen(open)
+                // 关闭即清空上一次失败的 mutation 状态，下次打开看到的是干净的确认框。
+                if (!open) withdraw.reset()
+              }}
+              open={confirmOpen}
+            >
               <AlertDialogTrigger asChild>
                 <Button variant="destructive">
                   <XCircle className="size-4" />
@@ -469,6 +476,17 @@ function ActionCard({
                     撤回后争议进入终态，不能撤销或重新发起同一条争议。
                   </AlertDialogDescription>
                 </AlertDialogHeader>
+                {/* 失败原因放在弹窗内：否则会被遮罩挡住的页面级 Alert 用户根本看不到。 */}
+                {withdraw.error !== null ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>撤回失败</AlertTitle>
+                    <AlertDescription>
+                      {disputeFailureText(
+                        withdraw.error instanceof ApiError ? withdraw.error.code : null,
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
                 <AlertDialogFooter>
                   <AlertDialogCancel disabled={withdraw.isPending}>取消</AlertDialogCancel>
                   <AlertDialogAction
@@ -499,15 +517,6 @@ function ActionCard({
           ) : null}
         </div>
       )}
-
-      {withdraw.error !== null ? (
-        <Alert className="mt-4" variant="destructive">
-          <AlertTitle>撤回失败</AlertTitle>
-          <AlertDescription>
-            {disputeFailureText(withdraw.error instanceof ApiError ? withdraw.error.code : null)}
-          </AlertDescription>
-        </Alert>
-      ) : null}
     </Card>
   )
 }

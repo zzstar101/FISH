@@ -30,18 +30,9 @@ function MyDisputesContent({ viewerId }: { viewerId: string }) {
 
   return (
     <div className="mx-auto max-w-[980px] space-y-5">
-      <div className="flex items-end justify-between gap-6">
-        <div>
-          <h1 className="font-semibold text-[26px] tracking-[-0.03em]">我的争议</h1>
-          <p className="mt-1.5 text-ink-3 text-sm">你发起或涉及的交易争议与处理进度。</p>
-        </div>
-        <Link
-          className="text-brand text-sm hover:underline"
-          to="/orders"
-          search={{ role: 'buyer' }}
-        >
-          去我的订单
-        </Link>
+      <div>
+        <h1 className="font-semibold text-[26px] tracking-[-0.03em]">我的争议</h1>
+        <p className="mt-1.5 text-ink-3 text-sm">你发起或涉及的交易争议与处理进度。</p>
       </div>
 
       {disputes.isPending ? <LoadingState label="正在加载争议记录…" /> : null}

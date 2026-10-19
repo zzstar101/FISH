@@ -72,7 +72,16 @@ export function EvidencePickerDialog({
         {conversation.isError ? (
           <ErrorState message="聊天记录加载失败" onRetry={() => void conversation.refetch()} />
         ) : null}
-        {conversation.isSuccess && (conversation.data?.messages.length ?? 0) === 0 ? (
+        {conversation.isSuccess && conversation.data === null ? (
+          <EmptyState
+            description="这笔交易或它的会话当前不可见，无法读取聊天记录来选证据。"
+            emoji="🔒"
+            title="无法读取交易会话"
+          />
+        ) : null}
+        {conversation.isSuccess &&
+        conversation.data !== null &&
+        conversation.data.messages.length === 0 ? (
           <EmptyState
             description="交易双方还没有在这笔交易的会话里发过消息。"
             emoji="💬"

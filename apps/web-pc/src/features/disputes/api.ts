@@ -25,7 +25,7 @@ import { ALLOWED_IMAGE_MIME } from '@fish/contracts/listings/schema'
 import { apiRequest } from '../../lib/api-client'
 import { fetchMessagePage } from '../chat/api'
 import { fetchTransaction } from '../profile/api'
-import { validateImageFile } from '../publish/api'
+import { imagePreparationMessage, toUploadableFile, validateImageFile } from '../publish/api'
 
 /** 「我的争议」单页条数（契约 `DisputeMineQuerySchema.limit` 服务端封顶 50）。 */
 export const DISPUTE_PAGE_LIMIT = 20
@@ -71,7 +71,11 @@ export async function withdrawDispute(disputeId: string): Promise<DisputeDetail>
 }
 
 /**
- * 上传一张附件：presign → PUT 对象存储 → confirm 写台账。
+ * 上传一张附件：HEIC→JPG 预处理 → presign → PUT 对象存储 → confirm 写台账。
+ *
+ * 预处理与其它四处图片上传入口**同一个 helper**（`toUploadableFile` /
+ * `imagePreparationMessage`）：浏览器能展示的格式原样上传，HEIC 先转 JPG，
+ * 转不了时给「HEIC 图片转换失败」的可区分文案，不把注定 422 的文件送去上传。
  *
  * 三步里任何一步失败都抛给调用方，但**PUT 失败与 confirm 失败要可区分**：
  * - 预校验 / presign 失败：`ApiError` 或本地校验 Error（配额、格式、尺寸）；
@@ -80,15 +84,19 @@ export async function withdrawDispute(disputeId: string): Promise<DisputeDetail>
  *   presign 拿到新键（本函数不缓存 staging 键）。
  */
 export async function uploadDisputeAttachment(disputeId: string, file: File): Promise<void> {
-  const invalid = validateImageFile(file)
+  const prepared = await toUploadableFile(file)
+  if (prepared === null) throw new Error(imagePreparationMessage(file))
+  const invalid = validateImageFile(prepared)
   if (invalid !== null) throw new Error(invalid)
-  const contentType = (ALLOWED_IMAGE_MIME as readonly string[]).find((mime) => mime === file.type)
+  const contentType = (ALLOWED_IMAGE_MIME as readonly string[]).find(
+    (mime) => mime === prepared.type,
+  )
   if (contentType === undefined) throw new Error('仅支持 JPG / PNG / WebP 图片')
 
   const presignInput: DisputeAttachmentPresignRequest = DisputeAttachmentPresignRequestSchema.parse(
     {
       contentType,
-      sizeBytes: file.size,
+      sizeBytes: prepared.size,
     },
   )
   const presign: DisputeAttachmentPresignResponse = DisputeAttachmentPresignResponseSchema.parse(
@@ -99,7 +107,7 @@ export async function uploadDisputeAttachment(disputeId: string, file: File): Pr
   )
 
   const uploaded = await fetch(presign.uploadUrl, {
-    body: file,
+    body: prepared,
     headers: { ...presign.headers, 'content-type': contentType },
     method: 'PUT',
   })
