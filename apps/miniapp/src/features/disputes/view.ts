@@ -67,12 +67,15 @@ export type DisputeRef = { id: string; status: DisputeStatus }
 
 export type DisputeEntry =
   | { kind: 'view'; dispute: DisputeRef }
+  | { kind: 'refile'; dispute: DisputeRef }
   | { kind: 'file' }
   | { kind: 'closed' }
 
 /**
  * 订单详情页的争议入口：
  * - 这笔交易已有我可见的争议 → 查看（终态争议也能看）；
+ * - 我撤回过、且发起窗口仍开着 → 除了查看还能重新发起（后端只对**未决**争议去重，
+ *   撤回后同一交易可以再建一条）；
  * - 否则窗口内 → 可发起；窗口外 → 只提示不再给入口。
  */
 export function disputeEntryOf(
@@ -80,7 +83,13 @@ export function disputeEntryOf(
   existing: DisputeRef | null,
   nowMs: number,
 ): DisputeEntry {
-  if (existing !== null) return { kind: 'view', dispute: existing }
+  if (existing !== null) {
+    // 撤回不是「这事结了」：问题没解决时用户还要能重新发起。窗口与发起同一套算法。
+    if (existing.status === 'WITHDRAWN' && !disputeWindowClosed(tx, nowMs)) {
+      return { kind: 'refile', dispute: existing }
+    }
+    return { kind: 'view', dispute: existing }
+  }
   if (disputeWindowClosed(tx, nowMs)) return { kind: 'closed' }
   return { kind: 'file' }
 }
@@ -101,6 +110,52 @@ export function pickDisputeForTransaction<T extends DisputeRef & { transaction: 
 /** 「补附件」按钮文案：额度用完时直接写清楚，避免用户点了才被 422 挡下。 */
 export function attachmentActionLabel(attachmentCount: number): string {
   return attachmentSlotsLeft(attachmentCount) > 0 ? '补附件' : '附件已满（6 张）'
+}
+
+export type DisputeEntryCopy = {
+  title: string
+  sub: string
+  /** 右侧动作词；`off` 时它是一句不可点的说明 */
+  act: string
+  /** true = 只读提示，整行不可点 */
+  off: boolean
+}
+
+/**
+ * 订单页争议入口卡的全部文案。四种形态在这里穷尽（`switch` 对联合类型收敛），
+ * 页面只负责摆版式；窗口判定仍然只在 `disputeEntryOf` 里做一次。
+ */
+export function disputeEntryCopyOf(entry: DisputeEntry): DisputeEntryCopy {
+  switch (entry.kind) {
+    case 'view':
+      return {
+        title: '这笔交易有一条争议',
+        sub: '查看处理进度与材料',
+        act: '查看争议',
+        off: false,
+      }
+    case 'refile':
+      return {
+        title: '争议已撤回',
+        sub: '问题仍未解决？可以重新发起争议',
+        act: '重新发起',
+        off: false,
+      }
+    case 'file':
+      return {
+        title: '交易出了问题？',
+        sub: '发起争议，由管理员介入核查，结论为最终结论',
+        act: '发起争议',
+        off: false,
+      }
+    case 'closed':
+      return {
+        title: '交易结束已超过 30 天',
+        sub: '无法再发起争议；如仍有纠纷，请联系客服处理',
+        act: '不可发起',
+        off: true,
+      }
+  }
 }
 
 /** 详情页按场景给不同的「查不到」文案：非参与人 404 不能写成系统故障。 */

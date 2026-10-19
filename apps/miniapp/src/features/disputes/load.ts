@@ -126,7 +126,8 @@ export type EvidenceCandidatesLoad = {
  * 可关联为证据的候选消息：该交易会话**最近一页**消息（升序返回，页面倒序展示）。
  *
  * 只取最近一页是刻意的：证据一般就是最近说过的几句话，做「往前翻更多」会让选证据变成一个
- * 独立的消息浏览器，超出本票范围。
+ * 独立的消息浏览器，超出本票范围。页面再从中只列**文字**消息 —— 契约的证据消息本身没有
+ * 媒体地址，媒体证据的形态另开 issue 跟进。
  */
 export async function loadEvidenceCandidates(
   conversationId: string,

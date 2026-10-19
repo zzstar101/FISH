@@ -169,6 +169,14 @@ test('发起：POST /disputes，body 过 DisputeCreateInput；「其他」缺说
   expect(calls).toHaveLength(0)
 })
 
+test('重复发起（created:false）不是错误：同一形状解析，页面据此进已有详情', async () => {
+  payload = { dispute: detailFixture(), created: false }
+  const result = await createDispute({ transactionId, type: 'ITEM_MISMATCH' })
+  expect(result.created).toBe(false)
+  expect(result.dispute.id).toBe(disputeId)
+  expect(calls).toHaveLength(1)
+})
+
 test('撤回 / 附件 presign+confirm / 证据：路径与 method 与契约一致', async () => {
   payload = detailFixture()
   await withdrawDispute(disputeId)

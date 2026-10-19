@@ -411,6 +411,13 @@
   color: var(--muted);
 }
 
+/* 证据范围说明：只列最近一页文字消息（不提供翻更早） */
+.dsd__sheet-note {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
 .dsd__sheet-hint {
   display: block;
   padding: 24px 0;

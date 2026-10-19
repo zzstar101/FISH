@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useReachBottom } from '@tarojs/taro'
+import Taro, { useDidShow, usePullDownRefresh, useReachBottom } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -52,23 +52,63 @@ export default function MyDisputes() {
     setLoadingMore(false)
   }
 
-  const read = useCallback(async () => {
-    const epoch = ++loadEpoch.current
-    loadingMoreRef.current = false
-    setLoading(true)
-    setFailed(false)
-    const result = await loadDisputePage(undefined, userId, Date.now())
-    if (epoch !== loadEpoch.current) return
-    setItems(result.items)
-    setNextCursor(result.nextCursor)
-    setFailed(result.failed)
-    setLoading(false)
-  }, [userId])
+  /**
+   * 第一页。`silent`（从详情页返回 / 下拉刷新）不闪骨架屏、也不把列表换掉：
+   * 刷新失败只提示一句，保留用户手上这份快照。
+   */
+  const read = useCallback(
+    async (silent = false) => {
+      const epoch = ++loadEpoch.current
+      loadingMoreRef.current = false
+      if (!silent) {
+        setLoading(true)
+        setFailed(false)
+      }
+      const result = await loadDisputePage(undefined, userId, Date.now())
+      if (epoch !== loadEpoch.current) return
+      if (silent) {
+        if (result.failed) {
+          void Taro.showToast({ title: '刷新没成功，稍后再试', icon: 'none' })
+          return
+        }
+        setItems(result.items)
+        setNextCursor(result.nextCursor)
+        setFailed(false)
+        setLoading(false)
+        return
+      }
+      setItems(result.items)
+      setNextCursor(result.nextCursor)
+      setFailed(result.failed)
+      setLoading(false)
+    },
+    [userId],
+  )
 
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null) return
     void read()
   }, [authStatus, userId, read])
+
+  /**
+   * 从详情页返回时补一次重拉（首次 show 跳过：那次由上面的登录态 effect 负责）。
+   * 详情页里可能刚撤回过 / 刚补了材料，返回后列表不能停在旧快照。
+   */
+  const skipFirstShow = useRef(true)
+  const authedRef = useRef(false)
+  authedRef.current = authStatus === 'authed'
+  useDidShow(() => {
+    if (skipFirstShow.current) {
+      skipFirstShow.current = false
+      return
+    }
+    if (!authedRef.current) return
+    void read(true)
+  })
+
+  usePullDownRefresh(() => {
+    void read(true).then(() => Taro.stopPullDownRefresh())
+  })
 
   const loadMore = useCallback(async () => {
     if (loadingMoreRef.current || nextCursor === null || loading || failed) return
@@ -136,9 +176,10 @@ export default function MyDisputes() {
               title="还没有交易争议"
               text="交易有问题时，可以在订单详情里发起争议，平台会介入处理。"
               icon={ICONS.shieldLine}
-              actionText="查看我的订单"
+              // 不按角色分流（买家/卖家都可能在这里）：留一个中性的返回
+              actionText="返回"
               onAction={() => {
-                void Taro.navigateTo({ url: '/pkg-trade/pages/orders-buy/index' })
+                void Taro.navigateBack()
               }}
             />
           </View>

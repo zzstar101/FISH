@@ -11,7 +11,7 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { findDisputeForTransaction } from '@/features/disputes/load'
 import { DISPUTE_STATUS_META } from '@/features/disputes/meta'
-import { type DisputeEntry, disputeEntryOf } from '@/features/disputes/view'
+import { type DisputeEntry, disputeEntryCopyOf, disputeEntryOf } from '@/features/disputes/view'
 import {
   confirmTransaction,
   fetchMeetupTokenStatus,
@@ -829,7 +829,11 @@ export default function TransactionMeetup() {
     </View>
   ) : null
 
-  /** 争议入口的两种落点：已有争议进详情，否则带订单 id 进发起页。 */
+  /**
+   * 争议入口的落点：
+   * - `view` 进详情；`refile` / `file` 带订单 id 进发起页（撤回后重新发起走的就是这里）；
+   * - `closed`（窗口外）没有落点，只展示只读提示。
+   */
   const openDispute = () => {
     const entry = disputeEntry
     if (entry === null || entry.kind === 'closed' || tx === null) return
@@ -839,6 +843,16 @@ export default function TransactionMeetup() {
         : `/pkg-trade/pages/dispute-create/index?transactionId=${encodeURIComponent(tx.id)}`
     void Taro.navigateTo({ url })
   }
+
+  /**
+   * 入口卡文案（纯函数在 `features/disputes/view.ts`，四种形态都已穷尽）。
+   * 窗口判定只在 `disputeEntryOf` 里做一次 —— 页面不重复实现 30 天算法。
+   */
+  const disputeEntryCopy = disputeEntry === null ? null : disputeEntryCopyOf(disputeEntry)
+  const disputeEntrySub =
+    disputeEntry !== null && disputeEntry.kind === 'view'
+      ? `${DISPUTE_STATUS_META[disputeEntry.dispute.status].label} · ${disputeEntryCopy?.sub ?? ''}`
+      : disputeEntryCopy?.sub
 
   return (
     <View className="meetup">
@@ -881,25 +895,21 @@ export default function TransactionMeetup() {
         {done ? null : dealCard}
       </View>
 
-      {/* ---------- 交易争议入口（#497）：窗口外不展示，已有争议优先「查看」 ---------- */}
-      {loadError === null && disputeEntry !== null && disputeEntry.kind !== 'closed' ? (
-        <View className="meetup__dispute" onClick={openDispute}>
+      {/* ---------- 交易争议入口（#497）：已有争议优先「查看」，撤回后可在窗口内重新发起，
+          窗口外只给只读提示（不给点不动的入口） ---------- */}
+      {loadError === null && disputeEntryCopy !== null ? (
+        <View
+          className={`meetup__dispute${disputeEntryCopy.off ? ' is-off' : ''}`}
+          onClick={disputeEntryCopy.off ? undefined : openDispute}
+        >
           <View className="meetup__dispute-ic">
             <Image className="meetup__dispute-ic-img" src={ICONS.shieldLine} mode="aspectFit" />
           </View>
           <View className="meetup__dispute-main">
-            <Text className="meetup__dispute-title">
-              {disputeEntry.kind === 'view' ? '这笔交易有一条争议' : '交易出了问题？'}
-            </Text>
-            <Text className="meetup__dispute-sub">
-              {disputeEntry.kind === 'view'
-                ? `${DISPUTE_STATUS_META[disputeEntry.dispute.status].label} · 查看处理进度与材料`
-                : '发起争议，由管理员介入核查，结论为最终结论'}
-            </Text>
+            <Text className="meetup__dispute-title">{disputeEntryCopy.title}</Text>
+            <Text className="meetup__dispute-sub">{disputeEntrySub}</Text>
           </View>
-          <Text className="meetup__dispute-act">
-            {disputeEntry.kind === 'view' ? '查看争议' : '发起争议'}
-          </Text>
+          <Text className="meetup__dispute-act">{disputeEntryCopy.act}</Text>
         </View>
       ) : null}
 

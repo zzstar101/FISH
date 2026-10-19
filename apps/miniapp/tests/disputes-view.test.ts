@@ -9,6 +9,7 @@ import {
 import { disputeToRecord } from '@/features/disputes/map'
 import {
   DISPUTE_ERROR_COPY,
+  DISPUTE_NOT_PENDING_WITHDRAW_COPY,
   DISPUTE_RESOLUTION_META,
   DISPUTE_STATUS_META,
   DISPUTE_TYPE_META,
@@ -21,6 +22,7 @@ import {
   attachmentSlotsLeft,
   canAddDisputeMaterial,
   canWithdrawDispute,
+  disputeEntryCopyOf,
   disputeEntryOf,
   disputeNotFoundCopy,
   disputeRoleOf,
@@ -149,9 +151,34 @@ describe('订单详情页的争议入口', () => {
     })
   })
 
+  test('撤回过且仍在窗口内：给「重新发起」（后端只对未决去重），窗口外只回看', () => {
+    expect(disputeEntryOf(openTx, { id: 'dsp_w', status: 'WITHDRAWN' }, NOW)).toEqual({
+      kind: 'refile',
+      dispute: { id: 'dsp_w', status: 'WITHDRAWN' },
+    })
+    // 已处理（RESOLVED）是最终结论，窗口内也不再给重新发起
+    expect(disputeEntryOf(openTx, { id: 'dsp_r', status: 'RESOLVED' }, NOW)).toEqual({
+      kind: 'view',
+      dispute: { id: 'dsp_r', status: 'RESOLVED' },
+    })
+  })
+
   test('没有争议时：窗口内可发起，出窗只给 closed 提示', () => {
     expect(disputeEntryOf(openTx, null, NOW)).toEqual({ kind: 'file' })
     expect(disputeEntryOf(staleTx, null, NOW)).toEqual({ kind: 'closed' })
+  })
+
+  test('窗口外要给出可读提示（不是静默不显示）：文案来自纯函数，页面只摆版式', () => {
+    const closed = disputeEntryCopyOf({ kind: 'closed' })
+    expect(closed.off).toBe(true)
+    expect(closed.title).toContain('30 天')
+    expect(closed.sub).toContain('无法再发起争议')
+    const refile = disputeEntryCopyOf({
+      kind: 'refile',
+      dispute: { id: 'dsp_w', status: 'WITHDRAWN' },
+    })
+    expect(refile.off).toBe(false)
+    expect(refile.act).toBe('重新发起')
   })
 
   test('同一交易多条争议：优先 PENDING，否则取最新（列表倒序的第一条）', () => {
@@ -206,6 +233,18 @@ describe('契约枚举的文案完整性', () => {
     }
     expect(disputeFailureText('SOMETHING_ELSE')).toBe('操作没成功，请稍后再试')
     expect(disputeFailureText(null)).toBe('操作没成功，请稍后再试')
+  })
+
+  test('NOT_PENDING 在撤回按钮上换一种说法（「不能再补充材料」读着不对）', () => {
+    expect(disputeFailureText('DISPUTE_NOT_PENDING')).toBe(DISPUTE_ERROR_COPY.DISPUTE_NOT_PENDING)
+    expect(disputeFailureText('DISPUTE_NOT_PENDING', 'withdraw')).toBe(
+      DISPUTE_NOT_PENDING_WITHDRAW_COPY,
+    )
+    expect(DISPUTE_NOT_PENDING_WITHDRAW_COPY).toContain('刷新')
+    // scene 只影响这一个码，其余文案两边一致
+    expect(disputeFailureText('DISPUTE_NOT_FOUND', 'withdraw')).toBe(
+      disputeFailureText('DISPUTE_NOT_FOUND'),
+    )
   })
 })
 

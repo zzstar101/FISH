@@ -108,9 +108,21 @@ export const DISPUTE_ERROR_COPY: Record<DisputeErrorCode, string> = {
   DISPUTE_NOT_PENDING: '争议已处理或已撤回，不能再补充材料',
 }
 
+/** 撤回场景的 NOT_PENDING：撤回按钮上「不能再补充材料」读着别扭，单独一句。 */
+export const DISPUTE_NOT_PENDING_WITHDRAW_COPY = '争议已被处理或撤回，请刷新查看'
+
+/** `scene` 只影响 `DISPUTE_NOT_PENDING` 的措辞，其余错误码两边一致。 */
+export type DisputeFailureScene = 'material' | 'withdraw'
+
 /** 契约错误码 → 中文；未知码/无码给通用兜底句（绝不把服务端 message 直接甩给用户）。 */
-export function disputeFailureText(code: string | null): string {
+export function disputeFailureText(
+  code: string | null,
+  scene: DisputeFailureScene = 'material',
+): string {
   if (code === null) return '操作没成功，请稍后再试'
+  if (code === 'DISPUTE_NOT_PENDING' && scene === 'withdraw') {
+    return DISPUTE_NOT_PENDING_WITHDRAW_COPY
+  }
   return DISPUTE_ERROR_COPY[code as DisputeErrorCode] ?? '操作没成功，请稍后再试'
 }
 

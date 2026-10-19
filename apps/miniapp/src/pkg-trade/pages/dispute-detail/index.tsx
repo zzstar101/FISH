@@ -59,13 +59,13 @@ import './index.scss'
  * ## 附件链：选图 → presign → PUT 直传 → confirm
  *
  * 见 `features/disputes/upload.ts`。失败逐张提示并停手（同一原因连试只会刷屏）；
- * 换号 / 卸载后未发出的步骤由 `UploadAbortedError` 静默中止。
+ * 页面卸载后（换号会重定向登录页并卸载本页）未发出的步骤由 `UploadAbortedError` 静默中止。
  *
  * ## 聊天证据
  *
  * 契约只接受**一条消息**（`messageId`），所以小程序这一侧的做法是：交易详情拿 `conversationId`
- * → 读该会话最近一页消息 → 用户点一条关联成证据。不提供「翻更早的消息」，那等于把整段私聊搬进
- * 争议里，超出本票范围。
+ * → 读该会话**最近一页**消息 → 用户点一条文字消息关联成证据。只列文字消息、不提供「翻更早的
+ * 消息」：那等于把整段私聊搬进争议里，超出本票范围（媒体消息的证据形态见跟进 issue）。
  */
 type PageState = 'loading' | 'ok' | 'notFound' | 'failed'
 type EvidenceState = 'idle' | 'loading' | 'ok' | 'failed'
@@ -79,6 +79,8 @@ export default function DisputeDetailPage() {
 
   const [state, setState] = useState<PageState>('loading')
   const [detail, setDetail] = useState<DisputeDetail | null>(null)
+  /** 写操作撞了 409（状态已变）：先禁写并静默重拉，避免继续按旧状态渲染按钮 */
+  const [stale, setStale] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -87,7 +89,10 @@ export default function DisputeDetailPage() {
   const [addingMessageId, setAddingMessageId] = useState<string | null>(null)
 
   const loadEpoch = useRef(0)
-  /** 页面卸载 / 换号后不再发上传链的后半段（`assertUploadActive` 的判据） */
+  /**
+   * 页面卸载后不再发上传链的后半段（`assertUploadActive` 的判据）。
+   * 换号会重定向登录页并卸载本页，所以这里只认卸载，不单独跟踪 userId。
+   */
   const alive = useRef(true)
   const evidenceLoadingRef = useRef(false)
 
@@ -98,22 +103,38 @@ export default function DisputeDetailPage() {
     }
   }, [])
 
-  const read = useCallback(async () => {
-    if (disputeId === '') {
-      setState('notFound')
-      return
-    }
-    const epoch = ++loadEpoch.current
-    setState('loading')
-    const result = await loadDisputeDetail(disputeId)
-    if (epoch !== loadEpoch.current) return
-    if (result.state === 'ok') {
-      setDetail(result.detail)
-      setState('ok')
-    } else {
-      setState(result.state)
-    }
-  }, [disputeId])
+  /** `silent`：保留当前内容（不闪骨架屏），用于 409 后重同步 */
+  const read = useCallback(
+    async (silent = false) => {
+      if (disputeId === '') {
+        setState('notFound')
+        return
+      }
+      const epoch = ++loadEpoch.current
+      if (!silent) setState('loading')
+      const result = await loadDisputeDetail(disputeId)
+      if (epoch !== loadEpoch.current) return
+      if (result.state === 'ok') {
+        setDetail(result.detail)
+        setStale(false)
+        setState('ok')
+      } else {
+        setState(result.state)
+      }
+    },
+    [disputeId],
+  )
+
+  /**
+   * 409 = 服务端状态已经变了（处理完 / 已撤回），本次写操作必然失败。
+   * 返回 true 时已触发静默重拉：按钮会在 `stale` 期间隐藏，刷新完成后按新状态重新判定。
+   */
+  const resyncIfConflict = (error: unknown): boolean => {
+    if (!isApiError(error) || error.status !== 409) return false
+    setStale(true)
+    void read(true)
+    return true
+  }
 
   useEffect(() => {
     if (authStatus !== 'authed') return
@@ -126,10 +147,14 @@ export default function DisputeDetailPage() {
     try {
       const next = await withdrawDispute(detail.id)
       setDetail(next)
+      setStale(false)
       void Taro.showToast({ title: '已撤回争议', icon: 'none' })
     } catch (error) {
+      resyncIfConflict(error)
       void Taro.showToast({
-        title: isApiError(error) ? disputeFailureText(error.code) : disputeFailureText(null),
+        title: isApiError(error)
+          ? disputeFailureText(error.code, 'withdraw')
+          : disputeFailureText(null),
         icon: 'none',
       })
     } finally {
@@ -190,11 +215,12 @@ export default function DisputeDetailPage() {
             )
           } catch (error) {
             if (error instanceof UploadAbortedError) break
+            resyncIfConflict(error)
             void Taro.showToast({
               title: isApiError(error) ? disputeFailureText(error.code) : '图片上传失败，请重试',
               icon: 'none',
             })
-            // 一张失败就停手：继续下一张大概率是同一个原因（额度满 / 网络断）
+            // 一张失败就停手：继续下一张大概率是同一个原因（额度满 / 网络断 / 争议已处理）
             break
           }
         }
@@ -246,6 +272,7 @@ export default function DisputeDetailPage() {
         icon: 'none',
       })
     } catch (error) {
+      resyncIfConflict(error)
       void Taro.showToast({
         title: isApiError(error) ? disputeFailureText(error.code) : disputeFailureText(null),
         icon: 'none',
@@ -270,8 +297,9 @@ export default function DisputeDetailPage() {
   const notFound = disputeNotFoundCopy('detail')
   const nowMs = Date.now()
   const role = detail === null ? 'observer' : disputeRoleOf(detail, userId)
-  const canWrite = detail !== null && canAddDisputeMaterial(detail, userId)
-  const canWithdraw = detail !== null && canWithdrawDispute(detail, userId)
+  // `stale`（刚撞 409、正在重拉）期间先禁写：继续按旧 `PENDING` 放出按钮只会再失败一次
+  const canWrite = detail !== null && !stale && canAddDisputeMaterial(detail, userId)
+  const canWithdraw = detail !== null && !stale && canWithdrawDispute(detail, userId)
   const attachmentCount = detail?.attachments.length ?? 0
   const evidenceIds = new Set((detail?.evidence ?? []).map((item) => item.message.id))
   const candidates = messages
@@ -497,6 +525,12 @@ export default function DisputeDetailPage() {
               </Text>
             ) : null}
 
+            {stale ? (
+              <Text className="dsd__note">
+                争议状态刚有更新，正在刷新；刷新完成后才能继续操作。
+              </Text>
+            ) : null}
+
             {canWithdraw ? (
               <View
                 className={`dsd__btn dsd__btn--danger${withdrawing ? ' is-off' : ''}`}
@@ -522,6 +556,8 @@ export default function DisputeDetailPage() {
                 关闭
               </Text>
             </View>
+            {/* 说清范围：只列最近一页的文字消息，更早的请回会话里核对 */}
+            <Text className="dsd__sheet-note">只显示这段会话最近一页的文字消息。</Text>
             {evidenceState === 'loading' ? (
               <Text className="dsd__sheet-hint">正在读取最近消息…</Text>
             ) : evidenceState === 'failed' ? (

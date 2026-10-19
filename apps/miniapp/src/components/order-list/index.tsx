@@ -317,6 +317,23 @@ export default function OrderList({
       <View className="orders__header-gap" />
 
       {/*
+        「我的争议」入口（#497）：订单页是争议的主要上游，「我的」→ 买到的 / 卖出的
+        都能进列表。放在内容区顶部而不是顶栏右槽 —— 这里标题是居中的，右槽会压标题。
+      */}
+      <View className="orders__dispute-row">
+        <View
+          className="orders__dispute"
+          onClick={() => {
+            void Taro.navigateTo({ url: '/pkg-trade/pages/my-disputes/index' })
+          }}
+        >
+          <Image className="orders__dispute-ic" src={ICONS.shieldLine} mode="aspectFit" />
+          <Text className="orders__dispute-t">交易争议</Text>
+          <Image className="orders__dispute-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
+      </View>
+
+      {/*
         列表不完整时才说的那句实话：翻页到上限或服务端游标没前进时，这份列表不是全部，
         所以既不显示计数、也不显示「已经到底了」。加载失败由下面的 LoadError 承担。
       */}

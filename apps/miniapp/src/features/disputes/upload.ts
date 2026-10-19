@@ -6,8 +6,9 @@
  * 都由服务端按争议判，不能复用发布链。
  *
  * 三步之间逐次做 `assertUploadActive`（同 #208 的理由）：`apiRequest` 的 Cookie 是调用那一刻
- * 现取的，换号后再发 confirm 会带着新账号的会话打到别人的争议上；PUT 还会在对象存储里留下
- * 没人引用的对象。传 `undefined` 表示不关心归属（页面在压栈期间不会卸载）。
+ * 现取的，页面卸载后（换号会重定向登录页并卸载页面）再发 confirm 可能带着别的账号的会话打到
+ * 不对的争议上；PUT 还会在对象存储里留下没人引用的对象。传 `undefined` 表示不关心归属
+ * （页面在压栈期间不会卸载）。
  */
 import type { DisputeAttachment } from '@fish/contracts/disputes/schema'
 import Taro from '@tarojs/taro'
