@@ -58,8 +58,16 @@ export function NotificationsPage() {
     const target = notificationTarget(item)
     if (target.kind === 'none') return
 
-    // TX / MODERATION 直接跳（会话与「我的发布」都是静态路由，不需要先确认存在）；
-    // 商品与愿望目标要先确认还可见，避免跳进一个已删/不属于该账号的资源页。
+    // TX / MODERATION / DISPUTE 直接跳（会话、「我的发布」与争议详情都是静态路由，
+    // 不需要先确认存在；争议通知的收件人必然是当事人）；商品与愿望目标要先确认还可见，
+    // 避免跳进一个已删/不属于该账号的资源页。
+    if (target.kind === 'dispute') {
+      await navigate({
+        to: '/disputes/$disputeId',
+        params: { disputeId: target.disputeId },
+      })
+      return
+    }
     if (target.kind === 'conversation') {
       await navigate({
         to: '/messages/$conversationId',

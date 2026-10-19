@@ -1,5 +1,6 @@
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import { ApiError } from '../../lib/api-client'
+import { disputeResolutionLabel } from '../disputes/meta'
 
 export type NotificationTarget =
   | { kind: 'listing'; listingId: string }
@@ -8,6 +9,8 @@ export type NotificationTarget =
   | { kind: 'conversation'; conversationId: string }
   /** MODERATION：我的发布（`/mylist`）—— 未通过时原因在那里 */
   | { kind: 'mylist' }
+  /** DISPUTE：用户侧争议详情（`/disputes/:disputeId`，本人是当事人） */
+  | { kind: 'dispute'; disputeId: string }
   | { kind: 'none' }
 
 /**
@@ -34,11 +37,13 @@ export function notificationTarget(item: NotificationDto): NotificationTarget {
       if (wishId) return { kind: 'wish', wishId }
       return { kind: 'none' }
     }
-    // DISPUTE（#465）：用户侧争议页排在小程序（PR C，本分支未交付），PC 新增的
-    // `/admin/disputes` 是管理端页面、普通用户不可达，所以这里仍给不了可用落点 ——
-    // 与 ACCOUNT 同一处理，只陈述结果、不给死链接。
-    case 'DISPUTE':
-      return { kind: 'none' }
+    // DISPUTE（#496）：争议通知的收件人一定是当事人（发起人或被诉方），
+    // 用户侧 `/disputes/:disputeId` 已上线，直接落到那条争议的详情。
+    // 空字符串不当作有效目标（与其它 kind 同口径）。
+    case 'DISPUTE': {
+      const disputeId = item.payload.disputeId?.trim()
+      return disputeId ? { kind: 'dispute', disputeId } : { kind: 'none' }
+    }
   }
 }
 
@@ -97,12 +102,13 @@ export function notificationCopy(item: NotificationDto): {
         default:
           return { emoji: '🔔', title: '认证结果有更新', description: '可以到认证页查看当前状态。' }
       }
-    // DISPUTE（#465）：与 `notificationTarget` 一致——PC 暂无争议页，只陈述结果。
+    // DISPUTE（#496）：与 `notificationTarget` 一致——落点是那条争议的详情，
+    // 已处理时文案带上与详情页同源的结论标签（`disputeResolutionLabel`）。
     case 'DISPUTE':
       return {
         emoji: '⚖️',
         title: '交易争议有更新',
-        description: disputeEventCopy(item.payload.disputeEvent),
+        description: disputeEventCopy(item.payload.disputeEvent, item.payload.resolution),
       }
   }
 }
@@ -111,17 +117,23 @@ export function notificationCopy(item: NotificationDto): {
  * 争议通知一句话。`disputeEvent` 缺席（历史行 / 脏 payload）时退回不含事件信息的通用句，
  * 与 `txEventCopy` 同一姿态——不编一个可能不对的进展。
  *
- * 这里刻意**不**带出处理结论（#465 审查：结论文案属 PR C 的用户侧票面，本 PR 只交付管理端；
- * 在后台票面里替另一张票定义用户可见措辞，等于把验收边界挪到本 PR 之外）。
+ * `RESOLVED` 带上与争议详情页**同源**的结论标签（`features/disputes/meta.ts`）：
+ * 用户侧票面（#496）已交付详情页，通知不能只说「已处理」却把结论藏起来；
+ * `resolution` 缺席（历史行 / 脏 payload）时仍退回中性句，不编结论。
  */
-function disputeEventCopy(event: NotificationDto['payload']['disputeEvent']): string {
+function disputeEventCopy(
+  event: NotificationDto['payload']['disputeEvent'],
+  resolution: NotificationDto['payload']['resolution'],
+): string {
   switch (event) {
     case 'FILED':
       return '对方就这笔交易发起了争议。'
     case 'WITHDRAWN':
       return '对方撤回了这笔交易的争议。'
-    case 'RESOLVED':
-      return '争议已处理，该结论为最终结论。'
+    case 'RESOLVED': {
+      const label = disputeResolutionLabel(resolution ?? null)
+      return label === null ? '争议已处理，该结论为最终结论。' : `争议已处理，结论：${label}。`
+    }
     default:
       return '这笔交易的争议状态有变化。'
   }
@@ -170,6 +182,9 @@ export function notificationTargetErrorMessage(target: NotificationTarget): stri
       return '该愿望不存在或不可见，已留在通知列表'
     case 'conversation':
     case 'mylist':
+    // `/disputes/:disputeId` 是静态路由，没有「目标不存在」的预检；收件人必然是当事人
+    // （通知由服务端只发给双方），点进去是详情或该条的 404 空态。
+    case 'dispute':
     case 'none':
       return null
   }

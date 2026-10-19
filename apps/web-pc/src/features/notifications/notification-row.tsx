@@ -44,7 +44,7 @@ export function NotificationRow({ item, onOpen }: NotificationRowProps) {
         </span>
       </span>
 
-      {target.kind === 'listing' ? (
+      {target.kind === 'listing' || target.kind === 'dispute' ? (
         <ChevronRight className="mt-3 size-[18px] shrink-0 text-ink-3 transition-transform group-hover:translate-x-0.5" />
       ) : null}
     </button>

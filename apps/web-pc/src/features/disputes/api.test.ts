@@ -1,0 +1,233 @@
+import { afterEach, describe, expect, mock, test } from 'bun:test'
+import type { DisputeDetail } from '@fish/contracts/disputes/schema'
+import { ApiError } from '../../lib/api-client'
+import {
+  addDisputeEvidence,
+  DISPUTE_PAGE_LIMIT,
+  fetchDispute,
+  fetchMyDisputes,
+  myDisputesPath,
+  startDispute,
+  uploadDisputeAttachment,
+} from './api'
+
+const DISPUTE_ID = 'dsp_01jc000000e00800000000000a' as const
+const TRANSACTION_ID = 'txn_01jc000000e00800000000000a' as const
+const LISTING_ID = 'lst_01jc000000e00800000000000a' as const
+const BUYER_ID = 'usr_01jc000000e00800000000000a' as const
+const SELLER_ID = 'usr_01jc000000e00800000000000b' as const
+const MESSAGE_ID = 'msg_01jc000000e00800000000000c' as const
+
+const buyer = { id: BUYER_ID, nickname: '阿岚' }
+const seller = { id: SELLER_ID, nickname: '小北' }
+
+const DISPUTE_DETAIL: DisputeDetail = {
+  id: DISPUTE_ID,
+  type: 'ITEM_MISMATCH',
+  status: 'PENDING',
+  detailText: '商品有明显划痕',
+  initiator: buyer,
+  respondent: seller,
+  transaction: {
+    id: TRANSACTION_ID,
+    listingId: LISTING_ID,
+    listingTitle: '二手自行车',
+    buyer,
+    seller,
+    amountCents: 12000,
+    status: 'PENDING_MEETUP',
+    completedAt: null,
+    cancelledAt: null,
+    createdAt: '2026-10-01T00:00:00.000Z',
+  },
+  resolution: null,
+  resolutionNote: null,
+  handledBy: null,
+  handledAt: null,
+  withdrawnAt: null,
+  createdAt: '2026-10-02T00:00:00.000Z',
+  updatedAt: '2026-10-02T00:00:00.000Z',
+  attachments: [],
+  evidence: [],
+}
+
+const originalFetch = globalThis.fetch
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
+})
+
+type FetchCall = { url: string; method: string; body: unknown }
+
+function mockFetchCalls(
+  handler: (call: FetchCall, index: number) => Response | Promise<Response>,
+): FetchCall[] {
+  const calls: FetchCall[] = []
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const call = {
+      url: String(input),
+      method: init?.method ?? 'GET',
+      body:
+        init?.body === undefined
+          ? null
+          : typeof init.body === 'string'
+            ? JSON.parse(init.body)
+            : init.body,
+    }
+    calls.push(call)
+    return handler(call, calls.length - 1)
+  }) as unknown as typeof fetch
+  return calls
+}
+
+describe('myDisputesPath', () => {
+  test('拼出 limit 与可选 cursor', () => {
+    expect(myDisputesPath()).toBe(`/disputes/mine?limit=${DISPUTE_PAGE_LIMIT}`)
+    expect(myDisputesPath('cur-1')).toBe(`/disputes/mine?limit=${DISPUTE_PAGE_LIMIT}&cursor=cur-1`)
+  })
+})
+
+describe('startDispute', () => {
+  test('POST /disputes，201 与 200（已有未决争议）都解析成功', async () => {
+    const calls = mockFetchCalls(() =>
+      Response.json({ dispute: DISPUTE_DETAIL, created: true }, { status: 201 }),
+    )
+    const created = await startDispute({ transactionId: TRANSACTION_ID, type: 'ITEM_MISMATCH' })
+    expect(created.created).toBe(true)
+    expect(created.dispute.id).toBe(DISPUTE_ID)
+    expect(calls).toEqual([
+      {
+        url: '/api/disputes',
+        method: 'POST',
+        body: { transactionId: TRANSACTION_ID, type: 'ITEM_MISMATCH' },
+      },
+    ])
+
+    mockFetchCalls(() =>
+      Response.json({ dispute: DISPUTE_DETAIL, created: false }, { status: 200 }),
+    )
+    const reused = await startDispute({ transactionId: TRANSACTION_ID, type: 'ITEM_MISMATCH' })
+    expect(reused.created).toBe(false)
+  })
+})
+
+describe('fetchMyDisputes / fetchDispute', () => {
+  test('列表走 /disputes/mine 且透传 cursor，解析分页信封', async () => {
+    const calls = mockFetchCalls(() =>
+      Response.json({ items: [DISPUTE_DETAIL], nextCursor: 'next-1' }),
+    )
+    const page = await fetchMyDisputes('cur-1')
+    expect(page.nextCursor).toBe('next-1')
+    expect(calls[0]?.url).toBe(`/api/disputes/mine?limit=${DISPUTE_PAGE_LIMIT}&cursor=cur-1`)
+  })
+
+  test('详情走 /disputes/:id，服务端 404 错误码原样抛出', async () => {
+    const calls = mockFetchCalls(() => Response.json(DISPUTE_DETAIL))
+    const detail = await fetchDispute(DISPUTE_ID)
+    expect(detail.id).toBe(DISPUTE_ID)
+    expect(calls[0]?.url).toBe(`/api/disputes/${DISPUTE_ID}`)
+
+    mockFetchCalls(() =>
+      Response.json(
+        { error: { code: 'DISPUTE_NOT_FOUND', message: '争议不存在或你无权查看' } },
+        { status: 404 },
+      ),
+    )
+    const error = await fetchDispute(DISPUTE_ID).catch((reason: unknown) => reason)
+    expect(error instanceof ApiError).toBe(true)
+    expect(error instanceof ApiError ? error.code : null).toBe('DISPUTE_NOT_FOUND')
+    expect(error instanceof ApiError ? error.status : null).toBe(404)
+  })
+})
+
+describe('addDisputeEvidence', () => {
+  test('POST evidence-messages，body 只带 messageId', async () => {
+    const evidence = {
+      evidence: {
+        message: {
+          id: MESSAGE_ID,
+          type: 'TEXT' as const,
+          senderId: BUYER_ID,
+          senderNickname: '阿岚',
+          content: '这个位置有划痕',
+          recalledAt: null,
+          createdAt: '2026-10-01T08:00:00.000Z',
+        },
+        addedBy: buyer,
+        createdAt: '2026-10-02T00:00:00.000Z',
+      },
+      created: true,
+    }
+    const calls = mockFetchCalls(() => Response.json(evidence))
+    const result = await addDisputeEvidence(DISPUTE_ID, MESSAGE_ID)
+    expect(result.created).toBe(true)
+    expect(calls[0]?.url).toBe(`/api/disputes/${DISPUTE_ID}/evidence-messages`)
+    expect(calls[0]?.body).toEqual({ messageId: MESSAGE_ID })
+  })
+})
+
+describe('uploadDisputeAttachment', () => {
+  const attachment = {
+    id: 'med_01jc000000e00800000000000d',
+    url: 'https://media.example/dispute.png',
+    mimeType: 'image/png' as const,
+    sizeBytes: 3,
+    width: 1,
+    height: 1,
+    uploadedBy: buyer,
+    createdAt: '2026-10-02T00:00:00.000Z',
+  }
+
+  test('presign → PUT 对象存储 → confirm，三步用同一 objectKey', async () => {
+    const calls = mockFetchCalls((call, index) => {
+      if (index === 0) {
+        return Response.json({
+          uploadUrl: 'https://storage.example/dispute-media/key.png',
+          objectKey: 'dispute-media/dsp/key.png',
+          headers: { 'x-storage-token': 'token-1' },
+          expiresAt: '2026-10-02T00:10:00.000Z',
+        })
+      }
+      if (index === 1) return new Response(null, { status: 200 })
+      expect(call.body).toEqual({ objectKey: 'dispute-media/dsp/key.png' })
+      return Response.json({ attachment, created: true }, { status: 201 })
+    })
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'proof.png', { type: 'image/png' })
+    await uploadDisputeAttachment(DISPUTE_ID, file)
+
+    expect(calls.map((call) => [call.url, call.method])).toEqual([
+      [`/api/disputes/${DISPUTE_ID}/attachments/presign`, 'POST'],
+      ['https://storage.example/dispute-media/key.png', 'PUT'],
+      [`/api/disputes/${DISPUTE_ID}/attachments`, 'POST'],
+    ])
+    expect(calls[0]?.body).toEqual({ contentType: 'image/png', sizeBytes: 3 })
+  })
+
+  test('PUT 失败给出可读错误且不再 confirm（服务端无台账行）', async () => {
+    const calls = mockFetchCalls((_call, index) => {
+      if (index === 0) {
+        return Response.json({
+          uploadUrl: 'https://storage.example/dispute-media/key.png',
+          objectKey: 'dispute-media/dsp/key.png',
+          headers: {},
+          expiresAt: '2026-10-02T00:10:00.000Z',
+        })
+      }
+      return new Response('upload failed', { status: 500 })
+    })
+
+    const file = new File([new Uint8Array([1])], 'proof.png', { type: 'image/png' })
+    const error = await uploadDisputeAttachment(DISPUTE_ID, file).catch((reason: unknown) => reason)
+    expect(error instanceof Error ? error.message : null).toBe('图片上传失败，请重试')
+    expect(calls).toHaveLength(2)
+  })
+
+  test('本地预校验失败时不发任何请求', async () => {
+    const calls = mockFetchCalls(() => Response.json({}))
+    const file = new File([new Uint8Array([1])], 'notes.txt', { type: 'text/plain' })
+    const error = await uploadDisputeAttachment(DISPUTE_ID, file).catch((reason: unknown) => reason)
+    expect(error instanceof Error ? error.message : null).toBe('仅支持 JPG / PNG / WebP 图片')
+    expect(calls).toHaveLength(0)
+  })
+})
