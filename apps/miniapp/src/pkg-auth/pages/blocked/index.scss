@@ -118,7 +118,7 @@
   color: var(--danger);
 }
 
-/* 解除钮：中性描边（恢复性动作），busy 转灰 */
+/* 解除钮：中性描边（恢复性动作），busy / 单飞期间其它行一并转灰 */
 .blk__rel {
   flex-shrink: 0;
   padding: 14px 32px;
@@ -127,7 +127,8 @@
   font-size: var(--fs-sm);
   color: var(--fg);
 
-  &.is-busy {
+  &.is-busy,
+  &.is-off {
     opacity: 0.5;
   }
 }

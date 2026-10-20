@@ -54,6 +54,30 @@ describe('黑名单管理页：接线', () => {
     expect(code).toContain('if (held()) setLoadingMore(false)')
   })
 
+  /**
+   * 只钉「标识符还在」是钉不住回归的：`held()` 让代次一变就恒为假，于是**换代的那条
+   * 路径**必须自己收回页脚持有权，否则 `loadingMore` 再也没人熄，页脚一直停在「正在加载…」
+   * （下拉刷新能救回来，但一次解除就让用户点不动页脚显然是缺陷）。
+   * 所以这里钉的是**相邻性** —— 收回动作必须紧贴 `loadGen.current + 1`，不是散落在别处。
+   */
+  test('解除成功换代时先收回「加载更多」的持有权（否则页脚一直卡在正在加载）', async () => {
+    const code = await pageSource()
+    expect(code).toMatch(
+      /pendingMore\.current\?\.\(\)[\s\S]{0,400}?moreToken\.current = null[\s\S]{0,200}?setLoadingMore\(false\)[\s\S]{0,200}?setMoreError\(false\)[\s\S]{0,200}?loadGen\.current \+ 1/,
+    )
+  })
+
+  test('解除单飞期间：点了不执行，且其它行视觉降级（不能看起来还能点）', async () => {
+    const code = await pageSource()
+    // 执行侧守卫（单飞）
+    expect(code).toContain('if (busyId !== null) return')
+    expect(code).toContain("busyId === row.id ? ' is-busy' : busyId !== null ? ' is-off' : ''")
+    const scss = await Bun.file(
+      new URL('../src/pkg-auth/pages/blocked/index.scss', import.meta.url),
+    ).text()
+    expect(scss).toMatch(/&\.is-busy,\s*&\.is-off\s*\{\s*opacity: 0\.5;/)
+  })
+
   test('页面注册在 pkg-auth 分包，设置页隐私组有入口行', async () => {
     const appConfig = await Bun.file(new URL('../src/app.config.ts', import.meta.url)).text()
     expect(appConfig).toContain("'pages/blocked/index'")
@@ -82,7 +106,7 @@ describe('他人主页拉黑入口：接线', () => {
     expect(code).toContain('setBlockRead({ key, blocked: state.blocked })')
   })
 
-  test('读状态之前不渲染、读失败保持隐藏；epoch 守卫与关注钮同一把钥匙', async () => {
+  test('读状态之前不渲染（不猜状态）；读取用 epoch 守卫，换页主/换账号即作废', async () => {
     const code = await Bun.file(
       new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url),
     ).text()
@@ -90,8 +114,20 @@ describe('他人主页拉黑入口：接线', () => {
     expect(code).toContain(
       'blockEntryView({ read: blockRead, key: followKey, pending: blockBusy })',
     )
+    // 读失败落回「没读到」 → 入口不渲染。断言必须**切到读 effect 那一段**再看，
+    // 否则 `blockKeyRef` / `isUnauthenticatedError` 在写路径（runBlockWrite）里到处都是，
+    // 正则会在别处命中，删掉读分支的守卫也照样 pass。
+    const readFx = code.slice(
+      code.indexOf('fetchBlockState(userId)'),
+      code.indexOf('runBlockWrite'),
+    )
+    expect(readFx.length).toBeGreaterThan(0)
     expect(code).toContain('setBlockRead(null)')
-    expect(code).toContain('blockKeyRef.current !== key')
+    // `.then` 与 `.catch` 各一把 epoch 守卫：换页主/换账号后在飞回包不许落地
+    expect(readFx).toContain('if (blockKeyRef.current !== key || state === null) return')
+    expect(readFx).toContain(
+      'if (blockKeyRef.current !== key || isUnauthenticatedError(error)) return',
+    )
   })
 
   test('渲染与点击都先过 blockReadOf：换页主/换账号时旧归属的状态既不可显示也不可点', async () => {

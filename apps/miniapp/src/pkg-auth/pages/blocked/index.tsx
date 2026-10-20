@@ -217,6 +217,17 @@ export default function BlockedPage() {
           // 列表换代：解除**之前**发出的首屏 / 加载更多回包里还有这个人，落地会把刚
           // 摘掉的行塞回来、且再点一次是对已经不存在的拉黑发请求（#484 审查第 ② 条）。
           // 只动 `loadGen`，不动 `accountSeq` —— 这仍是同一个账号，本行自己的收尾照旧。
+          //
+          // 换代同时必须**收回页脚持有权**（与 `runLoad` 同一套）：在飞的「加载更多」
+          // 因代次已变，`held()` 恒为假、`finally` 不再清 `loadingMore` —— 不在这里
+          // 取消并熄掉，页脚会一直停在「正在加载…」，要等下拉刷新 / 重进页才恢复。
+          // 代价可接受：解除期间点下的「加载更多」也会被取消，游标没前进、页脚退回
+          // 「加载更多」，再点一次即可（与 `runLoad` 取消在飞分页同款）。
+          pendingMore.current?.()
+          pendingMore.current = null
+          moreToken.current = null
+          setLoadingMore(false)
+          setMoreError(false)
           const gen = loadGen.current + 1
           loadGen.current = gen
           setLoad((prev) =>
@@ -296,7 +307,11 @@ export default function BlockedPage() {
                   ) : null}
                 </View>
                 <View
-                  className={`blk__rel${busyId === row.id ? ' is-busy' : ''}`}
+                  // 解除是单飞的：别的行此刻点了也不会执行，视觉上一并转灰，别让用户
+                  // 以为「点了没反应」是卡住
+                  className={`blk__rel${
+                    busyId === row.id ? ' is-busy' : busyId !== null ? ' is-off' : ''
+                  }`}
                   onClick={() => unblock(row)}
                 >
                   <Text>{busyId === row.id ? '解除中…' : '解除'}</Text>
