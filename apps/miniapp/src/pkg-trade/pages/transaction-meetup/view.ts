@@ -107,7 +107,7 @@ export function nextConfirmPending(outcome: ConfirmOutcome): boolean {
  * 所以调用点在 `dto === null` 时必须把这份旧快照一起丢掉，落到「加载失败 + 重试」，由
  * `bootstrap` 重读后落到正确的终态卡；并且这次落定要记进写链落定序号（`landFailed`），
  * 否则写入前发出的读取快照迟到时会用旧 `PENDING_MEETUP` 把这张卡整张撤销
- * （#296 审查发现 2）。
+ * （#296 落地口径审查）。
  */
 export function pendingAfterTerminalRefetch(dto: { status: string } | null): boolean {
   return dto !== null && dto.status === 'PENDING_MEETUP'
@@ -131,6 +131,8 @@ export function playsCompletionFx(status: string | null): boolean {
  *
  * 两条序号共用这一个比较，因为判据是同一回事：发出时捕获的序号回来时对不上，就说明
  * 期间已经有更新的任务接管，这份结果落地只会把对方刚写下的状态盖回去 —— 丢比盖安全。
+ * （写入侧的单向判据另见 `writeLandedSince`：它用 `>` 而不是 `!==`，因为两个入参分别
+ * 是「快照发出时捕获的尝试序号」与「此刻的落定水位线」，比的不是同一次任务的收发。）
  *
  * 但两个**计数器**必须互相独立，不能用其中一个替代另一个：
  * - `writeSeq` / `landedSeq`（本页写入：前者取锁时自增，后者只在写链**落定页面**时跟上）挡住
@@ -160,9 +162,10 @@ export function sequenceSuperseded(seen: number, current: number): boolean {
  * 返回刷新等于没有（#296 发现 1）。
  *
  * 为什么「恢复态 / 失败态」也算落定：核销成功但 confirm 失败时页面换成「确认完成面交」
- * 重试入口，此时凭证已被 CONSUMED —— 放行写入前的快照会撤下入口、把人打回 6 位码输入态，
- * 再输只会被拒；同理「丢掉不可信的旧快照、落到加载失败态」也不能被这份快照撤销
- * （#147 审查 F1/F2、#296 发现 3、审查发现 1/2）。
+ * 重试入口，放行写入前的快照就会去改写这个入口 —— 入口本可由随后的凭证状态读取自愈
+ * （核销成功后 `sellerConfirmedAt` 已在后端落库），但那次读取失败即 `.catch(() => null)`，
+ * 自愈没有保证；同理「丢掉不可信的旧快照、落到加载失败态」也不能被这份快照撤销
+ * （#147 审查 F1/F2、#296 发现 3）。
  *
  * 为什么是「期间有过落定」而不是「**最后一次**尝试落定」：后者在「先落过一次地、最后
  * 一次尝试又失败」的窗口里会放行这份旧快照，把已经写成的 `COMPLETED` 倒回

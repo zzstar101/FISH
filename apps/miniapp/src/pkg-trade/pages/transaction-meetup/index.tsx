@@ -219,8 +219,11 @@ export default function TransactionMeetup() {
    * 写链**落定页面**（#296 发现 1）：记下「这一次尝试真的改过页面」的序号。
    *
    * 与 `writeSeq`（取锁时自增的**尝试**序号）分开：试过不等于写过。返回刷新的丢弃判据比的
-   * 是这个序号（判据本体见 `view.ts:writeLandedSince`）。写链每一种改过页面的收尾都必须调它
-   * 一次：写回交易快照走 `landWrite`，失败态走 `landFailed`，其余恢复态直接调本函数。
+   * 是这个序号（判据本体见 `view.ts:writeLandedSince`）。凡改写了 `syncOnShow` 也会改写的那
+   * 三份状态（`tx` / `loadError` / `confirmPending`）的收尾都必须调它一次：写回交易快照走
+   * `landWrite`，失败态走 `landFailed`，其余恢复态直接调本函数。只动输入错误 / 取码态、不碰
+   * 这三份状态的收尾（`setInputError`、`setToken`）**不**落定 —— 页面状态没被写过，正该放行
+   * 返回刷新。
    */
   const landPage = () => {
     landedSeq.current = writeSeq.current
@@ -469,10 +472,12 @@ export default function TransactionMeetup() {
         await settle()
         if (isStale(epoch)) return
         setConfirmPending(nextConfirmPending({ kind: 'error', failure }))
-        // 走到这里说明 `consume()` 成功过（凭证已被核销）、只有 confirm 失败：页面换成
-        // 「确认完成面交」重试入口，这是写链建立的恢复态。迟到的写入前快照若放行，会把
-        // 入口撤下、把人打回 6 位码输入态，而码已 CONSUMED（再输只会被拒）—— 所以这次
-        // 尝试同样算「落定过页面」（#296 审查发现 1）。
+        // 走到这里说明 `consume()` 成功过（凭证已被核销）、只有 confirm 失败：页面换成了
+        // 「确认完成面交」重试入口 —— 这次尝试改过 `confirmPending`，按落定口径算「落定过
+        // 页面」（与 Issue #296 字面的有意偏离：该分支并未写回交易快照，取舍见 PR 说明）。
+        // 放行迟到的写入前快照就会让它去改写这个入口：入口本可由随后的凭证状态读取自愈
+        // （核销成功后 `sellerConfirmedAt` 已在后端落库），但那条读取失败即
+        // `.catch(() => null)` —— 自愈没有保证，所以丢这份旧快照比赌自愈安全。
         landPage()
       }
     } catch (error) {
@@ -565,7 +570,8 @@ export default function TransactionMeetup() {
       }
       void Taro.showToast({ title: '确认失败，请稍后重试', icon: 'none' })
       // 重试失败但入口保持（页面仍是写链建立的恢复态）：迟到的写入前快照同样不许把它
-      // 撤销 —— 与 `verify` 那条是同一条不变量（#296 审查发现 1）。
+      // 撤销 —— 与 `verify` 的 confirm 失败分支是同一条不变量（自愈同样没有保证：
+      // `syncOnShow` 那次凭证状态读取失败即 `.catch(() => null)`）。
       landPage()
     } finally {
       if (!isStale(epoch)) setSubmitting(false)

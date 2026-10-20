@@ -32,7 +32,7 @@ import {
  *   面交页 —— 旧接线按取锁时自增的尝试序号判新旧，把这次返回刷新整份丢弃，页面停在写入前
  *   的旧快照（#296 发现 1）；反过来，写链已经落定过页面（写回交易快照、换成「确认完成
  *   面交」重试入口、或落到加载失败态）时，迟到的写入前快照必须继续被丢弃，否则会把已
- *   CONSUMED 的凭证打回 6 位码输入态、或把失败卡整张撤销（#296 审查发现 1、2）；核销撞上
+ *   CONSUMED 的凭证打回 6 位码输入态、或把失败卡整张撤销（#296 落地口径审查）；核销撞上
  *   终态、重读又失败时停在输入态（#296 发现 3）。
  *
  * 边界：本文件只跑判据，不跑组件接线（ref 赋值时机、`useDidShow` 注册顺序、渲染期
@@ -375,6 +375,9 @@ describe('meetup 接线：写入落地序号（#296 发现 1）', () => {
     expect(
       sync.match(/if \(writeLandedSince\(seenWrites, landedSeq\.current\)\) return/g),
     ).toHaveLength(2)
+    // 捕获源必须是**尝试**序号：改成 landedSeq.current 会让判据恒为 false（回到 #147 审查 F2
+    // 的坑 —— 写入前发出的快照盖掉刚写成的 COMPLETED），而上面两条断言仍全绿
+    expect(sync).toContain('const seenWrites = writeSeq.current')
     // 尝试序号在取锁那一瞬就自增：拿它判会把「写入以网络失败收尾」也当成写过
     expect(sync).not.toContain('sequenceSuperseded(seenWrites, writeSeq.current)')
   })
@@ -425,7 +428,7 @@ describe('meetup 接线：写入落地序号（#296 发现 1）', () => {
     )
     // 核销成功、只有 confirm 网络失败：页面换成「确认完成面交」重试入口，而凭证已被
     // CONSUMED。这份恢复态必须记序号 —— 否则写入前发出的返回读取迟到时会撤下入口、把人
-    // 打回 6 位码输入态，再输只会被后端以「已被使用」拒掉（#296 审查发现 1）。
+    // 打回 6 位码输入态（入口能否靠凭证状态自愈没有保证，见 view.ts:writeLandedSince）。
     const retryEntry = sliceFrom(
       verifyFn,
       "setConfirmPending(nextConfirmPending({ kind: 'error', failure }))",
