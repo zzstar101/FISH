@@ -30,9 +30,15 @@ export function sendKeyFor(
 /**
  * 发送失败的文案分档。
  *
- * 这条路径上服务端会给出四类结论（见 `apps/api/src/modules/messages/service.ts` 与
- * `router.ts`）：商品不可见 / 会话不存在或我不是参与者 / 同键换了商品 / 请求体不合法。
- * 除最后一类外都不是「重试就能好」，所以不能一律说「请重试」。
+ * 这条路径上服务端会给出五类结论（见 `apps/api/src/modules/messages/service.ts` 与
+ * `router.ts`）：商品不可见 / 会话不存在或我不是参与者 / 同键换了商品 / **会话被拉黑
+ * 守卫冻结**（403 `CONVERSATION_UNAVAILABLE`）/ 请求体不合法。除最后一类外都不是
+ * 「重试就能好」，所以不能一律说「请重试」。
+ *
+ * 拉黑守卫的文案与建会话那条（`features/chat/api.ts` 的 `CONVERSATION_UNAVAILABLE_TEXT`）
+ * 同一句：那个模块 import 了 Taro，本纯模块不能引它，所以这里是**同文字面量**，改文案
+ * 要两处一起改。中性、**不暴露谁拉黑了谁**，也不说「重试」——解不解除是对方的事，让
+ * 用户对着按钮白点没有意义（会话页发送那条直出服务端文案，同码同义、只是更具体）。
  */
 export function sendFailureText(code: string | null): string {
   switch (code) {
@@ -42,6 +48,9 @@ export function sendFailureText(code: string | null): string {
       return '会话不存在或已结束'
     case 'IDEMPOTENCY_KEY_REUSED':
       return '发送内容有变化，请重新发送'
+    case 'CONVERSATION_UNAVAILABLE':
+      // 拉黑守卫（#466 / #473）：中性文案，不暴露谁拉黑了谁
+      return '会话当前不可用'
     default:
       return '发送失败，请重试'
   }
