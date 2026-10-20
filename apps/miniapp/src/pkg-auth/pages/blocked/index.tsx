@@ -27,23 +27,17 @@ import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { fetchMyBlocks, setBlock } from '@/features/blocks/api'
-import { describeBlockFailure } from '@/features/blocks/view'
+import {
+  type BlockedRow,
+  type BlocksLoad,
+  describeBlockFailure,
+  moreReplyLanded,
+  nextBlocksLoad,
+} from '@/features/blocks/view'
 import { cancellable } from '@/lib/cancellable'
 import { isUnauthenticatedError } from '@/lib/request'
 import { relativeTimeOf } from '@/lib/time'
 import './index.scss'
-
-type BlockedRow = {
-  id: string
-  nickname: string
-  avatarUrl: string | null
-  blockedAt: string
-}
-
-type BlocksLoad =
-  | { kind: 'loading' }
-  | { kind: 'ready'; rows: BlockedRow[]; nextCursor: string | null }
-  | { kind: 'error' }
 
 export default function BlockedPage() {
   const authStatus = useAuthGuard()
@@ -67,6 +61,17 @@ export default function BlockedPage() {
 
   /** 在飞取数的代次：换账号 / 退出即自增，旧回包据此丢弃（following 同款）。 */
   const accountSeq = useRef(0)
+  /**
+   * 列表快照的代次（#484 审查第 ② 条）：解除成功即自增，让解除**之前**发出的首屏
+   * 回包（那份快照里还有刚被解除的人）作废。与 `accountSeq` 分开：解除不属于换账号，
+   * 不该顺手把本页自己的写收尾（`busyId` 清位）也一起作废。
+   */
+  const loadGen = useRef(0)
+  /**
+   * 「加载更多」的持有者令牌（#484 审查第 ③ 条）：只有当前持有者能清 `loadingMore`
+   * 与写页脚错误，被取消 / 被顶替的旧请求不许替新请求收尾。
+   */
+  const moreToken = useRef<symbol | null>(null)
   const pending = useRef<(() => void) | null>(null)
   const pendingMore = useRef<(() => void) | null>(null)
 
@@ -83,9 +88,12 @@ export default function BlockedPage() {
     setBusyId(null)
     setRowError(null)
     accountSeq.current += 1
+    moreToken.current = null
   }
 
   const loadFirstPage = useCallback(async (): Promise<BlocksLoad> => {
+    // 发起时的代次：本快照属于这一代，落地时 `nextBlocksLoad` 据此判新旧
+    const gen = loadGen.current
     try {
       const page = await fetchMyBlocks()
       return {
@@ -97,6 +105,7 @@ export default function BlockedPage() {
           blockedAt: item.blockedAt,
         })),
         nextCursor: page.nextCursor,
+        gen,
       }
     } catch (error) {
       // 401 不是「加载失败」，守卫已在跳登录；这里统一进错误态，重试即可。
@@ -108,6 +117,8 @@ export default function BlockedPage() {
   const runLoad = useCallback(async (): Promise<void> => {
     pending.current?.()
     pendingMore.current?.()
+    // 顶替在飞的「加载更多」：交回令牌，它的收尾不再有权清 `loadingMore`
+    moreToken.current = null
     setLoadingMore(false)
     setMoreError(false)
     setRowError(null)
@@ -118,7 +129,9 @@ export default function BlockedPage() {
     pending.current = run.cancel
     const next = await run.promise
     if (accountSeq.current !== seq) return
-    if (next) setLoad(next)
+    // `loadFirstPage` 产出的快照按发起时的代次落地：解除成功换代后，旧快照落地会被
+    // `nextBlocksLoad` 挡掉（不让刚解除的人被塞回来）
+    if (next) setLoad((prev) => nextBlocksLoad(prev, next))
   }, [loadFirstPage])
 
   useEffect(() => {
@@ -140,7 +153,13 @@ export default function BlockedPage() {
   const loadMore = useCallback(async (): Promise<void> => {
     if (load.kind !== 'ready' || load.nextCursor === null || loadingMore) return
     const seq = accountSeq.current
+    const gen = loadGen.current
     const cursor = load.nextCursor
+    // 自己那一枚令牌：只有持有者能清 `loadingMore` / 写页脚错误（#484 审查第 ③ 条）
+    const token = Symbol('blocks-more')
+    moreToken.current = token
+    const held = () =>
+      moreReplyLanded({ gen, genNow: loadGen.current, token, tokenNow: moreToken.current })
     setLoadingMore(true)
     setMoreError(false)
     const run = cancellable(
@@ -150,8 +169,9 @@ export default function BlockedPage() {
     pendingMore.current = run.cancel
     try {
       const page = await run.promise
-      // 被取消 / 换账号后到达的旧回包一律丢弃，不写进当前账号的列表。
-      if (page === null || accountSeq.current !== seq) return
+      // 被取消 / 换账号 / 已被顶替 / 已换代（解除成功）后到达的旧回包一律丢弃，
+      // 不写进当前列表：否则会把刚解除的人塞回来。
+      if (page === null || accountSeq.current !== seq || !held()) return
       setLoad((prev) =>
         prev.kind === 'ready'
           ? {
@@ -166,17 +186,21 @@ export default function BlockedPage() {
                 })),
               ],
               nextCursor: page.nextCursor,
+              // 快照属于发起时那一代：解除成功换代后，仅靠 `held()` 已挡住，这里保持
+              // 与 `prev.gen` 同代，落地后仍是可被更新的快照
+              gen: prev.gen,
             }
           : prev,
       )
     } catch (error) {
       // 取消不是失败：runLoad / 重进页会 cancel 在飞的「加载更多」，被取消的请求随后
       // reject 时不能误标成页脚失败（following 页 loadMore 同款判据）。
-      if (run.isCancelled() || accountSeq.current !== seq) return
+      if (run.isCancelled() || accountSeq.current !== seq || !held()) return
       console.debug('[miniapp] 黑名单：加载更多失败', error)
       setMoreError(true)
     } finally {
-      if (accountSeq.current === seq) setLoadingMore(false)
+      // 只有持有者能熄加载态：被顶替的旧请求不许替新请求收尾
+      if (held()) setLoadingMore(false)
     }
   }, [load, loadingMore])
 
@@ -190,9 +214,14 @@ export default function BlockedPage() {
       .then((state) => {
         if (accountSeq.current !== seq) return
         if (!state.blocked) {
+          // 列表换代：解除**之前**发出的首屏 / 加载更多回包里还有这个人，落地会把刚
+          // 摘掉的行塞回来、且再点一次是对已经不存在的拉黑发请求（#484 审查第 ② 条）。
+          // 只动 `loadGen`，不动 `accountSeq` —— 这仍是同一个账号，本行自己的收尾照旧。
+          const gen = loadGen.current + 1
+          loadGen.current = gen
           setLoad((prev) =>
             prev.kind === 'ready'
-              ? { ...prev, rows: prev.rows.filter((item) => item.id !== row.id) }
+              ? { ...prev, rows: prev.rows.filter((item) => item.id !== row.id), gen }
               : prev,
           )
           void Taro.showToast({ title: '已解除拉黑', icon: 'none' })

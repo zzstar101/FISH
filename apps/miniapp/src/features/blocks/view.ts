@@ -44,27 +44,93 @@ export type BlockEntryView = {
   blocked: boolean
 }
 
+/**
+ * 读到的拉黑态**带着它属于谁**（`key` = 账号|页主，与关注钮同一把钥匙）。
+ *
+ * 这是 #484 审查第 ① 条的修复：状态原本不带归属，换账号 / 换页主后 `null` 要等
+ * effect 到下一帧才写回，中间那一帧会拿**上一个页主**的 `blocked` 画出按钮 ——
+ * 于是在 A 的主页点了「解除拉黑」，实际发出的是对 B 的解除。带 key 后归属不符
+ * 就当没读到（不渲染、不可操作），不依赖 effect 的先后。
+ */
+export type BlockRead = { key: string; blocked: boolean }
+
+/** 读到的状态是否仍属于当前 owner；不属于 ⇒ 视作「没读到」（`null`）。 */
+export function blockReadOf(read: BlockRead | null, key: string): { blocked: boolean } | null {
+  if (read === null || read.key !== key) return null
+  return { blocked: read.blocked }
+}
+
 export function blockEntryView(input: {
-  read: { blocked: boolean } | null
+  read: BlockRead | null
+  key: string
   pending: boolean
 }): BlockEntryView {
-  if (input.read === null) {
+  const current = blockReadOf(input.read, input.key)
+  if (current === null) {
     return { visible: false, label: '拉黑该用户', busy: false, blocked: false }
   }
   if (input.pending) {
     return {
       visible: true,
-      label: input.read.blocked ? '解除中…' : '拉黑中…',
+      label: current.blocked ? '解除中…' : '拉黑中…',
       busy: true,
-      blocked: input.read.blocked,
+      blocked: current.blocked,
     }
   }
   return {
     visible: true,
-    label: input.read.blocked ? '解除拉黑' : '拉黑该用户',
+    label: current.blocked ? '解除拉黑' : '拉黑该用户',
     busy: false,
-    blocked: input.read.blocked,
+    blocked: current.blocked,
   }
+}
+
+/**
+ * 黑名单页的一屏数据（在纯模块里定义，落地判据才能单测）。
+ *
+ * `gen` 是**这份快照属于哪一代**：解除成功会让本地快照换代（见 `nextBlocksLoad`），
+ * 于是解除前发出的首屏回包即便后到，也塞不回那一行。
+ */
+export type BlockedRow = {
+  id: string
+  nickname: string
+  avatarUrl: string | null
+  blockedAt: string
+}
+
+export type BlocksLoad =
+  | { kind: 'loading' }
+  | { kind: 'ready'; rows: BlockedRow[]; nextCursor: string | null; gen: number }
+  | { kind: 'error' }
+
+/**
+ * 首屏回包落地判据（#484 审查第 ② 条）。
+ *
+ * 竞态：解除**成功**摘掉了那一行，而解除之前发出的首屏回包随后到达 —— 那份快照里
+ * 还带着这个人，直接落地就把刚解除的行塞回列表（用户看到「解除成功」却没少一行，
+ * 再点一次会打一个已经不存在的拉黑）。判据：快照代次比当前旧就不落地，
+ * 让本地已摘行的状态赢。
+ */
+export function nextBlocksLoad(prev: BlocksLoad, next: BlocksLoad): BlocksLoad {
+  if (prev.kind === 'ready' && next.kind === 'ready' && next.gen < prev.gen) return prev
+  return next
+}
+
+/**
+ * 「加载更多」的回包与收尾是否仍由发起者持有（#484 审查第 ③ 条）。
+ *
+ * 竞态：`pendingMore` 会被 `runLoad`（下拉刷新 / 重进页）取消并重新登记，两次请求
+ * 都能走到 `finally`；谁的 `finally` 都去清 `loadingMore` / 写页脚错误，后到的收尾
+ * 就会把**新请求**的加载态提前熄掉，或把新请求的失败算到旧请求头上。判据：代次
+ * 一致 **且** 令牌仍是自己那一枚，才有权清位与写错误。
+ */
+export function moreReplyLanded(input: {
+  gen: number
+  genNow: number
+  token: symbol
+  tokenNow: symbol | null
+}): boolean {
+  return input.gen === input.genNow && input.token === input.tokenNow
 }
 
 /**

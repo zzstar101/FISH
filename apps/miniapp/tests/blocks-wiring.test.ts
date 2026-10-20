@@ -47,6 +47,13 @@ describe('黑名单管理页：接线', () => {
     expect(code).toContain('moreError')
   })
 
+  test('首屏 / 加载更多的回包都先过持有者判据才落地（解除时不把刚摘掉的行塞回来）', async () => {
+    const code = await pageSource()
+    expect(code).toContain('nextBlocksLoad(prev, next)')
+    expect(code).toContain('moreReplyLanded({ gen, genNow: loadGen.current, token, tokenNow:')
+    expect(code).toContain('if (held()) setLoadingMore(false)')
+  })
+
   test('页面注册在 pkg-auth 分包，设置页隐私组有入口行', async () => {
     const appConfig = await Bun.file(new URL('../src/app.config.ts', import.meta.url)).text()
     expect(appConfig).toContain("'pages/blocked/index'")
@@ -72,7 +79,7 @@ describe('他人主页拉黑入口：接线', () => {
     expect(code).toContain('runBlockWrite(key, true)')
     expect(code).toContain('runBlockWrite(key, false)')
     // 服务端真值回填，不本地翻转
-    expect(code).toContain('setBlockRead({ blocked: state.blocked })')
+    expect(code).toContain('setBlockRead({ key, blocked: state.blocked })')
   })
 
   test('读状态之前不渲染、读失败保持隐藏；epoch 守卫与关注钮同一把钥匙', async () => {
@@ -80,9 +87,20 @@ describe('他人主页拉黑入口：接线', () => {
       new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url),
     ).text()
 
-    expect(code).toContain('blockEntryView({ read: blockRead, pending: blockBusy })')
+    expect(code).toContain(
+      'blockEntryView({ read: blockRead, key: followKey, pending: blockBusy })',
+    )
     expect(code).toContain('setBlockRead(null)')
     expect(code).toContain('blockKeyRef.current !== key')
+  })
+
+  test('渲染与点击都先过 blockReadOf：换页主/换账号时旧归属的状态既不可显示也不可点', async () => {
+    const code = await Bun.file(
+      new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url),
+    ).text()
+
+    expect(code).toContain('blockReadOf(blockRead, followKey)')
+    expect(code).toContain('if (blockBusy || current === null || !canFollow) return')
   })
 
   test('写失败给域内稳定文案，401 给登录文案（不裸抛）', async () => {

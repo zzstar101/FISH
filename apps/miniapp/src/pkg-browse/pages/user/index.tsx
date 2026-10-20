@@ -11,7 +11,13 @@ import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
 import { fetchBlockState, setBlock } from '@/features/blocks/api'
-import { blockConfirmModal, blockEntryView, describeBlockFailure } from '@/features/blocks/view'
+import {
+  type BlockRead,
+  blockConfirmModal,
+  blockEntryView,
+  blockReadOf,
+  describeBlockFailure,
+} from '@/features/blocks/view'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
@@ -438,11 +444,14 @@ export default function UserHome() {
    *   端上跟同一页的关注钮保持一致更顺）。
    * - 拉黑先过原生确认弹窗（后果说明与 PC 确认弹窗同文，见 `blockConfirmModal`）；
    *   解除是恢复性动作，直接执行。
-   * - 成功以服务端 `{blocked}` 为准回填，不本地翻转；epoch 守卫与关注钮同一把钥匙
+   * - 成功以服务端 `{blocked}` 为准回填，不本地翻转；回包与 finally 用 epoch 守卫
    *   （`blockKeyRef` 与 `followKeyRef` 同形状：账号|页主，换账号 / 换页主即作废）。
+   * - **读到的状态自带归属**（`BlockRead.key`）：渲染与点击都先过 `blockReadOf`，
+   *   归属不符就当没读到 —— 否则换页主的那一帧会拿上一个页主的 `blocked` 画出按钮，
+   *   于是在 A 的主页点「解除拉黑」发出对 B 的解除（#484 审查第 ① 条）。
    * - 写失败给域内稳定文案（`describeBlockFailure`），401 给登录文案。
    */
-  const [blockRead, setBlockRead] = useState<{ blocked: boolean } | null>(null)
+  const [blockRead, setBlockRead] = useState<BlockRead | null>(null)
   const [blockBusy, setBlockBusy] = useState(false)
   const blockKeyRef = useRef(followKey)
   blockKeyRef.current = followKey
@@ -460,7 +469,7 @@ export default function UserHome() {
     void run.promise
       .then((state) => {
         if (blockKeyRef.current !== key || state === null) return
-        setBlockRead({ blocked: state.blocked })
+        setBlockRead({ key, blocked: state.blocked })
       })
       .catch((error: unknown) => {
         // 读失败保持隐藏（同关注钮「不猜状态」）；401 守卫已在跳登录，不再弹文案
@@ -479,7 +488,7 @@ export default function UserHome() {
     void run.promise
       .then((state) => {
         if (blockKeyRef.current !== key || state === null) return
-        setBlockRead({ blocked: state.blocked })
+        setBlockRead({ key, blocked: state.blocked })
         void Taro.showToast({ title: state.blocked ? '已拉黑' : '已解除拉黑', icon: 'none' })
       })
       .catch((error: unknown) => {
@@ -497,9 +506,11 @@ export default function UserHome() {
   }
 
   const toggleBlock = () => {
-    if (blockBusy || blockRead === null || !canFollow) return
+    // 归属不符的旧状态不可操作：点下去会打错人（同 `blockEntryView` 的判据）
+    const current = blockReadOf(blockRead, followKey)
+    if (blockBusy || current === null || !canFollow) return
     const key = followKey
-    if (blockRead.blocked) {
+    if (current.blocked) {
       runBlockWrite(key, false)
       return
     }
@@ -514,7 +525,7 @@ export default function UserHome() {
       .catch(() => undefined)
   }
 
-  const blockEntry = blockEntryView({ read: blockRead, pending: blockBusy })
+  const blockEntry = blockEntryView({ read: blockRead, key: followKey, pending: blockBusy })
 
   /** 展开态点击收起 / 折叠态点击展开；短签名（`!signHasMore`）点击无效果 */
   const toggleSign = () => {
