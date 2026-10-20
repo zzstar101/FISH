@@ -280,6 +280,19 @@ export default function Settings() {
             <Text className="st__rvalue">{commentPolicy}</Text>
             <View className="st__arrow" />
           </View>
+
+          {/* 黑名单管理（#466 端上批次 / #473）：列出我拉黑的人 + 逐行解除。
+              拉黑入口在他人主页；这里只做管理。 */}
+          <View
+            className="st__row"
+            onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/blocked/index' })}
+          >
+            <View className="st__ric">
+              <Image className="st__ric-ic" src={ICONS.shieldLine} mode="aspectFit" />
+            </View>
+            <Text className="st__rlabel">黑名单</Text>
+            <View className="st__arrow" />
+          </View>
         </View>
 
         {/* ============================ 关于 ============================ */}
