@@ -1224,3 +1224,164 @@ describe('loadWechatEnv（#86 评审 P1：配置校验）', () => {
     expect(loadWechatEnv({ WECHAT_TRANSPORT: 'stub' })).toEqual({ transport: 'stub' })
   })
 })
+
+describe('POST /auth/phone/bind（#204：live 换取）', () => {
+  const originalFetch = globalThis.fetch
+
+  /** live 装配：出码与换号共用同一份 token 缓存，因此上游先要一次 stable_token。 */
+  const liveApp = () =>
+    createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl }, undefined, undefined, undefined, {
+      transport: 'live',
+      appid: 'wx-test-appid',
+      appSecret: 'test-secret',
+      qrEnvVersion: 'release',
+    })
+
+  /**
+   * 打桩全局 fetch：live 下换号要走 `stable_token` + `getuserphonenumber` 两条请求。
+   * 返回的 `phoneCalls` 只记换号那一条，避免把取 token 的请求混进断言。
+   */
+  function stubWechat(phoneResponse: () => Response) {
+    const phoneCalls: Array<{ url: URL; init: RequestInit | undefined }> = []
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = new URL(input instanceof URL ? input.href : String(input))
+      if (url.pathname === '/cgi-bin/stable_token') {
+        return new Response(JSON.stringify({ access_token: 'tok-test', expires_in: 7200 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      phoneCalls.push({ url, init })
+      return phoneResponse()
+    }) as unknown as typeof fetch
+    return { phoneCalls, restore: () => (globalThis.fetch = originalFetch) }
+  }
+
+  test('换取成功：200 返回掩码号，/me 出 phoneBound；上游拿到的是 code 不是号码', async () => {
+    const { phoneCalls, restore } = stubWechat(
+      () =>
+        new Response(
+          JSON.stringify({
+            errcode: 0,
+            phone_info: { purePhoneNumber: '19912340001', countryCode: '86' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    )
+    try {
+      const studentNo = '202101000301'
+      await register({ studentNo, nickname: 'live 换号用户' })
+      const cookie = sessionCookie(await login(studentNo))
+
+      const res = await liveApp().request(
+        '/auth/phone/bind',
+        postWith(cookie, { code: 'wx-phone-code-1' }),
+      )
+      expect(res.status).toBe(200)
+      const text = await res.text()
+      expect(JSON.parse(text)).toEqual({ phoneBound: true, maskedPhone: '199****0001' })
+      expect(text).not.toContain('19912340001')
+
+      // 上游只收到动态 code（一次性令牌），不是号码本身；且打的确实是换号端点。
+      const sentCall = phoneCalls[0]
+      if (sentCall === undefined) throw new Error('上游没有被调用')
+      expect(sentCall.url.pathname).toBe('/wxa/business/getuserphonenumber')
+      expect(JSON.parse(sentCall.init?.body as string)).toEqual({ code: 'wx-phone-code-1' })
+
+      const me = AuthResponseSchema.parse(
+        await (await liveApp().request('/me', withCookie(cookie))).json(),
+      )
+      expect(me.user.phoneBound).toBe(true)
+      expect(me.user.maskedPhone).toBe('199****0001')
+    } finally {
+      restore()
+    }
+  })
+
+  test('同号重复绑定：幂等 200，#464 之外不改别的状态', async () => {
+    const { restore } = stubWechat(
+      () =>
+        new Response(
+          JSON.stringify({ errcode: 0, phone_info: { purePhoneNumber: '19912340002' } }),
+          { status: 200 },
+        ),
+    )
+    try {
+      const studentNo = '202101000305'
+      await register({ studentNo, nickname: 'live 幂等' })
+      const cookie = sessionCookie(await login(studentNo))
+
+      const app = liveApp()
+      const first = await app.request('/auth/phone/bind', postWith(cookie, { code: 'c1' }))
+      expect(first.status).toBe(200)
+      const second = await app.request('/auth/phone/bind', postWith(cookie, { code: 'c2' }))
+      expect(second.status).toBe(200)
+      expect(await second.json()).toEqual({ phoneBound: true, maskedPhone: '199****0002' })
+    } finally {
+      restore()
+    }
+  })
+
+  test('code 无效：422 PHONE_CODE_INVALID，且原会话不受影响', async () => {
+    const { restore } = stubWechat(
+      () =>
+        new Response(JSON.stringify({ errcode: 40029, errmsg: 'invalid code' }), { status: 200 }),
+    )
+    try {
+      const studentNo = '202101000302'
+      await register({ studentNo, nickname: 'live 无效 code' })
+      const cookie = sessionCookie(await login(studentNo))
+
+      const app = liveApp()
+      const res = await app.request('/auth/phone/bind', postWith(cookie, { code: 'bad-code' }))
+      expect(res.status).toBe(422)
+      expect(await res.json()).toMatchObject({ error: { code: 'PHONE_CODE_INVALID' } })
+
+      // 绑定失败不能把用户踢下线：会话照常可用，手机号仍未绑定。
+      const me = await app.request('/me', withCookie(cookie))
+      expect(me.status).toBe(200)
+      expect(AuthResponseSchema.parse(await me.json()).user.phoneBound).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  test('号码不是大陆号：422 PHONE_NUMBER_UNSUPPORTED，与上游故障区分开', async () => {
+    const { restore } = stubWechat(
+      () =>
+        new Response(
+          JSON.stringify({
+            errcode: 0,
+            phone_info: { purePhoneNumber: '61234567', countryCode: '852' },
+          }),
+          { status: 200 },
+        ),
+    )
+    try {
+      const studentNo = '202101000304'
+      await register({ studentNo, nickname: 'live 港号' })
+      const cookie = sessionCookie(await login(studentNo))
+
+      const res = await liveApp().request('/auth/phone/bind', postWith(cookie, { code: 'hk-code' }))
+      expect(res.status).toBe(422)
+      expect(await res.json()).toMatchObject({ error: { code: 'PHONE_NUMBER_UNSUPPORTED' } })
+    } finally {
+      restore()
+    }
+  })
+
+  test('上游故障：502 PHONE_UPSTREAM_FAILED（不当成用户 code 错误）', async () => {
+    const { restore } = stubWechat(() => new Response('upstream boom', { status: 500 }))
+    try {
+      const studentNo = '202101000303'
+      await register({ studentNo, nickname: 'live 上游炸' })
+      const cookie = sessionCookie(await login(studentNo))
+
+      const res = await liveApp().request('/auth/phone/bind', postWith(cookie, { code: 'any' }))
+      expect(res.status).toBe(502)
+      expect(await res.json()).toMatchObject({ error: { code: 'PHONE_UPSTREAM_FAILED' } })
+    } finally {
+      restore()
+    }
+  })
+})

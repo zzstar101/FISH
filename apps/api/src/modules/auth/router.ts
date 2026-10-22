@@ -23,7 +23,11 @@ import type { Db } from '@fish/db/client'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type Context, type Handler, Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
-import { createWechatAccessTokenService, WechatPlatformError } from '../wechat/access-token'
+import {
+  createWechatAccessTokenService,
+  type WechatAccessTokenService,
+  WechatPlatformError,
+} from '../wechat/access-token'
 import { AuthError } from './errors'
 import { maskPhone } from './me'
 import { type AccountDeletionWriteGuard, type AuthVariables, createRequireAuth } from './middleware'
@@ -33,6 +37,11 @@ import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
 import type { VerificationService } from './verification-service'
 import { VerificationError } from './verification-store'
+import {
+  createWechatPhoneClient,
+  PhoneCodeInvalidError,
+  PhoneNumberUnsupportedError,
+} from './wechat-phone'
 import { createWechatMiniappCodeClient, type WechatMiniappCodeClient } from './wechat-platform'
 import {
   createLiveWechatIdentityProvider,
@@ -57,6 +66,35 @@ function toErrorResponse(c: Context, error: unknown): Response {
     return c.json(errorBody(error.code, error.message), error.status)
   }
   throw error
+}
+
+/**
+ * 手机号换取（#204）的三类失败面，彼此不能混为一谈——端上的引导完全不同：
+ *
+ * - `PHONE_CODE_INVALID`(422)：code 无效 / 过期 / 已被消费 → 重新点一次授权按钮；
+ * - `PHONE_NUMBER_UNSUPPORTED`(422)：换取成功但号码不是 11 位大陆手机号 → 换号或走别的绑定方式；
+ * - `PHONE_UPSTREAM_FAILED`(502)：上游不可达 / 超时 / 凭证失效重试后仍失败 → 「稍后再试」，
+ *   **原会话不受影响**（本端点只追加绑定，不签发票据、不动 cookie）。
+ *
+ * 把上游故障伪装成用户 code 错误会让用户对着正确的授权反复重试，所以这里坚持分开。
+ */
+function toPhoneBindErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof PhoneCodeInvalidError) {
+    return c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效或已过期'), 422)
+  }
+  if (error instanceof PhoneNumberUnsupportedError) {
+    return c.json(
+      errorBody('PHONE_NUMBER_UNSUPPORTED', '暂不支持该手机号，请使用中国大陆手机号'),
+      422,
+    )
+  }
+  if (error instanceof WechatPlatformError) {
+    // 502 留一行可排障的痕迹。`WechatPlatformError.message` 是本地生成的（只含错误类型名 /
+    // HTTP 状态 / errcode），不含 code、access_token、AppSecret 或明文号码。
+    console.warn(`[auth] phone bind upstream failed (userId=${c.get('userId')}):`, error.message)
+    return c.json(errorBody('PHONE_UPSTREAM_FAILED', '手机号服务暂不可用，请稍后重试'), 502)
+  }
+  return toErrorResponse(c, error)
 }
 
 /**
@@ -120,26 +158,35 @@ export function createAuthModule(options: {
           provider: wechatProvider,
         })
       : null
-  // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）。
-  const phoneResolver: ((code: string) => string) | null =
-    options.wechat.transport === 'stub' ? (code) => code.trim() : null
-
   /**
-   * 微信平台侧能力（#197）：**整个进程只在这里创建一份**缓存与刷新循环。
-   * 只有 `live` 才构造——`off` 显式 503、`stub` 生成不了真码（出码为 null，由端上走
-   * 开发者工具），两者都不该去调上游。将来 #204 的手机号换取复用同一个 `tokens` 实例。
+   * 微信平台侧能力（#197 出码 / #204 手机号换取）：**整个进程只在这里创建一份** token 缓存与
+   * 刷新循环，两条链路共用同一个 `tokens` 实例——`access_token` 是 appid 级别的全局单例资源，
+   * 各持一份缓存等于两边互相把对方的凭证刷失效。
+   *
+   * 只有 `live` 才构造：`off` 显式 503、`stub` 生成不了真码（出码为 null，由端上走开发者工具），
+   * 两者都不该去调上游。
    */
-  const wechatPlatform: { codes: WechatMiniappCodeClient } | null =
+  const wechatTokens: WechatAccessTokenService | null =
     options.wechat.transport === 'live'
-      ? {
-          codes: createWechatMiniappCodeClient({
-            tokens: createWechatAccessTokenService({
-              appid: options.wechat.appid,
-              appSecret: options.wechat.appSecret,
-            }),
-          }),
-        }
+      ? createWechatAccessTokenService({
+          appid: options.wechat.appid,
+          appSecret: options.wechat.appSecret,
+        })
       : null
+  const wechatPlatform: { codes: WechatMiniappCodeClient } | null =
+    wechatTokens === null
+      ? null
+      : { codes: createWechatMiniappCodeClient({ tokens: wechatTokens }) }
+  const wechatPhone =
+    wechatTokens === null ? null : createWechatPhoneClient({ tokens: wechatTokens })
+  // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）：
+  // `stub` 下 code 即明文号码（只允许非生产显式开启），`live` 交给上游核验，`off` 保持 null → 503。
+  const phoneResolver: ((code: string) => Promise<string>) | null =
+    options.wechat.transport === 'stub'
+      ? async (code) => code.trim()
+      : wechatPhone === null
+        ? null
+        : (code) => wechatPhone.resolve(code)
   const scanTickets = createScanTicketService({ db: options.db, sessions: wechatSessions })
   const scanTicketLimiter = createScanTicketRateLimiter()
 
@@ -180,11 +227,10 @@ export function createAuthModule(options: {
       )
 
     try {
-      // stub：phone code 即明文手机号（getPhoneNumber 真实接入需要企业主体 + AppSecret，
-      // 到位后在 resolver 内调 phonenumber.getPhoneNumber，绑定语义不变）。
-      // off / live 下 phoneResolver 为 null：live 的解析器接入前，绑定入口显式 503，
-      // 绝不把「格式正确的 code」当成已验证的手机号（格式正确 ≠ 持有该号码）。
-      const phone = phoneResolver(parsed.data.code)
+      // `stub`：phone code 即明文手机号（只允许非生产显式开启）。`live`：code 交给微信
+      // `phonenumber.getUserPhoneNumber` 换取**已由平台核验**的号码——格式正确不是归属证明，
+      // 所以只有上游返回的号码才允许落库。`off` 已在上面 503，不会走到这里。
+      const phone = await phoneResolver(parsed.data.code)
       if (!/^1\d{10}$/.test(phone)) {
         return c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效'), 422)
       }
@@ -193,7 +239,7 @@ export function createAuthModule(options: {
         PhoneBindResponseSchema.parse({ phoneBound: true, maskedPhone: maskPhone(phone) }),
       )
     } catch (error) {
-      return toErrorResponse(c, error)
+      return toPhoneBindErrorResponse(c, error)
     }
   })
 
