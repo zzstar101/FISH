@@ -91,7 +91,7 @@ function toPhoneBindErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof WechatPlatformError) {
     // 502 留一行可排障的痕迹。`WechatPlatformError.message` 是本地生成的（只含错误类型名 /
     // HTTP 状态 / errcode），不含 code、access_token、AppSecret 或明文号码。
-    console.warn('[auth] phone bind upstream failed:', error.message)
+    console.warn(`[auth] phone bind upstream failed (userId=${c.get('userId')}):`, error.message)
     return c.json(errorBody('PHONE_UPSTREAM_FAILED', '手机号服务暂不可用，请稍后重试'), 502)
   }
   return toErrorResponse(c, error)

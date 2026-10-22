@@ -122,8 +122,11 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
      * 绑定手机号（#86 C 节）：phone code（stub 下即明文手机号）→ 写 `users.phone`。
      * 只追加绑定，不动 session；唯一索引兜底并发，冲突报 409。
      * 冻结的语义：同一用户重复提交同一号码 = 幂等成功（UPDATE 命中自身行，不撞唯一索引）。
-     * 已知缺口（不在本期）：解绑 / 换绑没有入口——`users.phone` 一旦写入无法清除，
-     * 真实 getPhoneNumber 接入前需单开 Issue 冻结换绑规则。
+     *
+     * 已知缺口（**不在 #204 范围**，规则待 #86 冻结）：这里没有 `phone IS NULL` 守卫，所以
+     * 再绑定一个**不同**号码会直接覆盖旧号（因为手机号来自平台核验，覆盖不算冒用，但既无审计
+     * 也无确认步）；解绑则确实没有通路（列不清空）。要收紧成「首次绑定后不可换绑」或「换绑需
+     * 显式确认」都得先由产品冻结规则，不在本单顺手加门槛。
      */
     async bindPhone(userId: string, phone: string): Promise<void> {
       try {

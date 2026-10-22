@@ -1282,14 +1282,41 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
       expect(JSON.parse(text)).toEqual({ phoneBound: true, maskedPhone: '199****0001' })
       expect(text).not.toContain('19912340001')
 
-      // 上游只收到动态 code（一次性令牌），不是号码本身。
-      expect(JSON.parse(phoneCalls[0]?.init?.body as string)).toEqual({ code: 'wx-phone-code-1' })
+      // 上游只收到动态 code（一次性令牌），不是号码本身；且打的确实是换号端点。
+      const sentCall = phoneCalls[0]
+      if (sentCall === undefined) throw new Error('上游没有被调用')
+      expect(sentCall.url.pathname).toBe('/wxa/business/getuserphonenumber')
+      expect(JSON.parse(sentCall.init?.body as string)).toEqual({ code: 'wx-phone-code-1' })
 
       const me = AuthResponseSchema.parse(
         await (await liveApp().request('/me', withCookie(cookie))).json(),
       )
       expect(me.user.phoneBound).toBe(true)
       expect(me.user.maskedPhone).toBe('199****0001')
+    } finally {
+      restore()
+    }
+  })
+
+  test('同号重复绑定：幂等 200，#464 之外不改别的状态', async () => {
+    const { restore } = stubWechat(
+      () =>
+        new Response(
+          JSON.stringify({ errcode: 0, phone_info: { purePhoneNumber: '19912340002' } }),
+          { status: 200 },
+        ),
+    )
+    try {
+      const studentNo = '202101000305'
+      await register({ studentNo, nickname: 'live 幂等' })
+      const cookie = sessionCookie(await login(studentNo))
+
+      const app = liveApp()
+      const first = await app.request('/auth/phone/bind', postWith(cookie, { code: 'c1' }))
+      expect(first.status).toBe(200)
+      const second = await app.request('/auth/phone/bind', postWith(cookie, { code: 'c2' }))
+      expect(second.status).toBe(200)
+      expect(await second.json()).toEqual({ phoneBound: true, maskedPhone: '199****0002' })
     } finally {
       restore()
     }

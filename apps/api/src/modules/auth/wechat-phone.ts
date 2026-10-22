@@ -93,7 +93,7 @@ export function createWechatPhoneClient(deps: {
         signal: AbortSignal.timeout(timeoutMs),
       })
     } catch (error) {
-      // 超时 / DNS / 连接失败。只带错误类型名——异常原文可能带带 token 的 URL。
+      // 超时 / DNS / 连接失败。只带错误类型名——异常原文可能带着含 token 的 URL。
       const kind = error instanceof Error ? error.name : 'unknown'
       throw new WechatPlatformError(`getuserphonenumber 请求失败（${kind}）`)
     }
@@ -123,6 +123,10 @@ export function createWechatPhoneClient(deps: {
     if (info === undefined || info === null) {
       throw new WechatPlatformError('getuserphonenumber 响应缺少 phone_info')
     }
+    // 国家码比号码形态更硬：`+1` 之类的 11 位号码也长得像大陆号，只靠正则会把境外号落库。
+    // 上游没给 countryCode 时退回形态判断（不因此拒绝，否则一次字段缺失就废掉整个绑定）。
+    const countryCode = typeof info.countryCode === 'string' ? info.countryCode.trim() : ''
+    if (countryCode !== '' && countryCode !== '86') throw new PhoneNumberUnsupportedError()
     // 只有**拿到了字符串**却不像大陆号码，才算「号码不支持」（用户侧可纠正）；
     // 两个字段都缺失 / 不是字符串，说明上游契约被破坏，必须报上游故障——
     // 否则用户会照着「请使用中国大陆手机号」去换号，而问题根本不在他那一边。

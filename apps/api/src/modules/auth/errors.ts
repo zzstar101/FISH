@@ -7,11 +7,11 @@ import type { AuthErrorCodeAll } from '@fish/contracts/auth/verification'
  * `AuthErrorCodeAll` = 会话子域（`session.ts`）+ 校园认证子域（`verification.ts`）
  * + 扫码登录子域（`scan.ts`）。
  *
- * 状态码取值覆盖三个子域中**经 AuthError 抛出**的那些：401 / 404（#197 票据无效，四种原因
- * 刻意合并）/ 409 / 429。**当前没有任何调用方用 `new AuthError(..., 502, ...)`**：两处 502
- * （#197 平台取码失败、#204 `PHONE_UPSTREAM_FAILED`）都在 router 里 inline 返回，因为它们的
- * 文案要按具体失败面区分。502 仍留在联合类型里，是为了「映射只有一处」——将来若有 service
- * 需要表达上游故障，不必再改这个类型。
+ * 状态码取值里**当前真实被用到**的是 401 / 404（#197 票据无效，四种原因刻意合并）/ 409；
+ * 429 与 502 目前没有 `new AuthError(...)` 调用方——429 由限流中间件 inline 返回，两处 502
+ * （#197 平台取码失败、#204 `PHONE_UPSTREAM_FAILED`）在 router 里 inline 返回，文案要按具体
+ * 失败面区分。两者仍留在联合类型里，是为了「映射只有一处」：将来 service 要表达限流或上游
+ * 故障时不必再改这个类型。
  *
  * 同样由 router 直接返回、不经 AuthError 的还有：`VALIDATION_FAILED`(422)、
  * `WECHAT_DISABLED`(503)、`PHONE_CODE_INVALID`(422)、`PHONE_NUMBER_UNSUPPORTED`(422)、

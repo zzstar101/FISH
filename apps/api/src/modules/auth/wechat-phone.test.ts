@@ -121,6 +121,39 @@ describe('createWechatPhoneClient（#204：live 手机号换取）', () => {
     )
   })
 
+  test('国家码不是 86：即使号码形态像大陆号也判不支持；缺 countryCode 时退回形态判断', async () => {
+    const { service } = fakeTokens(['tok-1'])
+
+    // +1 的 11 位号码形态与大陆号一致，必须靠 countryCode 拦住。
+    const usNumber = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            errcode: 0,
+            phone_info: { phoneNumber: '19912345678', countryCode: '1' },
+          }),
+          { status: 200 },
+        ),
+    )
+    await expect(
+      createWechatPhoneClient({ tokens: service, fetchImpl: usNumber.fetchImpl }).resolve('c'),
+    ).rejects.toBeInstanceOf(PhoneNumberUnsupportedError)
+
+    // 上游没给 countryCode 时不因此拒绝：形态通过即接受。
+    const noCountry = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({ errcode: 0, phone_info: { purePhoneNumber: '19912345678' } }),
+          { status: 200 },
+        ),
+    )
+    expect(
+      await createWechatPhoneClient({ tokens: service, fetchImpl: noCountry.fetchImpl }).resolve(
+        'c',
+      ),
+    ).toBe('19912345678')
+  })
+
   test('取 token 就失败（上游不可达 / 退避窗口内）：直接上抛上游故障，不发换号请求', async () => {
     const failing: WechatAccessTokenService = {
       async get() {
