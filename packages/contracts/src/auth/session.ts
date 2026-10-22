@@ -56,8 +56,18 @@ export const AuthErrorCodeSchema = z.enum([
    * 端上据此引导「微信登录暂不可用」，而不是当作登录失败无限重试。
    */
   'WECHAT_DISABLED',
-  /** #86 C：phone code 解析失败（stub 下即「不是 11 位手机号」）。422。 */
+  /** #86 C：phone code 解析失败（stub 下即「不是 11 位手机号」；live 下是微信判 code 无效 / 过期 / 已用）。422。 */
   'PHONE_CODE_INVALID',
+  /**
+   * #204：微信换取成功，但返回的号码不是 11 位大陆手机号（本产品只服务大陆号）。
+   * 422——用户侧可纠正（换号或走其它绑定方式），与上游故障分开。
+   */
+  'PHONE_NUMBER_UNSUPPORTED',
+  /**
+   * #204：手机号换取的上游故障（不可达 / 超时 / 凭证失效重试一次后仍失败 / 响应结构非法）。
+   * 502——「稍后再试」；不得伪装成 code 错误，否则用户会对着正确授权反复重试。
+   */
+  'PHONE_UPSTREAM_FAILED',
   /** #86 C：手机号已被其他账号绑定（唯一索引兜底并发换绑）。409。 */
   'PHONE_ALREADY_BOUND',
 ])
