@@ -68,7 +68,8 @@ export type MailTransportEnv =
 
 /**
  * SMTP 投递配置。`secure=true` 是隐式 TLS（如 465，连接即握手），不支持 STARTTLS。
- * `secure=false` 走明文 TCP（口令也明文），只给本机测试用：`NODE_ENV=production` 下启动即失败。
+ * `secure=false` 走明文 TCP（口令也明文），只允许连回环地址（本机测试用）：护栏不依赖 `NODE_ENV`
+ * ——生产部署路径不设置它（见 docs/deployment.md §4），按主机判定才拦得住明文口令出网。
  */
 export type SmtpEnv = {
   host: string
@@ -101,9 +102,9 @@ function loadSmtpEnv(source: Record<string, string | undefined>): SmtpEnv {
     throw new Error('环境变量校验失败：SMTP_SECURE 只能是 true 或 false（默认 true，隐式 TLS）')
   }
   const secure = rawSecure === 'true'
-  if (!secure && source.NODE_ENV?.trim().toLowerCase() === 'production') {
+  if (!secure && !['127.0.0.1', '::1', 'localhost'].includes(host.toLowerCase())) {
     throw new Error(
-      '环境变量校验失败：生产环境（NODE_ENV=production）禁止 SMTP_SECURE=false（口令会明文传输）',
+      '环境变量校验失败：SMTP_SECURE=false 只允许 SMTP_HOST 为回环地址（口令会明文传输）',
     )
   }
   return { host, port, secure, user, pass, from }

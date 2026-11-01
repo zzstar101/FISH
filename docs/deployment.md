@@ -372,7 +372,7 @@ AI_POLISH_MODEL=deepseek-flash
 
 `SMTP_PASS` 是飞书邮箱后台为该账号生成的 **SMTP 专用密码**，不是登录密码。`SMTP_PORT` /
 `SMTP_SECURE` 可省略（默认 465 / true）；只支持隐式 TLS，不支持 587 STARTTLS；`SMTP_SECURE=false`
-（明文）在 `NODE_ENV=production` 下启动即失败。仍可改用 Resend：`MAIL_TRANSPORT=resend` 加
+（明文）只允许 `SMTP_HOST` 为回环地址，否则启动即失败（不依赖 `NODE_ENV`）。仍可改用 Resend：`MAIL_TRANSPORT=resend` 加
 `RESEND_API_KEY` / `RESEND_FROM` 两行（需先在 Resend 验证发件域名）。
 
 **只有首次部署**才用下面这段整份写入；两个密钥都从 `read` 进内存再落盘，不要直接粘在命令里——

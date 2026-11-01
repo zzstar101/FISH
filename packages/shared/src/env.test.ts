@@ -397,8 +397,13 @@ describe('loadMailTransportEnv 的 smtp', () => {
   })
 
   test('SMTP_PORT / SMTP_SECURE 可显式覆盖', () => {
-    const env = loadMailTransportEnv({ ...complete, SMTP_PORT: '2525', SMTP_SECURE: 'false' })
-    expect(env).toMatchObject({ smtp: { port: 2525, secure: false } })
+    const env = loadMailTransportEnv({
+      ...complete,
+      SMTP_HOST: '127.0.0.1',
+      SMTP_PORT: '2525',
+      SMTP_SECURE: 'false',
+    })
+    expect(env).toMatchObject({ smtp: { host: '127.0.0.1', port: 2525, secure: false } })
   })
 
   test('缺任一必填项都启动失败，错误只报变量名、不回显口令', () => {
@@ -420,9 +425,9 @@ describe('loadMailTransportEnv 的 smtp', () => {
     expect(() => loadMailTransportEnv({ ...complete, SMTP_SECURE: 'ssl' })).toThrow('SMTP_SECURE')
   })
 
-  test('生产环境禁止 SMTP_SECURE=false（口令不走明文）', () => {
-    expect(() =>
-      loadMailTransportEnv({ ...complete, SMTP_SECURE: 'false', NODE_ENV: 'production' }),
-    ).toThrow('SMTP_SECURE=false')
+  test('SMTP_SECURE=false 只允许回环主机（不依赖 NODE_ENV，口令不明文出网）', () => {
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_SECURE: 'false' })).toThrow(
+      'SMTP_SECURE=false',
+    )
   })
 })

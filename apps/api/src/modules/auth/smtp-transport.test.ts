@@ -14,6 +14,10 @@ type FakeOptions = {
   reject?: Record<string, string>
   /** 不发 220 问候，用来触发总超时。 */
   silent?: boolean
+  /** 不回复 QUIT（邮件已被 DATA 250 接收）。 */
+  quitSilent?: boolean
+  /** EHLO 回一串永不结束的 `250-` 续行。 */
+  ehloFlood?: boolean
 }
 
 type ConnState = { buffer: string; inData: boolean; data: string; login: 'none' | 'user' | 'pass' }
@@ -49,6 +53,8 @@ function startFakeSmtp(options: FakeOptions = {}) {
     if (rejected) return rejected
     switch (verb) {
       case 'EHLO':
+        if (options.ehloFlood)
+          return Array.from({ length: 2000 }, () => `250-${'x'.repeat(60)}`).join('\r\n')
         return `250-fake.local\r\n250-AUTH ${options.auth ?? 'LOGIN PLAIN'}\r\n250 8BITMIME`
       case 'AUTH':
         if (line.toUpperCase() === 'AUTH LOGIN') {
@@ -64,7 +70,7 @@ function startFakeSmtp(options: FakeOptions = {}) {
         state.data = ''
         return '354 End data with <CR><LF>.<CR><LF>'
       case 'QUIT':
-        return '221 2.0.0 Bye'
+        return options.quitSilent ? null : '221 2.0.0 Bye'
       default:
         return '502 5.5.2 Error: command not recognized'
     }
@@ -125,6 +131,13 @@ function transportFor(port: number, timeoutMs?: number) {
     from: '鱼小应 <noreply@example.com>',
     timeoutMs,
   })
+}
+
+/** 轮询等待服务端回调落地（close 回调是异步的，不靠固定 sleep）。 */
+async function waitFor(condition: () => boolean, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!condition() && Date.now() < deadline) await Bun.sleep(5)
+  expect(condition()).toBe(true)
 }
 
 const b64 = (value: string) => Buffer.from(value, 'utf8').toString('base64')
@@ -195,7 +208,7 @@ describe('createSmtpTransport', () => {
     }
     expect(unb64(parts[0]?.body ?? '')).toBe(mail.text.replace(/\n/g, '\r\n'))
     expect(unb64(parts[1]?.body ?? '')).toBe(mail.html.replace(/\n/g, '\r\n'))
-    expect(fake.closedConnections()).toBe(1)
+    await waitFor(() => fake?.closedConnections() === 1)
   })
 
   test('只宣告 LOGIN 时走 AUTH LOGIN 两步', async () => {
@@ -221,15 +234,28 @@ describe('createSmtpTransport', () => {
     expect(message).toBe('SMTP RCPT TO 失败 (550)')
     expect(message).not.toContain('student@school.edu.cn')
     expect(fake.commands).not.toContain('DATA')
-    await Bun.sleep(50)
-    expect(fake.closedConnections()).toBe(1)
+    await waitFor(() => fake?.closedConnections() === 1)
   })
 
   test('服务器无响应：总超时后失败并关闭连接', async () => {
     fake = startFakeSmtp({ silent: true })
     await expect(transportFor(fake.port, 200).send(mail)).rejects.toThrow('SMTP 投递超时')
-    await Bun.sleep(50)
-    expect(fake.closedConnections()).toBe(1)
+    await waitFor(() => fake?.closedConnections() === 1)
+  })
+
+  test('DATA 已 250 接收而 QUIT 无回复：按成功返回，不等满总超时', async () => {
+    fake = startFakeSmtp({ quitSilent: true })
+    const started = Date.now()
+    await transportFor(fake.port, 5_000).send(mail)
+    expect(Date.now() - started).toBeLessThan(3_000)
+    expect(fake.messages).toHaveLength(1)
+    await waitFor(() => fake?.closedConnections() === 1)
+  })
+
+  test('永不结束的多行回复超过上限即失败，不无限攒内存', async () => {
+    fake = startFakeSmtp({ ehloFlood: true })
+    await expect(transportFor(fake.port).send(mail)).rejects.toThrow('SMTP 回复过长')
+    await waitFor(() => fake?.closedConnections() === 1)
   })
 
   test('收件地址带 CRLF 直接拒绝（不建连）；主题里的 CRLF 被 encoded-word 吃掉', async () => {
@@ -246,15 +272,22 @@ describe('createSmtpTransport', () => {
   })
 
   test('SMTP_FROM 格式非法时装配即失败', () => {
-    expect(() =>
-      createSmtpTransport({
-        host: '127.0.0.1',
-        port: 25,
-        secure: false,
-        user: 'u',
-        pass: 'p',
-        from: '鱼小应 noreply-at-example.com',
-      }),
-    ).toThrow('SMTP_FROM')
+    for (const from of [
+      '鱼小应 noreply-at-example.com',
+      '鱼小应 <a..b@example.com>',
+      '鱼小应 <.a@example.com>',
+      '鱼小应 <a@a.-b.com>',
+    ]) {
+      expect(() =>
+        createSmtpTransport({
+          host: '127.0.0.1',
+          port: 25,
+          secure: false,
+          user: 'u',
+          pass: 'p',
+          from,
+        }),
+      ).toThrow('SMTP_FROM')
+    }
   })
 })

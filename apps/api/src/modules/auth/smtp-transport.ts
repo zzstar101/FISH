@@ -26,12 +26,18 @@ export type SmtpTransportConfig = {
 
 type SmtpReply = { code: number; lines: string[] }
 
-/** 只接受可打印 ASCII 的简单地址：不允许空白、尖括号、引号等，杜绝 CRLF / 命令注入。 */
-const ADDRESS_PATTERN =
-  /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/
+/**
+ * 只接受可打印 ASCII 的 dot-atom 地址：local-part 不允许首尾/连续的点，域名逐标签校验
+ * （标签不以连字符开头或结尾）；不允许空白、尖括号、引号等，杜绝 CRLF / 命令注入。
+ */
+const ATOM = "[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
+const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?'
+const ADDRESS_PATTERN = new RegExp(`^${ATOM}(?:\\.${ATOM})*@${LABEL}(?:\\.${LABEL})*$`)
 const MAX_ADDRESS_LENGTH = 254
-/** 单条回复行的缓冲上限：服务端异常时不无限攒内存。 */
-const MAX_REPLY_BUFFER = 64 * 1024
+/** 单条回复（含多行续行）的字节上限：服务端异常时不无限攒内存。 */
+const MAX_REPLY_BYTES = 64 * 1024
+/** DATA 已被接收后，等 QUIT 回复的上限：只是礼节，不拖住发码请求。 */
+const QUIT_WAIT_MS = 1_000
 
 function isValidAddress(address: string): boolean {
   return address.length <= MAX_ADDRESS_LENGTH && ADDRESS_PATTERN.test(address)
@@ -117,6 +123,7 @@ function createReplyReader() {
   const decoder = new TextDecoder()
   let buffer = ''
   let pending: string[] = []
+  let pendingBytes = 0
   const replies: SmtpReply[] = []
   let waiter: { resolve: (reply: SmtpReply) => void; reject: (error: Error) => void } | null = null
   let failure: Error | null = null
@@ -152,13 +159,16 @@ function createReplyReader() {
           return
         }
         pending.push(match[3] ?? '')
+        pendingBytes += line.length
         if (match[2] !== '-') {
           deliver({ code: Number(match[1]), lines: pending })
           pending = []
+          pendingBytes = 0
         }
         index = buffer.indexOf('\r\n')
       }
-      if (buffer.length > MAX_REPLY_BUFFER) fail(new Error('SMTP 回复过长'))
+      // 未结束的多行回复（一直 `250-`）与未换行的残行合计封顶。
+      if (pendingBytes + buffer.length > MAX_REPLY_BYTES) fail(new Error('SMTP 回复过长'))
     },
     next(): Promise<SmtpReply> {
       const queued = replies.shift()
@@ -197,11 +207,14 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
   async function deliver(mail: VerificationMail, message: string): Promise<void> {
     const reader = createReplyReader()
     // 用对象承载连接状态：这些字段在 socket 回调里改写，局部 let 会被 TS 的控制流收窄成初值。
-    const conn: { socket: Socket<undefined> | null; closed: boolean; finished: boolean } = {
-      socket: null,
-      closed: false,
-      finished: false,
-    }
+    // accepted：DATA 的 250 到手后才置 true。在那之前的任何失败（含 250 丢失 / 迟到）都按失败
+    // 上报——结局未知时宁可让用户重发，也不把可能没送达的码当成已发。
+    const conn: {
+      socket: Socket<undefined> | null
+      closed: boolean
+      finished: boolean
+      accepted: boolean
+    } = { socket: null, closed: false, finished: false, accepted: false }
     let drainWaiter: (() => void) | null = null
     let timer: ReturnType<typeof setTimeout> | undefined
 
@@ -291,12 +304,18 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
       // 点填充（RFC 5321 §4.5.2）：base64 正文不会以 `.` 开头，这里兜底所有行。
       const stuffed = message.replace(/(^|\r\n)\./g, '$1..')
       await command(`${stuffed}\r\n.`, [250], 'DATA 投递')
-      // 邮件已被接收；QUIT 失败不影响结果。
-      await command('QUIT', [221], 'QUIT').catch(() => undefined)
+      // 250 之后邮件已被服务器接收、投递即成功：QUIT 只等一小会儿，它的失败 / 超时都不影响结果。
+      conn.accepted = true
+      clearTimeout(timer)
+      await Promise.race([command('QUIT', [221], 'QUIT'), Bun.sleep(QUIT_WAIT_MS)]).catch(
+        () => undefined,
+      )
     }
 
     try {
       await Promise.race([conversation(), timeout])
+    } catch (error) {
+      if (!conn.accepted) throw error
     } finally {
       conn.finished = true
       clearTimeout(timer)
