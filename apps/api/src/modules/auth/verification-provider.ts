@@ -16,7 +16,7 @@ export type VerificationMail = {
   text: string
 }
 
-/** 邮件传输边界。dev 实现写本地 outbox；真 SMTP 实现后补，接口不变。 */
+/** 邮件传输边界。dev 实现写本地 outbox；生产走 Resend 或 SMTP（smtp-transport.ts）。 */
 export interface MailTransport {
   send(mail: VerificationMail): Promise<void>
 }
@@ -31,7 +31,7 @@ export interface VerificationCodeCodec {
 
 /**
  * 验证码 Provider = 生成/比对 + 送达。验证域 service 只依赖这个接口。
- * 实现见 `email-providers.ts`（dev outbox / Resend）；`apps/api` 装配层注入。
+ * 实现见 `email-providers.ts`（dev outbox / Resend / SMTP）；`apps/api` 装配层注入。
  */
 export interface EmailVerificationProvider {
   codes: VerificationCodeCodec

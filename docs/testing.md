@@ -92,7 +92,7 @@ CI 不跑微信开发者工具级的小程序端上验证——那属 `docs/mini
 `.env.example`（当前 89 行）中出现的键**全部有真实消费方**，无幽灵键、无缺失键：
 
 - `packages/shared/src/env.ts` 的各 `load*Env`：`AI_POLISH_*`（4）、`CONTENT_MODERATION_TRANSPORT`、
-  `EMBEDDING_*`（4）、`MAIL_TRANSPORT`、`RESEND_API_KEY`、`RESEND_FROM`、`MEETUP_TOKEN_SECRET`、
+  `EMBEDDING_*`（4）、`MAIL_TRANSPORT`、`RESEND_API_KEY`、`RESEND_FROM`、`SMTP_*`（6）、`MEETUP_TOKEN_SECRET`、
   `TENCENT_*`（5）、`WECHAT_TRANSPORT` / `WECHAT_APPID` / `WECHAT_APP_SECRET` / `WECHAT_QR_ENV_VERSION`；
 - `DATABASE_URL` / `API_PORT`：经 `packages/shared/src/env.ts` 的 `ServerEnvSchema` 校验，
   消费于 `apps/api/src/app.ts:132` 与 `apps/worker/src/index.ts:13`（`API_PORT` 在
