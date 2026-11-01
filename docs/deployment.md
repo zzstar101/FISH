@@ -272,7 +272,8 @@ mc admin policy attach local fish-app-rw --user fish-app
 - 忽略 `If-None-Match: *`；条件写同时附带 COS 自有的 `x-cos-forbid-overwrite: true`，先后覆盖会被
   409/304 拦下。但它**不仲裁并发**（实测 8 个并发 PUT 全部 200），所以 API 在进程内按对象键串行化条件写
   （`apps/api/src/modules/uploads/storage.ts` 的 `writeMediaBytesIfAbsent`）。这只在**单个 API 进程**
-  写桶时成立：COS 部署不要横向扩多个 API 实例。
+  写桶时成立：COS 部署不要横向扩多个 API 实例。PUT 没拿到响应（网络错误 / 30s 超时）时，该键再隔离
+  30s 才放行下一个写，避免与仍在途的前一个 PUT 重叠。
 - 客户端直传的预签名 URL 指向桶域名：小程序后台的 request 合法域名要加上
   `https://<bucket>.cos.<region>.myqcloud.com`；PC 站浏览器直传要在桶的 CORS 里放行站点源的 `PUT`。
 - 匿名读与生命周期规则不走本仓的 `infra/minio-*.json`：在 COS 控制台配置（轻量对象存储为 role mode，
