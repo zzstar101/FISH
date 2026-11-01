@@ -8,7 +8,7 @@
  * 调用就脱离了用户手势，微信会直接失败。这也是模板配置在启动时预热、点击时同步读
  * `cachedSubscribeConfig()` 的原因（见 `./api`）。
  *
- * ## 三条纪律
+ * ## 四条纪律
  *
  * 1. **绝不阻塞主流程**：返回的 Promise 内部已经 `catch` 掉一切失败，调用方 `void` 掉即可。
  *    用户点"发送"，消息该发就发；授权框被拒绝不影响交易与聊天。
@@ -16,6 +16,9 @@
  *    （提交未配置的模板微信会报错，而用户看到的是一个永远不会兑现的授权框）。
  * 3. **结果原样上报**：`accept` / `reject` / `ban` / `filter` 都报给服务端，由它对账
  *    （只认 `accept`）。端上不做"这算不算成功"的判断。
+ * 4. **结果归给发起它的那个账号**（#511 审查 high）：授权框返回之前如果退出登录或换了账号，
+ *    这一次结果整包丢弃 —— 额度是**按账号**记的，记到别人头上等于凭空给那个账号加一次站外
+ *    推送。比对见 `requestSubscribe` 里的 `sessionEpoch` / `ownerId`。
  */
 import {
   type SubscribeMessageGrantReport,
@@ -25,6 +28,8 @@ import {
   subscribeMessageGrantStatusSchema,
 } from '@fish/contracts/subscribe-messages/schema'
 import Taro from '@tarojs/taro'
+import { authSnapshot } from '@/features/auth/store'
+import { sessionEpoch } from '@/lib/session'
 import { cachedSubscribeConfig, loadSubscribeConfig, reportSubscribeGrants } from './api'
 
 /** 一次性订阅一次最多提交 3 个模板（微信限制），首批正好三个 kind。 */
@@ -57,6 +62,18 @@ export async function requestSubscribe(
   }
   if (kindByTemplateId.size === 0) return null
 
+  /*
+   * 记下这次授权**是谁发起的**（#511 审查 high）：`requestSubscribeMessage` 是一次用户手势，
+   * 用户完全可能在授权框还开着的时候退出登录、或换另一个账号登录（A 发起 → 返回时已是 B）。
+   * 微信的返回值与身份无关，直接上报就会把 A 的「允许」记到 B 头上 —— 一次性订阅的额度是
+   * **按账号记账**的，记错人等于给 B 凭空加一次站外推送，A 的那次授权则丢了。
+   *
+   * 两把尺子一起比对：`sessionEpoch`（`clearSession()` 会 +1，覆盖退出登录/会话失效）与
+   * 当前账号 id（覆盖 A→B 换号）。**同步取**，就在调微信的这一句之前。
+   */
+  const epoch = sessionEpoch()
+  const ownerId = authSnapshot().user?.id ?? null
+
   let result: Record<string, unknown>
   try {
     /*
@@ -81,6 +98,15 @@ export async function requestSubscribe(
   // 失败回调（`errCode` 是数字）与"什么都没返回"同解：这一次没有结果可上报。
   if (typeof result.errCode === 'number') {
     console.warn('[miniapp] 订阅消息授权未完成（不影响功能）', result.errMsg)
+    return null
+  }
+
+  /*
+   * 授权框期间身份变了（退出登录 / A→B 换号）：这次「允许」不属于当前账号，整包丢弃。
+   * 顺序很重要 —— 必须在**构造上报体之前**比，不然记账已经落到 B 名下了。
+   */
+  if (epoch !== sessionEpoch() || (authSnapshot().user?.id ?? null) !== ownerId) {
+    console.warn('[miniapp] 订阅消息授权结果已不属于当前账号，丢弃上报')
     return null
   }
 

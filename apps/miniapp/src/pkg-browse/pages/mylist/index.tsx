@@ -795,8 +795,8 @@ export default function MyList() {
   const declineProposal = (row: Row) => {
     const proposal = row.proposal
     if (!proposal || pendingBusy !== null) return
-    // #462：接受提案时请求 TX 订阅授权（不 await，失败不影响这次同意）。
-    void requestSubscribe(['TX'])
+    // 拒绝**不请求** TX 授权（#511 审查 high）：拒绝之后没有交易，也就没有「订单状态更新」
+    // 可推 —— 在这里弹授权框是把一次永远不会兑现的允许卖给用户。
     setPendingBusy(proposal.conversationId)
     void (async () => {
       try {
@@ -824,6 +824,9 @@ export default function MyList() {
   const acceptProposal = (row: Row) => {
     const proposal = row.proposal
     if (!proposal || pendingBusy !== null) return
+    // #462：**同意**提案时请求 TX 订阅授权（Owner 冻结的授权入口）。必须放在用户手势的
+    // 同步阶段、且不 await：授权被拒或失败都不影响这次同意，站内通知照旧。
+    void requestSubscribe(['TX'])
     setPendingBusy(proposal.conversationId)
     void (async () => {
       try {
