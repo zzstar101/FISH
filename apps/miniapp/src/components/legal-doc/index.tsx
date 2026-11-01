@@ -74,7 +74,7 @@ function Runs({ runs }: { runs: Run[] }) {
   return (
     <>
       {runs.map((run) => (
-        <Text key={run.k ?? run.t} className={runClass(run)}>
+        <Text key={run.k ?? run.t} className={runClass(run)} userSelect>
           {run.t}
         </Text>
       ))}
