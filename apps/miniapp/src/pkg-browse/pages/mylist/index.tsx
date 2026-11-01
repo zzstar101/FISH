@@ -23,6 +23,7 @@ import {
 } from '@/features/listing/api'
 import { requestSellEdit, requestSellPrefill } from '@/features/listing/edit-target'
 import { rejectionNote } from '@/features/listing/moderation-reason'
+import { requestSubscribe } from '@/features/subscribe/request'
 import { acceptTransaction, rejectProposal } from '@/features/transaction/api'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -794,6 +795,8 @@ export default function MyList() {
   const declineProposal = (row: Row) => {
     const proposal = row.proposal
     if (!proposal || pendingBusy !== null) return
+    // #462：接受提案时请求 TX 订阅授权（不 await，失败不影响这次同意）。
+    void requestSubscribe(['TX'])
     setPendingBusy(proposal.conversationId)
     void (async () => {
       try {

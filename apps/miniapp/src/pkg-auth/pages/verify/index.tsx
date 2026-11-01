@@ -7,6 +7,7 @@ import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { applyVerification, useAuth } from '@/features/auth/store'
+import { requestSubscribe } from '@/features/subscribe/request'
 import {
   CAMPUS_EMAIL_DOMAIN,
   fetchVerificationStatus,
@@ -294,6 +295,9 @@ export default function Verify() {
     if (!ownerId) return
     const task = beginTask(epochRef.current, ownerId)
     submittingRef.current = true
+    // #462：提交校园认证时请求 REVIEW 订阅授权（认证结果站外可达）。不 await，
+    // 授权被拒不影响这次校验。
+    void requestSubscribe(['REVIEW'])
     setSubmitting(true)
     setCodeError('')
     try {
