@@ -1,6 +1,6 @@
 import { ACCOUNT_DELETION_COOLING_OFF_DAYS } from '@fish/contracts/account-deletion/schema'
 import { Button, Image, Text, View } from '@tarojs/components'
-import Taro, { usePageScroll, useUnload } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow, usePageScroll, useUnload } from '@tarojs/taro'
 import { useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
@@ -154,6 +154,19 @@ export default function Settings() {
    * 唯一可靠的作废信号是页面生命周期本身，所以卸载即置 `false`。
    */
   const pageAliveRef = useRef(true)
+  /**
+   * 本页面实例是否**可见**。#204 审查 C 轮：`useUnload` 只在页面被销毁时跑，用户从这里
+   * `navigateTo` 进别的页面时设置页只是被隐藏（`onHide`），实例仍然存活 —— 于是绑定的成功 /
+   * 失败 toast 会盖在那个无关页面上，看起来像那边操作的结果。所以提示另走一层可见性判断；
+   * **store 更新不受影响**（号码确实绑到了这个账号，回来时该看到新掩码）。
+   */
+  const pageVisibleRef = useRef(true)
+  useDidShow(() => {
+    pageVisibleRef.current = true
+  })
+  useDidHide(() => {
+    pageVisibleRef.current = false
+  })
   useUnload(() => {
     pageAliveRef.current = false
   })
@@ -161,6 +174,17 @@ export default function Settings() {
   const maskedPhone = user?.maskedPhone ?? null
   const phoneValue = phoneBound ? (maskedPhone ?? '已绑定') : '未绑定'
   const bindLabel = binding ? '绑定中…' : '绑定'
+
+  /**
+   * 只在设置页**可见**时提示。
+   *
+   * 绑定请求飞行中用户可能已经进了别的页面（`navigateTo` 只隐藏本页、不销毁），此时的成功 /
+   * 失败 toast 会盖在那个无关页面上。store 更新照做（号码确实绑到了这个账号，回来就该看到
+   * 新掩码），只有提示按可见性过滤。
+   */
+  const toastIfVisible = (title: string) => {
+    if (pageVisibleRef.current) toast(title)
+  }
 
   /**
    * 手机号授权回调。
@@ -202,7 +226,7 @@ export default function Settings() {
         // （例外：把当前会话清掉的 401 会以 `failed` 回来，走下面那条分支告诉用户「登录已失效」）
         if (outcome.kind === 'aborted') return
         if (outcome.kind === 'failed') {
-          toast(
+          toastIfVisible(
             phoneBindFailureMessage(
               isApiError(outcome.error)
                 ? { code: outcome.error.code, message: outcome.error.message }
@@ -215,7 +239,7 @@ export default function Settings() {
           phoneBound: true,
           maskedPhone: outcome.maskedPhone,
         })
-        toast('手机号已绑定')
+        toastIfVisible('手机号已绑定')
       } finally {
         // 页面已卸载就别再动它：新页面实例自己有一份 `binding` / `bindingRef`，往作废实例上写
         // 只会污染一个已经没人看的 state（且 `finally` 是这一段里唯一还会碰到组件状态的地方）
