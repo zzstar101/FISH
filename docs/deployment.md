@@ -646,6 +646,14 @@ server {
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
   }
+  location /api/ws/ {                   # 小程序的 realtimeUrl 由 API 地址推导：wss://<域名>/api/ws/chat
+    proxy_pass http://127.0.0.1:3000/ws/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 1h;
+  }
   location /ws {                        # /ws 与 /ws/chat 都要能 upgrade
     proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
