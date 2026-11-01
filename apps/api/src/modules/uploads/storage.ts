@@ -278,6 +278,69 @@ export function createBunS3MediaStorage(options: {
     if (!isSafeObjectKey(key)) throw new Error(`对象键形状不合法：${JSON.stringify(key)}`)
   }
 
+  /** 一次条件 PUT：对象已存在时返回 false，绝不覆盖。并发互斥由调用方 `writeMediaBytesIfAbsent` 负责。 */
+  const conditionalPut = async (
+    key: string,
+    bytes: Uint8Array,
+    contentType: string,
+  ): Promise<boolean> => {
+    // Bun.S3Client.write 不暴露 If-None-Match。Bun 1.4.0 的 presign options 无自定义签名头能力，
+    // 因此服务端 PUT 附加该条件头；Content-Type 也未签名，且 presign 的 type 对 PUT 是
+    // response-content-type 查询参数，不是签名的请求 Content-Type。
+    //
+    // 腾讯云 COS 单独收到 `If-None-Match: *` 时忽略它（实测重复 PUT 仍 200 并覆盖），只认它自己的
+    // `x-cos-forbid-overwrite: true`（对象已存在时 409 FileAlreadyExists）。两个头一起带时
+    // COS 对已存在对象实测返回 304，同样落入下方冲突分支。S3 / MinIO 不认识 `x-cos-*` 头、
+    // 按 `If-None-Match` 返回 412。
+    const url = client.presign(key, {
+      method: 'PUT',
+      expiresIn: 60,
+      type: contentType,
+    })
+    let response: Response
+    try {
+      response = await fetchImpl(url, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+          'If-None-Match': '*',
+          'x-cos-forbid-overwrite': 'true',
+        },
+        body: bytes,
+      })
+    } catch (error) {
+      const safeError = new Error('S3 条件写入网络请求失败')
+      safeError.name = error instanceof Error ? error.name : 'Error'
+      const code = (error as { code?: unknown }).code
+      if (typeof code === 'string') Object.assign(safeError, { code })
+      throw safeError
+    }
+    if (response.status === 412 || response.status === 409 || response.status === 304) {
+      // 条件写竞争输家只有在对象已存在时才算幂等成功；stat 故障或对象不存在均不能吞掉。
+      try {
+        await client.stat(key)
+        return false
+      } catch (error) {
+        if ((error as { code?: string }).code === 'NoSuchKey') {
+          throw new Error(`S3 条件写入冲突但对象不存在：HTTP ${response.status}`)
+        }
+        throw error
+      }
+    }
+    if (!response.ok) throw new Error(`S3 条件写入失败：HTTP ${response.status}`)
+    return true
+  }
+
+  /**
+   * 同一键的条件写在本进程内**排队**执行。
+   *
+   * 腾讯云 COS 的 `x-cos-forbid-overwrite` 只防**先后**覆盖、不仲裁**并发**：实测 8 个并发 PUT
+   * 全部 200、最后写入者胜出。串行化之后，第二个 PUT 一定发生在第一个落盘之后，于是 COS 的
+   * 409/304 与 S3/MinIO 的 412 都能正确拦下输家。前提是同一时刻只有一个 API 进程写这个桶
+   * （见 docs/deployment.md 的对象存储兼容性要求）；S3 / MinIO 本身已在存储端原子仲裁，排队无害。
+   */
+  const conditionalWriteQueues = new Map<string, Promise<boolean>>()
+
   return {
     presignPut({ key, contentType }) {
       // 键由服务端拼出，形状不合法属编程错误：宁可抛错，也不要签出一个指向别人对象的 URL。
@@ -339,42 +402,17 @@ export function createBunS3MediaStorage(options: {
 
     async writeMediaBytesIfAbsent(key, bytes, contentType) {
       assertSafeObjectKey(key)
-      // Bun.S3Client.write 不暴露 If-None-Match。Bun 1.4.0 的 presign options 无自定义签名头能力，
-      // 因此服务端 PUT 附加该条件头；Content-Type 也未签名，且 presign 的 type 对 PUT 是
-      // response-content-type 查询参数，不是签名的请求 Content-Type。
-      const url = client.presign(key, {
-        method: 'PUT',
-        expiresIn: 60,
-        type: contentType,
-      })
-      let response: Response
+      const previous = conditionalWriteQueues.get(key)
+      // 前一个写的成败与本次无关：失败了本次照常尝试，成功了本次会收到 409/412 并复用它。
+      const current = (previous ?? Promise.resolve(false))
+        .catch(() => false)
+        .then(() => conditionalPut(key, bytes, contentType))
+      conditionalWriteQueues.set(key, current)
       try {
-        response = await fetchImpl(url, {
-          method: 'PUT',
-          headers: { 'Content-Type': contentType, 'If-None-Match': '*' },
-          body: bytes,
-        })
-      } catch (error) {
-        const safeError = new Error('S3 条件写入网络请求失败')
-        safeError.name = error instanceof Error ? error.name : 'Error'
-        const code = (error as { code?: unknown }).code
-        if (typeof code === 'string') Object.assign(safeError, { code })
-        throw safeError
+        return await current
+      } finally {
+        if (conditionalWriteQueues.get(key) === current) conditionalWriteQueues.delete(key)
       }
-      if (response.status === 412 || response.status === 409) {
-        // 条件写竞争输家只有在对象已存在时才算幂等成功；stat 故障或对象不存在均不能吞掉。
-        try {
-          await client.stat(key)
-          return false
-        } catch (error) {
-          if ((error as { code?: string }).code === 'NoSuchKey') {
-            throw new Error(`S3 条件写入冲突但对象不存在：HTTP ${response.status}`)
-          }
-          throw error
-        }
-      }
-      if (!response.ok) throw new Error(`S3 条件写入失败：HTTP ${response.status}`)
-      return true
     },
 
     async readMediaBytes(key, maxBytes = 10 * 1024 * 1024) {

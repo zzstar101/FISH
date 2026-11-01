@@ -69,6 +69,8 @@ const client = config
       bucket: config.bucket,
       endpoint: config.endpoint,
       region: config.region,
+      // 与 app.ts 同一开关：腾讯云 COS 只接受虚拟主机风格，集成测试才能对着 COS 跑。
+      virtualHostedStyle: process.env.S3_VIRTUAL_HOSTED_STYLE === 'true',
     })
   : null
 
@@ -312,7 +314,18 @@ describe('S3 条件写适配器（离线）', () => {
     expect(await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')).toBe(true)
   })
 
-  test.each([412, 409])('HTTP %i 且对象存在返回 false', async (status) => {
+  test('同时带 S3 与腾讯云 COS 的防覆盖条件头', async () => {
+    const sent = new Headers()
+    const media = makeStorage(makeClient(), async (_input, init) => {
+      new Headers(init?.headers).forEach((value, name) => sent.set(name, value))
+      return new Response(null, { status: 200 })
+    })
+    await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')
+    expect(sent.get('If-None-Match')).toBe('*')
+    expect(sent.get('x-cos-forbid-overwrite')).toBe('true')
+  })
+
+  test.each([412, 409, 304])('HTTP %i 且对象存在返回 false', async (status) => {
     const client = makeClient()
     const stat = spyOn(client, 'stat').mockResolvedValue({
       size: 1,
@@ -325,7 +338,7 @@ describe('S3 条件写适配器（离线）', () => {
     expect(stat).toHaveBeenCalledWith(key)
   })
 
-  test.each([412, 409])('HTTP %i 且对象不存在抛错', async (status) => {
+  test.each([412, 409, 304])('HTTP %i 且对象不存在抛错', async (status) => {
     const client = makeClient()
     spyOn(client, 'stat').mockRejectedValue(
       Object.assign(new Error('missing'), { code: 'NoSuchKey' }),
@@ -336,7 +349,7 @@ describe('S3 条件写适配器（离线）', () => {
     ).rejects.toThrow('对象不存在')
   })
 
-  test.each([412, 409])('HTTP %i 且 stat 出错时抛出 stat 错误', async (status) => {
+  test.each([412, 409, 304])('HTTP %i 且 stat 出错时抛出 stat 错误', async (status) => {
     const client = makeClient()
     const failure = new Error('stat unavailable')
     spyOn(client, 'stat').mockRejectedValue(failure)
@@ -344,6 +357,50 @@ describe('S3 条件写适配器（离线）', () => {
     await expect(
       media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
     ).rejects.toBe(failure)
+  })
+
+  test('同一键的并发条件写串行发出：输家在胜者落盘后才 PUT（COS 不仲裁并发）', async () => {
+    const client = makeClient()
+    spyOn(client, 'stat').mockResolvedValue({
+      size: 1,
+      type: 'image/png',
+      lastModified: new Date(),
+      etag: 'test-etag',
+    })
+    let inFlight = 0
+    let maxInFlight = 0
+    let stored = false
+    const media = makeStorage(client, async () => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await Bun.sleep(5)
+      inFlight -= 1
+      // 模拟 COS：只拦得住先后覆盖，拦不住同时到达的写。
+      if (stored) return new Response(null, { status: 409 })
+      stored = true
+      return new Response(null, { status: 200 })
+    })
+    const results = await Promise.all(
+      [1, 2, 3].map((byte) =>
+        media.writeMediaBytesIfAbsent?.(key, new Uint8Array([byte]), 'image/png'),
+      ),
+    )
+    expect(maxInFlight).toBe(1)
+    expect(results).toEqual([true, false, false])
+  })
+
+  test('排在前面的条件写失败不拖累后面的写', async () => {
+    let calls = 0
+    const media = makeStorage(makeClient(), async () => {
+      calls += 1
+      return new Response(null, { status: calls === 1 ? 500 : 200 })
+    })
+    const [first, second] = await Promise.allSettled([
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([2]), 'image/png'),
+    ])
+    expect(first?.status).toBe('rejected')
+    expect(second).toEqual({ status: 'fulfilled', value: true })
   })
 
   test.each([500, 501])('HTTP %i 抛错', async (status) => {

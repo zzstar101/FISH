@@ -261,8 +261,19 @@ mc admin policy attach local fish-app-rw --user fish-app
 
 **对象存储兼容性要求（#475）**：交易评价配图 confirm 通过服务端 `PUT If-None-Match: *` 原子创建 final 对象，
 对象存储必须支持 S3 条件写并正确返回 `412 Precondition Failed`（或并发冲突 `409 ConditionalRequestConflict`）。
-上线前必须在目标存储实测并发条件 PUT；不能仅凭 S3 API 兼容声明推定兼容。阿里云 OSS、腾讯云 COS 的 S3 兼容接口
+上线前必须在目标存储实测并发条件 PUT；不能仅凭 S3 API 兼容声明推定兼容。阿里云 OSS 的 S3 兼容接口
 对该条件写头的支持存在差异/不保证，未验证前视为不兼容；这类部署可能覆盖已固化评价图片，需使用支持条件写的存储或另行实现服务端互斥。
+
+**腾讯云 COS（含轻量对象存储）实测结论**：
+- 只接受虚拟主机风格：设 `S3_VIRTUAL_HOSTED_STYLE=true`，且 `S3_ENDPOINT` 写**桶域名本身**
+  （`https://<bucket>.cos.<region>.myqcloud.com`），`S3_REGION` 写桶地域（如 `ap-guangzhou`）。
+  路径风格下读写与列举都会被拒（列举失败会让上传配额统计 fail-open）。
+- 忽略 `If-None-Match: *`；条件写同时附带 COS 自有的 `x-cos-forbid-overwrite: true`，先后覆盖会被
+  409/304 拦下。但它**不仲裁并发**（实测 8 个并发 PUT 全部 200），所以 API 在进程内按对象键串行化条件写
+  （`apps/api/src/modules/uploads/storage.ts` 的 `writeMediaBytesIfAbsent`）。这只在**单个 API 进程**
+  写桶时成立：COS 部署不要横向扩多个 API 实例。
+- 匿名读与生命周期规则不走本仓的 `infra/minio-*.json`：在 COS 控制台配置（轻量对象存储为 role mode，
+  桶策略 / CORS / 生命周期 API 均返回 `AccessDenied`），或保持桶私有、由反代只放行 `listings/*` 的 GET。
 
 **staging 前缀要配生命周期过期（#483 审查响应）**：confirm 刻意不删 staging 源对象（保守
 选择，非重试安全的必要条件——final 键已存在时 confirm 幂等成功、不依赖 staging 存活），
