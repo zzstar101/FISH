@@ -158,6 +158,35 @@
   white-space: nowrap;
 }
 
+/* 手机号行的原生授权钮（`open-type="getPhoneNumber"`，见 #204）。
+   小程序 button 自带 padding / 行高 / `::after` 灰边，不清掉会在行里撑出一块灰底
+   （同 `pkg-auth/pages/profile-edit` 的头像按钮）。 */
+.st__bind {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 56px;
+  margin: 0;
+  padding: 0 24px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+
+  &::after {
+    border: none;
+  }
+
+  &.is-off {
+    opacity: 0.6;
+  }
+}
+
 /* 右箭头：CSS 画的直角折线，展开时旋转 90° */
 .st__arrow {
   flex: 0 0 auto;

@@ -10,6 +10,7 @@ import {
   loadWechatEnv,
 } from '@fish/shared/env'
 import { createApp } from './app'
+import { API_HTTP_IDLE_TIMEOUT_SECONDS } from './modules/auth/phone-bind-budget'
 import { normalizeIp } from './modules/listings/trusted-ip'
 import type { SubscribeMessageScheduler } from './modules/subscribe-messages/scheduler'
 import { websocket } from './ws'
@@ -91,6 +92,10 @@ server = Bun.serve({
   port: env.API_PORT,
   fetch: app.fetch,
   websocket,
+  // 默认 10s 会掐断「手机号绑定」的最坏路径（上游 20s：取 token 5s + 换号 5s，凭证失效再各
+  // 一次），客户端收到 ECONNRESET 而号码其实已经落库。取值与上游预算、客户端超时三者对齐，
+  // 推导见 `modules/auth/phone-bind-budget.ts`；WebSocket 用的是另一个定时器（不受影响）。
+  idleTimeout: API_HTTP_IDLE_TIMEOUT_SECONDS,
 })
 
 console.log(`[api] listening on http://localhost:${server.port}`)

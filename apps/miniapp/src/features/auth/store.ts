@@ -173,6 +173,25 @@ export function applyProfile(
 }
 
 /**
+ * 用一次**已经拿到权威结果**的手机号绑定响应就地更新 store（#204）。
+ *
+ * 与 `applyVerification` / `applyProfile` 同一套口径，`ownerId` 必须由调用方传发起绑定请求
+ * 时的账号：一次绑定可能飞行十几秒（微信上游最长重试 15s），期间用户完全可能退出、换号
+ * 登录 —— 只判断「当前已登录」会把 A 的 `maskedPhone` 合并进 B 的 `user`，而 store 是全局
+ * 单例，B 会长期显示别人的手机号。号码不同就整个丢弃。
+ *
+ * 为什么不改成再打一次 `GET /me`：那次请求失败（超时 / 断网）会把刚绑定成功的状态
+ * 回滚成「未绑定」，而 `POST /auth/phone/bind` 的 200 本身已经是权威结果。
+ */
+export function applyPhoneBinding(
+  ownerId: string,
+  next: Pick<Me, 'phoneBound' | 'maskedPhone'>,
+): void {
+  if (snapshot.status !== 'authed' || snapshot.user?.id !== ownerId) return
+  emit({ status: 'authed', user: { ...snapshot.user, ...next } })
+}
+
+/**
  * 确认会话真的落到本地了再宣告登录。
  *
  * `apiRequest` 里 `saveSession` 是静默吞异常的（存储写失败不该让请求失败），
