@@ -186,6 +186,7 @@ export default function Settings() {
           },
         )
         // 会话已变：这趟结果属于上一个账号，既不写 store 也不提示
+        // （例外：把当前会话清掉的 401 会以 `failed` 回来，走下面那条分支告诉用户「登录已失效」）
         if (outcome.kind === 'aborted') return
         if (outcome.kind === 'failed') {
           toast(
@@ -201,7 +202,8 @@ export default function Settings() {
           phoneBound: true,
           maskedPhone: outcome.maskedPhone,
         })
-        toast(rebinding ? '手机号已换绑' : '手机号已绑定')
+        // 同号重复授权在后端是幂等 200（同号码再绑一次不报冲突），号码没变就不是「换绑」
+        toast(rebinding && outcome.maskedPhone !== maskedPhone ? '手机号已换绑' : '手机号已绑定')
       } finally {
         bindingRef.current = false
         setBinding(false)

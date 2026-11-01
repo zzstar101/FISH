@@ -209,6 +209,65 @@ describe('runPhoneBind', () => {
     expect(outcome).toEqual({ kind: 'aborted' })
   })
 
+  test('401 把当前会话清掉：错误必须交回页面，不能被当成旧任务静默吞掉', async () => {
+    // `lib/request` 收到 401 `UNAUTHENTICATED` 时会 clearSession()，代次随之前进、
+    // 当前已无人登录 —— 长得像「旧任务」，但那正是「登录已失效」的原因本身。
+    let current: { ownerId: string | null; epoch: number } = { ownerId: 'u1', epoch: 1 }
+    const error = Object.assign(new Error('登录已失效'), {
+      name: 'ApiError',
+      code: 'UNAUTHENTICATED',
+      status: 401,
+    })
+    const outcome = await runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'abc' },
+      {
+        bindPhone: async () => {
+          current = { ownerId: null, epoch: 2 }
+          throw error
+        },
+        session: () => current,
+      },
+    )
+    expect(outcome).toEqual({ kind: 'failed', error })
+    // 页面据此给用户的正是这句（`phoneBindFailureMessage` 的 UNAUTHENTICATED 分支）
+    expect(phoneBindFailureMessage({ code: 'UNAUTHENTICATED', message: 'x' })).toBe(
+      '登录已失效，请重新登录',
+    )
+  })
+
+  test('401 但用户已登进另一个账号：仍 aborted，不把旧账号的报错弹给新账号', async () => {
+    const error = Object.assign(new Error('登录已失效'), {
+      name: 'ApiError',
+      code: 'UNAUTHENTICATED',
+      status: 401,
+    })
+    const outcome = await runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'abc' },
+      {
+        bindPhone: async () => {
+          throw error
+        },
+        session: () => ({ ownerId: 'u2', epoch: 2 }),
+      },
+    )
+    expect(outcome).toEqual({ kind: 'aborted' })
+  })
+
+  test('会话已变但不是 401（断网 / 超时）：仍算旧任务，静默', async () => {
+    let current: { ownerId: string | null; epoch: number } = { ownerId: 'u1', epoch: 1 }
+    const outcome = await runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'abc' },
+      {
+        bindPhone: async () => {
+          current = { ownerId: null, epoch: 2 }
+          throw new Error('network')
+        },
+        session: () => current,
+      },
+    )
+    expect(outcome).toEqual({ kind: 'aborted' })
+  })
+
   test('发起时会话已不匹配：一个请求都不发（新凭据不能去换旧账号的授权）', async () => {
     let calls = 0
     const outcome = await runPhoneBind(

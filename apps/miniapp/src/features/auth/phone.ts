@@ -111,12 +111,25 @@ export function isPhoneBindCurrent(ticket: PhoneBindTicket, session: PhoneBindSe
   return ticket.ownerId === session.ownerId && ticket.epoch === session.epoch
 }
 
+/**
+ * 401 `UNAUTHENTICATED`（会话已失效）的形状判定。
+ *
+ * 只看字段、不 `import` `lib/request` 的 `isUnauthenticatedError`：那个模块带 Taro，
+ * 引用它会把本文件拖成测不了的文件。按**形状**而不是 `instanceof` 判也和小程序的分包
+ * chunk 一致——同一个类在不同 chunk 里可能不是同一个构造函数。
+ */
+function isUnauthenticatedError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const shaped = error as { code?: unknown; status?: unknown }
+  return shaped.code === 'UNAUTHENTICATED' && shaped.status === 401
+}
+
 export type PhoneBindOutcome =
   /** 绑定成功；`ownerId` 是**发起任务那个**账号，页面据此广播 */
   | { kind: 'bound'; ownerId: string; maskedPhone: string }
-  /** 会话已变 / 已退出 / 页面已卸载：不写 store、不弹提示 */
+  /** 会话已变 / 已退出 / 页面已卸载：不写 store、不弹提示（唯一例外见 `runPhoneBind` 的 401 说明） */
   | { kind: 'aborted' }
-  /** 请求抛错，交页面翻译成文案（`phoneBindFailureMessage`） */
+  /** 请求抛错，交页面翻译成文案（`phoneBindFailureMessage`）；含把当前会话清掉的 401 */
   | { kind: 'failed'; error: unknown }
 
 export type PhoneBindDeps = {
@@ -147,8 +160,19 @@ export async function runPhoneBind(
     if (!alive()) return { kind: 'aborted' }
     return { kind: 'bound', ownerId: input.ticket.ownerId, maskedPhone: bound.maskedPhone }
   } catch (error) {
+    const current = deps.session()
     // 迟到的失败也不该给新账号弹旧账号的错误
-    if (!alive()) return { kind: 'aborted' }
+    if (!isPhoneBindCurrent(input.ticket, current)) {
+      // 唯一例外：**401 把当前会话清掉了**。`lib/request` 收到 401 `UNAUTHENTICATED` 时
+      // 就地 `clearSession()`（代次随之前进），所以它天然长得像「旧任务」—— 但那正是
+      // 「登录已失效」的原因本身。一刀切吞掉的话，用户被守卫静默踢回登录页、看不到任何说明，
+      // 而 `phoneBindFailureMessage` 的 `UNAUTHENTICATED` 分支永远走不到（死代码）。
+      // 只在「现在确实没人登录」时交回页面：用户若已登进另一个账号，就不该收到旧账号的报错。
+      if (current.ownerId === null && isUnauthenticatedError(error)) {
+        return { kind: 'failed', error }
+      }
+      return { kind: 'aborted' }
+    }
     return { kind: 'failed', error }
   }
 }
