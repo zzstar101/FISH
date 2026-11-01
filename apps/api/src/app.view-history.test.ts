@@ -47,6 +47,17 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
+/**
+ * 事件时刻锚定在「两天前的 UTC 零点」，不写死日期：上报接口按真实时钟拒收保留期外的事件，
+ * 足迹读接口按真实时钟只取近 30 天，写死的日期会随日历流逝滑出窗口（2026-11-01 起整组失败）。
+ */
+const BASE_DAY = (() => {
+  const day = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000)
+  day.setUTCHours(0, 0, 0, 0)
+  return day.toISOString().slice(0, 10)
+})()
+const at = (time: string): string => `${BASE_DAY}T${time}.000Z`
+
 const PASSWORD = 'fish123456'
 
 const post = (body: unknown, headers: Record<string, string> = {}) => ({
@@ -144,7 +155,7 @@ describe('view history API (#415 M1)', () => {
     expect(
       await postDetailView({
         listingPublicId: listing,
-        occurredAt: '2026-10-01T01:00:00.000Z',
+        occurredAt: at('01:00:00'),
         cookie: viewer.cookie,
       }),
     ).toBe(202)
@@ -153,17 +164,17 @@ describe('view history API (#415 M1)', () => {
     expect(first.status).toBe(200)
     expect(first.body.total).toBe(1)
     expect(first.body.items[0]?.listing.id).toBe(listing)
-    expect(first.body.items[0]?.viewedAt).toBe('2026-10-01T01:00:00.000Z')
+    expect(first.body.items[0]?.viewedAt).toBe(at('01:00:00'))
 
     // 再看一次：同一件商品仍是一行，时间被顶新（列表里不会出现两条）。
     await postDetailView({
       listingPublicId: listing,
-      occurredAt: '2026-10-01T02:00:00.000Z',
+      occurredAt: at('02:00:00'),
       cookie: viewer.cookie,
     })
     const second = await getViewHistory(viewer.cookie)
     expect(second.body.total).toBe(1)
-    expect(second.body.items[0]?.viewedAt).toBe('2026-10-01T02:00:00.000Z')
+    expect(second.body.items[0]?.viewedAt).toBe(at('02:00:00'))
   })
 
   test('补发的旧事件不会把时间倒退（GREATEST）', async () => {
@@ -173,17 +184,17 @@ describe('view history API (#415 M1)', () => {
 
     await postDetailView({
       listingPublicId: listing,
-      occurredAt: '2026-10-01T05:00:00.000Z',
+      occurredAt: at('05:00:00'),
       cookie: viewer.cookie,
     })
     await postDetailView({
       listingPublicId: listing,
-      occurredAt: '2026-10-01T04:00:00.000Z',
+      occurredAt: at('04:00:00'),
       cookie: viewer.cookie,
     })
 
     const page = await getViewHistory(viewer.cookie)
-    expect(page.body.items[0]?.viewedAt).toBe('2026-10-01T05:00:00.000Z')
+    expect(page.body.items[0]?.viewedAt).toBe(at('05:00:00'))
   })
 
   test('匿名浏览不进足迹，登录后也不会凭空多出来（不回填）', async () => {
@@ -191,19 +202,17 @@ describe('view history API (#415 M1)', () => {
     const listing = await createListing(seller.id, '匿名浏览商品')
 
     // 先匿名看一次，再注册登录。
-    expect(
-      await postDetailView({ listingPublicId: listing, occurredAt: '2026-10-01T06:00:00.000Z' }),
-    ).toBe(202)
+    expect(await postDetailView({ listingPublicId: listing, occurredAt: at('06:00:00') })).toBe(202)
     const viewer = await registerUser('06')
     await postDetailView({
       listingPublicId: listing,
-      occurredAt: '2026-10-01T07:00:00.000Z',
+      occurredAt: at('07:00:00'),
       cookie: viewer.cookie,
     })
 
     const page = await getViewHistory(viewer.cookie)
     expect(page.body.total).toBe(1)
-    expect(page.body.items[0]?.viewedAt).toBe('2026-10-01T07:00:00.000Z')
+    expect(page.body.items[0]?.viewedAt).toBe(at('07:00:00'))
   })
 
   test('未登录读写都是 401 UNAUTHENTICATED', async () => {
@@ -224,7 +233,7 @@ describe('view history API (#415 M1)', () => {
 
     await postDetailView({
       listingPublicId: listing,
-      occurredAt: '2026-10-01T09:00:00.000Z',
+      occurredAt: at('09:00:00'),
       cookie: owner.cookie,
     })
 
@@ -258,7 +267,7 @@ describe('view history API (#415 M1)', () => {
     ] as const) {
       await postDetailView({
         listingPublicId: listing,
-        occurredAt: `2026-10-01T${hour}:00:00.000Z`,
+        occurredAt: at(`${hour}:00:00`),
         cookie: viewer.cookie,
       })
     }
@@ -302,7 +311,7 @@ describe('view history API (#415 M1)', () => {
 
     await postDetailView({
       listingPublicId: listing,
-      occurredAt: '2026-10-01T08:00:00.000Z',
+      occurredAt: at('08:00:00'),
       cookie: viewer.cookie,
     })
 
