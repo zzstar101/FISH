@@ -28,7 +28,7 @@ import { z } from 'zod'
  * - 服务端最坏耗时 ≈20s：取 `access_token` 5s + 换号 5s，凭证失效再各一次
  *   （重试见 `apps/api/src/modules/auth/wechat-phone.ts`，两段上游超时都是
  *   `WECHAT_PLATFORM_TIMEOUT_MS` = 5s）；
- * - 服务端连接超时（`Bun.serve` 的 `idleTimeout`，见 `apps/api/src/index.ts`）取 22s，
+ * - 服务端连接超时（`Bun.serve` 的 `idleTimeout`，见 `apps/api/src/index.ts`）取 23s，
  *   覆盖上面 20s 再加本地写库；低于它的话客户端会收到 ECONNRESET，而号码其实已经落库；
  * - 所以客户端必须比两者都长：25s。
  *

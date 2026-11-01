@@ -57,7 +57,7 @@ describe('手机号绑定：上游预算 / 服务端连接超时 / 客户端超�
  * 关系式之外还要证明**机制**成立：真实 `Bun.serve` 在显式 `idleTimeout` 下不会掐断长处理器。
  *
  * 处理器故意跑「第一次尝试的两段上游」（取 token 5s + 换号 5s）再 +0.3s：刚好越过 Bun 的默认
- * 10s（不设 `idleTimeout` 时这里会像审查复现那样收到 ECONNRESET），又远在新超时 22s 之内。
+ * 10s（不设 `idleTimeout` 时这里会像审查复现那样收到 ECONNRESET），又远在新超时 23s 之内。
  * 完整跑满 20s 太慢，这段足够证明「预算是按显式 idleTimeout 兑现的」。
  */
 describe('真实 Bun.serve：长于默认 10s 的绑定请求不会被掐断', () => {
