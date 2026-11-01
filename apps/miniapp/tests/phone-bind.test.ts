@@ -144,6 +144,7 @@ describe('runPhoneBind', () => {
       {
         bindPhone: async () => ({ maskedPhone: '138****8000' }),
         session: () => ({ ownerId: 'u1', epoch: 1 }),
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'bound', ownerId: 'u1', maskedPhone: '138****8000' })
@@ -160,6 +161,7 @@ describe('runPhoneBind', () => {
           return { maskedPhone: '138****8000' }
         },
         session: () => current,
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'aborted' })
@@ -175,6 +177,7 @@ describe('runPhoneBind', () => {
           return { maskedPhone: '138****8000' }
         },
         session: () => ({ ownerId: 'u1', epoch }),
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'aborted' })
@@ -189,6 +192,7 @@ describe('runPhoneBind', () => {
           throw error
         },
         session: () => ({ ownerId: 'u1', epoch: 1 }),
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'failed', error })
@@ -204,6 +208,7 @@ describe('runPhoneBind', () => {
           throw new Error('boom')
         },
         session: () => current,
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'aborted' })
@@ -226,6 +231,7 @@ describe('runPhoneBind', () => {
           throw error
         },
         session: () => current,
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'failed', error })
@@ -248,6 +254,7 @@ describe('runPhoneBind', () => {
           throw error
         },
         session: () => ({ ownerId: 'u2', epoch: 2 }),
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'aborted' })
@@ -263,6 +270,7 @@ describe('runPhoneBind', () => {
           throw new Error('network')
         },
         session: () => current,
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'aborted' })
@@ -278,9 +286,107 @@ describe('runPhoneBind', () => {
           return { maskedPhone: '138****8000' }
         },
         session: () => ({ ownerId: 'u2', epoch: 2 }),
+        pageAlive: () => true,
       },
     )
     expect(outcome).toEqual({ kind: 'aborted' })
     expect(calls).toBe(0)
+  })
+})
+
+/**
+ * 页面生命周期这一档（#204 审查第二轮 P2）。
+ *
+ * 设置页卸载（用户返回上一页）后，飞行中的绑定请求仍在跑。此时**会话判据完全失效**：
+ * 账号没换、会话代次没变，旧响应的 `{ownerId, epoch}` 与新页面的任务一模一样。所以必须由
+ * 页面存活标记作废；否则「旧页面发起 → 返回并重进 → 新页面绑定完成 → 旧响应迟到」会覆盖
+ * 新掩码、再弹一次 toast，并把已作废页面的按钮解锁。
+ */
+describe('runPhoneBind：页面卸载', () => {
+  test('卸载后成功回来：aborted（会话没变也不写 store、不提示）', async () => {
+    let alive = true
+    const outcome = await runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'abc' },
+      {
+        bindPhone: async () => {
+          // 请求飞行中用户返回上一页，页面卸载
+          alive = false
+          return { maskedPhone: '138****8000' }
+        },
+        // 账号与会话代次都没变：只有页面存活标记能挡住这次写入
+        session: () => ({ ownerId: 'u1', epoch: 1 }),
+        pageAlive: () => alive,
+      },
+    )
+    expect(outcome).toEqual({ kind: 'aborted' })
+  })
+
+  test('卸载后失败回来：aborted（不把已关闭页面的错误弹到别处）', async () => {
+    let alive = true
+    const outcome = await runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'abc' },
+      {
+        bindPhone: async () => {
+          alive = false
+          throw new Error('boom')
+        },
+        session: () => ({ ownerId: 'u1', epoch: 1 }),
+        pageAlive: () => alive,
+      },
+    )
+    expect(outcome).toEqual({ kind: 'aborted' })
+  })
+
+  test('卸载后 401 清掉会话也仍然 aborted：已卸载的页面没有 UI 可以提示', async () => {
+    let alive = true
+    const error = Object.assign(new Error('登录已失效'), {
+      name: 'ApiError',
+      code: 'UNAUTHENTICATED',
+      status: 401,
+    })
+    let current: { ownerId: string | null; epoch: number } = { ownerId: 'u1', epoch: 1 }
+    const outcome = await runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'abc' },
+      {
+        bindPhone: async () => {
+          alive = false
+          current = { ownerId: null, epoch: 2 }
+          throw error
+        },
+        session: () => current,
+        pageAlive: () => alive,
+      },
+    )
+    expect(outcome).toEqual({ kind: 'aborted' })
+  })
+
+  test('卸载重进后的乱序响应：旧页面那次作废，新页面那次才是结果', async () => {
+    const oldPage = { alive: true }
+    const newPage = { alive: true }
+    let resolveOld: (value: { maskedPhone: string }) => void = () => {}
+    // 旧页面发起的那次请求一直挂着（慢网）
+    const oldOutcome = runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'old-code' },
+      {
+        bindPhone: () => new Promise<{ maskedPhone: string }>((resolve) => (resolveOld = resolve)),
+        session: () => ({ ownerId: 'u1', epoch: 1 }),
+        pageAlive: () => oldPage.alive,
+      },
+    )
+    // 用户返回（旧页面卸载）→ 重新进设置页（新页面实例）→ 在新页面上绑定成功
+    oldPage.alive = false
+    const newOutcome = await runPhoneBind(
+      { ticket: { ownerId: 'u1', epoch: 1 }, code: 'new-code' },
+      {
+        bindPhone: async () => ({ maskedPhone: '139****9999' }),
+        session: () => ({ ownerId: 'u1', epoch: 1 }),
+        pageAlive: () => newPage.alive,
+      },
+    )
+    expect(newOutcome).toEqual({ kind: 'bound', ownerId: 'u1', maskedPhone: '139****9999' })
+
+    // 旧页面的 200 现在才到：账号与代次都与新任务相同，只有页面存活能把它判掉
+    resolveOld({ maskedPhone: '138****8000' })
+    expect(await oldOutcome).toEqual({ kind: 'aborted' })
   })
 })

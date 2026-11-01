@@ -127,7 +127,10 @@ function isUnauthenticatedError(error: unknown): boolean {
 export type PhoneBindOutcome =
   /** 绑定成功；`ownerId` 是**发起任务那个**账号，页面据此广播 */
   | { kind: 'bound'; ownerId: string; maskedPhone: string }
-  /** 会话已变 / 已退出 / 页面已卸载：不写 store、不弹提示（唯一例外见 `runPhoneBind` 的 401 说明） */
+  /**
+   * 会话已变 / 已退出 / **页面已卸载**：不写 store、不弹提示（唯一例外见 `runPhoneBind` 的
+   * 401 说明）
+   */
   | { kind: 'aborted' }
   /** 请求抛错，交页面翻译成文案（`phoneBindFailureMessage`）；含把当前会话清掉的 401 */
   | { kind: 'failed'; error: unknown }
@@ -137,22 +140,34 @@ export type PhoneBindDeps = {
   bindPhone(code: string): Promise<{ maskedPhone: string }>
   /** 读**当前**会话（不是开任务时那个） */
   session(): PhoneBindSession
+  /**
+   * 发起这次绑定的**页面实例**是否还活着（设置页 `useUnload` 之后为 `false`）。
+   *
+   * 会话判据挡不住这一档：用户从设置页返回（页面卸载）→ 再进设置页 → 在新页面上绑定成功，
+   * 旧页面的响应迟到时 `ownerId` + 代次**全都一样**（同一个账号、同一个会话），于是旧响应
+   * 会覆盖新掩码、再弹一次 toast、并把已作废页面的 `binding` 解开。作废判据只能来自页面生命周期。
+   */
+  pageAlive(): boolean
 }
 
 /**
  * 跑一次绑定。
  *
- * 单次请求，但「换号」仍然必须防：请求飞行途中用户可能退出并登进另一个账号，
- * 那时迟到的 200 属于**上一个**账号 —— 写进 store 会让新账号长期显示别人的掩码号
- * （store 是全局单例，`GET /me` 不会自我纠正）。所以响应回来后先重新问一次会话，
- * 返回 `aborted` 时页面必须什么都不做。
+ * 单次请求，但「换号」与「换页」仍然必须防：请求飞行途中用户可能退出并登进另一个账号，
+ * 也可能离开设置页再回来。那时迟到的结果属于**上一个**账号 / **上一张**页面：
+ * - 写进 store 会让新账号长期显示别人的掩码号（store 是全局单例，`GET /me` 不会自我纠正）；
+ * - 在新页面上弹 toast 会把旧任务的结果说成新任务的；旧页面迟到的 200 还可能盖掉新页面
+ *   刚绑好的掩码。
+ *
+ * 所以响应回来（成功或失败）后都要重新问一次会话与页面存活，返回 `aborted` 时页面必须什么都
+ * 不做（不写 store、不提示、不解锁）。
  */
 export async function runPhoneBind(
   input: { ticket: PhoneBindTicket; code: string },
   deps: PhoneBindDeps,
 ): Promise<PhoneBindOutcome> {
-  const alive = () => isPhoneBindCurrent(input.ticket, deps.session())
-  // 换号后绝不发这个请求：它带的是新账号的凭据，却承诺的是旧账号的授权结果
+  const alive = () => deps.pageAlive() && isPhoneBindCurrent(input.ticket, deps.session())
+  // 换号 / 换页后绝不发这个请求：它带的是新账号的凭据，却承诺的是旧账号的授权结果
   if (!alive()) return { kind: 'aborted' }
 
   try {
@@ -160,6 +175,8 @@ export async function runPhoneBind(
     if (!alive()) return { kind: 'aborted' }
     return { kind: 'bound', ownerId: input.ticket.ownerId, maskedPhone: bound.maskedPhone }
   } catch (error) {
+    // 页面已卸载：此刻没有任何 UI 应该被更新（401 的特别处理也只为让**活着的**页面提示）
+    if (!deps.pageAlive()) return { kind: 'aborted' }
     const current = deps.session()
     // 迟到的失败也不该给新账号弹旧账号的错误
     if (!isPhoneBindCurrent(input.ticket, current)) {

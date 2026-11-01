@@ -1,6 +1,6 @@
 import { ACCOUNT_DELETION_COOLING_OFF_DAYS } from '@fish/contracts/account-deletion/schema'
 import { Button, Image, Text, View } from '@tarojs/components'
-import Taro, { usePageScroll } from '@tarojs/taro'
+import Taro, { usePageScroll, useUnload } from '@tarojs/taro'
 import { useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
@@ -56,7 +56,11 @@ import './index.scss'
  *
  * **手机号绑定（#204）也在这张卡里**：Owner 定的入口是设置页的账号组。授权走原生
  * `<Button open-type="getPhoneNumber">`（只把一次性 code 交给后端，明文号码不出端），
- * 逻辑在 `features/auth/phone`；已绑定时同一按钮再授权即换绑。
+ * 逻辑在 `features/auth/phone`。
+ *
+ * **已绑定时不再提供授权按钮**：换绑 / 解绑规则归 #86 且尚未冻结，端上此时只展示掩码号码。
+ * 让同一个按钮「再授权一次」看起来像换绑，等于替 #86 先把规则定了（后端 `bindPhone` 是覆盖
+ * 语义，点一下就会真的换掉），所以入口先收起来，等 #86 冻结后再按规则做。
  */
 
 /** `getStorageSync` 只能在端上跑；读取失败（低版本禁用存储等）视为「没存过」 */
@@ -135,7 +139,7 @@ export default function Settings() {
   const toast = (title: string) => void Taro.showToast({ title, icon: 'none' })
 
   /**
-   * 手机号绑定（#204）的三个渲染态。
+   * 手机号绑定（#204）的渲染态。
    *
    * `binding` 负责把按钮画成「绑定中…」，`bindingRef` 才是真正的防连点闸门：
    * `setState` 是异步的，同一帧里两次点击都会读到旧的 `binding`，于是同一份 code 被提交
@@ -143,11 +147,20 @@ export default function Settings() {
    */
   const [binding, setBinding] = useState(false)
   const bindingRef = useRef(false)
+  /**
+   * 本页面实例是否还活着。#204 审查 P2：会话代次挡不住「返回设置页 → 再进来 → 新页面绑好 →
+   * 旧页面的响应迟到」这一档 —— 同一个账号、同一个会话代次，旧响应的 `{ownerId, epoch}`
+   * 与新任务**完全一样**，于是它会覆盖新掩码、再弹一次 toast、解开已作废页面的按钮态。
+   * 唯一可靠的作废信号是页面生命周期本身，所以卸载即置 `false`。
+   */
+  const pageAliveRef = useRef(true)
+  useUnload(() => {
+    pageAliveRef.current = false
+  })
   const phoneBound = user?.phoneBound === true
   const maskedPhone = user?.maskedPhone ?? null
   const phoneValue = phoneBound ? (maskedPhone ?? '已绑定') : '未绑定'
-  /** 已绑定也能再授权 —— 后端语义是**覆盖**，即换绑 */
-  const bindLabel = binding ? '绑定中…' : phoneBound ? '换绑' : '绑定'
+  const bindLabel = binding ? '绑定中…' : '绑定'
 
   /**
    * 手机号授权回调。
@@ -172,8 +185,6 @@ export default function Settings() {
     if (bindingRef.current) return
     bindingRef.current = true
     setBinding(true)
-    // 已经绑过 → 这次是换绑（后端覆盖语义），提示词要说准，别报「已绑定」
-    const rebinding = phoneBound
     const ticket = { ownerId, epoch: sessionEpoch() }
     void (async () => {
       try {
@@ -183,9 +194,11 @@ export default function Settings() {
             bindPhone,
             // 读**当前**会话（不是发起时那份）：请求飞行途中用户可能已退出 / 换号
             session: () => ({ ownerId: authSnapshot().user?.id ?? null, epoch: sessionEpoch() }),
+            // 读**当前**页面存活：返回（页面卸载）后迟到的结果一律作废
+            pageAlive: () => pageAliveRef.current,
           },
         )
-        // 会话已变：这趟结果属于上一个账号，既不写 store 也不提示
+        // 会话已变 / 页面已卸载：这趟结果不属于任何人，既不写 store 也不提示
         // （例外：把当前会话清掉的 401 会以 `failed` 回来，走下面那条分支告诉用户「登录已失效」）
         if (outcome.kind === 'aborted') return
         if (outcome.kind === 'failed') {
@@ -202,11 +215,14 @@ export default function Settings() {
           phoneBound: true,
           maskedPhone: outcome.maskedPhone,
         })
-        // 同号重复授权在后端是幂等 200（同号码再绑一次不报冲突），号码没变就不是「换绑」
-        toast(rebinding && outcome.maskedPhone !== maskedPhone ? '手机号已换绑' : '手机号已绑定')
+        toast('手机号已绑定')
       } finally {
-        bindingRef.current = false
-        setBinding(false)
+        // 页面已卸载就别再动它：新页面实例自己有一份 `binding` / `bindingRef`，往作废实例上写
+        // 只会污染一个已经没人看的 state（且 `finally` 是这一段里唯一还会碰到组件状态的地方）
+        if (pageAliveRef.current) {
+          bindingRef.current = false
+          setBinding(false)
+        }
       }
     })()
   }
@@ -313,21 +329,24 @@ export default function Settings() {
 
           {/* 手机号（#204）：这里必须是原生 <Button> —— `open-type="getPhoneNumber"`
               只能挂在 button 上，普通 View + onClick 拿不到微信的一次性 code。
-              未绑定时点它授权绑定；已绑定时同一个按钮再点一次是换绑（后端覆盖）。 */}
+              只给**未绑定**用户渲染它：已绑定时只展示掩码号码，换绑 / 解绑规则归 #86 且尚未
+              冻结（让这个按钮在已绑定时可点，等于替 #86 先把「再授权 = 换绑」定下来）。 */}
           <View className="st__row">
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.serviceMuted} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">手机号</Text>
             <Text className="st__rvalue">{phoneValue}</Text>
-            <Button
-              className={`st__bind${binding ? ' is-off' : ''}`}
-              openType="getPhoneNumber"
-              disabled={binding}
-              onGetPhoneNumber={onGetPhoneNumber}
-            >
-              {bindLabel}
-            </Button>
+            {phoneBound ? null : (
+              <Button
+                className={`st__bind${binding ? ' is-off' : ''}`}
+                openType="getPhoneNumber"
+                disabled={binding}
+                onGetPhoneNumber={onGetPhoneNumber}
+              >
+                {bindLabel}
+              </Button>
+            )}
           </View>
         </View>
 
