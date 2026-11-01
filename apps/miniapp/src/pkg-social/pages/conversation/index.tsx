@@ -43,7 +43,7 @@ import { ChatRealtime, type ChatRealtimeEvent } from '@/features/chat/realtime'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
 import { requestSubscribe } from '@/features/subscribe/request'
-import { acceptTransaction, rejectProposal } from '@/features/transaction/api'
+import { acceptTransaction, fetchTransaction, rejectProposal } from '@/features/transaction/api'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -211,6 +211,8 @@ export default function Conversation() {
   /** 撤回在途的消息 id：一条一把锁，防止连点重复 POST（服务端虽幂等，但没必要发两次） */
   const [recallingId, setRecallingId] = useState<string | null>(null)
   const [proposalAction, setProposalAction] = useState<'accept' | 'reject' | null>(null)
+  const proposalActionLock = useRef(false)
+  const [transactionStates, setTransactionStates] = useState<Record<string, string>>({})
   /**
    * 「点摘引跳过去」的目标 DOM id（null = 跟随最新）。
    *
@@ -1747,6 +1749,39 @@ export default function Conversation() {
     })
   }
 
+  useEffect(() => {
+    const ids = messages
+      .map((message) => parseTxEvent(message.content))
+      .filter(
+        (event): event is NonNullable<ReturnType<typeof parseTxEvent>> =>
+          event?.type === 'tx.accepted' && typeof event.transactionId === 'string',
+      )
+      .map((event) => event.transactionId as string)
+    const missing = ids.filter((id) => !(id in transactionStates))
+    if (missing.length === 0) return
+    let active = true
+    void Promise.all(
+      [...new Set(missing)].map(async (id) => {
+        try {
+          const transaction = await fetchTransaction(id)
+          return [id, transaction.status] as const
+        } catch {
+          return null
+        }
+      }),
+    ).then((results) => {
+      if (!active) return
+      setTransactionStates((current) => {
+        const next = { ...current }
+        for (const result of results) if (result) next[result[0]] = result[1]
+        return next
+      })
+    })
+    return () => {
+      active = false
+    }
+  }, [messages, transactionStates])
+
   const openMeetup = (transactionId: string) => {
     void Taro.navigateTo({
       url: `/pkg-trade/pages/transaction-meetup/index?id=${encodeURIComponent(transactionId)}`,
@@ -1754,19 +1789,27 @@ export default function Conversation() {
   }
 
   const actOnProposal = async (action: 'accept' | 'reject', amountCents: number) => {
-    if (!conversation || proposalAction) return
+    if (!conversation || proposalAction || proposalActionLock.current) return
+    proposalActionLock.current = true
     setProposalAction(action)
     try {
       if (action === 'accept') await acceptTransaction(conversation.id, amountCents)
       else await rejectProposal(conversation.id)
       await load({ silent: false })
+      void Taro.showToast({
+        title: action === 'accept' ? '已接受交易' : '已拒绝交易',
+        icon: 'none',
+      })
     } catch (error) {
+      // 接受/拒绝都可能在响应丢失后已经落库；先重读会话再展示错误，避免用户重复操作。
+      await load({ silent: false })
       void Taro.showToast({
         title: isApiError(error) ? error.message : '操作失败，请重试',
         icon: 'none',
       })
     } finally {
       setProposalAction(null)
+      proposalActionLock.current = false
     }
   }
 
@@ -1944,7 +1987,7 @@ export default function Conversation() {
           ? (event as { transactionId: string }).transactionId
           : null
       if (!transactionId) return null
-      const completed = conversation?.listing.status === 'SOLD'
+      const completed = transactionStates[transactionId] === 'COMPLETED'
       return (
         <View key={message.id} id={`e-${message.id}`} className="conv__syswrap">
           <View className="conv__sys">
@@ -1984,13 +2027,13 @@ export default function Conversation() {
               className="conv__txcard-act"
               onClick={() => void actOnProposal('reject', amountCents)}
             >
-              <Text>{proposalAction === 'reject' ? '处理中…' : '拒绝'}</Text>
+              <Text>{proposalAction ? '处理中…' : '拒绝'}</Text>
             </View>
             <View
               className="conv__txcard-act"
               onClick={() => void actOnProposal('accept', amountCents)}
             >
-              <Text>{proposalAction === 'accept' ? '处理中…' : '接受'}</Text>
+              <Text>{proposalAction ? '处理中…' : '接受'}</Text>
             </View>
           </View>
         </View>
