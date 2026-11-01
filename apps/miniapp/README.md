@@ -49,6 +49,7 @@ TARO_APP_ID=wx你的appid bun run build:miniapp
 worktree** 里构建，不要用带未提交改动的工作区：
 
 ```bash
+set -e   # 构建或 ES5 检查失败就停下，绝不上传半成品
 TARO_APP_ID=wx61b67a115826647e TARO_APP_API_BASE=https://yuxiaoyingai.com/api bun run build:miniapp
 
 CLI=/Applications/wechatwebdevtools.app/Contents/MacOS/cli   # macOS 默认安装位置
@@ -56,6 +57,9 @@ $CLI islogin                                                 # 未登录：$CLI 
 $CLI open --project "$PWD/apps/miniapp/dist"                 # 先打开一次，否则 upload 可能报「需要重新登录」
 $CLI upload --project "$PWD/apps/miniapp/dist" -v 0.0.1 -d "内部测试 0.0.1（origin/main <sha>）"
 ```
+
+构建到上传之间不要在同一个 worktree 里再跑别的构建（包括 `dev:miniapp` 的 watch）：它们共用 `dist/`，
+上传的产物可能混进另一份 AppID / API 配置。
 
 上传后是「开发版本」：到 mp.weixin.qq.com → 管理 → 版本管理 里「选为体验版」，再在 成员管理 → 体验成员
 里加人。体验版同样校验服务器域名（开发管理 → 开发设置 → 服务器域名），需要配好：
