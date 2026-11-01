@@ -375,6 +375,10 @@ AI_POLISH_MODEL=deepseek-flash
 （明文）只允许 `SMTP_HOST` 为回环地址，否则启动即失败（不依赖 `NODE_ENV`）。仍可改用 Resend：`MAIL_TRANSPORT=resend` 加
 `RESEND_API_KEY` / `RESEND_FROM` 两行（需先在 Resend 验证发件域名）。
 
+`SMTP_PASS` 原样写进 systemd `EnvironmentFile`、不加引号：飞书生成的专用密码是字母数字，没有问题；
+若口令含 `\`、引号、`$`、`#` 或首尾空格，要改成双引号包裹并对 `\` 和 `"` 转义，否则 systemd 读到的值
+与原文不同，AUTH 会一直失败。
+
 **只有首次部署**才用下面这段整份写入；两个密钥都从 `read` 进内存再落盘，不要直接粘在命令里——
 那会永久留在 root 的 shell 历史里。`SMTP_USER` / `SMTP_FROM` 也必须问进来：`loadMailTransportEnv`
 只验它们非空（`SMTP_FROM` 另验地址格式），占位域名会照样把服务起起来、直到发信时才失败。

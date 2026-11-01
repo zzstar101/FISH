@@ -20,7 +20,10 @@ export type SmtpTransportConfig = {
   pass: string
   /** 发件人，如 `鱼小应 <noreply@example.com>` 或裸地址。 */
   from: string
-  /** 整次投递（连接到 QUIT）的总超时毫秒数。默认 15s。 */
+  /**
+   * 连接到 DATA 250 的总超时毫秒数，默认 7s。加上 QUIT 最多再等的 1s 仍低于 `Bun.serve`
+   * 默认的 10s idleTimeout（apps/api/src/index.ts 未改它），发码请求不会先被 HTTP 层掐断。
+   */
   timeoutMs?: number
 }
 
@@ -60,8 +63,8 @@ function encodeHeaderWords(value: string): string {
   const words: string[] = []
   let chunk = ''
   for (const char of value) {
-    // 45 字节 → 60 个 base64 字符 + 12 字符外壳 = 72 ≤ 75。
-    if (Buffer.byteLength(chunk + char, 'utf8') > 45) {
+    // 39 字节 → 52 个 base64 字符 + 12 字符外壳 = 64；加上 `Subject: ` 前缀整行仍 ≤ 76。
+    if (Buffer.byteLength(chunk + char, 'utf8') > 39) {
       words.push(chunk)
       chunk = ''
     }
@@ -149,10 +152,11 @@ function createReplyReader() {
     push(chunk: Uint8Array) {
       if (failure) return
       buffer += decoder.decode(chunk, { stream: true })
-      let index = buffer.indexOf('\r\n')
+      // 按 LF 切行并去掉行尾 CR：容忍不规范服务器的裸 LF 行尾。
+      let index = buffer.indexOf('\n')
       while (index !== -1) {
-        const line = buffer.slice(0, index)
-        buffer = buffer.slice(index + 2)
+        const line = buffer.slice(0, index).replace(/\r$/, '')
+        buffer = buffer.slice(index + 1)
         const match = /^(\d{3})([ -])(.*)$/.exec(line) ?? /^(\d{3})()()$/.exec(line)
         if (!match) {
           fail(new Error('SMTP 回复格式非法'))
@@ -165,7 +169,7 @@ function createReplyReader() {
           pending = []
           pendingBytes = 0
         }
-        index = buffer.indexOf('\r\n')
+        index = buffer.indexOf('\n')
       }
       // 未结束的多行回复（一直 `250-`）与未换行的残行合计封顶。
       if (pendingBytes + buffer.length > MAX_REPLY_BYTES) fail(new Error('SMTP 回复过长'))
@@ -199,7 +203,7 @@ function pickAuthMechanism(ehlo: SmtpReply): 'PLAIN' | 'LOGIN' {
 const encoder = new TextEncoder()
 
 export function createSmtpTransport(config: SmtpTransportConfig): MailTransport {
-  const timeoutMs = config.timeoutMs ?? 15_000
+  const timeoutMs = config.timeoutMs ?? 7_000
   const from = parseMailbox(config.from)
   const fromDomain = from.address.slice(from.address.lastIndexOf('@') + 1)
   const b64 = (value: string) => Buffer.from(value, 'utf8').toString('base64')
@@ -275,6 +279,13 @@ export function createSmtpTransport(config: SmtpTransportConfig): MailTransport 
             },
             error() {
               reader.fail(new Error('SMTP 连接异常'))
+            },
+            // 显式检查证书校验结果：失败时给出明确原因并立即断开，而不是表现为「连接被关闭」。
+            handshake(s, authorized) {
+              if (!authorized) {
+                reader.fail(new Error('SMTP TLS 证书校验失败'))
+                s.terminate()
+              }
             },
             connectError() {
               // 拒绝原因由 Bun.connect 的 promise 抛出，下面统一包装。
