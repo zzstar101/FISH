@@ -167,7 +167,11 @@ export function createAuthModule(options: {
    * 只有 `live` 才构造：`off` 显式 503、`stub` 生成不了真码（出码为 null，由端上走开发者工具），
    * 两者都不该去调上游。
    */
-  const wechatTokens: WechatAccessTokenService | null =
+  //
+  // #462：`access_token` 服务本身被单独取出（`wechatAccessTokens`）并随模块返回值暴露，
+  // 让订阅消息的发送客户端复用**同一个实例**——它不是"给 auth 用的"，而是"这个进程唯一的
+  // 那份凭证缓存"。在这里再建第二个就是两条刷新循环互相作废对方刚取到的 token。
+  const wechatAccessTokens =
     options.wechat.transport === 'live'
       ? createWechatAccessTokenService({
           appid: options.wechat.appid,
@@ -175,11 +179,11 @@ export function createAuthModule(options: {
         })
       : null
   const wechatPlatform: { codes: WechatMiniappCodeClient } | null =
-    wechatTokens === null
+    wechatAccessTokens === null
       ? null
-      : { codes: createWechatMiniappCodeClient({ tokens: wechatTokens }) }
+      : { codes: createWechatMiniappCodeClient({ tokens: wechatAccessTokens }) }
   const wechatPhone =
-    wechatTokens === null ? null : createWechatPhoneClient({ tokens: wechatTokens })
+    wechatAccessTokens === null ? null : createWechatPhoneClient({ tokens: wechatAccessTokens })
   // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）：
   // `stub` 下 code 即明文号码（只允许非生产显式开启），`live` 交给上游核验，`off` 保持 null → 503。
   const phoneResolver: ((code: string) => Promise<string>) | null =
@@ -479,6 +483,11 @@ export function createAuthModule(options: {
     meHandler,
     resolveViewerId,
     sessionCookie: cookie,
+    /**
+     * 本进程唯一的微信 `access_token` 服务（#294）：`off` / `stub` 下为 `null`
+     * （那两种 transport 不该去调上游）。#462 的订阅消息发送复用它，见上面创建处的注释。
+     */
+    wechatAccessTokens,
     /**
      * 令牌 → 用户 + 账号状态。给 #464 的**可选身份**守卫用
      * （`account-deletion/optional-identity-guard.ts`）：那几条入口不挂 `requireAuth`，

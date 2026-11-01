@@ -4,6 +4,7 @@ import {
   loadMailTransportEnv,
   loadMeetupTokenEnv,
   loadServerEnv,
+  loadSubscribeMessageTemplatesEnv,
   loadVisualEmbeddingEnv,
   loadVisualParseEnv,
   loadWechatEnv,
@@ -11,6 +12,7 @@ import {
 import { createApp } from './app'
 import { API_HTTP_IDLE_TIMEOUT_SECONDS } from './modules/auth/phone-bind-budget'
 import { normalizeIp } from './modules/listings/trusted-ip'
+import type { SubscribeMessageScheduler } from './modules/subscribe-messages/scheduler'
 import { websocket } from './ws'
 
 const env = loadServerEnv()
@@ -32,6 +34,9 @@ const visualEmbeddingEnv = loadVisualEmbeddingEnv()
 // OCR/VLM 语义解析（#324 M5）：未设置即 `off`——只做图片向量召回，不产生第二次上游调用，
 // 也就不会把查询图再发一次。开启（live）后文本路才参与召回。
 const visualParseEnv = loadVisualParseEnv()
+// 微信订阅消息模板（#462）：三个都可选，缺项即"该 kind 未开通"。填了但形状不对（手抄模板 ID
+// 最常见的错法）在启动时直接失败，而不是等投递时拿到 47003/40037 才分不清是模板错了还是平台故障。
+const subscribeTemplatesEnv = loadSubscribeMessageTemplatesEnv()
 
 // 假数据可见性第三件（设计 §8.2）：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
 if (aiEnv.transport === 'stub') {
@@ -54,6 +59,14 @@ if (proxyIp !== null && normalizeIp(proxyIp) === null) {
   throw new Error('LISTING_LOOKUP_TRUSTED_PROXY_IP 必须是规范 IPv4/IPv6 地址')
 }
 let server: ReturnType<typeof Bun.serve>
+// 订阅消息的投递循环（#462）：`createApp` 只造调度器并经 `lifecycle` 交出，启动与停止属于进程。
+//
+// 用可变**容器**而不是裸 `let`：赋值发生在 `createApp` 的回调里，TS 的控制流分析看不到那次
+// 赋值，裸 `let` 会被窄化成 `null`（`.start()` 直接报 "Property 'start' does not exist on type
+// 'never'"）。属性读取不做这种窄化。
+const lifecycle: { subscribeScheduler: SubscribeMessageScheduler | null } = {
+  subscribeScheduler: null,
+}
 const app = createApp(
   env,
   mailEnv,
@@ -67,6 +80,12 @@ const app = createApp(
   moderationEnv,
   visualEmbeddingEnv,
   visualParseEnv,
+  subscribeTemplatesEnv,
+  {
+    onSubscribeScheduler: (scheduler) => {
+      lifecycle.subscribeScheduler = scheduler
+    },
+  },
 )
 
 server = Bun.serve({
@@ -80,3 +99,24 @@ server = Bun.serve({
 })
 
 console.log(`[api] listening on http://localhost:${server.port}`)
+
+/*
+ * 投递循环在监听之后启动（#462）：它每轮都会打数据库，起得比 `Bun.serve` 早只会让"启动日志"
+ * 与实际可服务时刻错位。能力未开通时 `start()` 只记一行日志、不建定时器。
+ *
+ * 退出必须显式 `stop()` **并等它返回**（#511 审查 high）：`setInterval` 会一直挂在事件循环上，
+ * SIGTERM 后进程本可以退出，却因为定时器还在而拖到平台强杀；而清掉定时器就 `process.exit()`
+ * 更糟 —— 那一轮可能正有一条投递在调微信，微信收到了、本地事务还没提交，重启后同一条会被
+ * 再发一次。`stop()` 因此是异步的：它关掉"开新工作"的入口，再等最多 `STOP_TIMEOUT_MS` 让
+ * 在途那条落定。SIGINT/SIGTERM 都按 0 退出，部署侧的滚动重启不会把"正常停机"记成失败。
+ */
+lifecycle.subscribeScheduler?.start()
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    void (lifecycle.subscribeScheduler?.stop() ?? Promise.resolve())
+      .catch((error: unknown) => {
+        console.error('[api] 停机时停止订阅消息循环失败', error)
+      })
+      .finally(() => process.exit(0))
+  })
+}

@@ -6,6 +6,7 @@ import {
   loadEmbeddingEnv,
   loadMailTransportEnv,
   loadServerEnv,
+  loadSubscribeMessageTemplatesEnv,
   loadWechatEnv,
 } from './env'
 
@@ -429,5 +430,58 @@ describe('loadMailTransportEnv 的 smtp', () => {
     expect(() => loadMailTransportEnv({ ...complete, SMTP_SECURE: 'false' })).toThrow(
       'SMTP_SECURE=false',
     )
+  })
+})
+
+describe('loadSubscribeMessageTemplatesEnv（#462）', () => {
+  // addtemplate 返回的 priTmplId 形状：43 位 base64url
+  const CHAT = 'dfuovKQoKXQJzo5t3ayKnQvW1ZunS8pwB7X0ZoZzzF8'
+  const TX = '31NYOZH2qjoGUp93gRTy3RhOON5fW_RxoOgVHyUex4M'
+  const REVIEW = 'mskwaeWwNkJnu9_qG_7sBrh50Qe2pvr5URzQa2vgfVo'
+
+  test('三个都配齐时原样读出（键名是小写的 chat / tx / review）', () => {
+    expect(
+      loadSubscribeMessageTemplatesEnv({
+        WECHAT_SUBSCRIBE_TMPL_CHAT: CHAT,
+        WECHAT_SUBSCRIBE_TMPL_TX: TX,
+        WECHAT_SUBSCRIBE_TMPL_REVIEW: REVIEW,
+      }),
+    ).toEqual({ chat: CHAT, tx: TX, review: REVIEW })
+  })
+
+  test('未设置 / 空串 / 纯空白都等于「未开通」（null），启动不失败', () => {
+    expect(loadSubscribeMessageTemplatesEnv({})).toEqual({ chat: null, tx: null, review: null })
+    expect(
+      loadSubscribeMessageTemplatesEnv({
+        WECHAT_SUBSCRIBE_TMPL_CHAT: '   ',
+        WECHAT_SUBSCRIBE_TMPL_TX: '',
+      }),
+    ).toEqual({ chat: null, tx: null, review: null })
+  })
+
+  test('两侧空白被 trim（复制粘贴最常见的脏数据）', () => {
+    expect(
+      loadSubscribeMessageTemplatesEnv({ WECHAT_SUBSCRIBE_TMPL_CHAT: ` ${CHAT}\t` }).chat,
+    ).toBe(CHAT)
+  })
+
+  test('形状不对时启动失败，错误只报变量名、不回显值', () => {
+    // 短路（长度不足）、含中文（手抄占位符）、含空格、含 `!` 都不合法
+    for (const bad of [
+      'short',
+      '模板ID含中文占位xxxxxxxxxx',
+      'dfuovKQoKXQJ zo5t3ayKnQvW1ZunS8pwB7X0ZoZzzF8',
+      'dfuovKQoKXQJzo5t3ayKnQvW1ZunS8pwB7X0ZoZzzF8!',
+    ]) {
+      let message = ''
+      try {
+        loadSubscribeMessageTemplatesEnv({ WECHAT_SUBSCRIBE_TMPL_TX: bad })
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain('WECHAT_SUBSCRIBE_TMPL_TX')
+      // 非法值本身不进错误信息（与其它加载器同一口径）
+      expect(message).not.toContain(bad.trim())
+    }
   })
 })

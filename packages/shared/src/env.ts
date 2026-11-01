@@ -596,3 +596,60 @@ export function loadVisualParseEnv(
   }
   throw new Error('环境变量校验失败：VISUAL_PARSE_TRANSPORT 只能是 off 或 live（未设置视为 off）')
 }
+
+/**
+ * 微信订阅消息模板配置（#462）——API 专属，不进共享 `ServerEnv`：worker 不调
+ * `subscribe/send`，模板 ID 不扩散到不需要它的进程（与 `AI_POLISH_*` / `TENCENT_CLOUD_*`
+ * 同一拆分原则）。
+ *
+ * 三个模板 ID **都是可选的**，缺项即 `null`：模板要在微信后台用正式 AppID 手工添加，
+ * 加好之前整个能力关闭（`GET /subscribe-messages/config` 返回 null，端上就不弹授权），
+ * 而不是启动失败——缺模板是「还没开通」，不是「配错了」。
+ *
+ * 但**填了就必须合法**：模板 ID 会原样进 `subscribe/send` 的请求体，拼错只会在投递时
+ * 拿到 40037 之类的参数错误，那时代码里已经分不清「模板写错」与「平台故障」。所以这里
+ * 按微信模板 ID 的字符集与长度先拦一道（`addtemplate` 返回的 43 位 base64url 形状）。
+ *
+ * 与 `WECHAT_TRANSPORT` 的关系：模板 ID 配好也不等于能用——只有 `WECHAT_TRANSPORT=live`
+ * 才有 access_token（见 `apps/api/src/app.ts` 的装配），`off` / `stub` 下整个能力关闭。
+ */
+export type SubscribeMessageTemplatesEnv = {
+  /** 消息未读提醒（CHAT） */
+  chat: string | null
+  /** 订单状态更新提醒（TX） */
+  tx: string | null
+  /** 审核结果通知（REVIEW） */
+  review: string | null
+}
+
+/**
+ * 微信模板 ID 的形状：`addtemplate` 返回 43 位 `[A-Za-z0-9_-]`。
+ * 放宽到 20–64 位，既挡住明显的手抄错误（空格、引号、中文），又不把长度写死成 43。
+ */
+const WECHAT_SUBSCRIBE_TEMPLATE_ID_PATTERN = /^[A-Za-z0-9_-]{20,64}$/
+
+function readSubscribeTemplateId(
+  source: Record<string, string | undefined>,
+  name: 'WECHAT_SUBSCRIBE_TMPL_CHAT' | 'WECHAT_SUBSCRIBE_TMPL_TX' | 'WECHAT_SUBSCRIBE_TMPL_REVIEW',
+): string | null {
+  const raw = source[name]?.trim()
+  // 空串与未设置同义：`.env.example` 里留空是最常见的"还没开通"写法。
+  if (!raw) return null
+  if (!WECHAT_SUBSCRIBE_TEMPLATE_ID_PATTERN.test(raw)) {
+    // 只报变量名与形状要求，**不回显值**（与上面所有加载器同一口径）。
+    throw new Error(
+      `环境变量校验失败：${name} 不是合法的微信模板 ID（应为 20–64 位 [A-Za-z0-9_-]，取自 addtemplate 返回的 priTmplId）`,
+    )
+  }
+  return raw
+}
+
+export function loadSubscribeMessageTemplatesEnv(
+  source: Record<string, string | undefined> = process.env,
+): SubscribeMessageTemplatesEnv {
+  return {
+    chat: readSubscribeTemplateId(source, 'WECHAT_SUBSCRIBE_TMPL_CHAT'),
+    tx: readSubscribeTemplateId(source, 'WECHAT_SUBSCRIBE_TMPL_TX'),
+    review: readSubscribeTemplateId(source, 'WECHAT_SUBSCRIBE_TMPL_REVIEW'),
+  }
+}

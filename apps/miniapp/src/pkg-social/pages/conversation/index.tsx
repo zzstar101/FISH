@@ -42,6 +42,7 @@ import {
 import { ChatRealtime, type ChatRealtimeEvent } from '@/features/chat/realtime'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
+import { requestSubscribe } from '@/features/subscribe/request'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -261,6 +262,11 @@ export default function Conversation() {
   const epoch = useRef(0)
   /** 本地乐观消息的自增序号（只用于渲染 key 与重试定位） */
   const localSeq = useRef(0)
+  /**
+   * #462：本次进入会话是否已经问过 CHAT 订阅授权。用 ref 而不是 state：
+   * 它不参与渲染，而 `doSend` 的闭包里必须读到**当前**值（连点两次不应该弹两次）。
+   */
+  const subscribeAsked = useRef(false)
   /**
    * 「已经发起过一次加载」标记：useDidShow 据此让渡首次触发给登录态 effect，
    * 不双发。声明在 `load` 之前是因为 `load` 的 useCallback 体内要引用它
@@ -995,6 +1001,18 @@ export default function Conversation() {
     pendingId?: string,
     reply?: { id: string; excerpt: string } | null,
   ) => {
+    /*
+      #462：进入会话后**第一次**点「发送」时请求 CHAT 订阅授权（Owner 冻结的授权入口）。
+
+      三条约束都在这一处满足：只在点击回调里调（本函数就是点击/重试的处理器）、只在**新消息**
+      时请求（重试不重复打扰）、不 `await` 不阻塞（授权被拒或失败都不影响这条消息发出去）。
+      一次性订阅是"允许一次加一次额度"，所以只需要问一次；`?` 的额度用尽时端上不会自动再问
+      —— 再问一次就是一次没有内容支撑的弹窗。
+    */
+    if (pendingId === undefined && !subscribeAsked.current) {
+      subscribeAsked.current = true
+      void requestSubscribe(['CHAT'])
+    }
     // 新气泡才需要新序号；重试沿用原来的临时 id（赋值不能塞进表达式，见 noAssignInExpressions）
     let id = pendingId
     if (!id) {

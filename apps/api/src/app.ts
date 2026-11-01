@@ -19,13 +19,16 @@ import type {
   MailTransportEnv,
   MeetupTokenEnv,
   ServerEnv,
+  SubscribeMessageTemplatesEnv,
   VisualEmbeddingEnv,
   VisualParseEnv,
+  WechatEnv,
 } from '@fish/shared/env'
 import {
   loadAiPolishEnv,
   loadMeetupTokenEnv,
   loadRecommendationRateLimitEnv,
+  loadSubscribeMessageTemplatesEnv,
 } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
@@ -100,6 +103,20 @@ import { createRecommendationRecall } from './modules/recommendation/recall/serv
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
+import {
+  createSubscribeMessageClient,
+  miniprogramStateOf,
+} from './modules/subscribe-messages/client'
+import { createSubscribeMessagesRouter } from './modules/subscribe-messages/router'
+import {
+  createSubscribeMessageScheduler,
+  type SubscribeMessageScheduler,
+} from './modules/subscribe-messages/scheduler'
+import {
+  createSubscribeMessageService,
+  resolveCapability,
+} from './modules/subscribe-messages/service'
+import { createSqlSubscribeMessageStore } from './modules/subscribe-messages/store'
 import { createTransactionReviewsRouter } from './modules/transaction-reviews/router'
 import { createTransactionReviewService } from './modules/transaction-reviews/service'
 import { createSqlTransactionReviewStore } from './modules/transaction-reviews/store'
@@ -166,7 +183,7 @@ export function createApp(
    * transport 无默认值（off/stub/live），生产禁 stub；`off` 时登录/绑定入口 503 关闭。
    * 测试传 `{ transport: 'stub' }` 显式开启；不传即 off，不会静默降级。
    */
-  wechatEnv: import('@fish/shared/env').WechatEnv = { transport: 'off' },
+  wechatEnv: WechatEnv = { transport: 'off' },
   lookupNetwork: { peerIp: (request: Request) => string | null; trustedProxyIp: string | null } = {
     peerIp: () => null,
     trustedProxyIp: null,
@@ -189,6 +206,17 @@ export function createApp(
    * 也不把查询图再发一次；开启后文本路才参与召回（见 `visual-search/parse.ts` 的 fail-open）。
    */
   visualParseEnv: VisualParseEnv = { transport: 'off' },
+  /**
+   * 微信订阅消息模板（#462）：API-only，`index.ts` 用 `loadSubscribeMessageTemplatesEnv()` 校验后
+   * 传入。三个都可选 —— 未配置即"能力未开通"（端上拿到 null 不弹授权），不是启动失败。
+   */
+  subscribeTemplatesEnv: SubscribeMessageTemplatesEnv = loadSubscribeMessageTemplatesEnv(),
+  /**
+   * 进程生命周期钩子（#462）：投递循环的 `start()` / `stop()` 属于进程，不属于请求 ——
+   * `createApp` 只**造**调度器并经这里交出去，`index.ts` 在 `Bun.serve` 之后启动、在退出信号里
+   * 停止。测试不传 ⇒ 调度器从不启动（不会被一个 15 秒定时器拖住 `bun test`）。
+   */
+  lifecycle: { onSubscribeScheduler?: (scheduler: SubscribeMessageScheduler) => void } = {},
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -848,6 +876,46 @@ export function createApp(
       getUserId: (c) => c.get('userId'),
     }),
   )
+
+  /*
+   * 微信订阅消息（#462）：`GET /subscribe-messages/config`（匿名，模板 ID 或 null）与
+   * `POST /me/subscribe-messages/grants`（登录 + 写守卫，上报 `requestSubscribeMessage` 结果）。
+   *
+   * 能力开关只算一次（`resolveCapability`），三处共用同一份结论：配置接口下发什么、
+   * grants 是否 503、投递循环是否启动。模板 ID 与 `WECHAT_TRANSPORT` 缺一即整体关闭 ——
+   * 没有 live 的 transport 就没有 `access_token`，模板配好也发不出去。
+   *
+   * 发送客户端（`createSubscribeMessageClient`）**必须**复用 auth 模块里那唯一的
+   * `wechatAccessTokens` 实例：一个 appid 在微信侧只有一份有效凭证（见 access-token.ts）。
+   */
+  const subscribeCapability = resolveCapability({
+    transport: wechatEnv.transport,
+    templates: subscribeTemplatesEnv,
+  })
+  const subscribeStore = createSqlSubscribeMessageStore(db)
+  const subscribeScheduler = createSubscribeMessageScheduler({
+    db,
+    client:
+      wechatEnv.transport === 'live' && auth.wechatAccessTokens !== null
+        ? createSubscribeMessageClient({
+            tokens: auth.wechatAccessTokens,
+            miniprogramState: miniprogramStateOf(wechatEnv.qrEnvVersion),
+          })
+        : null,
+    capability: subscribeCapability,
+  })
+  app.route(
+    '/',
+    createSubscribeMessagesRouter({
+      service: createSubscribeMessageService({
+        store: subscribeStore,
+        capability: subscribeCapability,
+      }),
+      requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
+    }),
+  )
+  lifecycle.onSubscribeScheduler?.(subscribeScheduler)
 
   // 商品描述 AI 润色（#141）：单个端点 `POST /ai/polish-candidates`，整体要求登录
   // （未登录 401，不给匿名者烧配额）。装配在 modules/ai 内，这里只接线；AI 的上游密钥

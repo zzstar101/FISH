@@ -47,6 +47,7 @@ import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
+import { requestSubscribe } from '@/features/subscribe/request'
 import { describeProposeFailure, proposeTransaction } from '@/features/transaction/api'
 import {
   initialAmountValue,
@@ -1007,6 +1008,9 @@ export default function ListingDetail() {
       if (!shouldReleaseActionTask(task, buyInFlightRef.current)) return
       buyInFlightRef.current = null
     }
+    // #462：发起交易时请求 TX 订阅授权（Owner 冻结的授权入口）。放在点击回调里、
+    // 不 await：授权被拒或失败都不影响这次「我想要」，后续状态变化照样进站内通知。
+    void requestSubscribe(['TX'])
     setBuyBusy(true)
     setBuyAmountError(null)
     setBuySubmitError(null)
