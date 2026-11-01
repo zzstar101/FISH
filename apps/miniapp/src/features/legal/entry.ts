@@ -9,6 +9,20 @@
  * `pages/login` 的两个协议链分别带 `?from=login`。没有这个参数（设置页 / 关于页进来）
  * 就是纯阅读态。
  */
+/** 法务文档页面集合；只有它们在互跳时需要继承 `?from=login` 来源以保留底部同意条 */
+export const LEGAL_PAGES = new Set([
+  '/pkg-legal/pages/terms/index',
+  '/pkg-legal/pages/privacy/index',
+  '/pkg-legal/pages/info-collection/index',
+  '/pkg-legal/pages/third-party-sharing/index',
+  '/pkg-legal/pages/community-guidelines/index',
+])
+
+/** 页脚互链的落点：从登录流程进入且目标同为法务页时延续 `?from=login`，跳意见反馈则不带 */
+export function crossLinkUrl(page: string, entry: boolean): string {
+  return entry && LEGAL_PAGES.has(page) ? `${page}?from=login` : page
+}
+
 export function isEntryFromAuth(params: { from?: string }): boolean {
   return params.from === 'login' || params.from === 'register'
 }

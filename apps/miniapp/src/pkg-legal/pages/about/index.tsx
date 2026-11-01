@@ -75,6 +75,27 @@ export default function About() {
           <Text className="ab__row-label">隐私政策</Text>
           <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
         </View>
+        <View
+          className="ab__row is-act"
+          onClick={() => go('/pkg-legal/pages/info-collection/index')}
+        >
+          <Text className="ab__row-label">个人信息收集清单</Text>
+          <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
+        <View
+          className="ab__row is-act"
+          onClick={() => go('/pkg-legal/pages/third-party-sharing/index')}
+        >
+          <Text className="ab__row-label">第三方信息共享清单</Text>
+          <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
+        <View
+          className="ab__row is-act"
+          onClick={() => go('/pkg-legal/pages/community-guidelines/index')}
+        >
+          <Text className="ab__row-label">社区规范与交易安全须知</Text>
+          <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
         {/* 占位条目：条目名与是否收录待 zzstar 定（稿的条目口径 ③） */}
         <View className="ab__row">
           <Text className="ab__row-label">

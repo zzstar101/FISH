@@ -4,7 +4,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
-import { markConsent } from '@/features/legal/entry'
+import { crossLinkUrl, markConsent } from '@/features/legal/entry'
 import type { Block, LegalDoc, LegalSection, ListItem, Run } from '@/features/legal/types'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
@@ -74,7 +74,7 @@ function Runs({ runs }: { runs: Run[] }) {
   return (
     <>
       {runs.map((run) => (
-        <Text key={run.k ?? run.t} className={runClass(run)}>
+        <Text key={run.k ?? run.t} className={runClass(run)} userSelect>
           {run.t}
         </Text>
       ))}
@@ -95,22 +95,6 @@ function runClass(run: Run): string | undefined {
   if (run.em) cls.push('ld__em')
   if (run.ph) cls.push('ld__ph')
   return cls.length > 0 ? cls.join(' ') : undefined
-}
-
-/** 法务文档之间互链的两个目标；只有它们需要继承「从登录流程进入」这个来源 */
-const LEGAL_PAGES = new Set(['/pkg-legal/pages/terms/index', '/pkg-legal/pages/privacy/index'])
-
-/**
- * 页脚互链的落点。
- *
- * 从登录流程进来的实例带着 `?from=login`（同意条据此显示）。互链**必须把它传下去**，
- * 否则：登录 → 用户协议（有同意条）→ 页脚《隐私政策》（**没有**同意条）→ 再互链回用户协议
- * 又是个新实例、仍然没有 —— 用户读到一半发现同意条整段消失，得连按几次返回才回到有它的那层。
- * 稿的页脚是裸 `<a href>`（静态稿里没有「来源」这个概念），这里按落地需要补上。
- * 意见反馈不是法务文档，不带这个参数。
- */
-function crossLinkUrl(page: string, entry: boolean): string {
-  return entry && LEGAL_PAGES.has(page) ? `${page}?from=login` : page
 }
 
 /** 信息清单的一条：名称 + 必要性标签 + 用途 */
