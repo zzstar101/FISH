@@ -147,7 +147,7 @@ Compose 必须把**新卷挂到 `/var/lib/postgresql`**。不要 `docker compose
 > `presign` 直传与匿名读这两条链路。
 
 也可以换成任何 S3 兼容服务（Cloudflare R2 / 阿里云 OSS）：换掉 `.env` 的 `S3_*` **六**项
-（含 `S3_PUBLIC_URL`，它决定读接口拼出的图片直链）即可，其它步骤不变，并且可以跳过 §6 的
+（含 `S3_PUBLIC_URL`，它决定读接口拼出的图片直链；腾讯云 COS 另需第七项 `S3_VIRTUAL_HOSTED_STYLE`，见下文）即可，其它步骤不变，并且可以跳过 §6 的
 `s3.<域名>` 反代。
 
 **不要用 `curl` 从 `dl.min.io` 下载**。从上面那个社区镜像里取二进制（`skopeo` 不需要 docker 守护进程）：
@@ -260,7 +260,8 @@ mc admin policy attach local fish-app-rw --user fish-app
 边界的永久旁路（#483 审查响应），删除评价后亦然。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
 
 **对象存储兼容性要求（#475）**：交易评价配图 confirm 通过服务端 `PUT If-None-Match: *` 原子创建 final 对象，
-对象存储必须支持 S3 条件写并正确返回 `412 Precondition Failed`（或并发冲突 `409 ConditionalRequestConflict`）。
+对象存储必须支持 S3 条件写并正确返回 `412 Precondition Failed`（或并发冲突 `409 ConditionalRequestConflict`）；
+不支持的存储（如下文的腾讯云 COS）只能靠单 API 进程内的排队兜底。
 上线前必须在目标存储实测并发条件 PUT；不能仅凭 S3 API 兼容声明推定兼容。阿里云 OSS 的 S3 兼容接口
 对该条件写头的支持存在差异/不保证，未验证前视为不兼容；这类部署可能覆盖已固化评价图片，需使用支持条件写的存储或另行实现服务端互斥。
 
@@ -272,6 +273,8 @@ mc admin policy attach local fish-app-rw --user fish-app
   409/304 拦下。但它**不仲裁并发**（实测 8 个并发 PUT 全部 200），所以 API 在进程内按对象键串行化条件写
   （`apps/api/src/modules/uploads/storage.ts` 的 `writeMediaBytesIfAbsent`）。这只在**单个 API 进程**
   写桶时成立：COS 部署不要横向扩多个 API 实例。
+- 客户端直传的预签名 URL 指向桶域名：小程序后台的 request 合法域名要加上
+  `https://<bucket>.cos.<region>.myqcloud.com`；PC 站浏览器直传要在桶的 CORS 里放行站点源的 `PUT`。
 - 匿名读与生命周期规则不走本仓的 `infra/minio-*.json`：在 COS 控制台配置（轻量对象存储为 role mode，
   桶策略 / CORS / 生命周期 API 均返回 `AccessDenied`），或保持桶私有、由反代只放行 `listings/*` 的 GET。
 

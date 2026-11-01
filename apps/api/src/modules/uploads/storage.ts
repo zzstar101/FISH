@@ -242,6 +242,9 @@ export function isReviewMediaStagingKey(key: string): boolean {
   )
 }
 
+/** 服务端条件 PUT 的超时：图片上限 10MB、走同地域内网，30s 足够；超时按存储故障上抛。 */
+const CONDITIONAL_PUT_TIMEOUT_MS = 30_000
+
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client
   /** 来自 `S3_PUBLIC_URL`（本地为 `http://localhost:9000/fish`）。 */
@@ -307,6 +310,8 @@ export function createBunS3MediaStorage(options: {
           'x-cos-forbid-overwrite': 'true',
         },
         body: bytes,
+        // 同一键的后续写在排队等它：挂死的 PUT 不能无限期堵住队列。
+        signal: AbortSignal.timeout(CONDITIONAL_PUT_TIMEOUT_MS),
       })
     } catch (error) {
       const safeError = new Error('S3 条件写入网络请求失败')
