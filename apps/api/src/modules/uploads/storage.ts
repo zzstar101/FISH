@@ -242,6 +242,27 @@ export function isReviewMediaStagingKey(key: string): boolean {
   )
 }
 
+/**
+ * 服务端条件写的超时：图片上限 10MB、走同地域内网，30s 足够；超时按存储故障上抛。
+ * 同一个值也是 PUT 结局未知（网络错误 / 超时）后该键的**隔离期**，见 `writeMediaBytesIfAbsent`。
+ */
+const CONDITIONAL_WRITE_TIMEOUT_MS = 30_000
+
+/** 让一个可能挂起的存储调用在 `ms` 后以错误结束（Bun.S3Client.stat 不接受 AbortSignal）。 */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}超时（${ms}ms）`)), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client
   /** 来自 `S3_PUBLIC_URL`（本地为 `http://localhost:9000/fish`）。 */
@@ -258,6 +279,8 @@ export function createBunS3MediaStorage(options: {
   expiresInSeconds?: number
   /** 可替换条件 PUT 的传输函数，供离线适配器测试使用。 */
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+  /** 条件写超时与隔离期（毫秒），默认 30s；只供离线测试缩短。 */
+  conditionalWriteTimeoutMs?: number
 }): MediaStorage {
   const {
     client,
@@ -271,12 +294,83 @@ export function createBunS3MediaStorage(options: {
     disputeUrlSecret,
   } = options
   const expiresInSeconds = options.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRES_SECONDS
+  const conditionalWriteTimeoutMs =
+    options.conditionalWriteTimeoutMs ?? CONDITIONAL_WRITE_TIMEOUT_MS
+  /** PUT 没拿到响应（网络错误 / 超时）的错误：存储端可能仍在处理这次写，结局未知。 */
+  const unsettledPutErrors = new WeakSet<Error>()
 
   /** 键只应由服务端生成；形状不合法一律抛错（fail-closed），不签名也不写入。 */
   const assertSafeObjectKey = (key: string): void => {
     // 带上出错的键本身：这句话是排障时唯一的线索，而"哪个键"决定了是编码错误还是数据脏（#406 第 4 项）。
     if (!isSafeObjectKey(key)) throw new Error(`对象键形状不合法：${JSON.stringify(key)}`)
   }
+
+  /** 一次条件 PUT：对象已存在时返回 false，绝不覆盖。并发互斥由调用方 `writeMediaBytesIfAbsent` 负责。 */
+  const conditionalPut = async (
+    key: string,
+    bytes: Uint8Array,
+    contentType: string,
+  ): Promise<boolean> => {
+    // Bun.S3Client.write 不暴露 If-None-Match。Bun 1.4.0 的 presign options 无自定义签名头能力，
+    // 因此服务端 PUT 附加该条件头；Content-Type 也未签名，且 presign 的 type 对 PUT 是
+    // response-content-type 查询参数，不是签名的请求 Content-Type。
+    //
+    // 腾讯云 COS 单独收到 `If-None-Match: *` 时忽略它（实测重复 PUT 仍 200 并覆盖），只认它自己的
+    // `x-cos-forbid-overwrite: true`（对象已存在时 409 FileAlreadyExists）。两个头一起带时
+    // COS 对已存在对象实测返回 304，同样落入下方冲突分支。S3 / MinIO 不认识 `x-cos-*` 头、
+    // 按 `If-None-Match` 返回 412。
+    const url = client.presign(key, {
+      method: 'PUT',
+      expiresIn: 60,
+      type: contentType,
+    })
+    let response: Response
+    try {
+      response = await fetchImpl(url, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+          'If-None-Match': '*',
+          'x-cos-forbid-overwrite': 'true',
+        },
+        body: bytes,
+        // 同一键的后续写在排队等它：挂死的 PUT 不能无限期堵住队列。
+        signal: AbortSignal.timeout(conditionalWriteTimeoutMs),
+      })
+    } catch (error) {
+      const safeError = new Error('S3 条件写入网络请求失败')
+      safeError.name = error instanceof Error ? error.name : 'Error'
+      const code = (error as { code?: unknown }).code
+      if (typeof code === 'string') Object.assign(safeError, { code })
+      unsettledPutErrors.add(safeError)
+      throw safeError
+    }
+    if (response.status === 412 || response.status === 409 || response.status === 304) {
+      // 条件写竞争输家只有在对象已存在时才算幂等成功；stat 故障或对象不存在均不能吞掉。
+      try {
+        // stat 挂起会让本键队列一直不放行：同样限时。
+        await withTimeout(client.stat(key), conditionalWriteTimeoutMs, 'S3 条件写入冲突后的 stat ')
+        return false
+      } catch (error) {
+        if ((error as { code?: string }).code === 'NoSuchKey') {
+          throw new Error(`S3 条件写入冲突但对象不存在：HTTP ${response.status}`)
+        }
+        throw error
+      }
+    }
+    if (!response.ok) throw new Error(`S3 条件写入失败：HTTP ${response.status}`)
+    return true
+  }
+
+  /**
+   * 同一键的条件写在本进程内**排队**执行。
+   *
+   * 腾讯云 COS 的 `x-cos-forbid-overwrite` 只防**先后**覆盖、不仲裁**并发**：实测 8 个并发 PUT
+   * 全部 200、最后写入者胜出。串行化之后，第二个 PUT 一定发生在第一个落盘之后，于是 COS 的
+   * 409/304 与 S3/MinIO 的 412 都能正确拦下输家。前提是同一时刻只有一个 API 进程写这个桶
+   * （见 docs/deployment.md 的对象存储兼容性要求）；S3 / MinIO 本身已在存储端原子仲裁，排队无害。
+   */
+  const conditionalWriteQueues = new Map<string, Promise<void>>()
 
   return {
     presignPut({ key, contentType }) {
@@ -339,42 +433,24 @@ export function createBunS3MediaStorage(options: {
 
     async writeMediaBytesIfAbsent(key, bytes, contentType) {
       assertSafeObjectKey(key)
-      // Bun.S3Client.write 不暴露 If-None-Match。Bun 1.4.0 的 presign options 无自定义签名头能力，
-      // 因此服务端 PUT 附加该条件头；Content-Type 也未签名，且 presign 的 type 对 PUT 是
-      // response-content-type 查询参数，不是签名的请求 Content-Type。
-      const url = client.presign(key, {
-        method: 'PUT',
-        expiresIn: 60,
-        type: contentType,
+      const previous = conditionalWriteQueues.get(key) ?? Promise.resolve()
+      // 前一个写的成败与本次无关：失败了本次照常尝试，成功了本次会收到 409/412 并复用它。
+      const current = previous.then(() => conditionalPut(key, bytes, contentType))
+      // 队尾 = 本次写「确定不会再落盘」的时刻。PUT 没拿到响应时（网络错误 / 本地超时），存储端
+      // 可能还在处理它：本次立即报错给调用方，但该键再隔离一个超时周期才放行下一个写，否则在
+      // 不仲裁并发的 COS 上，后一个 PUT 可能与仍在途的前一个重叠、覆盖已固化的对象。
+      const tail: Promise<void> = current.then(
+        () => undefined,
+        (error: unknown) =>
+          error instanceof Error && unsettledPutErrors.has(error)
+            ? Bun.sleep(conditionalWriteTimeoutMs)
+            : undefined,
+      )
+      conditionalWriteQueues.set(key, tail)
+      void tail.then(() => {
+        if (conditionalWriteQueues.get(key) === tail) conditionalWriteQueues.delete(key)
       })
-      let response: Response
-      try {
-        response = await fetchImpl(url, {
-          method: 'PUT',
-          headers: { 'Content-Type': contentType, 'If-None-Match': '*' },
-          body: bytes,
-        })
-      } catch (error) {
-        const safeError = new Error('S3 条件写入网络请求失败')
-        safeError.name = error instanceof Error ? error.name : 'Error'
-        const code = (error as { code?: unknown }).code
-        if (typeof code === 'string') Object.assign(safeError, { code })
-        throw safeError
-      }
-      if (response.status === 412 || response.status === 409) {
-        // 条件写竞争输家只有在对象已存在时才算幂等成功；stat 故障或对象不存在均不能吞掉。
-        try {
-          await client.stat(key)
-          return false
-        } catch (error) {
-          if ((error as { code?: string }).code === 'NoSuchKey') {
-            throw new Error(`S3 条件写入冲突但对象不存在：HTTP ${response.status}`)
-          }
-          throw error
-        }
-      }
-      if (!response.ok) throw new Error(`S3 条件写入失败：HTTP ${response.status}`)
-      return true
+      return current
     },
 
     async readMediaBytes(key, maxBytes = 10 * 1024 * 1024) {

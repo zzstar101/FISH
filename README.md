@@ -125,7 +125,7 @@ bun run dev:web-pc   # PC Web   → http://localhost:5174/pc/
 
 PC Web 打开 <http://localhost:5174/pc/>；移动端是微信小程序（用微信开发者工具打开 `apps/miniapp` 的构建产物，见 [apps/miniapp/README.md](apps/miniapp/README.md)）。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
 本地校园认证邮件（含验证码）写入 `apps/api/.dev/mail-outbox.jsonl`，不会发送真实邮件。
-已有 `.env` 也需补上该变量；生产必须使用 `MAIL_TRANSPORT=resend` 并配置 Resend，
+已有 `.env` 也需补上该变量；生产必须使用 `MAIL_TRANSPORT=smtp`（飞书企业邮箱）或 `resend` 并配置对应变量，
 见 [部署手册 §4](docs/deployment.md#4-代码与环境变量)。
 
 冒烟自检：

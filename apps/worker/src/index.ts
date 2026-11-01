@@ -104,6 +104,7 @@ const mediaStorage = createWorkerMediaStorage(
     bucket: env.S3_BUCKET,
     endpoint: env.S3_ENDPOINT,
     region: env.S3_REGION,
+    virtualHostedStyle: env.S3_VIRTUAL_HOSTED_STYLE,
   }),
 )
 

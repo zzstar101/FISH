@@ -147,7 +147,7 @@ Compose 必须把**新卷挂到 `/var/lib/postgresql`**。不要 `docker compose
 > `presign` 直传与匿名读这两条链路。
 
 也可以换成任何 S3 兼容服务（Cloudflare R2 / 阿里云 OSS）：换掉 `.env` 的 `S3_*` **六**项
-（含 `S3_PUBLIC_URL`，它决定读接口拼出的图片直链）即可，其它步骤不变，并且可以跳过 §6 的
+（含 `S3_PUBLIC_URL`，它决定读接口拼出的图片直链；腾讯云 COS 另需第七项 `S3_VIRTUAL_HOSTED_STYLE`，见下文）即可，其它步骤不变，并且可以跳过 §6 的
 `s3.<域名>` 反代。
 
 **不要用 `curl` 从 `dl.min.io` 下载**。从上面那个社区镜像里取二进制（`skopeo` 不需要 docker 守护进程）：
@@ -260,9 +260,24 @@ mc admin policy attach local fish-app-rw --user fish-app
 边界的永久旁路（#483 审查响应），删除评价后亦然。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
 
 **对象存储兼容性要求（#475）**：交易评价配图 confirm 通过服务端 `PUT If-None-Match: *` 原子创建 final 对象，
-对象存储必须支持 S3 条件写并正确返回 `412 Precondition Failed`（或并发冲突 `409 ConditionalRequestConflict`）。
-上线前必须在目标存储实测并发条件 PUT；不能仅凭 S3 API 兼容声明推定兼容。阿里云 OSS、腾讯云 COS 的 S3 兼容接口
+对象存储必须支持 S3 条件写并正确返回 `412 Precondition Failed`（或并发冲突 `409 ConditionalRequestConflict`）；
+不支持的存储（如下文的腾讯云 COS）只能靠单 API 进程内的排队兜底。
+上线前必须在目标存储实测并发条件 PUT；不能仅凭 S3 API 兼容声明推定兼容。阿里云 OSS 的 S3 兼容接口
 对该条件写头的支持存在差异/不保证，未验证前视为不兼容；这类部署可能覆盖已固化评价图片，需使用支持条件写的存储或另行实现服务端互斥。
+
+**腾讯云 COS（含轻量对象存储）实测结论**：
+- 只接受虚拟主机风格：设 `S3_VIRTUAL_HOSTED_STYLE=true`，且 `S3_ENDPOINT` 写**桶域名本身**
+  （`https://<bucket>.cos.<region>.myqcloud.com`），`S3_REGION` 写桶地域（如 `ap-guangzhou`）。
+  路径风格下读写与列举都会被拒（列举失败会让上传配额统计 fail-open）。
+- 忽略 `If-None-Match: *`；条件写同时附带 COS 自有的 `x-cos-forbid-overwrite: true`，先后覆盖会被
+  409/304 拦下。但它**不仲裁并发**（实测 8 个并发 PUT 全部 200），所以 API 在进程内按对象键串行化条件写
+  （`apps/api/src/modules/uploads/storage.ts` 的 `writeMediaBytesIfAbsent`）。这只在**单个 API 进程**
+  写桶时成立：COS 部署不要横向扩多个 API 实例。PUT 没拿到响应（网络错误 / 30s 超时）时，该键再隔离
+  30s 才放行下一个写，避免与仍在途的前一个 PUT 重叠。
+- 客户端直传的预签名 URL 指向桶域名：小程序后台的 request 合法域名要加上
+  `https://<bucket>.cos.<region>.myqcloud.com`；PC 站浏览器直传要在桶的 CORS 里放行站点源的 `PUT`。
+- 匿名读与生命周期规则不走本仓的 `infra/minio-*.json`：在 COS 控制台配置（轻量对象存储为 role mode，
+  桶策略 / CORS / 生命周期 API 均返回 `AccessDenied`），或保持桶私有、由反代只放行 `listings/*` 的 GET。
 
 **staging 前缀要配生命周期过期（#483 审查响应）**：confirm 刻意不删 staging 源对象（保守
 选择，非重试安全的必要条件——final 键已存在时 confirm 幂等成功、不依赖 staging 存活），
@@ -335,10 +350,14 @@ api/worker 共用的 `/srv/fish/.env`：那个文件在应用工作目录里，�
 本机未实测。）
 
 ```bash
-# 校园认证邮件（仅 API 加载）
-MAIL_TRANSPORT=resend
-RESEND_API_KEY=REPLACE_ME_RESEND_API_KEY
-RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"
+# 校园认证邮件（仅 API 加载）：飞书企业邮箱 SMTP，465 隐式 TLS
+MAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.feishu.cn
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=noreply@YOUR_DOMAIN
+SMTP_PASS=REPLACE_ME_SMTP_PASSWORD
+SMTP_FROM="鱼小应 <noreply@YOUR_DOMAIN>"
 
 # #70 面交码的 HMAC 签名密钥（仅 API 加载；必填且不少于 32 字符）
 MEETUP_TOKEN_SECRET=REPLACE_ME_64_HEX
@@ -351,19 +370,30 @@ AI_POLISH_API_KEY=REPLACE_ME_UPSTREAM_KEY
 AI_POLISH_MODEL=deepseek-flash
 ```
 
-先在 Resend 验证发件域名（含 SPF/DKIM）。**只有首次部署**才用下面这段整份写入；两个密钥都从
-`read` 进内存再落盘，不要直接粘在命令里——那会永久留在 root 的 shell 历史里。`RESEND_FROM`
-也必须问进来：`loadMailTransportEnv` 只验它非空，占位域名会照样把服务起起来、直到发信时才失败。
+`SMTP_PASS` 是飞书邮箱后台为该账号生成的 **SMTP 专用密码**，不是登录密码。`SMTP_PORT` /
+`SMTP_SECURE` 可省略（默认 465 / true）；只支持隐式 TLS，不支持 587 STARTTLS；`SMTP_SECURE=false`
+（明文）只允许 `SMTP_HOST` 为回环地址，否则启动即失败（不依赖 `NODE_ENV`）。仍可改用 Resend：`MAIL_TRANSPORT=resend` 加
+`RESEND_API_KEY` / `RESEND_FROM` 两行（需先在 Resend 验证发件域名）。
+
+`SMTP_PASS` 原样写进 systemd `EnvironmentFile`、不加引号：飞书生成的专用密码是字母数字，没有问题；
+若口令含 `\`、引号、`$`、`#` 或首尾空格，要改成双引号包裹并对 `\` 和 `"` 转义，否则 systemd 读到的值
+与原文不同，AUTH 会一直失败。
+
+**只有首次部署**才用下面这段整份写入；两个密钥都从 `read` 进内存再落盘，不要直接粘在命令里——
+那会永久留在 root 的 shell 历史里。`SMTP_USER` / `SMTP_FROM` 也必须问进来：`loadMailTransportEnv`
+只验它们非空（`SMTP_FROM` 另验地址格式），占位域名会照样把服务起起来、直到发信时才失败。
 
 ```bash
 sudo install -d -m 755 /etc/fish
-read -r  -p '发件地址（已在 Resend 验证过的域名）: ' RESEND_FROM
-read -rs -p 'Resend 密钥（不回显）: ' RESEND_API_KEY && echo
+read -r  -p 'SMTP 账号（如 noreply@your-domain）: ' SMTP_USER
+read -rs -p 'SMTP 专用密码（不回显）: ' SMTP_PASS && echo
 read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
 {
-  printf 'MAIL_TRANSPORT=resend\n'
-  printf 'RESEND_API_KEY=%s\n' "$RESEND_API_KEY"
-  printf 'RESEND_FROM="%s"\n' "$RESEND_FROM"
+  printf 'MAIL_TRANSPORT=smtp\n'
+  printf 'SMTP_HOST=smtp.feishu.cn\n'
+  printf 'SMTP_USER=%s\n' "$SMTP_USER"
+  printf 'SMTP_PASS=%s\n' "$SMTP_PASS"
+  printf 'SMTP_FROM="鱼小应 <%s>"\n' "$SMTP_USER"
   printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)"
   printf 'AI_POLISH_TRANSPORT=live\n'
   printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
@@ -371,7 +401,7 @@ read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
   printf 'AI_POLISH_MODEL=deepseek-flash\n'
 } | sudo tee /etc/fish/api-mail.env >/dev/null
 sudo chown root:root /etc/fish/api-mail.env && sudo chmod 600 /etc/fish/api-mail.env
-unset RESEND_API_KEY RESEND_FROM AI_POLISH_API_KEY
+unset SMTP_USER SMTP_PASS AI_POLISH_API_KEY
 ```
 
 **已经按旧版手册部署过的机器不要重跑上面那一段**：`tee` 是整文件覆写，会顺手换掉
@@ -380,6 +410,23 @@ unset RESEND_API_KEY RESEND_FROM AI_POLISH_API_KEY
 ```bash
 sudo grep -q '^MEETUP_TOKEN_SECRET=' /etc/fish/api-mail.env \
   || printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" | sudo tee -a /etc/fish/api-mail.env >/dev/null
+```
+
+**已经用 Resend 部署过、要切到飞书 SMTP 的机器**：同样不要重跑整份写入，只替换邮件那几行
+（先删旧的 `MAIL_TRANSPORT` / `RESEND_*`，再追加 SMTP 配置，然后重启 API）：
+
+```bash
+read -r  -p 'SMTP 账号（如 noreply@your-domain）: ' SMTP_USER
+read -rs -p 'SMTP 专用密码（不回显）: ' SMTP_PASS && echo
+sudo sed -i '/^MAIL_TRANSPORT=/d;/^RESEND_/d;/^SMTP_/d' /etc/fish/api-mail.env
+{
+  printf 'MAIL_TRANSPORT=smtp\n'
+  printf 'SMTP_HOST=smtp.feishu.cn\n'
+  printf 'SMTP_USER=%s\n' "$SMTP_USER"
+  printf 'SMTP_PASS=%s\n' "$SMTP_PASS"
+  printf 'SMTP_FROM="鱼小应 <%s>"\n' "$SMTP_USER"
+} | sudo tee -a /etc/fish/api-mail.env >/dev/null
+unset SMTP_USER SMTP_PASS
 ```
 
 **#141 起 API 还需要四个 AI 变量，且 `AI_POLISH_TRANSPORT` 无默认值**：升级后不补它，API 会**直接
@@ -416,7 +463,8 @@ stub**——它返回的是演示文案，客户端会带"演示文案·非真�
   不做 shell 展开，纯 hex 可以免掉 `$`、引号与 `#` 引发的整类解析歧义。
 - **不要把 `.env.example` 里那行 `dev-only-meetup-secret-…` 抄到生产**。它在公开仓库里，
   照抄等于公开签名密钥，任何人可离线伪造任意面交码。
-- `MAIL_TRANSPORT` 必填，选择 `resend` 但缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择
+- `MAIL_TRANSPORT` 必填，选择 `smtp` 缺 `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM`
+  任一项、或选择 `resend` 缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择
   transport。`outbox` 仅供本地开发，不能投递真实邮件。若从 `.env.example` 复制了生产 `.env`，
   移除其中的 `MAIL_TRANSPORT=outbox` 与 `MEETUP_TOKEN_SECRET=dev-only-…`，避免与 API 专属配置并存。
 
@@ -630,6 +678,14 @@ server {
     proxy_pass http://127.0.0.1:3000/;   # 末尾的 / 才会剥掉 /api 前缀
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
+  }
+  location /api/ws/ {                   # 小程序的 realtimeUrl 由 API 地址推导：wss://<域名>/api/ws/chat
+    proxy_pass http://127.0.0.1:3000/ws/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 1h;
   }
   location /ws {                        # /ws 与 /ws/chat 都要能 upgrade
     proxy_pass http://127.0.0.1:3000;
@@ -1130,11 +1186,11 @@ ps -p 1 -o comm= ; ls -d /run/systemd/system 2>/dev/null || echo "无 systemd"
 1. **supervisor**（apt 里有）：为 `fish-api` / `fish-worker` / `caddy` 各写一个 `[program:x]`，
    用 `user=` 降权、`autostart=true` / `autorestart=true`、`stdout_logfile=` 收日志；
    `supervisord -c …` 启动，`supervisorctl status/restart` 控制。这是最接近 systemd 行为的一种。
-   ⚠️ 没有 `EnvironmentFile` 可用时，**§4 列出的全部 API 专属变量**（邮件三项、#70 的
+   ⚠️ 没有 `EnvironmentFile` 可用时，**§4 列出的全部 API 专属变量**（`MAIL_TRANSPORT` 与对应的 `SMTP_*` / `RESEND_*`、#70 的
    `MEETUP_TOKEN_SECRET`、#141 的四个 `AI_POLISH_*`）必须由 `fish-api` 的 `environment=`
    注入——少任意一项 API 都起不来，带着 `autorestart=true` 反复重启，症状与 §9 第 12 条一致。
    清单以 §4 为准（这里不再逐个列，避免像本节原先那样漏掉后加的变量）。
-   `environment=` 用逗号分隔且值里带空格（`RESEND_FROM` 就是 `鱼小应 <…>`），那一项要按
+   `environment=` 用逗号分隔且值里带空格（`SMTP_FROM` 就是 `鱼小应 <…>`），那一项要按
    supervisor 的规则加引号；`supervisord.conf` 本身收到 `root:root 600`，别放世界可读的目录。
    （supervisor 的引号细则本机未实测。）
 2. `cron` + `@reboot`：能开机能拉起来，但没有崩溃自恢复，也没有依赖顺序（worker 会在迁移前先起）。

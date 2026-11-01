@@ -1,6 +1,6 @@
 # @fish/miniapp
 
-FISH 的微信小程序客户端（Taro 4 + React 18 + TypeScript）。第一阶段只有可运行的骨架，**没有业务逻辑**。
+FISH（鱼小应）的微信小程序客户端（Taro 4 + React 18 + TypeScript）。
 
 ## 常用命令
 
@@ -25,20 +25,50 @@ contracts 源码、Zod 及 Taro 使用的 tslib，避免依赖中的现代语法
 `./dist`，Taro 在构建时会把 `dist/project.config.json` 的 `miniprogramRoot` 改写成 `"./"`。
 也可以直接打开 `apps/miniapp/dist`，两者都成立。
 
-AppID 用占位值 `touristappid`。**不要**往仓库里写 AppSecret / Access Token / 私钥。
+仓库 `project.config.json` 里的 `appid` 是 #172 随开发者工具回写一起提交的 `wx4e8a1988208bcd17`，
+**不是**正式小程序「鱼小应」的 AppID。AppID 本身不是密钥，可以进仓库；**不要**往仓库里写
+AppSecret / Access Token / 私钥。AppSecret 只放服务器 API 的 env（`WECHAT_APP_SECRET`，见
+`docs/deployment.md`）。
 
-### 切换到真实 AppID
+### 切换 AppID
 
-仓库里始终是 `touristappid`；真实 AppID 构建时注入，只会写进被 gitignore 的 `dist/project.config.json`，
-不动源码文件（Taro 的实现：`@tarojs/cli/dist/presets/files/generateProjectConfig.js` 里
+AppID 在构建时注入，只会写进被 gitignore 的 `dist/project.config.json`，不动源码文件（Taro 的实现：
+`@tarojs/cli/dist/presets/files/generateProjectConfig.js` 里
 `origProjectConfig.appid = process.env.TARO_APP_ID || origProjectConfig.appid`）：
 
 ```bash
 TARO_APP_ID=wx你的appid bun run build:miniapp
 ```
 
-注意：`touristappid` 只在微信开发者工具**未登录**（游客模式）时可用。如果工具已登录真实账号，
-`cli open` / GUI 打开会报 `不存在此 AppID (code 10)`，必须用上面的方式注入一个有效 AppID。
+开发者工具登录的微信号必须是该 AppID 的开发者，否则 `cli open` / GUI 打开会报
+`不存在此 AppID (code 10)` 或无权限。
+
+### 构建并上传体验版
+
+正式小程序 AppID 为 `wx61b67a115826647e`，后端为 `https://yuxiaoyingai.com/api`。在**干净的 `origin/main`
+worktree** 里构建，不要用带未提交改动的工作区：
+
+```bash
+set -e   # 构建或 ES5 检查失败就停下，绝不上传半成品
+TARO_APP_ID=wx61b67a115826647e TARO_APP_API_BASE=https://yuxiaoyingai.com/api bun run build:miniapp
+
+CLI=/Applications/wechatwebdevtools.app/Contents/MacOS/cli   # macOS 默认安装位置
+$CLI islogin                                                 # 未登录：$CLI login 扫码
+$CLI open --project "$PWD/apps/miniapp/dist"                 # 先打开一次，否则 upload 可能报「需要重新登录」
+$CLI upload --project "$PWD/apps/miniapp/dist" -v 0.0.1 -d "内部测试 0.0.1（origin/main <sha>）"
+```
+
+构建到上传之间不要在同一个 worktree 里再跑别的构建（包括 `dev:miniapp` 的 watch）：它们共用 `dist/`，
+上传的产物可能混进另一份 AppID / API 配置。
+
+上传后是「开发版本」：到 mp.weixin.qq.com → 管理 → 版本管理 里「选为体验版」，再在 成员管理 → 体验成员
+里加人。体验版同样校验服务器域名（开发管理 → 开发设置 → 服务器域名），需要配好：
+
+| 类型 | 域名 |
+| --- | --- |
+| request | `https://yuxiaoyingai.com`、`https://s3.yuxiaoyingai.com`、对象存储桶域名（预签名直传，见 `docs/deployment.md`） |
+| socket | `wss://yuxiaoyingai.com`（`/api/ws/chat` 由 API 地址推导） |
+| downloadFile | `https://yuxiaoyingai.com`、`https://s3.yuxiaoyingai.com` |
 
 ## 接后端：API 地址怎么给
 

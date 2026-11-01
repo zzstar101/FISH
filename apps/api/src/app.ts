@@ -42,6 +42,7 @@ import { createAiPolishModule } from './modules/ai/module'
 import {
   createDevEmailVerificationProvider,
   createResendEmailVerificationProvider,
+  createSmtpEmailVerificationProvider,
 } from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
@@ -253,9 +254,11 @@ export function createApp(
               { apiKey: mailEnv.resendApiKey, from: mailEnv.resendFrom },
               { logoUrl: brandLogoUrl },
             )
-          : createDevEmailVerificationProvider(undefined, {
-              logoUrl: brandLogoUrl,
-            }),
+          : mailEnv.transport === 'smtp'
+            ? createSmtpEmailVerificationProvider(mailEnv.smtp, { logoUrl: brandLogoUrl })
+            : createDevEmailVerificationProvider(undefined, {
+                logoUrl: brandLogoUrl,
+              }),
     }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
@@ -301,6 +304,7 @@ export function createApp(
       bucket: env.S3_BUCKET,
       endpoint: env.S3_ENDPOINT,
       region: env.S3_REGION,
+      virtualHostedStyle: env.S3_VIRTUAL_HOSTED_STYLE,
     }),
     publicUrlBase: env.S3_PUBLIC_URL,
     legacyUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/legacy`,
@@ -470,6 +474,7 @@ export function createApp(
       bucket: env.S3_BUCKET,
       endpoint: env.S3_ENDPOINT,
       region: env.S3_REGION,
+      virtualHostedStyle: env.S3_VIRTUAL_HOSTED_STYLE,
     }),
     publicUrlBase: env.S3_PUBLIC_URL,
     expiresInSeconds: VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS,

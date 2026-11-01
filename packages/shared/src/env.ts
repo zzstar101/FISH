@@ -1,16 +1,41 @@
 import { z } from 'zod'
 
-const ServerEnvSchema = z.object({
-  DATABASE_URL: z.string().min(1),
-  API_PORT: z.coerce.number().int().positive().default(3000),
-  WEB_ORIGIN: z.string().min(1),
-  S3_ENDPOINT: z.string().min(1),
-  S3_REGION: z.string().min(1),
-  S3_ACCESS_KEY_ID: z.string().min(1),
-  S3_SECRET_ACCESS_KEY: z.string().min(1),
-  S3_BUCKET: z.string().min(1),
-  S3_PUBLIC_URL: z.string().min(1),
-})
+const ServerEnvSchema = z
+  .object({
+    DATABASE_URL: z.string().min(1),
+    API_PORT: z.coerce.number().int().positive().default(3000),
+    WEB_ORIGIN: z.string().min(1),
+    S3_ENDPOINT: z.string().min(1),
+    S3_REGION: z.string().min(1),
+    S3_ACCESS_KEY_ID: z.string().min(1),
+    S3_SECRET_ACCESS_KEY: z.string().min(1),
+    S3_BUCKET: z.string().min(1),
+    S3_PUBLIC_URL: z.string().min(1),
+    // 腾讯云 COS（含轻量对象存储）只接受虚拟主机风格（桶名在域名里），路径风格请求直接被拒。
+    // 为 `true` 时 `S3_ENDPOINT` 必须是桶域名本身（如 `https://<bucket>.cos.<region>.myqcloud.com`）：
+    // Bun 在该模式下不再把桶名拼进 URL。只认 `true` / `false`，拼错直接启动失败。
+    S3_VIRTUAL_HOSTED_STYLE: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
+  })
+  .superRefine((env, ctx) => {
+    // 开了虚拟主机风格却把 S3_ENDPOINT 写成地域域名，Bun 会把请求签到没有桶的域名上——启动期拦下。
+    if (!env.S3_VIRTUAL_HOSTED_STYLE) return
+    let hostname = ''
+    try {
+      hostname = new URL(env.S3_ENDPOINT).hostname
+    } catch {
+      // 留空：下面统一报错。
+    }
+    if (!hostname.startsWith(`${env.S3_BUCKET}.`)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['S3_ENDPOINT'],
+        message: 'S3_VIRTUAL_HOSTED_STYLE=true 时必须是桶域名本身（<S3_BUCKET>.<存储域名>）',
+      })
+    }
+  })
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>
 
@@ -31,19 +56,66 @@ export function loadServerEnv(source: Record<string, string | undefined> = proce
 /**
  * API 专属邮件投递配置（#68 评审二轮 P1-2）。
  *
- * `MAIL_TRANSPORT` **无默认值**：部署层必须显式声明 `outbox` 或 `resend`，
- * 忘记注入不会静默降级成 dev 投递。选 `resend` 时 Resend 两项必须齐全。
- * 只在 API 进程校验（worker 不发邮件），避免 Resend 密钥扩散到 worker。
+ * `MAIL_TRANSPORT` **无默认值**：部署层必须显式声明 `outbox` / `resend` / `smtp`，
+ * 忘记注入不会静默降级成 dev 投递。选 `resend` 时 Resend 两项必须齐全；选 `smtp` 时
+ * `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` 必须齐全。
+ * 只在 API 进程校验（worker 不发邮件），避免邮件密钥扩散到 worker。
  */
 export type MailTransportEnv =
   | { transport: 'outbox' }
   | { transport: 'resend'; resendApiKey: string; resendFrom: string }
+  | { transport: 'smtp'; smtp: SmtpEnv }
+
+/**
+ * SMTP 投递配置。`secure=true` 是隐式 TLS（如 465，连接即握手），不支持 STARTTLS。
+ * `secure=false` 走明文 TCP（口令也明文），只允许连回环地址（本机测试用）：护栏不依赖 `NODE_ENV`
+ * ——生产部署路径不设置它（见 docs/deployment.md §4），按主机判定才拦得住明文口令出网。
+ */
+export type SmtpEnv = {
+  host: string
+  port: number
+  secure: boolean
+  user: string
+  pass: string
+  /** 发件人，如 `鱼小应 <noreply@example.com>`；格式由 transport 装配时校验。 */
+  from: string
+}
+
+function loadSmtpEnv(source: Record<string, string | undefined>): SmtpEnv {
+  // 与 AI_POLISH 同口径：trim 后判空，全空白等于没配。口令不 trim（可能合法地含空格），只判空。
+  const host = source.SMTP_HOST?.trim()
+  const user = source.SMTP_USER?.trim()
+  const pass = source.SMTP_PASS
+  const from = source.SMTP_FROM?.trim()
+  if (!host || !user || !pass || !from) {
+    throw new Error(
+      '环境变量校验失败：MAIL_TRANSPORT=smtp 必须同时配置 SMTP_HOST / SMTP_USER / SMTP_PASS / SMTP_FROM',
+    )
+  }
+  const rawPort = source.SMTP_PORT?.trim() || '465'
+  const port = Number(rawPort)
+  if (!/^\d+$/.test(rawPort) || port < 1 || port > 65535) {
+    throw new Error('环境变量校验失败：SMTP_PORT 必须是 1-65535 的整数（默认 465）')
+  }
+  const rawSecure = source.SMTP_SECURE?.trim() || 'true'
+  if (rawSecure !== 'true' && rawSecure !== 'false') {
+    throw new Error('环境变量校验失败：SMTP_SECURE 只能是 true 或 false（默认 true，隐式 TLS）')
+  }
+  const secure = rawSecure === 'true'
+  if (!secure && !['127.0.0.1', '::1', 'localhost'].includes(host.toLowerCase())) {
+    throw new Error(
+      '环境变量校验失败：SMTP_SECURE=false 只允许 SMTP_HOST 为回环地址（口令会明文传输）',
+    )
+  }
+  return { host, port, secure, user, pass, from }
+}
 
 export function loadMailTransportEnv(
   source: Record<string, string | undefined> = process.env,
 ): MailTransportEnv {
   const mode = source.MAIL_TRANSPORT
   if (mode === 'outbox') return { transport: 'outbox' }
+  if (mode === 'smtp') return { transport: 'smtp', smtp: loadSmtpEnv(source) }
   if (mode === 'resend') {
     const apiKey = source.RESEND_API_KEY
     const from = source.RESEND_FROM
@@ -55,7 +127,7 @@ export function loadMailTransportEnv(
     return { transport: 'resend', resendApiKey: apiKey, resendFrom: from }
   }
   throw new Error(
-    '环境变量校验失败：MAIL_TRANSPORT 必须显式设置为 outbox 或 resend（不允许静默降级投递）',
+    '环境变量校验失败：MAIL_TRANSPORT 必须显式设置为 outbox / resend / smtp（不允许静默降级投递）',
   )
 }
 

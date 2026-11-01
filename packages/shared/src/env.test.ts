@@ -4,6 +4,8 @@ import {
   loadAiPolishEnv,
   loadContentModerationEnv,
   loadEmbeddingEnv,
+  loadMailTransportEnv,
+  loadServerEnv,
   loadWechatEnv,
 } from './env'
 
@@ -322,6 +324,110 @@ describe('loadWechatEnv 的 WECHAT_QR_ENV_VERSION（#197）', () => {
     )
     expect(() => loadWechatEnv({ WECHAT_TRANSPORT: 'stub', WECHAT_QR_ENV_VERSION: 'dev' })).toThrow(
       'WECHAT_QR_ENV_VERSION',
+    )
+  })
+})
+
+describe('loadServerEnv 的 S3_VIRTUAL_HOSTED_STYLE', () => {
+  const base = {
+    DATABASE_URL: 'postgres://fish:fish@localhost:5432/fish',
+    WEB_ORIGIN: 'http://localhost:5174',
+    S3_ENDPOINT: 'http://localhost:9000',
+    S3_REGION: 'us-east-1',
+    S3_ACCESS_KEY_ID: 'fish',
+    S3_SECRET_ACCESS_KEY: 'fish-secret',
+    S3_BUCKET: 'fish',
+    S3_PUBLIC_URL: 'http://localhost:9000/fish',
+  }
+
+  test('未设置时为路径风格（false）', () => {
+    expect(loadServerEnv(base).S3_VIRTUAL_HOSTED_STYLE).toBe(false)
+  })
+
+  const cos = {
+    ...base,
+    S3_ENDPOINT: 'https://fish-1250000000.cos.ap-guangzhou.myqcloud.com',
+    S3_BUCKET: 'fish-1250000000',
+  }
+
+  test('true 开启虚拟主机风格', () => {
+    expect(loadServerEnv({ ...cos, S3_VIRTUAL_HOSTED_STYLE: 'true' }).S3_VIRTUAL_HOSTED_STYLE).toBe(
+      true,
+    )
+  })
+
+  test('true 时 S3_ENDPOINT 不是桶域名则启动失败', () => {
+    expect(() =>
+      loadServerEnv({
+        ...cos,
+        S3_ENDPOINT: 'https://cos.ap-guangzhou.myqcloud.com',
+        S3_VIRTUAL_HOSTED_STYLE: 'true',
+      }),
+    ).toThrow('S3_ENDPOINT')
+  })
+
+  test('非 true / false 的值启动失败', () => {
+    expect(() => loadServerEnv({ ...base, S3_VIRTUAL_HOSTED_STYLE: 'yes' })).toThrow(
+      'S3_VIRTUAL_HOSTED_STYLE',
+    )
+  })
+})
+
+describe('loadMailTransportEnv 的 smtp', () => {
+  const complete = {
+    MAIL_TRANSPORT: 'smtp',
+    SMTP_HOST: 'smtp.example.com',
+    SMTP_USER: 'noreply@example.com',
+    SMTP_PASS: 'not-a-real-password',
+    SMTP_FROM: '鱼小应 <noreply@example.com>',
+  }
+
+  test('必填项齐全时端口默认 465、默认隐式 TLS', () => {
+    expect(loadMailTransportEnv(complete)).toEqual({
+      transport: 'smtp',
+      smtp: {
+        host: 'smtp.example.com',
+        port: 465,
+        secure: true,
+        user: 'noreply@example.com',
+        pass: 'not-a-real-password',
+        from: '鱼小应 <noreply@example.com>',
+      },
+    })
+  })
+
+  test('SMTP_PORT / SMTP_SECURE 可显式覆盖', () => {
+    const env = loadMailTransportEnv({
+      ...complete,
+      SMTP_HOST: '127.0.0.1',
+      SMTP_PORT: '2525',
+      SMTP_SECURE: 'false',
+    })
+    expect(env).toMatchObject({ smtp: { host: '127.0.0.1', port: 2525, secure: false } })
+  })
+
+  test('缺任一必填项都启动失败，错误只报变量名、不回显口令', () => {
+    for (const key of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'] as const) {
+      let message = ''
+      try {
+        loadMailTransportEnv({ ...complete, [key]: key === 'SMTP_PASS' ? '' : '  ' })
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain(key)
+      expect(message).not.toContain('not-a-real-password')
+    }
+  })
+
+  test('端口 / SMTP_SECURE 取值非法时启动失败', () => {
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_PORT: '465abc' })).toThrow('SMTP_PORT')
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_PORT: '70000' })).toThrow('SMTP_PORT')
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_SECURE: 'ssl' })).toThrow('SMTP_SECURE')
+  })
+
+  test('SMTP_SECURE=false 只允许回环主机（不依赖 NODE_ENV，口令不明文出网）', () => {
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_SECURE: 'false' })).toThrow(
+      'SMTP_SECURE=false',
     )
   })
 })
