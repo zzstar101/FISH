@@ -10,6 +10,13 @@ const ServerEnvSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().min(1),
   S3_BUCKET: z.string().min(1),
   S3_PUBLIC_URL: z.string().min(1),
+  // 腾讯云 COS（含轻量对象存储）只接受虚拟主机风格（桶名在域名里），路径风格请求直接被拒。
+  // 为 `true` 时 `S3_ENDPOINT` 必须是桶域名本身（如 `https://<bucket>.cos.<region>.myqcloud.com`）：
+  // Bun 在该模式下不再把桶名拼进 URL。只认 `true` / `false`，拼错直接启动失败。
+  S3_VIRTUAL_HOSTED_STYLE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
 })
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>

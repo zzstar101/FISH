@@ -4,6 +4,7 @@ import {
   loadAiPolishEnv,
   loadContentModerationEnv,
   loadEmbeddingEnv,
+  loadServerEnv,
   loadWechatEnv,
 } from './env'
 
@@ -322,6 +323,35 @@ describe('loadWechatEnv 的 WECHAT_QR_ENV_VERSION（#197）', () => {
     )
     expect(() => loadWechatEnv({ WECHAT_TRANSPORT: 'stub', WECHAT_QR_ENV_VERSION: 'dev' })).toThrow(
       'WECHAT_QR_ENV_VERSION',
+    )
+  })
+})
+
+describe('loadServerEnv 的 S3_VIRTUAL_HOSTED_STYLE', () => {
+  const base = {
+    DATABASE_URL: 'postgres://fish:fish@localhost:5432/fish',
+    WEB_ORIGIN: 'http://localhost:5174',
+    S3_ENDPOINT: 'http://localhost:9000',
+    S3_REGION: 'us-east-1',
+    S3_ACCESS_KEY_ID: 'fish',
+    S3_SECRET_ACCESS_KEY: 'fish-secret',
+    S3_BUCKET: 'fish',
+    S3_PUBLIC_URL: 'http://localhost:9000/fish',
+  }
+
+  test('未设置时为路径风格（false）', () => {
+    expect(loadServerEnv(base).S3_VIRTUAL_HOSTED_STYLE).toBe(false)
+  })
+
+  test('true 开启虚拟主机风格', () => {
+    expect(
+      loadServerEnv({ ...base, S3_VIRTUAL_HOSTED_STYLE: 'true' }).S3_VIRTUAL_HOSTED_STYLE,
+    ).toBe(true)
+  })
+
+  test('非 true / false 的值启动失败', () => {
+    expect(() => loadServerEnv({ ...base, S3_VIRTUAL_HOSTED_STYLE: 'yes' })).toThrow(
+      'S3_VIRTUAL_HOSTED_STYLE',
     )
   })
 })
