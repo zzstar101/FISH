@@ -95,9 +95,36 @@ describe('createSubscribeMessageClient.send', () => {
       touser: input.openid,
       template_id: input.templateId,
       page: input.page,
-      data: input.data,
+      // 微信要的是 `{ 字段: { value } }` 信封，不是扁平字符串（#511 审查 blocker）。
+      data: { thing4: { value: '林一' } },
       miniprogram_state: 'formal',
       lang: 'zh_CN',
+    })
+  })
+
+  test('每个模板字段都包成 { value }（多字段逐个断言，不只断言第一个）', async () => {
+    const { fetchImpl, calls } = scriptedFetch([{ errcode: 0 }])
+    const client = createSubscribeMessageClient({
+      tokens: fakeTokens(),
+      miniprogramState: 'trial',
+      fetchImpl,
+    })
+
+    await client.send({
+      ...input,
+      data: {
+        thing4: '林一',
+        thing2: '你有一条新消息',
+        thing28: '九成新自行车',
+        time3: '2026-11-01 10:30',
+      },
+    })
+
+    expect(calls[0]?.body.data).toEqual({
+      thing4: { value: '林一' },
+      thing2: { value: '你有一条新消息' },
+      thing28: { value: '九成新自行车' },
+      time3: { value: '2026-11-01 10:30' },
     })
   })
 

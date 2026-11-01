@@ -40,6 +40,22 @@ export const SUBSCRIBE_ERRCODE_NO_QUOTA = 43101
  */
 const PERMANENT_ERRCODES = new Set([40003, 40037, 41030, 47003])
 
+/**
+ * 模板字段 → 微信要求的 `{ value }` 信封。
+ *
+ * `subscribe/send` 的 `data` 是 `{ "thing4": { "value": "林一" } }`，**不是**扁平字符串：
+ * 直接发 `{ "thing4": "林一" }` 会被上游判 47003（参数不合法），而 47003 在我们这边属于
+ * 「参数类错误、不重试」，表现就是每一条都静默失败。
+ *
+ * 库里（`subscribe_message_deliveries.data`）与模板层（`templates.ts`）一律只存扁平
+ * `Record<string, string>`——转换只在这一个**出站边界**发生，别处不许再包一层。
+ */
+export function toWechatTemplateData(
+  data: Record<string, string>,
+): Record<string, { value: string }> {
+  return Object.fromEntries(Object.entries(data).map(([field, value]) => [field, { value }]))
+}
+
 /** 小程序版本 → `miniprogram_state`。Owner 冻结：由 `WECHAT_QR_ENV_VERSION` 映射。 */
 export type MiniprogramState = 'developer' | 'trial' | 'formal'
 
@@ -103,7 +119,8 @@ export function createSubscribeMessageClient(deps: {
           touser: input.openid,
           template_id: input.templateId,
           page: input.page,
-          data: input.data,
+          // 微信要 `{ field: { value } }`，见 `toWechatTemplateData` 的注释。
+          data: toWechatTemplateData(input.data),
           miniprogram_state: deps.miniprogramState,
           lang: 'zh_CN',
         }),
