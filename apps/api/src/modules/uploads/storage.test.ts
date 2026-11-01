@@ -121,17 +121,23 @@ describe('Bun S3 存储适配', () => {
     expect(await media.stat(key)).toBeNull()
   })
 
+  // 每个写者用**独立的**存储实例（≈ 独立进程，各有各的进程内排队），验证的是对象存储端的原子仲裁。
+  // 腾讯云 COS 不保证仲裁并发（实测会出现多个 200），这条在 COS 上不可作为通过依据——COS 只靠单进程排队（见 docs/deployment.md）。
   test.skipIf(!reachable)('writeMediaBytesIfAbsent 并发条件写仅固化一个胜者', async () => {
     const media = storage
-    if (!media?.writeMediaBytesIfAbsent || !media.readMediaBytes) {
-      throw new Error('storage 未初始化')
-    }
+    if (!client || !config || !media?.readMediaBytes) throw new Error('storage 未初始化')
+    const s3 = client
+    const writers = Array.from({ length: 8 }, () =>
+      createBunS3MediaStorage({ client: s3, publicUrlBase: config.publicUrl }),
+    )
     const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
     const payloads = Array.from({ length: 8 }, (_, index) => new Uint8Array([index, 2, 3]))
 
     try {
       const results = await Promise.all(
-        payloads.map((bytes) => media.writeMediaBytesIfAbsent?.(key, bytes, 'image/png')),
+        payloads.map((bytes, index) =>
+          writers[index]?.writeMediaBytesIfAbsent?.(key, bytes, 'image/png'),
+        ),
       )
       expect(results.filter(Boolean)).toHaveLength(1)
       const winner = results.findIndex(Boolean)
@@ -317,7 +323,9 @@ describe('S3 条件写适配器（离线）', () => {
   test('同时带 S3 与腾讯云 COS 的防覆盖条件头', async () => {
     const sent = new Headers()
     const media = makeStorage(makeClient(), async (_input, init) => {
-      new Headers(init?.headers).forEach((value, name) => sent.set(name, value))
+      new Headers(init?.headers).forEach((value, name) => {
+        sent.set(name, value)
+      })
       return new Response(null, { status: 200 })
     })
     await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')

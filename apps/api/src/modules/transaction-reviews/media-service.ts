@@ -235,7 +235,8 @@ export function createReviewMediaService(options: {
       if (sniffImageMime(bytes) !== stat.contentType) throw invalidKey()
 
       // 前置 stat 只用于幂等快路径，不能承担互斥：多个 confirm 可同时观察到不存在。
-      // If-None-Match:* 在对象存储端原子仲裁，输家复用已固化的 final，不覆盖其字节。
+      // 条件写（S3/MinIO 由 If-None-Match:* 在存储端原子仲裁；COS 由存储适配器在进程内按键排队，
+      // 只在单 API 进程下成立）让输家复用已固化的 final，不覆盖其字节。
       await asServiceOutage(
         'write final',
         writeMediaBytesIfAbsent(finalKey, bytes, stat.contentType),

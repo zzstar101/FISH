@@ -21,6 +21,7 @@ const client = new Bun.S3Client({
   region: env.S3_REGION,
   accessKeyId: env.S3_ACCESS_KEY_ID,
   secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+  virtualHostedStyle: env.S3_VIRTUAL_HOSTED_STYLE,
 })
 const keys: string[] = []
 let api: ReturnType<typeof Bun.spawn> | undefined

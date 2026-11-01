@@ -343,10 +343,26 @@ describe('loadServerEnv 的 S3_VIRTUAL_HOSTED_STYLE', () => {
     expect(loadServerEnv(base).S3_VIRTUAL_HOSTED_STYLE).toBe(false)
   })
 
+  const cos = {
+    ...base,
+    S3_ENDPOINT: 'https://fish-1250000000.cos.ap-guangzhou.myqcloud.com',
+    S3_BUCKET: 'fish-1250000000',
+  }
+
   test('true 开启虚拟主机风格', () => {
-    expect(
-      loadServerEnv({ ...base, S3_VIRTUAL_HOSTED_STYLE: 'true' }).S3_VIRTUAL_HOSTED_STYLE,
-    ).toBe(true)
+    expect(loadServerEnv({ ...cos, S3_VIRTUAL_HOSTED_STYLE: 'true' }).S3_VIRTUAL_HOSTED_STYLE).toBe(
+      true,
+    )
+  })
+
+  test('true 时 S3_ENDPOINT 不是桶域名则启动失败', () => {
+    expect(() =>
+      loadServerEnv({
+        ...cos,
+        S3_ENDPOINT: 'https://cos.ap-guangzhou.myqcloud.com',
+        S3_VIRTUAL_HOSTED_STYLE: 'true',
+      }),
+    ).toThrow('S3_ENDPOINT')
   })
 
   test('非 true / false 的值启动失败', () => {
