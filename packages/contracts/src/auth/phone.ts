@@ -22,6 +22,22 @@ import { z } from 'zod'
  */
 
 /**
+ * 端上 `POST /auth/phone/bind` 的请求超时（毫秒）。
+ *
+ * 这个数必须**跨端对齐**，所以放在契约里（同 `ACCOUNT_DELETION_COOLING_OFF_DAYS` 的做法）：
+ * - 服务端最坏耗时 ≈20s：取 `access_token` 5s + 换号 5s，凭证失效再各一次
+ *   （重试见 `apps/api/src/modules/auth/wechat-phone.ts`，两段上游超时都是
+ *   `WECHAT_PLATFORM_TIMEOUT_MS` = 5s）；
+ * - 服务端连接超时（`Bun.serve` 的 `idleTimeout`，见 `apps/api/src/index.ts`）取 22s，
+ *   覆盖上面 20s 再加本地写库；低于它的话客户端会收到 ECONNRESET，而号码其实已经落库；
+ * - 所以客户端必须比两者都长：25s。
+ *
+ * 三者的大小关系由 `apps/api/src/modules/auth/phone-bind-budget.test.ts` 钉住（含真实
+ * `Bun.serve` 用例），改动任何一端都会在那里红。
+ */
+export const PHONE_BIND_CLIENT_TIMEOUT_MS = 25_000
+
+/**
  * `getPhoneNumber` 一次性动态令牌。
  *
  * 长度上限**刻意放宽**（512）而不是按某个「官方上限」收口：官方接口页没有给 code 长度，

@@ -22,7 +22,8 @@ export type SmtpTransportConfig = {
   from: string
   /**
    * 连接到 DATA 250 的总超时毫秒数，默认 7s。加上 QUIT 最多再等的 1s 仍低于 `Bun.serve`
-   * 默认的 10s idleTimeout（apps/api/src/index.ts 未改它），发码请求不会先被 HTTP 层掐断。
+   * 的 `idleTimeout`（`apps/api/src/index.ts` 显式设成 `API_HTTP_IDLE_TIMEOUT_SECONDS` = 22s，
+   * 由手机号绑定的上游预算反推，见 `./phone-bind-budget.ts`），发码请求不会先被 HTTP 层掐断。
    */
   timeoutMs?: number
 }
