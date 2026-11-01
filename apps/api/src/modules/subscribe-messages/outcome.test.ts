@@ -16,7 +16,7 @@ describe('planAttempt', () => {
   test('43101（用户拒绝/无次数）→ SKIPPED 并把该 kind 的额度置 0，不重试', () => {
     expect(
       planAttempt({ ok: false, reason: 'no-quota', errcode: 43101, detail: 'errcode=43101' }, 1),
-    ).toEqual({ status: 'SKIPPED', error: 'errcode=43101', clearGrant: true })
+    ).toEqual({ status: 'SKIPPED', error: 'errcode=43101', clearGrant: true, errcode: 43101 })
   })
 
   test.each([40003, 40037, 41030, 47003])('参数类错误 %d → FAILED（不重试）', (errcode) => {

@@ -42,6 +42,14 @@ async function newUser(nickname = '订阅测试'): Promise<string> {
   return id
 }
 
+/**
+ * 记 `count` 次「允许」。`addAcceptedGrants` 的第三个参数是**封顶值**、每次只 +1，
+ * 所以模拟"用户点了 5 次允许"必须调 5 次。
+ */
+async function grant(userId: string, kind: 'CHAT' | 'TX' | 'REVIEW', count: number): Promise<void> {
+  for (let i = 0; i < count; i += 1) await store.addAcceptedGrants(userId, [kind], 50)
+}
+
 /** 造一条待发投递行，返回它的 id。 */
 async function newDelivery(
   recipientId: string,
@@ -257,7 +265,7 @@ describe('attemptDelivery', () => {
 
   test('43101（用户拒绝/无次数）：SKIPPED 且该 kind 的额度就地清零', async () => {
     const me = await newUser()
-    await store.addAcceptedGrants(me, ['CHAT'], 7)
+    await grant(me, 'CHAT', 7)
     const id = await newDelivery(me, { kind: 'CHAT' })
 
     const outcome = await store.attemptDelivery(id, new Date(), async () => ({
@@ -278,7 +286,7 @@ describe('attemptDelivery', () => {
 
   test('参数类错误：FAILED、记 errcode，不再重试', async () => {
     const me = await newUser()
-    await store.addAcceptedGrants(me, ['TX'], 5)
+    await grant(me, 'TX', 5)
     const id = await newDelivery(me)
 
     const outcome = await store.attemptDelivery(id, new Date(), async () => ({
@@ -298,7 +306,7 @@ describe('attemptDelivery', () => {
 
   test('本地跳过（没有 openid）：SKIPPED 且不扣额度', async () => {
     const me = await newUser()
-    await store.addAcceptedGrants(me, ['TX'], 3)
+    await grant(me, 'TX', 3)
     const id = await newDelivery(me)
 
     const outcome = await store.attemptDelivery(id, new Date(), async () => ({

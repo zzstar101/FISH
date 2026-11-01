@@ -427,7 +427,14 @@ export function createSqlSubscribeMessageStore(db: Db): SubscribeMessageStore {
 
         if (transition.status === 'SKIPPED') {
           if (transition.clearGrant) await zeroGrant(tx, delivery.recipientId, delivery.kind)
-          await markSkipped(tx, deliveryId, now, transition.error, committedAttempts)
+          await markSkipped(
+            tx,
+            deliveryId,
+            now,
+            transition.error,
+            committedAttempts,
+            transition.errcode,
+          )
           return { outcome: 'skipped' }
         }
 
@@ -472,11 +479,13 @@ async function markSkipped(
   now: Date,
   error: string,
   attempts?: number,
+  errcode?: number,
 ): Promise<void> {
   await tx
     .update(subscribeMessageDeliveries)
     .set({
       status: 'SKIPPED',
+      lastErrcode: errcode ?? null,
       lastError: error,
       nextAttemptAt: now,
       // 没走到发送就跳过的（额度为 0）不增加尝试次数：那不是一次尝试。

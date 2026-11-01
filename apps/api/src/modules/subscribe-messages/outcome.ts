@@ -42,7 +42,7 @@ const RETRY_DELAYS_MS = [FIRST_RETRY_DELAY_MS, 120_000] as const
 export type DeliveryTransition =
   | { status: 'SENT' }
   /** `clearGrant`：微信说「用户拒绝 / 没有次数」（43101），本地计数与上游已经对不上，置 0。 */
-  | { status: 'SKIPPED'; error: string; clearGrant: boolean }
+  | { status: 'SKIPPED'; error: string; clearGrant: boolean; errcode?: number }
   | { status: 'FAILED'; error: string; errcode: number | null }
   | { status: 'RETRY'; error: string; errcode: number | null; nextAttemptInMs: number }
 
@@ -76,7 +76,9 @@ export function planAttempt(outcome: AttemptSignal, committedAttempts: number): 
   }
 
   if (outcome.reason === 'no-quota') {
-    return { status: 'SKIPPED', error: outcome.detail, clearGrant: true }
+    // 43101 要落到 `last_errcode` 上：运维按 errcode 找"用户拒绝/次数用尽"的那批行时，
+    // 不该因为状态是 SKIPPED 就查不到它（见 docs/deployment.md 的排查 SQL）。
+    return { status: 'SKIPPED', error: outcome.detail, clearGrant: true, errcode: outcome.errcode }
   }
 
   if (outcome.reason === 'permanent') {
