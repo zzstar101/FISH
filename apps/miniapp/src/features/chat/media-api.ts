@@ -222,7 +222,16 @@ export async function uploadChatVoice(
   const buffer = await readLocalFile(voice.path, '语音读取失败，请重试')
   assertMediaActive(isActive)
   const contentType: VoiceMime | null = voiceMimeFromBytes(buffer)
-  if (!contentType) throw new Error('当前录音格式暂不支持发送语音')
+  if (!contentType) {
+    const bytes = new Uint8Array(buffer)
+    const header = Array.from(bytes.slice(0, 16), (byte) =>
+      byte.toString(16).padStart(2, '0'),
+    ).join(' ')
+    console.error('[chat-media] 不支持的录音容器', { sizeBytes: buffer.byteLength, header })
+    throw new Error(
+      `当前录音格式暂不支持发送语音（${buffer.byteLength} bytes, ${header || 'empty'}）`,
+    )
+  }
   const objectKey = await putObject(conversationId, 'VOICE', contentType, buffer, isActive)
   return {
     kind: 'VOICE',
@@ -374,6 +383,7 @@ function recorder(): VoiceRecorder {
     })
   })
   manager.onError((error) => {
+    console.error('[chat-media] 录音机错误', error)
     const handlers = voiceHandlers
     voiceHandlers = null
     handlers?.reject(voiceError(error))
@@ -474,6 +484,13 @@ export class VoicePermissionError extends Error {
   }
 }
 
+export class VoicePrivacyError extends Error {
+  constructor() {
+    super('请先同意《用户隐私保护指引》后重试')
+    this.name = 'VoicePrivacyError'
+  }
+}
+
 /** 录音失败文案：权限被拒要给「去设置」，其它给可重试的提示。 */
 export function voiceError(error: unknown): Error {
   /**
@@ -485,11 +502,12 @@ export function voiceError(error: unknown): Error {
    * 「录音失败，请重试」，页面的 `instanceof VoicePermissionError` 判据从此恒假，
    * 「去设置」入口（`getSetting` → `openSetting`）永远进不去，用户只能反复看到通用文案。
    */
-  if (error instanceof VoicePermissionError) return error
+  if (error instanceof VoicePermissionError || error instanceof VoicePrivacyError) return error
   const message =
     typeof error === 'object' && error !== null && 'errMsg' in error
       ? String((error as { errMsg?: unknown }).errMsg ?? '')
       : ''
+  if (/privacy/i.test(message)) return new VoicePrivacyError()
   if (/auth|permission|scope/i.test(message)) {
     return new VoicePermissionError()
   }

@@ -58,6 +58,7 @@ describe('parseTxEvent —— 交易 SYSTEM 事件解析', () => {
   test('认得出契约里的 tx.* JSON', () => {
     expect(parseTxEvent(JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }))).toEqual({
       type: 'tx.proposal',
+      amountCents: 15000,
     })
   })
 

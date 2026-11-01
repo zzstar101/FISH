@@ -36,6 +36,7 @@ import {
   uploadChatImage,
   uploadChatVoice,
   VoicePermissionError,
+  VoicePrivacyError,
   type VoiceRecording,
   voiceError,
 } from '@/features/chat/media-api'
@@ -45,6 +46,7 @@ import { presenceView } from '@/features/presence/view'
 import { requestSubscribe } from '@/features/subscribe/request'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
+import { ensurePrivacyAuthorized } from '@/lib/privacy'
 import { isApiError } from '@/lib/request'
 import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
@@ -1356,6 +1358,10 @@ export default function Conversation() {
     recordingRef.current = null
     setRecording(false)
     const failure = voiceError(error)
+    if (failure instanceof VoicePrivacyError) {
+      void Taro.showToast({ title: failure.message, icon: 'none' })
+      return
+    }
     if (!(failure instanceof VoicePermissionError)) {
       void Taro.showToast({ title: failure.message, icon: 'none' })
       return
@@ -1380,8 +1386,12 @@ export default function Conversation() {
   }
 
   /** 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态 */
-  const startVoice = () => {
+  const startVoice = async () => {
     if (!canSend || recordingRef.current) return
+    if (!(await ensurePrivacyAuthorized())) {
+      void Taro.showToast({ title: '请先同意《用户隐私保护指引》后重试', icon: 'none' })
+      return
+    }
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
       recordingRef.current = startVoiceRecording(handleVoiceFailure)
