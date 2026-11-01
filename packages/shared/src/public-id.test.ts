@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { TypeID } from 'typeid-js'
+import { fromUUID, TypeID } from 'typeid-js'
 import { decodePublicId, encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from './public-id'
 
 const uuid = '01930000-0000-7000-8000-000000000011'
@@ -53,9 +53,19 @@ describe('Public ID / UUIDv7 boundary', () => {
       expect(id).toBe(expected)
       expect(decodePublicId(PUBLIC_ID_PREFIX.user, id)).toBe(uuid)
       expect(isPublicId(PUBLIC_ID_PREFIX.user, id)).toBe(true)
-      expect(isPublicId(PUBLIC_ID_PREFIX.user, id.replace('usr_', 'usr_8'))).toBe(false)
+      // 等长变异才会走到自写的后缀解码：首位溢出 128 bit、非法字符、非 v7 版本位
+      expect(isPublicId(PUBLIC_ID_PREFIX.user, `usr_8${id.slice(5)}`)).toBe(false)
+      expect(isPublicId(PUBLIC_ID_PREFIX.user, `usr_${id.slice(4, 29)}u`)).toBe(false)
+      const v4 = fromUUID('01930000-0000-4000-8000-000000000011', PUBLIC_ID_PREFIX.user)
+      expect(v4).toHaveLength(id.length)
+      expect(isPublicId(PUBLIC_ID_PREFIX.user, v4)).toBe(false)
     } finally {
-      globalThis.TextEncoder = original
+      Object.defineProperty(globalThis, 'TextEncoder', {
+        value: original,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      })
     }
   })
 
