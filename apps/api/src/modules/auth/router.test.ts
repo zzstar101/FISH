@@ -1241,7 +1241,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
    * 打桩全局 fetch：live 下换号要走 `stable_token` + `getuserphonenumber` 两条请求。
    * 返回的 `phoneCalls` 只记换号那一条，避免把取 token 的请求混进断言。
    */
-  function stubWechat(phoneResponse: () => Response) {
+  function stubWechat(phoneResponse: () => Response | Promise<Response>) {
     const phoneCalls: Array<{ url: URL; init: RequestInit | undefined }> = []
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = new URL(input instanceof URL ? input.href : String(input))
@@ -1293,6 +1293,44 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
       )
       expect(me.user.phoneBound).toBe(true)
       expect(me.user.maskedPhone).toBe('199****0001')
+    } finally {
+      restore()
+    }
+  })
+
+  test('换号途中账号进入冷静期：403 ACCOUNT_DELETION_PENDING，号码一行都没写', async () => {
+    const studentNo = '202101000302'
+    await register({ studentNo, nickname: '冷静期竞争用户' })
+    const cookie = sessionCookie(await login(studentNo))
+
+    // 冷静期拦截（#464）问的是**请求进入时**的账号状态，而这条链路中间要等微信上游。
+    // 这里在换号那一步把账号改成注销申请态，复现「守卫已放行、写库还没发生」的那个 20s 窗口。
+    const { restore } = stubWechat(async () => {
+      await scratch
+        .update(users)
+        .set({ accountStatus: 'DELETION_REQUESTED' })
+        .where(eq(users.studentNo, studentNo))
+      return new Response(
+        JSON.stringify({
+          errcode: 0,
+          phone_info: { purePhoneNumber: '19912340002', countryCode: '86' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+    try {
+      const res = await liveApp().request(
+        '/auth/phone/bind',
+        postWith(cookie, { code: 'wx-phone-code-2' }),
+      )
+      expect(res.status).toBe(403)
+      expect(await res.json()).toMatchObject({ error: { code: 'ACCOUNT_DELETION_PENDING' } })
+
+      const rows = await scratch
+        .select({ phone: users.phone })
+        .from(users)
+        .where(eq(users.studentNo, studentNo))
+      expect(rows[0]?.phone ?? null).toBeNull()
     } finally {
       restore()
     }

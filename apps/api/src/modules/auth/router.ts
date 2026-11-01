@@ -22,6 +22,7 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type Context, type Handler, Hono } from 'hono'
+import { ACCOUNT_DELETION_PENDING_MESSAGE } from '../account-deletion/write-policy'
 import type { RestrictionGuard } from '../governance/guard'
 import {
   createWechatAccessTokenService,
@@ -234,7 +235,14 @@ export function createAuthModule(options: {
       if (!/^1\d{10}$/.test(phone)) {
         return c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效'), 422)
       }
-      await service.bindPhone(c.get('userId'), phone)
+      const written = await service.bindPhone(c.get('userId'), phone)
+      if (!written) {
+        // 冷静期拦截（#464）在 `requireAuth` 里按**请求进入时**的账号状态判，而这条链路中间要等
+        // 一次微信上游（最坏 20s）：这段时间里提交注销申请，守卫是看不到的。条件 UPDATE 返回
+        // 「一行没写」就到这条分支 —— 码与文案跟守卫逐字一致（`ACCOUNT_DELETION_PENDING_MESSAGE`），
+        // 端上不必区分 403 来自哪个执行点。
+        return c.json(errorBody('ACCOUNT_DELETION_PENDING', ACCOUNT_DELETION_PENDING_MESSAGE), 403)
+      }
       return c.json(
         PhoneBindResponseSchema.parse({ phoneBound: true, maskedPhone: maskPhone(phone) }),
       )

@@ -3,7 +3,7 @@ import type { LoginRequest, RegisterRequest } from '@fish/contracts/auth/session
 import type { Me } from '@fish/contracts/auth/user'
 import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { AuthError } from './errors'
 import { toMe, type UserRow } from './me'
 import type { Sessions } from './session'
@@ -127,10 +127,24 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
      * 再绑定一个**不同**号码会直接覆盖旧号（因为手机号来自平台核验，覆盖不算冒用，但既无审计
      * 也无确认步）；解绑则确实没有通路（列不清空）。要收紧成「首次绑定后不可换绑」或「换绑需
      * 显式确认」都得先由产品冻结规则，不在本单顺手加门槛。
+     *
+     * 返回 `false` = **账号已不在可写状态**（`account_status !== 'ACTIVE'`），一行都没写。
+     * 路由据此回 403 `ACCOUNT_DELETION_PENDING`。
+     *
+     * 为什么条件 UPDATE 而不是相信守卫（#204 评审 P1）：冷静期拦截（#464）在 `requireAuth` 里问
+     * 的是**请求进入那一刻**的账号状态，而这条链路中间要等微信上游（最坏 20s）。用户完全可能
+     * 在这 20s 里从另一个页面/设备提交注销申请 —— 守卫早已跑过，等到这里再无条件 UPDATE 就把
+     * 号码写进了冷静期的账号。把状态并进 WHERE 让「检查」和「写」是同一条语句，窗口才是 0；
+     * 分两次查再判仍有窗口，只是更小。
      */
-    async bindPhone(userId: string, phone: string): Promise<void> {
+    async bindPhone(userId: string, phone: string): Promise<boolean> {
       try {
-        await db.update(users).set({ phone }).where(eq(users.id, userId))
+        const updated = await db
+          .update(users)
+          .set({ phone })
+          .where(and(eq(users.id, userId), eq(users.accountStatus, 'ACTIVE')))
+          .returning({ id: users.id })
+        return updated.length > 0
       } catch (error) {
         if (isUniqueViolation(error)) {
           throw new AuthError('PHONE_ALREADY_BOUND', 409, '该手机号已绑定其他账号')
