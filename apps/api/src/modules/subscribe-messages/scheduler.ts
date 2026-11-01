@@ -1,4 +1,3 @@
-import type { SubscribeMessageKind } from '@fish/contracts/subscribe-messages/schema'
 import type { Db } from '@fish/db/client'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { SubscribeMessageClient } from './client'
@@ -297,6 +296,3 @@ function tryEncode(prefix: Parameters<typeof encodePublicId>[0], id: unknown): s
     return null
   }
 }
-
-/** 便于测试与文档引用：首批三个 kind（顺序即 `GET config` 的键顺序）。 */
-export const SUBSCRIBE_MESSAGE_KINDS: readonly SubscribeMessageKind[] = ['CHAT', 'TX', 'REVIEW']

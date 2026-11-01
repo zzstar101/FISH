@@ -1,10 +1,15 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
+import { conversations } from '@fish/db/schema/conversations'
+import { listings } from '@fish/db/schema/listings'
+import { messages } from '@fish/db/schema/messages'
+import { notifications } from '@fish/db/schema/notifications'
 import {
   subscribeMessageDeliveries,
   subscribeMessageGrants,
 } from '@fish/db/schema/subscribe-messages'
-import { users } from '@fish/db/schema/users'
+import { users, wechatIdentities } from '@fish/db/schema/users'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { and, eq, inArray } from 'drizzle-orm'
 import { createSqlSubscribeMessageStore, type NewSubscribeDelivery } from './store'
 
@@ -75,6 +80,14 @@ async function deliveryRow(id: string) {
 }
 
 afterAll(async () => {
+  // 会话/商品对 users 是 NO ACTION 外键（不随用户删除连带），必须先自己清掉；
+  // 消息随会话 CASCADE，通知与订阅消息两张表随用户 CASCADE。
+  if (createdConversations.length > 0) {
+    await db.delete(conversations).where(inArray(conversations.id, createdConversations))
+  }
+  if (createdListings.length > 0) {
+    await db.delete(listings).where(inArray(listings.id, createdListings))
+  }
   if (created.length > 0) await db.delete(users).where(inArray(users.id, created))
   await db.$client.close()
 })
@@ -322,5 +335,330 @@ describe('findOpenid', () => {
   test('没有微信身份 → null', async () => {
     const me = await newUser()
     expect(await store.findOpenid(me)).toBeNull()
+  })
+})
+
+/**
+ * 两条登记查询（#462）：候选来源怎么被筛出来 —— 时间窗、未读判据、限频、去重。
+ *
+ * 这几条谓词全在 SQL 里（`notExists` 子查询、`CASE` 算收件人、`IS NULL` 语义），
+ * 换成假 store 就等于不测。用例都按「我自己造的行在不在结果里」断言，不比对整个结果集：
+ * 这几条查询是全表按窗口扫的，同库里其它用例的行也可能落在窗口内。
+ */
+const createdConversations: string[] = []
+const createdListings: string[] = []
+
+async function newListing(sellerId: string, title: string): Promise<string> {
+  const id = crypto.randomUUID()
+  await db.insert(listings).values({
+    id,
+    listingNo: await reserveTestListingNo(db, id),
+    sellerId,
+    title,
+    description: '订阅消息登记测试用商品',
+    priceCents: 9900,
+    category: 'DIGITAL',
+    condition: 'GOOD',
+    status: 'ACTIVE',
+  })
+  createdListings.push(id)
+  return id
+}
+
+async function newConversation(input: {
+  listingId: string
+  buyerId: string
+  sellerId: string
+  sellerLastReadAt?: Date | null
+  buyerLastReadAt?: Date | null
+}): Promise<string> {
+  const id = crypto.randomUUID()
+  await db.insert(conversations).values({
+    id,
+    listingId: input.listingId,
+    buyerId: input.buyerId,
+    sellerId: input.sellerId,
+    lastMessageAt: new Date(),
+    buyerLastReadAt: input.buyerLastReadAt ?? null,
+    sellerLastReadAt: input.sellerLastReadAt ?? null,
+  })
+  createdConversations.push(id)
+  return id
+}
+
+async function newMessage(input: {
+  conversationId: string
+  senderId: string | null
+  createdAt: Date
+  type?: 'TEXT' | 'SYSTEM'
+  recalledAt?: Date | null
+}): Promise<string> {
+  const id = crypto.randomUUID()
+  await db.insert(messages).values({
+    id,
+    conversationId: input.conversationId,
+    senderId: input.senderId,
+    type: input.type ?? 'TEXT',
+    content: '这件还在吗',
+    createdAt: input.createdAt,
+    recalledAt: input.recalledAt ?? null,
+  })
+  return id
+}
+
+async function newNotification(input: {
+  userId: string
+  type: 'TX' | 'MATCH' | 'MODERATION' | 'ACCOUNT' | 'DISPUTE'
+  payload?: Record<string, string>
+  createdAt: Date
+}): Promise<string> {
+  const rows = await db
+    .insert(notifications)
+    .values({
+      userId: input.userId,
+      type: input.type,
+      payload: input.payload ?? {},
+      createdAt: input.createdAt,
+    })
+    .returning({ id: notifications.id })
+  const id = rows[0]?.id
+  if (!id) throw new Error('insert notifications 未返回行')
+  return id
+}
+
+async function bindWechat(userId: string): Promise<void> {
+  await db
+    .insert(wechatIdentities)
+    .values({ userId, openid: `o${crypto.randomUUID().slice(0, 27)}` })
+}
+
+/** 一次登记扫描用的三个时间点（都以「现在」为基准，避免与系统时钟漂移纠缠）。 */
+function chatWindow(at = Date.now()) {
+  return {
+    since: new Date(at - 10 * 60 * 1000),
+    unreadBefore: new Date(at - 60 * 1000),
+    throttleSince: new Date(at - 30 * 60 * 1000),
+    limit: 500,
+  }
+}
+
+describe('listChatSources（聊天登记）', () => {
+  test('对方 60 秒未读的消息进入候选：收件人是会话另一方，带发送人昵称与商品标题', async () => {
+    const buyer = await newUser('买家小林')
+    const seller = await newUser('卖家小陈')
+    const listingId = await newListing(seller, '九成新自行车')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const at = Date.now()
+    const messageId = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 2 * 60 * 1000),
+    })
+
+    const mine = (await store.listChatSources(chatWindow(at))).find(
+      (row) => row.messageId === messageId,
+    )
+
+    expect(mine).toBeDefined()
+    expect(mine?.recipientId).toBe(seller)
+    expect(mine?.conversationId).toBe(conversationId)
+    expect(mine?.senderNickname).toBe('买家小林')
+    expect(mine?.listingTitle).toBe('九成新自行车')
+  })
+
+  test('刚发出（不满 60 秒）的消息不登记：可能马上就被读到', async () => {
+    const buyer = await newUser()
+    const seller = await newUser()
+    const listingId = await newListing(seller, '登山杖')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const at = Date.now()
+    const messageId = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 30 * 1000),
+    })
+
+    expect(
+      (await store.listChatSources(chatWindow(at))).some((row) => row.messageId === messageId),
+    ).toBe(false)
+  })
+
+  test('收件人已读过（读位晚于消息）不登记', async () => {
+    const at = Date.now()
+    const buyer = await newUser()
+    const seller = await newUser()
+    const listingId = await newListing(seller, '台灯')
+    const conversationId = await newConversation({
+      listingId,
+      buyerId: buyer,
+      sellerId: seller,
+      // 卖家在 1 分钟前读过：2 分钟前那条消息已经被看到
+      sellerLastReadAt: new Date(at - 60 * 1000),
+    })
+    const messageId = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 2 * 60 * 1000),
+    })
+
+    expect(
+      (await store.listChatSources(chatWindow(at))).some((row) => row.messageId === messageId),
+    ).toBe(false)
+  })
+
+  test('已登记过的消息不再出现（重扫幂等）', async () => {
+    const at = Date.now()
+    const buyer = await newUser()
+    const seller = await newUser()
+    const listingId = await newListing(seller, '电饭煲')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const messageId = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 2 * 60 * 1000),
+    })
+    await newDelivery(seller, {
+      sourceType: 'CHAT',
+      sourceId: messageId,
+      kind: 'CHAT',
+      conversationId,
+    })
+
+    expect(
+      (await store.listChatSources(chatWindow(at))).some((row) => row.messageId === messageId),
+    ).toBe(false)
+  })
+
+  test('同一「会话 × 收件人」30 分钟内已推过一条，窗口内不再登记', async () => {
+    const at = Date.now()
+    const buyer = await newUser()
+    const seller = await newUser()
+    const listingId = await newListing(seller, '行李箱')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    // 10 分钟前推过这条会话发给卖家的提醒（另一条消息，来源不同）
+    await newDelivery(seller, {
+      sourceType: 'CHAT',
+      sourceId: crypto.randomUUID(),
+      kind: 'CHAT',
+      conversationId,
+    })
+    const messageId = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 2 * 60 * 1000),
+    })
+
+    expect(
+      (await store.listChatSources(chatWindow(at))).some((row) => row.messageId === messageId),
+    ).toBe(false)
+  })
+
+  test('撤回的消息与 SYSTEM 消息都不登记', async () => {
+    const at = Date.now()
+    const buyer = await newUser()
+    const seller = await newUser()
+    const listingId = await newListing(seller, '耳机')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const recalled = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 3 * 60 * 1000),
+      recalledAt: new Date(at - 2 * 60 * 1000),
+    })
+    // SYSTEM 消息没有发送者：`sender_id <> recipient_id` 对 NULL 求值为 NULL，因此天然被排除
+    const system = await newMessage({
+      conversationId,
+      senderId: null,
+      type: 'SYSTEM',
+      createdAt: new Date(at - 2 * 60 * 1000),
+    })
+
+    const rows = await store.listChatSources(chatWindow(at))
+
+    expect(rows.some((row) => row.messageId === recalled)).toBe(false)
+    expect(rows.some((row) => row.messageId === system)).toBe(false)
+  })
+})
+
+describe('listNotificationSources（通知登记）', () => {
+  const sinceOf = (at: number) => new Date(at - 30 * 60 * 1000)
+
+  test('窗口内、收件人有微信身份的 TX 通知进入候选', async () => {
+    const at = Date.now()
+    const me = await newUser()
+    await bindWechat(me)
+    const id = await newNotification({
+      userId: me,
+      type: 'TX',
+      payload: { transactionId: crypto.randomUUID(), event: 'ACCEPTED' },
+      createdAt: new Date(at - 60 * 1000),
+    })
+
+    const rows = await store.listNotificationSources(sinceOf(at), 500)
+
+    expect(rows.some((row) => row.id === id)).toBe(true)
+  })
+
+  test('没有微信身份的用户不登记：没有站外触达的对象', async () => {
+    const at = Date.now()
+    const me = await newUser()
+    const id = await newNotification({
+      userId: me,
+      type: 'TX',
+      payload: { transactionId: crypto.randomUUID(), event: 'ACCEPTED' },
+      createdAt: new Date(at - 60 * 1000),
+    })
+
+    expect(
+      (await store.listNotificationSources(sinceOf(at), 500)).some((row) => row.id === id),
+    ).toBe(false)
+  })
+
+  test('首批之外的通知类型（MATCH）不登记', async () => {
+    const at = Date.now()
+    const me = await newUser()
+    await bindWechat(me)
+    const id = await newNotification({
+      userId: me,
+      type: 'MATCH',
+      createdAt: new Date(at - 60 * 1000),
+    })
+
+    expect(
+      (await store.listNotificationSources(sinceOf(at), 500)).some((row) => row.id === id),
+    ).toBe(false)
+  })
+
+  test('窗口外的旧通知不登记：重启后不补推两小时前的进展', async () => {
+    const at = Date.now()
+    const me = await newUser()
+    await bindWechat(me)
+    const id = await newNotification({
+      userId: me,
+      type: 'TX',
+      payload: { transactionId: crypto.randomUUID(), event: 'ACCEPTED' },
+      createdAt: new Date(at - 31 * 60 * 1000),
+    })
+
+    expect(
+      (await store.listNotificationSources(sinceOf(at), 500)).some((row) => row.id === id),
+    ).toBe(false)
+  })
+
+  test('已登记过的通知不再出现（重扫幂等）', async () => {
+    const at = Date.now()
+    const me = await newUser()
+    await bindWechat(me)
+    const id = await newNotification({
+      userId: me,
+      type: 'TX',
+      payload: { transactionId: crypto.randomUUID(), event: 'ACCEPTED' },
+      createdAt: new Date(at - 60 * 1000),
+    })
+    await newDelivery(me, { sourceType: 'NOTIFICATION', sourceId: id })
+
+    expect(
+      (await store.listNotificationSources(sinceOf(at), 500)).some((row) => row.id === id),
+    ).toBe(false)
   })
 })
