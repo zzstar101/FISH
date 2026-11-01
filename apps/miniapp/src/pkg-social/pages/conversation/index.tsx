@@ -43,6 +43,7 @@ import { ChatRealtime, type ChatRealtimeEvent } from '@/features/chat/realtime'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
 import { requestSubscribe } from '@/features/subscribe/request'
+import { acceptTransaction, rejectProposal } from '@/features/transaction/api'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -209,6 +210,7 @@ export default function Conversation() {
   const [replyTarget, setReplyTarget] = useState<MessageDto | null>(null)
   /** 撤回在途的消息 id：一条一把锁，防止连点重复 POST（服务端虽幂等，但没必要发两次） */
   const [recallingId, setRecallingId] = useState<string | null>(null)
+  const [proposalAction, setProposalAction] = useState<'accept' | 'reject' | null>(null)
   /**
    * 「点摘引跳过去」的目标 DOM id（null = 跟随最新）。
    *
@@ -1745,9 +1747,27 @@ export default function Conversation() {
     })
   }
 
-  const openMeetup = () => {
-    // 交易码页需要交易 id；会话里只做入口，不在这里推断是哪一笔（那是 A1/A2 的事）
-    void Taro.navigateTo({ url: '/pkg-trade/pages/transaction-meetup/index' })
+  const openMeetup = (transactionId: string) => {
+    void Taro.navigateTo({
+      url: `/pkg-trade/pages/transaction-meetup/index?id=${encodeURIComponent(transactionId)}`,
+    })
+  }
+
+  const actOnProposal = async (action: 'accept' | 'reject', amountCents: number) => {
+    if (!conversation || proposalAction) return
+    setProposalAction(action)
+    try {
+      if (action === 'accept') await acceptTransaction(conversation.id, amountCents)
+      else await rejectProposal(conversation.id)
+      await load({ silent: false })
+    } catch (error) {
+      void Taro.showToast({
+        title: isApiError(error) ? error.message : '操作失败，请重试',
+        icon: 'none',
+      })
+    } finally {
+      setProposalAction(null)
+    }
   }
 
   /**
@@ -1919,21 +1939,58 @@ export default function Conversation() {
     const event = parseTxEvent(message.content)
 
     if (event?.type === 'tx.accepted') {
+      const transactionId =
+        typeof (event as { transactionId?: unknown }).transactionId === 'string'
+          ? (event as { transactionId: string }).transactionId
+          : null
+      if (!transactionId) return null
+      const completed = conversation?.listing.status === 'SOLD'
       return (
         <View key={message.id} id={`e-${message.id}`} className="conv__syswrap">
           <View className="conv__sys">
-            <Text className="conv__sys-tx">已接受交易，待面交</Text>
+            <Text className="conv__sys-tx">{completed ? '交易已完成' : '已接受交易，待面交'}</Text>
           </View>
           <View className="conv__txcard">
             <Image className="conv__txcard-ic" src={ICONS.qr} mode="aspectFit" />
             <View className="conv__txcard-main">
-              <Text className="conv__txcard-t">卖家已接受交易</Text>
+              <Text className="conv__txcard-t">{completed ? '交易已完成' : '卖家已接受交易'}</Text>
               <Text className="conv__txcard-d">
-                面交时与对方核对 6 位交易码，确认后订单才算完成。
+                {completed
+                  ? '订单已完成，可查看本单交易记录。'
+                  : '面交时与对方核对 6 位交易码，确认后订单才算完成。'}
               </Text>
             </View>
-            <View className="conv__txcard-act" onClick={openMeetup}>
-              <Text>查看交易码</Text>
+            <View className="conv__txcard-act" onClick={() => openMeetup(transactionId)}>
+              <Text>{completed ? '查看交易' : '查看交易码'}</Text>
+            </View>
+          </View>
+        </View>
+      )
+    }
+
+    if (event?.type === 'tx.proposal' && conversation?.role === 'seller') {
+      const amountCents = (event as { amountCents?: unknown }).amountCents
+      if (typeof amountCents !== 'number' || !Number.isSafeInteger(amountCents)) return null
+      return (
+        <View key={message.id} id={`e-${message.id}`} className="conv__syswrap">
+          <View className="conv__sys">
+            <Text className="conv__sys-tx">买家发起交易确认 · ¥{formatAmount(amountCents)}</Text>
+          </View>
+          <View className="conv__txcard">
+            <View className="conv__txcard-main">
+              <Text className="conv__txcard-t">是否接受这笔交易？</Text>
+            </View>
+            <View
+              className="conv__txcard-act"
+              onClick={() => void actOnProposal('reject', amountCents)}
+            >
+              <Text>{proposalAction === 'reject' ? '处理中…' : '拒绝'}</Text>
+            </View>
+            <View
+              className="conv__txcard-act"
+              onClick={() => void actOnProposal('accept', amountCents)}
+            >
+              <Text>{proposalAction === 'accept' ? '处理中…' : '接受'}</Text>
             </View>
           </View>
         </View>

@@ -11,7 +11,7 @@ import type { AllowedImageMime } from '@/features/upload/mime'
  */
 
 /** 交易 SYSTEM 事件（`transactions/schema.ts` 的 `tx.*` 协议） */
-export type TxEvent = { type: string }
+export type TxEvent = { type: string; transactionId?: string; amountCents?: number }
 
 /**
  * 解析交易 SYSTEM 事件的 JSON；非 JSON（普通文本系统消息）返回 null。
@@ -22,7 +22,15 @@ export function parseTxEvent(content: string): TxEvent | null {
     const event: unknown = JSON.parse(content)
     if (event && typeof event === 'object' && 'type' in event) {
       const type = (event as { type: unknown }).type
-      if (typeof type === 'string') return { type }
+      if (typeof type === 'string') {
+        const transactionId = (event as { transactionId?: unknown }).transactionId
+        const amountCents = (event as { amountCents?: unknown }).amountCents
+        return {
+          type,
+          ...(typeof transactionId === 'string' ? { transactionId } : {}),
+          ...(typeof amountCents === 'number' ? { amountCents } : {}),
+        }
+      }
     }
   } catch {
     // 非 JSON：当普通文本
