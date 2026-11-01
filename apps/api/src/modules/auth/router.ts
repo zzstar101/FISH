@@ -24,11 +24,7 @@ import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type Context, type Handler, Hono } from 'hono'
 import { ACCOUNT_DELETION_PENDING_MESSAGE } from '../account-deletion/write-policy'
 import type { RestrictionGuard } from '../governance/guard'
-import {
-  createWechatAccessTokenService,
-  type WechatAccessTokenService,
-  WechatPlatformError,
-} from '../wechat/access-token'
+import { createWechatAccessTokenService, WechatPlatformError } from '../wechat/access-token'
 import { AuthError } from './errors'
 import { maskPhone } from './me'
 import { type AccountDeletionWriteGuard, type AuthVariables, createRequireAuth } from './middleware'
