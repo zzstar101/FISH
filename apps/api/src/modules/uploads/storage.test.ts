@@ -90,6 +90,9 @@ const storage: MediaStorage | null =
 
 const reachable = await probeStorage()
 
+/** 腾讯云 COS 不仲裁并发条件写（实测会出现多个 200），只靠单进程排队，见 docs/deployment.md。 */
+const isTencentCos = config ? new URL(config.endpoint).hostname.endsWith('.myqcloud.com') : false
+
 describe('Bun S3 存储适配', () => {
   test.skipIf(!reachable)('presign → PUT → stat → 匿名 GET 全链路可跑通', async () => {
     const media = storage
@@ -122,33 +125,36 @@ describe('Bun S3 存储适配', () => {
   })
 
   // 每个写者用**独立的**存储实例（≈ 独立进程，各有各的进程内排队），验证的是对象存储端的原子仲裁。
-  // 腾讯云 COS 不保证仲裁并发（实测会出现多个 200），这条在 COS 上不可作为通过依据——COS 只靠单进程排队（见 docs/deployment.md）。
-  test.skipIf(!reachable)('writeMediaBytesIfAbsent 并发条件写仅固化一个胜者', async () => {
-    const media = storage
-    if (!client || !config || !media?.readMediaBytes) throw new Error('storage 未初始化')
-    const s3 = client
-    const writers = Array.from({ length: 8 }, () =>
-      createBunS3MediaStorage({ client: s3, publicUrlBase: config.publicUrl }),
-    )
-    const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
-    const payloads = Array.from({ length: 8 }, (_, index) => new Uint8Array([index, 2, 3]))
-
-    try {
-      const results = await Promise.all(
-        payloads.map((bytes, index) =>
-          writers[index]?.writeMediaBytesIfAbsent?.(key, bytes, 'image/png'),
-        ),
+  // 腾讯云 COS 不提供这一保证，对着 COS 跑时跳过（它的保证来自单进程排队，由离线用例覆盖）。
+  test.skipIf(!reachable || isTencentCos)(
+    'writeMediaBytesIfAbsent 并发条件写仅固化一个胜者',
+    async () => {
+      const media = storage
+      if (!client || !config || !media?.readMediaBytes) throw new Error('storage 未初始化')
+      const s3 = client
+      const writers = Array.from({ length: 8 }, () =>
+        createBunS3MediaStorage({ client: s3, publicUrlBase: config.publicUrl }),
       )
-      expect(results.filter(Boolean)).toHaveLength(1)
-      const winner = results.findIndex(Boolean)
-      expect(winner).toBeGreaterThanOrEqual(0)
-      const winningPayload = payloads[winner]
-      if (!winningPayload) throw new Error('并发条件写没有胜者')
-      expect(await media.readMediaBytes(key)).toEqual(winningPayload)
-    } finally {
-      await client?.delete(key)
-    }
-  })
+      const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+      const payloads = Array.from({ length: 8 }, (_, index) => new Uint8Array([index, 2, 3]))
+
+      try {
+        const results = await Promise.all(
+          payloads.map((bytes, index) =>
+            writers[index]?.writeMediaBytesIfAbsent?.(key, bytes, 'image/png'),
+          ),
+        )
+        expect(results.filter(Boolean)).toHaveLength(1)
+        const winner = results.findIndex(Boolean)
+        expect(winner).toBeGreaterThanOrEqual(0)
+        const winningPayload = payloads[winner]
+        if (!winningPayload) throw new Error('并发条件写没有胜者')
+        expect(await media.readMediaBytes(key)).toEqual(winningPayload)
+      } finally {
+        await client?.delete(key)
+      }
+    },
+  )
 
   /*
    * #465 P2-2：争议附件的配额要数**对象**，不能只数台账行 —— 否则「只 presign + PUT、
@@ -402,6 +408,46 @@ describe('S3 条件写适配器（离线）', () => {
     const media = makeStorage(makeClient(), async () => {
       calls += 1
       return new Response(null, { status: calls === 1 ? 500 : 200 })
+    })
+    const [first, second] = await Promise.allSettled([
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([2]), 'image/png'),
+    ])
+    expect(first?.status).toBe('rejected')
+    expect(second).toEqual({ status: 'fulfilled', value: true })
+  })
+
+  test('PUT 没拿到响应时，该键隔离一个超时周期才放行下一个写（存储端可能仍在处理）', async () => {
+    const startedAt: number[] = []
+    const media = createBunS3MediaStorage({
+      client: makeClient(),
+      publicUrlBase: 'https://cdn.test/fish',
+      conditionalWriteTimeoutMs: 50,
+      fetch: async () => {
+        startedAt.push(performance.now())
+        if (startedAt.length === 1) throw new Error('socket hang up')
+        return new Response(null, { status: 200 })
+      },
+    })
+    const first = media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')
+    const second = media.writeMediaBytesIfAbsent?.(key, new Uint8Array([2]), 'image/png')
+    await expect(first).rejects.toThrow('网络请求失败')
+    expect(await second).toBe(true)
+    expect((startedAt[1] ?? 0) - (startedAt[0] ?? 0)).toBeGreaterThanOrEqual(45)
+  })
+
+  test('冲突后的 stat 挂起会超时，不会永久堵住该键', async () => {
+    const client = makeClient()
+    spyOn(client, 'stat').mockImplementation(() => new Promise(() => {}))
+    let calls = 0
+    const media = createBunS3MediaStorage({
+      client,
+      publicUrlBase: 'https://cdn.test/fish',
+      conditionalWriteTimeoutMs: 20,
+      fetch: async () => {
+        calls += 1
+        return new Response(null, { status: calls === 1 ? 409 : 200 })
+      },
     })
     const [first, second] = await Promise.allSettled([
       media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),

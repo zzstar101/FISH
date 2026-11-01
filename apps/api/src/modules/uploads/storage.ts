@@ -242,8 +242,26 @@ export function isReviewMediaStagingKey(key: string): boolean {
   )
 }
 
-/** 服务端条件 PUT 的超时：图片上限 10MB、走同地域内网，30s 足够；超时按存储故障上抛。 */
-const CONDITIONAL_PUT_TIMEOUT_MS = 30_000
+/**
+ * 服务端条件写的超时：图片上限 10MB、走同地域内网，30s 足够；超时按存储故障上抛。
+ * 同一个值也是 PUT 结局未知（网络错误 / 超时）后该键的**隔离期**，见 `writeMediaBytesIfAbsent`。
+ */
+const CONDITIONAL_WRITE_TIMEOUT_MS = 30_000
+
+/** 让一个可能挂起的存储调用在 `ms` 后以错误结束（Bun.S3Client.stat 不接受 AbortSignal）。 */
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}超时（${ms}ms）`)), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client
@@ -261,6 +279,8 @@ export function createBunS3MediaStorage(options: {
   expiresInSeconds?: number
   /** 可替换条件 PUT 的传输函数，供离线适配器测试使用。 */
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+  /** 条件写超时与隔离期（毫秒），默认 30s；只供离线测试缩短。 */
+  conditionalWriteTimeoutMs?: number
 }): MediaStorage {
   const {
     client,
@@ -274,6 +294,10 @@ export function createBunS3MediaStorage(options: {
     disputeUrlSecret,
   } = options
   const expiresInSeconds = options.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRES_SECONDS
+  const conditionalWriteTimeoutMs =
+    options.conditionalWriteTimeoutMs ?? CONDITIONAL_WRITE_TIMEOUT_MS
+  /** PUT 没拿到响应（网络错误 / 超时）的错误：存储端可能仍在处理这次写，结局未知。 */
+  const unsettledPutErrors = new WeakSet<Error>()
 
   /** 键只应由服务端生成；形状不合法一律抛错（fail-closed），不签名也不写入。 */
   const assertSafeObjectKey = (key: string): void => {
@@ -311,19 +335,21 @@ export function createBunS3MediaStorage(options: {
         },
         body: bytes,
         // 同一键的后续写在排队等它：挂死的 PUT 不能无限期堵住队列。
-        signal: AbortSignal.timeout(CONDITIONAL_PUT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(conditionalWriteTimeoutMs),
       })
     } catch (error) {
       const safeError = new Error('S3 条件写入网络请求失败')
       safeError.name = error instanceof Error ? error.name : 'Error'
       const code = (error as { code?: unknown }).code
       if (typeof code === 'string') Object.assign(safeError, { code })
+      unsettledPutErrors.add(safeError)
       throw safeError
     }
     if (response.status === 412 || response.status === 409 || response.status === 304) {
       // 条件写竞争输家只有在对象已存在时才算幂等成功；stat 故障或对象不存在均不能吞掉。
       try {
-        await client.stat(key)
+        // stat 挂起会让本键队列一直不放行：同样限时。
+        await withTimeout(client.stat(key), conditionalWriteTimeoutMs, 'S3 条件写入冲突后的 stat ')
         return false
       } catch (error) {
         if ((error as { code?: string }).code === 'NoSuchKey') {
@@ -344,7 +370,7 @@ export function createBunS3MediaStorage(options: {
    * 409/304 与 S3/MinIO 的 412 都能正确拦下输家。前提是同一时刻只有一个 API 进程写这个桶
    * （见 docs/deployment.md 的对象存储兼容性要求）；S3 / MinIO 本身已在存储端原子仲裁，排队无害。
    */
-  const conditionalWriteQueues = new Map<string, Promise<boolean>>()
+  const conditionalWriteQueues = new Map<string, Promise<void>>()
 
   return {
     presignPut({ key, contentType }) {
@@ -407,17 +433,24 @@ export function createBunS3MediaStorage(options: {
 
     async writeMediaBytesIfAbsent(key, bytes, contentType) {
       assertSafeObjectKey(key)
-      const previous = conditionalWriteQueues.get(key)
+      const previous = conditionalWriteQueues.get(key) ?? Promise.resolve()
       // 前一个写的成败与本次无关：失败了本次照常尝试，成功了本次会收到 409/412 并复用它。
-      const current = (previous ?? Promise.resolve(false))
-        .catch(() => false)
-        .then(() => conditionalPut(key, bytes, contentType))
-      conditionalWriteQueues.set(key, current)
-      try {
-        return await current
-      } finally {
-        if (conditionalWriteQueues.get(key) === current) conditionalWriteQueues.delete(key)
-      }
+      const current = previous.then(() => conditionalPut(key, bytes, contentType))
+      // 队尾 = 本次写「确定不会再落盘」的时刻。PUT 没拿到响应时（网络错误 / 本地超时），存储端
+      // 可能还在处理它：本次立即报错给调用方，但该键再隔离一个超时周期才放行下一个写，否则在
+      // 不仲裁并发的 COS 上，后一个 PUT 可能与仍在途的前一个重叠、覆盖已固化的对象。
+      const tail: Promise<void> = current.then(
+        () => undefined,
+        (error: unknown) =>
+          error instanceof Error && unsettledPutErrors.has(error)
+            ? Bun.sleep(conditionalWriteTimeoutMs)
+            : undefined,
+      )
+      conditionalWriteQueues.set(key, tail)
+      void tail.then(() => {
+        if (conditionalWriteQueues.get(key) === tail) conditionalWriteQueues.delete(key)
+      })
+      return current
     },
 
     async readMediaBytes(key, maxBytes = 10 * 1024 * 1024) {
