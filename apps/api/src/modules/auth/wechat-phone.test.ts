@@ -154,6 +154,58 @@ describe('createWechatPhoneClient（#204：live 手机号换取）', () => {
     ).toBe('19912345678')
   })
 
+  test('countryCode 是数字：86 等价于 "86"（照常接受），数字 1 仍判不支持', async () => {
+    const { service } = fakeTokens(['tok-1'])
+    const numericCn = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            errcode: 0,
+            phone_info: { purePhoneNumber: '13800138000', countryCode: 86 },
+          }),
+          { status: 200 },
+        ),
+    )
+    expect(
+      await createWechatPhoneClient({ tokens: service, fetchImpl: numericCn.fetchImpl }).resolve(
+        'c',
+      ),
+    ).toBe('13800138000')
+
+    // 数字国家码不能落进「没给 countryCode」的形态兜底：+1 的 11 位号长得像大陆号。
+    const numericUs = stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            errcode: 0,
+            phone_info: { purePhoneNumber: '19912345678', countryCode: 1 },
+          }),
+          { status: 200 },
+        ),
+    )
+    await expect(
+      createWechatPhoneClient({ tokens: service, fetchImpl: numericUs.fetchImpl }).resolve('c'),
+    ).rejects.toBeInstanceOf(PhoneNumberUnsupportedError)
+  })
+
+  test('countryCode 类型非法（对象 / 布尔 / 小数）：上游故障，不落进形态兜底', async () => {
+    const { service } = fakeTokens(['tok-1'])
+    for (const bad of [{}, true, 86.5]) {
+      const { fetchImpl } = stubFetch(
+        () =>
+          new Response(
+            JSON.stringify({
+              errcode: 0,
+              phone_info: { purePhoneNumber: '19912345678', countryCode: bad },
+            }),
+            { status: 200 },
+          ),
+      )
+      const failure = createWechatPhoneClient({ tokens: service, fetchImpl }).resolve('c')
+      await expect(failure).rejects.toBeInstanceOf(WechatPlatformError)
+    }
+  })
+
   test('取 token 就失败（上游不可达 / 退避窗口内）：直接上抛上游故障，不发换号请求', async () => {
     const failing: WechatAccessTokenService = {
       async get() {

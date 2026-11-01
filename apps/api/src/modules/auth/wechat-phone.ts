@@ -43,6 +43,22 @@ function toCnMobile(raw: string): string | null {
 }
 
 /**
+ * `countryCode` 归一化。
+ *
+ * - 字符串：`trim()` 后直接用（上游文档里的形状是 `"countryCode": "86"`）；
+ * - 整数：按十进制字符串处理，`86` 与 `"86"` 等价 —— 上游若把国家码写成数字，不该因此
+ *   掉进「没给 countryCode」的形态兜底（那样一个境外号可能被当大陆号落库）；
+ * - `undefined` / `null`：`''`，即「上游没给」；
+ * - 其它（对象 / 布尔 / 小数）：`null`，调用方必须按上游故障处理。
+ */
+function normalizeCountryCode(value: unknown): string | null {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' && Number.isInteger(value)) return String(value)
+  return null
+}
+
+/**
  * 「这个 code 不能用」的官方错误码：
  * - `40029` invalid code（无效 / 过期 / 不是本小程序的 code）；
  * - `40163` code been used（已被消费过——每个 code 只能换一次）。
@@ -104,7 +120,7 @@ export function createWechatPhoneClient(deps: {
     const body = (await res.json().catch(() => null)) as {
       errcode?: number
       errmsg?: string
-      phone_info?: { phoneNumber?: string; purePhoneNumber?: string; countryCode?: string }
+      phone_info?: { phoneNumber?: string; purePhoneNumber?: string; countryCode?: unknown }
     } | null
     if (body === null) throw new WechatPlatformError('getuserphonenumber 响应不是 JSON')
 
@@ -124,9 +140,15 @@ export function createWechatPhoneClient(deps: {
       throw new WechatPlatformError('getuserphonenumber 响应缺少 phone_info')
     }
     // 国家码比号码形态更硬：`+1` 之类的 11 位号码也长得像大陆号，只靠正则会把境外号落库。
-    // 上游没给 countryCode 时退回形态判断（不因此拒绝，否则一次字段缺失就废掉整个绑定）。
-    const countryCode = typeof info.countryCode === 'string' ? info.countryCode.trim() : ''
-    if (countryCode !== '' && countryCode !== '86') throw new PhoneNumberUnsupportedError()
+    // 上游没给 countryCode 时退回形态判断（不因此拒绝，否则一次字段缺失就废掉整个绑定）；
+    // 给了但类型不对则是响应被破坏 → 上游故障，绝不落进形态兜底（否则境外号会被当大陆号）。
+    const normalizedCountryCode = normalizeCountryCode(info.countryCode)
+    if (normalizedCountryCode === null) {
+      throw new WechatPlatformError('getuserphonenumber 响应的 countryCode 类型非法')
+    }
+    if (normalizedCountryCode !== '' && normalizedCountryCode !== '86') {
+      throw new PhoneNumberUnsupportedError()
+    }
     // 只有**拿到了字符串**却不像大陆号码，才算「号码不支持」（用户侧可纠正）；
     // 两个字段都缺失 / 不是字符串，说明上游契约被破坏，必须报上游故障——
     // 否则用户会照着「请使用中国大陆手机号」去换号，而问题根本不在他那一边。

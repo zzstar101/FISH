@@ -54,6 +54,15 @@ export async function wechatSignIn(code: string): Promise<Me> {
 }
 
 /**
+ * 手机号绑定的请求超时（毫秒）。
+ *
+ * 必须**大于**服务端最坏耗时（`apps/api/src/modules/auth/wechat-phone.ts`：取 token 5s +
+ * 换号 5s，凭证失效再各一次 ≈ 20s）。用全局的 15s 会让客户端先超时、报「网络异常」，
+ * 而号码其实已经落库 —— 用户看到的失败与服务端事实不一致，还会诱发重复授权。
+ */
+const PHONE_BIND_TIMEOUT_MS = 25_000
+
+/**
  * 手机号绑定（#204）：只上报 `<Button open-type="getPhoneNumber">` 给的一次性 `code`。
  *
  * 契约冻结（`packages/contracts/src/auth/phone.ts`）：`encryptedData` / `iv` / 明文号码
@@ -65,7 +74,11 @@ export async function wechatSignIn(code: string): Promise<Me> {
  */
 export async function bindPhone(code: string): Promise<PhoneBindResponse> {
   return PhoneBindResponseSchema.parse(
-    await apiRequest('/auth/phone/bind', { method: 'POST', body: { code } }),
+    await apiRequest('/auth/phone/bind', {
+      method: 'POST',
+      body: { code },
+      timeout: PHONE_BIND_TIMEOUT_MS,
+    }),
   )
 }
 
