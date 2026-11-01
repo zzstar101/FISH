@@ -42,6 +42,7 @@ import { createAiPolishModule } from './modules/ai/module'
 import {
   createDevEmailVerificationProvider,
   createResendEmailVerificationProvider,
+  createSmtpEmailVerificationProvider,
 } from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
@@ -253,9 +254,11 @@ export function createApp(
               { apiKey: mailEnv.resendApiKey, from: mailEnv.resendFrom },
               { logoUrl: brandLogoUrl },
             )
-          : createDevEmailVerificationProvider(undefined, {
-              logoUrl: brandLogoUrl,
-            }),
+          : mailEnv.transport === 'smtp'
+            ? createSmtpEmailVerificationProvider(mailEnv.smtp, { logoUrl: brandLogoUrl })
+            : createDevEmailVerificationProvider(undefined, {
+                logoUrl: brandLogoUrl,
+              }),
     }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,

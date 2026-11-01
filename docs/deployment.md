@@ -350,10 +350,14 @@ api/worker 共用的 `/srv/fish/.env`：那个文件在应用工作目录里，�
 本机未实测。）
 
 ```bash
-# 校园认证邮件（仅 API 加载）
-MAIL_TRANSPORT=resend
-RESEND_API_KEY=REPLACE_ME_RESEND_API_KEY
-RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"
+# 校园认证邮件（仅 API 加载）：飞书企业邮箱 SMTP，465 隐式 TLS
+MAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.feishu.cn
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=noreply@YOUR_DOMAIN
+SMTP_PASS=REPLACE_ME_SMTP_PASSWORD
+SMTP_FROM="鱼小应 <noreply@YOUR_DOMAIN>"
 
 # #70 面交码的 HMAC 签名密钥（仅 API 加载；必填且不少于 32 字符）
 MEETUP_TOKEN_SECRET=REPLACE_ME_64_HEX
@@ -366,19 +370,26 @@ AI_POLISH_API_KEY=REPLACE_ME_UPSTREAM_KEY
 AI_POLISH_MODEL=deepseek-flash
 ```
 
-先在 Resend 验证发件域名（含 SPF/DKIM）。**只有首次部署**才用下面这段整份写入；两个密钥都从
-`read` 进内存再落盘，不要直接粘在命令里——那会永久留在 root 的 shell 历史里。`RESEND_FROM`
-也必须问进来：`loadMailTransportEnv` 只验它非空，占位域名会照样把服务起起来、直到发信时才失败。
+`SMTP_PASS` 是飞书邮箱后台为该账号生成的 **SMTP 专用密码**，不是登录密码。`SMTP_PORT` /
+`SMTP_SECURE` 可省略（默认 465 / true）；只支持隐式 TLS，不支持 587 STARTTLS；`SMTP_SECURE=false`
+（明文）在 `NODE_ENV=production` 下启动即失败。仍可改用 Resend：`MAIL_TRANSPORT=resend` 加
+`RESEND_API_KEY` / `RESEND_FROM` 两行（需先在 Resend 验证发件域名）。
+
+**只有首次部署**才用下面这段整份写入；两个密钥都从 `read` 进内存再落盘，不要直接粘在命令里——
+那会永久留在 root 的 shell 历史里。`SMTP_USER` / `SMTP_FROM` 也必须问进来：`loadMailTransportEnv`
+只验它们非空（`SMTP_FROM` 另验地址格式），占位域名会照样把服务起起来、直到发信时才失败。
 
 ```bash
 sudo install -d -m 755 /etc/fish
-read -r  -p '发件地址（已在 Resend 验证过的域名）: ' RESEND_FROM
-read -rs -p 'Resend 密钥（不回显）: ' RESEND_API_KEY && echo
+read -r  -p 'SMTP 账号（如 noreply@your-domain）: ' SMTP_USER
+read -rs -p 'SMTP 专用密码（不回显）: ' SMTP_PASS && echo
 read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
 {
-  printf 'MAIL_TRANSPORT=resend\n'
-  printf 'RESEND_API_KEY=%s\n' "$RESEND_API_KEY"
-  printf 'RESEND_FROM="%s"\n' "$RESEND_FROM"
+  printf 'MAIL_TRANSPORT=smtp\n'
+  printf 'SMTP_HOST=smtp.feishu.cn\n'
+  printf 'SMTP_USER=%s\n' "$SMTP_USER"
+  printf 'SMTP_PASS=%s\n' "$SMTP_PASS"
+  printf 'SMTP_FROM="鱼小应 <%s>"\n' "$SMTP_USER"
   printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)"
   printf 'AI_POLISH_TRANSPORT=live\n'
   printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
@@ -386,7 +397,7 @@ read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
   printf 'AI_POLISH_MODEL=deepseek-flash\n'
 } | sudo tee /etc/fish/api-mail.env >/dev/null
 sudo chown root:root /etc/fish/api-mail.env && sudo chmod 600 /etc/fish/api-mail.env
-unset RESEND_API_KEY RESEND_FROM AI_POLISH_API_KEY
+unset SMTP_USER SMTP_PASS AI_POLISH_API_KEY
 ```
 
 **已经按旧版手册部署过的机器不要重跑上面那一段**：`tee` 是整文件覆写，会顺手换掉
@@ -395,6 +406,23 @@ unset RESEND_API_KEY RESEND_FROM AI_POLISH_API_KEY
 ```bash
 sudo grep -q '^MEETUP_TOKEN_SECRET=' /etc/fish/api-mail.env \
   || printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" | sudo tee -a /etc/fish/api-mail.env >/dev/null
+```
+
+**已经用 Resend 部署过、要切到飞书 SMTP 的机器**：同样不要重跑整份写入，只替换邮件那几行
+（先删旧的 `MAIL_TRANSPORT` / `RESEND_*`，再追加 SMTP 配置，然后重启 API）：
+
+```bash
+read -r  -p 'SMTP 账号（如 noreply@your-domain）: ' SMTP_USER
+read -rs -p 'SMTP 专用密码（不回显）: ' SMTP_PASS && echo
+sudo sed -i '/^MAIL_TRANSPORT=/d;/^RESEND_/d;/^SMTP_/d' /etc/fish/api-mail.env
+{
+  printf 'MAIL_TRANSPORT=smtp\n'
+  printf 'SMTP_HOST=smtp.feishu.cn\n'
+  printf 'SMTP_USER=%s\n' "$SMTP_USER"
+  printf 'SMTP_PASS=%s\n' "$SMTP_PASS"
+  printf 'SMTP_FROM="鱼小应 <%s>"\n' "$SMTP_USER"
+} | sudo tee -a /etc/fish/api-mail.env >/dev/null
+unset SMTP_USER SMTP_PASS
 ```
 
 **#141 起 API 还需要四个 AI 变量，且 `AI_POLISH_TRANSPORT` 无默认值**：升级后不补它，API 会**直接
@@ -431,7 +459,8 @@ stub**——它返回的是演示文案，客户端会带"演示文案·非真�
   不做 shell 展开，纯 hex 可以免掉 `$`、引号与 `#` 引发的整类解析歧义。
 - **不要把 `.env.example` 里那行 `dev-only-meetup-secret-…` 抄到生产**。它在公开仓库里，
   照抄等于公开签名密钥，任何人可离线伪造任意面交码。
-- `MAIL_TRANSPORT` 必填，选择 `resend` 但缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择
+- `MAIL_TRANSPORT` 必填，选择 `smtp` 缺 `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM`
+  任一项、或选择 `resend` 缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择
   transport。`outbox` 仅供本地开发，不能投递真实邮件。若从 `.env.example` 复制了生产 `.env`，
   移除其中的 `MAIL_TRANSPORT=outbox` 与 `MEETUP_TOKEN_SECRET=dev-only-…`，避免与 API 专属配置并存。
 
@@ -1153,11 +1182,11 @@ ps -p 1 -o comm= ; ls -d /run/systemd/system 2>/dev/null || echo "无 systemd"
 1. **supervisor**（apt 里有）：为 `fish-api` / `fish-worker` / `caddy` 各写一个 `[program:x]`，
    用 `user=` 降权、`autostart=true` / `autorestart=true`、`stdout_logfile=` 收日志；
    `supervisord -c …` 启动，`supervisorctl status/restart` 控制。这是最接近 systemd 行为的一种。
-   ⚠️ 没有 `EnvironmentFile` 可用时，**§4 列出的全部 API 专属变量**（邮件三项、#70 的
+   ⚠️ 没有 `EnvironmentFile` 可用时，**§4 列出的全部 API 专属变量**（`MAIL_TRANSPORT` 与对应的 `SMTP_*` / `RESEND_*`、#70 的
    `MEETUP_TOKEN_SECRET`、#141 的四个 `AI_POLISH_*`）必须由 `fish-api` 的 `environment=`
    注入——少任意一项 API 都起不来，带着 `autorestart=true` 反复重启，症状与 §9 第 12 条一致。
    清单以 §4 为准（这里不再逐个列，避免像本节原先那样漏掉后加的变量）。
-   `environment=` 用逗号分隔且值里带空格（`RESEND_FROM` 就是 `鱼小应 <…>`），那一项要按
+   `environment=` 用逗号分隔且值里带空格（`SMTP_FROM` 就是 `鱼小应 <…>`），那一项要按
    supervisor 的规则加引号；`supervisord.conf` 本身收到 `root:root 600`，别放世界可读的目录。
    （supervisor 的引号细则本机未实测。）
 2. `cron` + `@reboot`：能开机能拉起来，但没有崩溃自恢复，也没有依赖顺序（worker 会在迁移前先起）。

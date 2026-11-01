@@ -56,19 +56,65 @@ export function loadServerEnv(source: Record<string, string | undefined> = proce
 /**
  * API 专属邮件投递配置（#68 评审二轮 P1-2）。
  *
- * `MAIL_TRANSPORT` **无默认值**：部署层必须显式声明 `outbox` 或 `resend`，
- * 忘记注入不会静默降级成 dev 投递。选 `resend` 时 Resend 两项必须齐全。
- * 只在 API 进程校验（worker 不发邮件），避免 Resend 密钥扩散到 worker。
+ * `MAIL_TRANSPORT` **无默认值**：部署层必须显式声明 `outbox` / `resend` / `smtp`，
+ * 忘记注入不会静默降级成 dev 投递。选 `resend` 时 Resend 两项必须齐全；选 `smtp` 时
+ * `SMTP_HOST` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` 必须齐全。
+ * 只在 API 进程校验（worker 不发邮件），避免邮件密钥扩散到 worker。
  */
 export type MailTransportEnv =
   | { transport: 'outbox' }
   | { transport: 'resend'; resendApiKey: string; resendFrom: string }
+  | { transport: 'smtp'; smtp: SmtpEnv }
+
+/**
+ * SMTP 投递配置。`secure=true` 是隐式 TLS（如 465，连接即握手），不支持 STARTTLS。
+ * `secure=false` 走明文 TCP（口令也明文），只给本机测试用：`NODE_ENV=production` 下启动即失败。
+ */
+export type SmtpEnv = {
+  host: string
+  port: number
+  secure: boolean
+  user: string
+  pass: string
+  /** 发件人，如 `鱼小应 <noreply@example.com>`；格式由 transport 装配时校验。 */
+  from: string
+}
+
+function loadSmtpEnv(source: Record<string, string | undefined>): SmtpEnv {
+  // 与 AI_POLISH 同口径：trim 后判空，全空白等于没配。口令不 trim（可能合法地含空格），只判空。
+  const host = source.SMTP_HOST?.trim()
+  const user = source.SMTP_USER?.trim()
+  const pass = source.SMTP_PASS
+  const from = source.SMTP_FROM?.trim()
+  if (!host || !user || !pass || !from) {
+    throw new Error(
+      '环境变量校验失败：MAIL_TRANSPORT=smtp 必须同时配置 SMTP_HOST / SMTP_USER / SMTP_PASS / SMTP_FROM',
+    )
+  }
+  const rawPort = source.SMTP_PORT?.trim() || '465'
+  const port = Number(rawPort)
+  if (!/^\d+$/.test(rawPort) || port < 1 || port > 65535) {
+    throw new Error('环境变量校验失败：SMTP_PORT 必须是 1-65535 的整数（默认 465）')
+  }
+  const rawSecure = source.SMTP_SECURE?.trim() || 'true'
+  if (rawSecure !== 'true' && rawSecure !== 'false') {
+    throw new Error('环境变量校验失败：SMTP_SECURE 只能是 true 或 false（默认 true，隐式 TLS）')
+  }
+  const secure = rawSecure === 'true'
+  if (!secure && source.NODE_ENV?.trim().toLowerCase() === 'production') {
+    throw new Error(
+      '环境变量校验失败：生产环境（NODE_ENV=production）禁止 SMTP_SECURE=false（口令会明文传输）',
+    )
+  }
+  return { host, port, secure, user, pass, from }
+}
 
 export function loadMailTransportEnv(
   source: Record<string, string | undefined> = process.env,
 ): MailTransportEnv {
   const mode = source.MAIL_TRANSPORT
   if (mode === 'outbox') return { transport: 'outbox' }
+  if (mode === 'smtp') return { transport: 'smtp', smtp: loadSmtpEnv(source) }
   if (mode === 'resend') {
     const apiKey = source.RESEND_API_KEY
     const from = source.RESEND_FROM
@@ -80,7 +126,7 @@ export function loadMailTransportEnv(
     return { transport: 'resend', resendApiKey: apiKey, resendFrom: from }
   }
   throw new Error(
-    '环境变量校验失败：MAIL_TRANSPORT 必须显式设置为 outbox 或 resend（不允许静默降级投递）',
+    '环境变量校验失败：MAIL_TRANSPORT 必须显式设置为 outbox / resend / smtp（不允许静默降级投递）',
   )
 }
 

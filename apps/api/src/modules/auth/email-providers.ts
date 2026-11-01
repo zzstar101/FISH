@@ -1,5 +1,6 @@
 import { mkdir, open } from 'node:fs/promises'
 import { renderVerificationMail } from './mail-template'
+import { createSmtpTransport, type SmtpTransportConfig } from './smtp-transport'
 import type { EmailVerificationProvider, VerificationMail } from './verification-provider'
 
 /**
@@ -162,6 +163,25 @@ export function createResendEmailVerificationProvider(
   brand?: { logoUrl?: string },
 ): EmailVerificationProvider {
   const transport = createResendTransport(config)
+  return {
+    codes,
+    transport,
+    render(to, code, expiresInMinutes) {
+      return renderVerificationMail(to, code, expiresInMinutes, brand?.logoUrl)
+    },
+  }
+}
+
+/**
+ * production Provider：SMTP 真实投递（飞书企业邮箱等）。
+ * 与 Resend 同一纪律：配置缺失由 `loadMailTransportEnv` 启动时失败；`from` 格式非法时
+ * 这里（装配期）直接抛错。
+ */
+export function createSmtpEmailVerificationProvider(
+  config: SmtpTransportConfig,
+  brand?: { logoUrl?: string },
+): EmailVerificationProvider {
+  const transport = createSmtpTransport(config)
   return {
     codes,
     transport,

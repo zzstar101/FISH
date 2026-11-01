@@ -4,6 +4,7 @@ import {
   loadAiPolishEnv,
   loadContentModerationEnv,
   loadEmbeddingEnv,
+  loadMailTransportEnv,
   loadServerEnv,
   loadWechatEnv,
 } from './env'
@@ -369,5 +370,59 @@ describe('loadServerEnv 的 S3_VIRTUAL_HOSTED_STYLE', () => {
     expect(() => loadServerEnv({ ...base, S3_VIRTUAL_HOSTED_STYLE: 'yes' })).toThrow(
       'S3_VIRTUAL_HOSTED_STYLE',
     )
+  })
+})
+
+describe('loadMailTransportEnv 的 smtp', () => {
+  const complete = {
+    MAIL_TRANSPORT: 'smtp',
+    SMTP_HOST: 'smtp.example.com',
+    SMTP_USER: 'noreply@example.com',
+    SMTP_PASS: 'not-a-real-password',
+    SMTP_FROM: '鱼小应 <noreply@example.com>',
+  }
+
+  test('必填项齐全时端口默认 465、默认隐式 TLS', () => {
+    expect(loadMailTransportEnv(complete)).toEqual({
+      transport: 'smtp',
+      smtp: {
+        host: 'smtp.example.com',
+        port: 465,
+        secure: true,
+        user: 'noreply@example.com',
+        pass: 'not-a-real-password',
+        from: '鱼小应 <noreply@example.com>',
+      },
+    })
+  })
+
+  test('SMTP_PORT / SMTP_SECURE 可显式覆盖', () => {
+    const env = loadMailTransportEnv({ ...complete, SMTP_PORT: '2525', SMTP_SECURE: 'false' })
+    expect(env).toMatchObject({ smtp: { port: 2525, secure: false } })
+  })
+
+  test('缺任一必填项都启动失败，错误只报变量名、不回显口令', () => {
+    for (const key of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'] as const) {
+      let message = ''
+      try {
+        loadMailTransportEnv({ ...complete, [key]: key === 'SMTP_PASS' ? '' : '  ' })
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain(key)
+      expect(message).not.toContain('not-a-real-password')
+    }
+  })
+
+  test('端口 / SMTP_SECURE 取值非法时启动失败', () => {
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_PORT: '465abc' })).toThrow('SMTP_PORT')
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_PORT: '70000' })).toThrow('SMTP_PORT')
+    expect(() => loadMailTransportEnv({ ...complete, SMTP_SECURE: 'ssl' })).toThrow('SMTP_SECURE')
+  })
+
+  test('生产环境禁止 SMTP_SECURE=false（口令不走明文）', () => {
+    expect(() =>
+      loadMailTransportEnv({ ...complete, SMTP_SECURE: 'false', NODE_ENV: 'production' }),
+    ).toThrow('SMTP_SECURE=false')
   })
 })
