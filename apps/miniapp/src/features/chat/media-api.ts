@@ -269,7 +269,14 @@ async function putObject(
     timeout: UPLOAD_TIMEOUT_MS,
   })
   if (uploaded.statusCode < 200 || uploaded.statusCode >= 300) {
-    throw new Error(kind === 'IMAGE' ? '图片发送失败，请重试' : '语音发送失败，请重试')
+    console.error('[chat-media] 对象存储上传失败', {
+      kind,
+      statusCode: uploaded.statusCode,
+      errMsg: uploaded.errMsg,
+    })
+    throw new Error(
+      `${kind === 'IMAGE' ? '图片' : '语音'}发送失败，请重试（HTTP ${uploaded.statusCode}）`,
+    )
   }
   return presign.objectKey
 }

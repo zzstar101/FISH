@@ -95,6 +95,7 @@ const {
   startVoiceRecording,
   uploadChatImage,
   VoicePermissionError,
+  VoicePrivacyError,
   voiceError,
 } = await import('../src/features/chat/media-api')
 
@@ -289,6 +290,15 @@ describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364
 })
 
 describe('voiceError —— 权限被拒必须与普通失败可区分', () => {
+  test('隐私授权错误不会被误判成麦克风权限错误', () => {
+    const error = voiceError({
+      errMsg: 'operateRecorder:fail privacy permission is not authorized',
+    })
+    expect(error).toBeInstanceOf(VoicePrivacyError)
+    expect(error).not.toBeInstanceOf(VoicePermissionError)
+    expect(error.message).toContain('隐私保护指引')
+  })
+
   test('权限 / auth 类错误：VoicePermissionError（页面据此给「去设置」）', () => {
     const error = voiceError({ errMsg: 'operateRecorder:fail auth deny' })
     expect(error).toBeInstanceOf(VoicePermissionError)
