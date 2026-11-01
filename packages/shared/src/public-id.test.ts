@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { TypeID } from 'typeid-js'
 import { decodePublicId, encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from './public-id'
 
 const uuid = '01930000-0000-7000-8000-000000000011'
@@ -38,5 +39,32 @@ describe('Public ID / UUIDv7 boundary', () => {
     const v4 = '00000000-0000-4000-8000-000000000001'
     expect(() => encodePublicId(PUBLIC_ID_PREFIX.listing, v4)).toThrow(v4)
     expect(() => encodePublicId(PUBLIC_ID_PREFIX.listing, v4)).toThrow('UUIDv7')
+  })
+
+  // 微信小程序真机 JS 运行时没有 `TextEncoder` 全局（开发者工具模拟器有）。typeid-js 的
+  // `fromString` 解码依赖它，真机上每个 Public ID 校验都失败，登录响应的 `usr_` 也过不了契约。
+  test('没有 TextEncoder 全局时仍能解码与校验（小程序真机）', () => {
+    const expected = encodePublicId(PUBLIC_ID_PREFIX.user, uuid)
+    const original = globalThis.TextEncoder
+    Reflect.deleteProperty(globalThis, 'TextEncoder')
+    try {
+      expect(typeof globalThis.TextEncoder).toBe('undefined')
+      const id = encodePublicId(PUBLIC_ID_PREFIX.user, uuid)
+      expect(id).toBe(expected)
+      expect(decodePublicId(PUBLIC_ID_PREFIX.user, id)).toBe(uuid)
+      expect(isPublicId(PUBLIC_ID_PREFIX.user, id)).toBe(true)
+      expect(isPublicId(PUBLIC_ID_PREFIX.user, id.replace('usr_', 'usr_8'))).toBe(false)
+    } finally {
+      globalThis.TextEncoder = original
+    }
+  })
+
+  test('自实现的后缀解码与 typeid-js 逐值一致', () => {
+    for (let i = 0; i < 500; i += 1) {
+      const v7 = Bun.randomUUIDv7()
+      const id = encodePublicId(PUBLIC_ID_PREFIX.message, v7)
+      expect(decodePublicId(PUBLIC_ID_PREFIX.message, id)).toBe(v7)
+      expect(TypeID.fromString(id, PUBLIC_ID_PREFIX.message).toUUID()).toBe(v7)
+    }
   })
 })
