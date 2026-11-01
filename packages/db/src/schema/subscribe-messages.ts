@@ -35,8 +35,18 @@ export type SubscribeMessageKind = 'CHAT' | 'TX' | 'REVIEW'
  */
 export type SubscribeMessageSourceType = 'NOTIFICATION' | 'CHAT'
 
-/** 投递状态机：`PENDING`（待发 / 待重试）→ `SENT` | `FAILED`（放弃）| `SKIPPED`（不该发）。 */
-export type SubscribeMessageDeliveryStatus = 'PENDING' | 'SENT' | 'FAILED' | 'SKIPPED'
+/**
+ * 投递状态机：#511 起是
+ * `PENDING`（待发 / 待重试）→ `SENDING`（已占行、正在调微信）→ `SENT` | `FAILED`（放弃）|
+ * `SKIPPED`（不该发）。
+ *
+ * `SENDING` 是**发送之前先提交**的一次性占位：#462 的原始设计把「占行 → 调微信 → 落状态」
+ * 关在同一个事务里，于是进程在飞行途中被强杀时，微信可能已经收到请求、而本地事务回滚成
+ * `PENDING` —— 重启后同一条会被再发一次。有了 `SENDING`，重启之后看到的只可能是「我在发
+ * 这条的时候死了」，那一行按「结果不确定」处理：**不重发**，标 `FAILED`
+ * （`last_error=interrupted`，见 `apps/api/src/modules/subscribe-messages/store.ts`）。
+ */
+export type SubscribeMessageDeliveryStatus = 'PENDING' | 'SENDING' | 'SENT' | 'FAILED' | 'SKIPPED'
 
 /**
  * 授权记账（Owner 冻结口径）：一次性订阅，用户每在 `requestSubscribeMessage` 里「允许」
@@ -127,13 +137,18 @@ export const subscribeMessageDeliveries = pgTable(
     index('subscribe_message_deliveries_pending_idx')
       .on(table.nextAttemptAt)
       .where(sql`${table.status} = 'PENDING'`),
+    // 「发送中」的行：每轮收尾（以及下一轮开头）扫一次有没有被强杀留下的 `SENDING`。
+    // 正常情况下这张部分索引里永远是空的（一条投递只在这几秒里处于该状态）。
+    index('subscribe_message_deliveries_sending_idx')
+      .on(table.updatedAt)
+      .where(sql`${table.status} = 'SENDING'`),
     // CHAT 的 30 分钟限频查询：`conversation_id = ? AND recipient_id = ? AND created_at > now()-30min`。
     index('subscribe_message_deliveries_chat_throttle_idx')
       .on(table.conversationId, table.recipientId, table.createdAt)
       .where(sql`${table.sourceType} = 'CHAT'`),
     check(
       'subscribe_message_deliveries_status_values',
-      sql`${table.status} IN ('PENDING', 'SENT', 'FAILED', 'SKIPPED')`,
+      sql`${table.status} IN ('PENDING', 'SENDING', 'SENT', 'FAILED', 'SKIPPED')`,
     ),
   ],
 )

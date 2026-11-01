@@ -8,6 +8,7 @@ import {
   subscribeMessageDeliveries,
   subscribeMessageGrants,
 } from '@fish/db/schema/subscribe-messages'
+import { transactions } from '@fish/db/schema/transactions'
 import { users, wechatIdentities } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { and, eq, inArray } from 'drizzle-orm'
@@ -88,8 +89,11 @@ async function deliveryRow(id: string) {
 }
 
 afterAll(async () => {
-  // 会话/商品对 users 是 NO ACTION 外键（不随用户删除连带），必须先自己清掉；
+  // 会话/商品/交易对 users 是 NO ACTION 外键（不随用户删除连带），必须先自己清掉；
   // 消息随会话 CASCADE，通知与订阅消息两张表随用户 CASCADE。
+  if (createdTransactions.length > 0) {
+    await db.delete(transactions).where(inArray(transactions.id, createdTransactions))
+  }
   if (createdConversations.length > 0) {
     await db.delete(conversations).where(inArray(conversations.id, createdConversations))
   }
@@ -355,6 +359,7 @@ describe('findOpenid', () => {
  */
 const createdConversations: string[] = []
 const createdListings: string[] = []
+const createdTransactions: string[] = []
 
 async function newListing(sellerId: string, title: string): Promise<string> {
   const id = crypto.randomUUID()
@@ -668,5 +673,244 @@ describe('listNotificationSources（通知登记）', () => {
     expect(
       (await store.listNotificationSources(sinceOf(at), 500)).some((row) => row.id === id),
     ).toBe(false)
+  })
+})
+
+/**
+ * 聊天登记的限频（#511 审查 high）：限频维度是「会话 × 收件人」，而唯一键
+ * `(source_type, source_id, recipient_id)` 拦不住**同会话的两条不同消息**——
+ * 两条消息的 `source_id` 不同，一轮里会各插一行、各推一条。
+ */
+async function newChatRow(
+  conversationId: string,
+  recipientId: string,
+  messageId: string = crypto.randomUUID(),
+): Promise<NewSubscribeDelivery> {
+  return {
+    sourceType: 'CHAT',
+    sourceId: messageId,
+    recipientId,
+    kind: 'CHAT',
+    data: {
+      thing4: '买家',
+      thing2: '你有一条新消息',
+      thing28: '折叠桌',
+      time3: '2026-11-01 10:30',
+    },
+    page: `pkg-social/pages/conversation/index?id=${conversationId}`,
+    conversationId,
+  }
+}
+
+/** 该「会话 × 收件人」在库里的 CHAT 投递行数。 */
+async function chatDeliveryCount(conversationId: string, recipientId: string): Promise<number> {
+  const rows = await db
+    .select({ id: subscribeMessageDeliveries.id })
+    .from(subscribeMessageDeliveries)
+    .where(
+      and(
+        eq(subscribeMessageDeliveries.sourceType, 'CHAT'),
+        eq(subscribeMessageDeliveries.conversationId, conversationId),
+        eq(subscribeMessageDeliveries.recipientId, recipientId),
+      ),
+    )
+  return rows.length
+}
+
+describe('listChatSources：同会话多条未读消息', () => {
+  test('每「会话 × 收件人」只出一条候选，取最新那条消息', async () => {
+    const at = Date.now()
+    const buyer = await newUser('买家')
+    const seller = await newUser('卖家')
+    const listingId = await newListing(seller, '折叠桌')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const older = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 5 * 60 * 1000),
+    })
+    const newer = await newMessage({
+      conversationId,
+      senderId: buyer,
+      createdAt: new Date(at - 2 * 60 * 1000),
+    })
+
+    const rows = (await store.listChatSources(chatWindow(at))).filter(
+      (row) => row.conversationId === conversationId,
+    )
+
+    // 修复前：两条都进候选（各自 source_id 不同，唯一键拦不住），一轮推两条
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.messageId).toBe(newer)
+    expect(rows.some((row) => row.messageId === older)).toBe(false)
+  })
+})
+
+describe('insertChatDeliveries：会话×收件人的限频', () => {
+  test('同一批里两条同组行也只登记一条（不依赖调用方去重）', async () => {
+    const buyer = await newUser('买家')
+    const seller = await newUser('卖家')
+    const listingId = await newListing(seller, '折叠桌')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const at = Date.now()
+
+    const inserted = await store.insertChatDeliveries(
+      [await newChatRow(conversationId, seller), await newChatRow(conversationId, seller)],
+      new Date(at - 30 * 60 * 1000),
+    )
+
+    expect(inserted).toBe(1)
+    expect(await chatDeliveryCount(conversationId, seller)).toBe(1)
+  })
+
+  test('窗口内已有 CHAT 投递行的组整组丢弃（返回 0）', async () => {
+    const buyer = await newUser('买家')
+    const seller = await newUser('卖家')
+    const listingId = await newListing(seller, '台灯')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const at = Date.now()
+    // 10 分钟前已经为这个「会话 × 收件人」登记过一条（另一条消息）
+    await newDelivery(seller, {
+      sourceType: 'CHAT',
+      sourceId: crypto.randomUUID(),
+      kind: 'CHAT',
+      conversationId,
+    })
+
+    const inserted = await store.insertChatDeliveries(
+      [await newChatRow(conversationId, seller)],
+      new Date(at - 30 * 60 * 1000),
+    )
+
+    expect(inserted).toBe(0)
+    expect(await chatDeliveryCount(conversationId, seller)).toBe(1)
+  })
+
+  test('两个并发登记（各自扫到不同消息）也只留一条：advisory lock 内复核限频', async () => {
+    const buyer = await newUser('买家')
+    const seller = await newUser('卖家')
+    const listingId = await newListing(seller, '行李箱')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const at = Date.now()
+    const throttleSince = new Date(at - 30 * 60 * 1000)
+    // 模拟两个 API 实例各扫到同会话的一条未读消息：两条行只有 source_id 不同，
+    // 唯一键不会冲突，靠事务级 advisory lock 把「复核 + 插入」串起来。
+    const first = await newChatRow(conversationId, seller)
+    const second = await newChatRow(conversationId, seller)
+
+    const inserted = await Promise.all([
+      store.insertChatDeliveries([first], throttleSince),
+      store.insertChatDeliveries([second], throttleSince),
+    ])
+
+    expect((inserted[0] ?? 0) + (inserted[1] ?? 0)).toBe(1)
+    expect(await chatDeliveryCount(conversationId, seller)).toBe(1)
+  })
+})
+
+describe('findTransactionListingTitles', () => {
+  test('按交易 id 取该交易指向的商品标题（DISPUTE 的 payload 只有 transactionId）', async () => {
+    const seller = await newUser('卖家')
+    const buyer = await newUser('买家')
+    const listingId = await newListing(seller, '九成新自行车')
+    const transactionId = crypto.randomUUID()
+    await db
+      .insert(transactions)
+      .values({ id: transactionId, listingId, buyerId: buyer, sellerId: seller, amountCents: 9900 })
+    createdTransactions.push(transactionId)
+
+    const titles = await store.findTransactionListingTitles([
+      transactionId,
+      // 脏值不该让整批查询抛 22P02（与 findListingTitles 同口径）
+      'not-a-uuid',
+    ])
+
+    expect(titles.get(transactionId)).toBe('九成新自行车')
+    expect(titles.size).toBe(1)
+  })
+})
+
+/**
+ * 「发送前先提交 SENDING」（#511 审查 high）：发送与记账不能共用一个事务 ——
+ * 上游已经收到、本地事务回滚（进程被强杀）会让重启后同一条被再发一次。
+ * 这几条用例钉住新状态机的两端：占位在发送前就可见，没发出去的尝试不扣额度，
+ * 中途死掉留下的 `SENDING` 一行既不重发也不留在待发队列里。
+ */
+describe('attemptDelivery：SENDING 占位与中断清扫', () => {
+  test('发送之前行已提交成 SENDING：进程死在途中也不会重发', async () => {
+    const me = await newUser()
+    await store.addAcceptedGrants(me, ['TX'], 50)
+    const id = await newDelivery(me)
+
+    const statusesDuringSend: string[] = []
+    const outcome = await store.attemptDelivery(id, new Date(), async () => {
+      // 用另一个连接读库：能读到 SENDING，说明它是在调微信之前就提交的
+      statusesDuringSend.push((await deliveryRow(id)).status)
+      return { ok: true }
+    })
+
+    expect(outcome).toEqual({ outcome: 'sent' })
+    expect(statusesDuringSend).toEqual(['SENDING'])
+    expect((await deliveryRow(id)).status).toBe('SENT')
+  })
+
+  test('没发出去的尝试不扣额度：可重试失败后预扣退回', async () => {
+    const me = await newUser()
+    await store.addAcceptedGrants(me, ['TX'], 50) // 只有 1 次
+    const id = await newDelivery(me)
+
+    await store.attemptDelivery(id, new Date(), async () => ({
+      ok: false,
+      reason: 'retryable',
+      detail: 'timeout',
+    }))
+
+    // 预扣了 1 次又退回：一次也没发出去，额度不该少
+    expect((await store.readRemaining(me)).TX).toBe(1)
+  })
+
+  test('发送中断的孤儿行：超时后判 FAILED(interrupted)，且永不重发', async () => {
+    const me = await newUser()
+    await store.addAcceptedGrants(me, ['TX'], 50)
+    const id = await newDelivery(me)
+    // 模拟"发到一半进程被强杀"：行停在 SENDING，updated_at 是很久以前
+    await db
+      .update(subscribeMessageDeliveries)
+      .set({ status: 'SENDING', updatedAt: new Date(Date.now() - 10 * 60 * 1000) })
+      .where(eq(subscribeMessageDeliveries.id, id))
+
+    const abandoned = await store.abandonStaleSending(
+      new Date(),
+      new Date(Date.now() - 2 * 60 * 1000),
+    )
+    expect(abandoned).toBeGreaterThanOrEqual(1)
+
+    const row = await deliveryRow(id)
+    expect(row.status).toBe('FAILED')
+    expect(row.lastError).toBe('interrupted')
+
+    // 「不重发」的两半：既不在待发列表里，直接尝试也只能是 gone
+    expect((await store.listPendingDeliveryIds(new Date(), 500)).includes(id)).toBe(false)
+    let sends = 0
+    expect(
+      await store.attemptDelivery(id, new Date(), async () => {
+        sends += 1
+        return { ok: true }
+      }),
+    ).toEqual({ outcome: 'gone' })
+    expect(sends).toBe(0)
+  })
+
+  test('刚进入发送的行不被清扫：阈值只覆盖确实死掉的', async () => {
+    const me = await newUser()
+    const id = await newDelivery(me)
+    await db
+      .update(subscribeMessageDeliveries)
+      .set({ status: 'SENDING' })
+      .where(eq(subscribeMessageDeliveries.id, id))
+
+    await store.abandonStaleSending(new Date(), new Date(Date.now() - 2 * 60 * 1000))
+
+    expect((await deliveryRow(id)).status).toBe('SENDING')
   })
 })

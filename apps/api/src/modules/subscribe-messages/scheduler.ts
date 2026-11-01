@@ -28,10 +28,15 @@ import {
  * 1. **登记**（不动现有写入点）：把 `notifications` 里新产生的 TX / DISPUTE / MODERATION /
  *    ACCOUNT 通知、以及「对方发来 60 秒还没读」的聊天消息，按映射写成投递行。
  *    去重靠 `(source_type, source_id, recipient_id)` 唯一键 + `ON CONFLICT DO NOTHING`，
- *    所以这一轮扫到重复的、进程重启后重扫的都只会留一行。
- * 2. **发送**：取到点待发的行，逐条在事务里"占行 → 校验额度 → 调微信 → 落状态"。
+ *    所以这一轮扫到重复的、进程重启后重扫的都只会留一行。聊天另有一层：限频维度是
+ *    「会话 × 收件人」，候选在 SQL 里按会话去重、插入在 advisory lock 内复核（见
+ *    `store.ts` 的 `insertChatDeliveries`）——同会话两条未读消息只推一条，多实例并发也不会各推一条。
+ * 2. **发送**：取到点待发的行，逐条"占位并提交 SENDING（含额度预扣）→ 调微信 → 落状态"。
+ *    调用上游**不在事务里**，见 `store.attemptDelivery` 的注释。
  * 3. **永不影响业务**：整个 `runOnce` 不抛异常，任何一步失败只记脱敏日志（不含 openid /
  *    token / 消息内容）。交易与站内通知早已落库，投递只是站外提醒。
+ * 4. **停机等它收口**：`stop()` 先关掉"开新工作"的入口，再等最多 `STOP_TIMEOUT_MS` 让在途
+ *    那条落定（`index.ts` 里 `await` 之后才退出），否则会出现"微信已发、本地没记"。
  *
  * ## 窗口为什么都是有界的
  *
@@ -55,6 +60,12 @@ export const CHAT_UNREAD_DELAY_MS = 60_000
 /** CHAT 的限频窗口：同一「会话 × 收件人」30 分钟内最多推 1 条（Owner 冻结口径）。 */
 export const CHAT_THROTTLE_MS = 30 * 60 * 1000
 
+/** 「发送中」超过多久算"发这条的进程已经死了"（见 `store.abandonStaleSending`）。 */
+export const SENDING_ABANDON_AFTER_MS = 2 * 60 * 1000
+
+/** 停机时最多等多久让在途那条落定（见 `stop()`）。 */
+export const STOP_TIMEOUT_MS = 20_000
+
 /** 每轮最多登记多少条来源（防止一次启动把整表扫进内存）。 */
 const REGISTER_BATCH = 100
 
@@ -64,6 +75,8 @@ const SEND_BATCH = 10
 export type SubscribeSchedulerRun = {
   /** 本轮新登记的投递行数（去重后真正插入的）。 */
   registered: number
+  /** 本轮被判成"发送中断、不再重发"的孤儿行数（正常应为 0）。 */
+  abandoned: number
   sent: number
   skipped: number
   failed: number
@@ -73,8 +86,14 @@ export type SubscribeSchedulerRun = {
 export type SubscribeMessageScheduler = {
   /** 启动循环。能力关闭时只记一行日志、不建定时器（可重复调用，幂等）。 */
   start(): void
-  /** 停止循环（进程退出时由 `index.ts` 调）。可重复调用。 */
-  stop(): void
+  /**
+   * 停止循环并等在途那一轮收口（进程退出时由 `index.ts` 调，需 `await`）。可重复调用。
+   *
+   * 为什么要等（#511 审查 high）：`setInterval` 的回调里可能正有一条投递在调微信。
+   * 清掉定时器就 `process.exit()` 会让"微信已收到、本地还没提交 SENT"成为事实，重启后
+   * 同一条会被再发一次。等它有上限（`STOP_TIMEOUT_MS`），免得上游卡死拖住停机。
+   */
+  stop(): Promise<void>
   /** 跑一轮（测试与手工触发用；循环每 `intervalMs` 调一次）。**不抛异常**。 */
   runOnce(): Promise<SubscribeSchedulerRun>
 }
@@ -86,6 +105,8 @@ export function createSubscribeMessageScheduler(deps: {
   capability: SubscribeMessageCapability
   now?: () => Date
   intervalMs?: number
+  /** 注入点：单测把停机等待压到毫秒级。 */
+  stopTimeoutMs?: number
   /** 注入点：单测接管日志，避免往 stdout 里写噪声。 */
   log?: (message: string, detail?: unknown) => void
   store?: SubscribeMessageStore
@@ -93,16 +114,25 @@ export function createSubscribeMessageScheduler(deps: {
   const store = deps.store ?? createSqlSubscribeMessageStore(deps.db)
   const now = deps.now ?? (() => new Date())
   const intervalMs = deps.intervalMs ?? SUBSCRIBE_SCHEDULER_INTERVAL_MS
+  const stopTimeoutMs = deps.stopTimeoutMs ?? STOP_TIMEOUT_MS
   const log = deps.log ?? ((message: string) => console.error(message))
 
   let timer: ReturnType<typeof setInterval> | null = null
   let running = false
+  /** 在途那一轮（`stop()` 要等它收口）。 */
+  let inFlight: Promise<SubscribeSchedulerRun> | null = null
+  /** 已进入停机流程：不再开新的上游调用。 */
+  let stopping = false
 
   /**
    * 登记通知来源。返回新插入的行数。
    *
-   * 一次批量取标题再统一映射：`payload` 里只有商品 UUID，逐条查标题会变成 N+1；
+   * 一次批量取标题再统一映射：`payload` 里只有 UUID，逐条查标题会变成 N+1；
    * 而列表里的商品标题是**渲染时**的快照（见 schema 注释）。
+   *
+   * 标题有**两个来源**，因为两种 payload 形状不同：
+   * - `TX` 自带 `listingId` → 直接按商品查；
+   * - `DISPUTE` 只有 `transactionId`（生产者 `app.ts` 的 `notifyDispute`）→ 按交易 join 商品。
    */
   async function registerNotifications(at: Date): Promise<number> {
     const since = new Date(at.getTime() - NOTIFICATION_LOOKBACK_MS)
@@ -112,10 +142,16 @@ export function createSubscribeMessageScheduler(deps: {
     const listingIds = sources
       .map((source) => source.payload.listingId)
       .filter((id): id is string => typeof id === 'string')
-    const titles = await store.findListingTitles(listingIds)
+    const transactionIds = sources
+      .map((source) => source.payload.transactionId)
+      .filter((id): id is string => typeof id === 'string')
+    const [titles, transactionTitles] = await Promise.all([
+      store.findListingTitles(listingIds),
+      store.findTransactionListingTitles(transactionIds),
+    ])
 
     const rows = sources.flatMap((source) => {
-      const content = renderNotification(source, titles)
+      const content = renderNotification(source, titles, transactionTitles)
       if (content === null) return []
       return [
         {
@@ -137,14 +173,20 @@ export function createSubscribeMessageScheduler(deps: {
   function renderNotification(
     source: NotificationDeliverySource,
     titles: Map<string, string>,
+    transactionTitles: Map<string, string>,
   ): SubscribeDeliveryContent | null {
     const listingId = source.payload.listingId
+    const transactionId = source.payload.transactionId
     return notificationDeliveryContent({
       type: source.type,
       payload: source.payload,
       createdAt: source.createdAt,
-      listingTitle: typeof listingId === 'string' ? (titles.get(listingId) ?? null) : null,
-      transactionId: tryEncode(PUBLIC_ID_PREFIX.transaction, source.payload.transactionId),
+      // `DISPUTE` 没有 `listingId`：退到「这条交易指向的商品」，否则永远是兜底占位。
+      listingTitle:
+        (typeof listingId === 'string' ? titles.get(listingId) : undefined) ??
+        (typeof transactionId === 'string' ? transactionTitles.get(transactionId) : undefined) ??
+        null,
+      transactionId: tryEncode(PUBLIC_ID_PREFIX.transaction, transactionId),
       conversationId: tryEncode(PUBLIC_ID_PREFIX.conversation, source.payload.conversationId),
       listingId: tryEncode(PUBLIC_ID_PREFIX.listing, listingId),
     })
@@ -152,16 +194,21 @@ export function createSubscribeMessageScheduler(deps: {
 
   /** 登记聊天未读来源，返回新插入的行数。 */
   async function registerChat(at: Date): Promise<number> {
+    const throttleSince = new Date(at.getTime() - CHAT_THROTTLE_MS)
     const sources = await store.listChatSources({
       since: new Date(at.getTime() - CHAT_LOOKBACK_MS),
       unreadBefore: new Date(at.getTime() - CHAT_UNREAD_DELAY_MS),
-      throttleSince: new Date(at.getTime() - CHAT_THROTTLE_MS),
+      throttleSince,
       limit: REGISTER_BATCH,
     })
     if (sources.length === 0) return 0
 
-    const rows = sources.map((source) => chatRow(source))
-    return store.insertDeliveries(rows)
+    // 限频的维度是「会话 × 收件人」：候选已按会话去重（见 `listChatSources`），
+    // 插之前在锁内再复核一次窗口，多实例同时扫到同一批也不会各插一条。
+    return store.insertChatDeliveries(
+      sources.map((source) => chatRow(source)),
+      throttleSince,
+    )
   }
 
   function chatRow(source: ChatDeliverySource) {
@@ -187,13 +234,17 @@ export function createSubscribeMessageScheduler(deps: {
   }
 
   /** 发一批到点的行。逐条独立事务：一条失败不影响其余。 */
-  async function sendPending(at: Date): Promise<Omit<SubscribeSchedulerRun, 'registered'>> {
+  async function sendPending(
+    at: Date,
+  ): Promise<Omit<SubscribeSchedulerRun, 'registered' | 'abandoned'>> {
     const counts = { sent: 0, skipped: 0, failed: 0, retry: 0 }
     const client = deps.client
     if (client === null) return counts
 
     const ids = await store.listPendingDeliveryIds(at, SEND_BATCH)
     for (const id of ids) {
+      // 停机中：**不再开新的上游调用**，让在途这一条落定后收口（见 `stop()`）。
+      if (stopping) break
       try {
         const result = await store.attemptDelivery(id, at, async (delivery) => {
           // 发之前的两道本地门禁：没有微信身份、或该 kind 的模板在本次发版后被摘掉。
@@ -224,38 +275,62 @@ export function createSubscribeMessageScheduler(deps: {
     return counts
   }
 
+  /** 一轮的实际工作（`runOnce` 负责单飞与在途登记）。 */
+  async function runRound(): Promise<SubscribeSchedulerRun> {
+    const at = now()
+
+    // ⓪ 先收拾"发送中"的孤儿行：上一个进程发到一半死了，结果不确定，**不重发**。
+    let abandoned = 0
+    try {
+      abandoned = await store.abandonStaleSending(
+        at,
+        new Date(at.getTime() - SENDING_ABANDON_AFTER_MS),
+      )
+      if (abandoned > 0) log(`[api] 订阅消息：${abandoned} 条发送中断的行按放弃处理（不重发）`)
+    } catch (error) {
+      log('[api] 订阅消息清理发送中断行失败', error instanceof Error ? error.name : 'unknown')
+    }
+
+    let registered = 0
+    // 两段登记各自独立：聊天那边查挂了不该让通知也停摆。
+    try {
+      registered += await registerNotifications(at)
+    } catch (error) {
+      log('[api] 订阅消息登记通知失败', error instanceof Error ? error.name : 'unknown')
+    }
+    try {
+      registered += await registerChat(at)
+    } catch (error) {
+      log('[api] 订阅消息登记聊天失败', error instanceof Error ? error.name : 'unknown')
+    }
+
+    const sent = await sendPending(at)
+    return { registered, abandoned, ...sent }
+  }
+
   async function runOnce(): Promise<SubscribeSchedulerRun> {
     const empty: SubscribeSchedulerRun = {
       registered: 0,
+      abandoned: 0,
       sent: 0,
       skipped: 0,
       failed: 0,
       retry: 0,
     }
     if (deps.client === null || !deps.capability.enabled) return empty
+    // 已进入停机流程：不再开新一轮（在途那一轮由 `stop()` 等）。
+    if (stopping) return empty
     // 单飞：上一轮还没跑完（比如一批超时累积）就跳过这一轮，避免并发 tick 抢同一批行。
     if (running) return empty
     running = true
 
+    const task = runRound()
+    inFlight = task
     try {
-      const at = now()
-      let registered = 0
-      // 两段登记各自独立：聊天那边查挂了不该让通知也停摆。
-      try {
-        registered += await registerNotifications(at)
-      } catch (error) {
-        log('[api] 订阅消息登记通知失败', error instanceof Error ? error.name : 'unknown')
-      }
-      try {
-        registered += await registerChat(at)
-      } catch (error) {
-        log('[api] 订阅消息登记聊天失败', error instanceof Error ? error.name : 'unknown')
-      }
-
-      const sent = await sendPending(at)
-      return { registered, ...sent }
+      return await task
     } finally {
       running = false
+      if (inFlight === task) inFlight = null
     }
   }
 
@@ -266,6 +341,7 @@ export function createSubscribeMessageScheduler(deps: {
         return
       }
       if (timer !== null) return
+      stopping = false
       timer = setInterval(() => {
         // `runOnce` 自己吞异常，但定时器回调里仍兜一层：任何漏网异常不该打死进程。
         void runOnce().catch((error: unknown) => {
@@ -277,10 +353,23 @@ export function createSubscribeMessageScheduler(deps: {
       log(`[api] 微信订阅消息投递循环已启动（每 ${Math.round(intervalMs / 1000)} 秒一轮）`)
     },
 
-    stop() {
-      if (timer === null) return
-      clearInterval(timer)
-      timer = null
+    async stop() {
+      // ① 先关掉"开新工作"的两个入口：定时器，以及正在跑的那一轮里的下一批发送。
+      stopping = true
+      if (timer !== null) {
+        clearInterval(timer)
+        timer = null
+      }
+      // ② 再等在途那一轮收口（有上限）。在途那条投递可能已经把请求发到微信了，
+      //    这时候直接退出就是"发了没记"，重启后会重复发。
+      const task = inFlight
+      if (task === null) return
+      await Promise.race([
+        task.catch((error: unknown) => {
+          log('[api] 订阅消息停机等待轮次异常', error instanceof Error ? error.name : 'unknown')
+        }),
+        Bun.sleep(stopTimeoutMs),
+      ])
     },
 
     runOnce,

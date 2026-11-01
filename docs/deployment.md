@@ -387,12 +387,18 @@ WECHAT_SUBSCRIBE_TMPL_REVIEW=mskwaeWwNkJnu9_qG_7sBrh50Qe2pvr5URzQa2vgfVo
 REVIEW：`thing2/phrase1/date3/thing7`）；**换模板就要改代码**，运维只改 ID 是发不出去的
 （字段对不上，微信回 `47003`，投递行转 `FAILED`，`last_errcode` 记 47003）。
 
-投递循环跑在 **API 进程**里（15 秒一轮，随 `Bun.serve` 一起 `start()`，SIGINT/SIGTERM 时 `stop()`），
-不占 worker 的常驻名额——它复用 API 已有的 `createWechatAccessTokenService`（那是唯一的
-access_token 缓存），另起一份会互相打 `40001`。滚动重启时最坏丢 15 秒的一轮登记，下一轮会补上
-（登记按「来源 × 收件人」唯一键去重，重启重扫不会重复推送）。额度是**一次性订阅**：
+投递循环跑在 **API 进程**里（15 秒一轮，随 `Bun.serve` 一起 `start()`；SIGINT/SIGTERM 时
+`await stop()`，最多等 20 秒让在途那条落定），不占 worker 的常驻名额——它复用 API 已有的
+`createWechatAccessTokenService`（那是唯一的 access_token 缓存），另起一份会互相打 `40001`。
+滚动重启时最坏丢 15 秒的一轮登记，下一轮会补上（登记按「来源 × 收件人」唯一键去重，重启重扫
+不会重复推送；聊天另按「会话 × 收件人」30 分钟内最多 1 条限频）。额度是**一次性订阅**：
 用户在端上每「允许」一次该 kind +1（封顶 50），每发出一条 -1，为 0 时不发并把投递行标成
-`SKIPPED`（`last_error=no_quota`）。查失败原因：
+`SKIPPED`（`last_error=no_quota`）。
+
+**发送前会先把该行提交成 `SENDING`**（微信调用不在数据库事务里），所以进程被强杀时留下的
+`SENDING` 行下一轮会被判成 `FAILED`（`last_error=interrupted`）并**不再重发** —— 那种情况下
+我们无法确定微信是否已经收到，宁可漏一条也不让用户收到两条一模一样的提醒（那一次预留的额度
+也不退回）。查到 `interrupted` 只是"发送中断"，不是微信拒收。查失败原因：
 `SELECT kind, status, attempts, last_errcode, last_error FROM subscribe_message_deliveries
 WHERE status <> 'SENT' ORDER BY created_at DESC LIMIT 50;`（这张表只有脱敏原因，没有 openid、
 token 与消息正文）。

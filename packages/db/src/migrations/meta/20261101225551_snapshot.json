@@ -1,5 +1,5 @@
 {
-  "id": "332589ac-c900-4b63-a932-f4d0c835af30",
+  "id": "6eb8e973-b02a-446b-acd9-2afa457499b6",
   "prevId": "770f5992-cf36-4350-b225-2dd40daa5532",
   "version": "7",
   "dialect": "postgresql",
@@ -5910,6 +5910,22 @@
           "method": "btree",
           "with": {}
         },
+        "subscribe_message_deliveries_sending_idx": {
+          "name": "subscribe_message_deliveries_sending_idx",
+          "columns": [
+            {
+              "expression": "updated_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"subscribe_message_deliveries\".\"status\" = 'SENDING'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "subscribe_message_deliveries_chat_throttle_idx": {
           "name": "subscribe_message_deliveries_chat_throttle_idx",
           "columns": [
@@ -5960,7 +5976,7 @@
       "checkConstraints": {
         "subscribe_message_deliveries_status_values": {
           "name": "subscribe_message_deliveries_status_values",
-          "value": "\"subscribe_message_deliveries\".\"status\" IN ('PENDING', 'SENT', 'FAILED', 'SKIPPED')"
+          "value": "\"subscribe_message_deliveries\".\"status\" IN ('PENDING', 'SENDING', 'SENT', 'FAILED', 'SKIPPED')"
         }
       },
       "isRLSEnabled": false

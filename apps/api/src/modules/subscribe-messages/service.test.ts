@@ -27,10 +27,16 @@ function fakeStore(initial: Partial<SubscribeRemaining> = {}) {
     async insertDeliveries() {
       throw new Error('不该被调用')
     },
+    async insertChatDeliveries() {
+      throw new Error('不该被调用')
+    },
     async listNotificationSources() {
       throw new Error('不该被调用')
     },
     async findListingTitles() {
+      throw new Error('不该被调用')
+    },
+    async findTransactionListingTitles() {
       throw new Error('不该被调用')
     },
     async listChatSources() {
@@ -40,6 +46,9 @@ function fakeStore(initial: Partial<SubscribeRemaining> = {}) {
       throw new Error('不该被调用')
     },
     async attemptDelivery() {
+      throw new Error('不该被调用')
+    },
+    async abandonStaleSending() {
       throw new Error('不该被调用')
     },
     async findOpenid() {

@@ -99,14 +99,19 @@ console.log(`[api] listening on http://localhost:${server.port}`)
  * 投递循环在监听之后启动（#462）：它每轮都会打数据库，起得比 `Bun.serve` 早只会让"启动日志"
  * 与实际可服务时刻错位。能力未开通时 `start()` 只记一行日志、不建定时器。
  *
- * 退出必须显式 `stop()`：`setInterval` 会一直挂在事件循环上，SIGTERM 后进程本可以退出，
- * 却因为定时器还在而拖到平台强杀（且下一轮可能正在发消息）。SIGINT/SIGTERM 都按 0 退出，
- * 部署侧的滚动重启因此不会把"正常停机"记成失败。
+ * 退出必须显式 `stop()` **并等它返回**（#511 审查 high）：`setInterval` 会一直挂在事件循环上，
+ * SIGTERM 后进程本可以退出，却因为定时器还在而拖到平台强杀；而清掉定时器就 `process.exit()`
+ * 更糟 —— 那一轮可能正有一条投递在调微信，微信收到了、本地事务还没提交，重启后同一条会被
+ * 再发一次。`stop()` 因此是异步的：它关掉"开新工作"的入口，再等最多 `STOP_TIMEOUT_MS` 让
+ * 在途那条落定。SIGINT/SIGTERM 都按 0 退出，部署侧的滚动重启不会把"正常停机"记成失败。
  */
 lifecycle.subscribeScheduler?.start()
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    lifecycle.subscribeScheduler?.stop()
-    process.exit(0)
+    void (lifecycle.subscribeScheduler?.stop() ?? Promise.resolve())
+      .catch((error: unknown) => {
+        console.error('[api] 停机时停止订阅消息循环失败', error)
+      })
+      .finally(() => process.exit(0))
   })
 }
