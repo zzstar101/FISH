@@ -18,6 +18,7 @@ import {
   type AccountDeletionStatus,
   AccountDeletionStatusSchema,
 } from '@fish/contracts/account-deletion/schema'
+import { type PhoneBindResponse, PhoneBindResponseSchema } from '@fish/contracts/auth/phone'
 import { AuthResponseSchema } from '@fish/contracts/auth/session'
 import type { Me } from '@fish/contracts/auth/user'
 import { WechatSessionResponseSchema } from '@fish/contracts/auth/wechat'
@@ -50,6 +51,22 @@ export async function logout(): Promise<void> {
 export async function wechatSignIn(code: string): Promise<Me> {
   const payload = await apiRequest('/auth/wechat/session', { method: 'POST', body: { code } })
   return WechatSessionResponseSchema.parse(payload).user
+}
+
+/**
+ * 手机号绑定（#204）：只上报 `<Button open-type="getPhoneNumber">` 给的一次性 `code`。
+ *
+ * 契约冻结（`packages/contracts/src/auth/phone.ts`）：`encryptedData` / `iv` / 明文号码
+ * **不出端**，服务端拿 code 调微信 `getuserphonenumber` 换号，只回派生态 `maskedPhone`。
+ * 已绑定时再调一次是**覆盖**（换绑），不是冲突。
+ * 错误码原样透出由设置页翻译（`./phone` 的 `phoneBindFailureMessage`）：422
+ * `PHONE_CODE_INVALID` / 422 `PHONE_NUMBER_UNSUPPORTED` / 409 `PHONE_ALREADY_BOUND` /
+ * 502 `PHONE_UPSTREAM_FAILED` / 503 `WECHAT_DISABLED`。
+ */
+export async function bindPhone(code: string): Promise<PhoneBindResponse> {
+  return PhoneBindResponseSchema.parse(
+    await apiRequest('/auth/phone/bind', { method: 'POST', body: { code } }),
+  )
 }
 
 /**

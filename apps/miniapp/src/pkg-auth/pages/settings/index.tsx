@@ -1,11 +1,25 @@
 import { ACCOUNT_DELETION_COOLING_OFF_DAYS } from '@fish/contracts/account-deletion/schema'
-import { Image, Text, View } from '@tarojs/components'
+import { Button, Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll } from '@tarojs/taro'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
+import { bindPhone } from '@/features/auth/api'
 import { useAuthGuard } from '@/features/auth/guard'
-import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
+import {
+  type PhoneAuthDetail,
+  phoneAuthHint,
+  phoneBindFailureMessage,
+  readPhoneAuthResult,
+  runPhoneBind,
+} from '@/features/auth/phone'
+import {
+  applyPhoneBinding,
+  authSnapshot,
+  clearLocalSession,
+  revokeServerSession,
+  useAuth,
+} from '@/features/auth/store'
 import type { NotifyKey } from '@/features/settings/preferences'
 import {
   COMMENT_POLICIES,
@@ -16,6 +30,8 @@ import {
 } from '@/features/settings/preferences'
 import { NOTIFY_PREFS_EVENT } from '@/features/settings/unread-badge'
 import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
+import { isApiError } from '@/lib/request'
+import { sessionEpoch } from '@/lib/session'
 import { settings } from '@/lib/settings-defaults'
 import type { MockSettings } from '@/mock/types'
 import './index.scss'
@@ -37,6 +53,10 @@ import './index.scss'
  *
  * **账号信息与退出登录是真实登录态**：账号行读 `features/auth/store` 的当前用户，
  * 退出走 `POST /auth/logout` 并清本地会话（原先两处都是占位）。
+ *
+ * **手机号绑定（#204）也在这张卡里**：Owner 定的入口是设置页的账号组。授权走原生
+ * `<Button open-type="getPhoneNumber">`（只把一次性 code 交给后端，明文号码不出端），
+ * 逻辑在 `features/auth/phone`；已绑定时同一按钮再授权即换绑。
  */
 
 /** `getStorageSync` 只能在端上跑；读取失败（低版本禁用存储等）视为「没存过」 */
@@ -56,6 +76,13 @@ type NotifyRow = {
   set: (value: boolean) => void
   icon: string
 }
+
+/**
+ * `onGetPhoneNumber` 的事件收窄：Taro 的类型按「成功」声明（`encryptedData` / `iv` 是
+ * required），但用户拒绝授权时 detail 只有 `errMsg`、没有 code，所以只声明真正会读的字段
+ * （同 `pkg-auth/pages/profile-edit` 里 `ChooseAvatarEvent` 的做法）。
+ */
+type PhoneNumberEvent = { detail: PhoneAuthDetail }
 
 export default function Settings() {
   // 设置页展示的是账号信息，未登录不该停留在这里（守卫只管跳转，页面继续渲染）
@@ -106,6 +133,81 @@ export default function Settings() {
   }
 
   const toast = (title: string) => void Taro.showToast({ title, icon: 'none' })
+
+  /**
+   * 手机号绑定（#204）的三个渲染态。
+   *
+   * `binding` 负责把按钮画成「绑定中…」，`bindingRef` 才是真正的防连点闸门：
+   * `setState` 是异步的，同一帧里两次点击都会读到旧的 `binding`，于是同一份 code 被提交
+   * 两次 —— 微信 code 一次性，第二次必然 422，用户会看到一个多余的报错。ref 是同步的。
+   */
+  const [binding, setBinding] = useState(false)
+  const bindingRef = useRef(false)
+  const phoneBound = user?.phoneBound === true
+  const maskedPhone = user?.maskedPhone ?? null
+  const phoneValue = phoneBound ? (maskedPhone ?? '已绑定') : '未绑定'
+  /** 已绑定也能再授权 —— 后端语义是**覆盖**，即换绑 */
+  const bindLabel = binding ? '绑定中…' : phoneBound ? '换绑' : '绑定'
+
+  /**
+   * 手机号授权回调。
+   *
+   * 只把 `detail.code` 交给后端：`encryptedData` / `iv` / 明文号码既不读也不上报
+   * （契约 `packages/contracts/src/auth/phone.ts`）。用户拒绝授权时回调里没有 code，
+   * 只带 `errMsg` —— 那时轻提示一句就行，不当成错误（后端一次都没被调用）。
+   *
+   * 隐私：`open-type="getPhoneNumber"` 本身就是隐私接口，未同意《用户隐私保护指引》时
+   * 微信会**自己**弹官方弹窗，所以这里不接自定义 `agreePrivacyAuthorization`
+   * （全仓都没有自定义隐私弹窗，见 `@/lib/privacy`；后台需声明隐私保护指引，不声明时平台不拦）。
+   */
+  const onGetPhoneNumber = (event: PhoneNumberEvent) => {
+    const auth = readPhoneAuthResult(event.detail)
+    if (auth.kind !== 'code') {
+      toast(phoneAuthHint(auth))
+      return
+    }
+    // 没有登录账号就没有「把手机号绑给谁」，不发请求（守卫会把页面跳去登录页）
+    const ownerId = user?.id ?? null
+    if (ownerId === null) return
+    if (bindingRef.current) return
+    bindingRef.current = true
+    setBinding(true)
+    // 已经绑过 → 这次是换绑（后端覆盖语义），提示词要说准，别报「已绑定」
+    const rebinding = phoneBound
+    const ticket = { ownerId, epoch: sessionEpoch() }
+    void (async () => {
+      try {
+        const outcome = await runPhoneBind(
+          { ticket, code: auth.code },
+          {
+            bindPhone,
+            // 读**当前**会话（不是发起时那份）：请求飞行途中用户可能已退出 / 换号
+            session: () => ({ ownerId: authSnapshot().user?.id ?? null, epoch: sessionEpoch() }),
+          },
+        )
+        // 会话已变：这趟结果属于上一个账号，既不写 store 也不提示
+        if (outcome.kind === 'aborted') return
+        if (outcome.kind === 'failed') {
+          toast(
+            phoneBindFailureMessage(
+              isApiError(outcome.error)
+                ? { code: outcome.error.code, message: outcome.error.message }
+                : null,
+            ),
+          )
+          return
+        }
+        applyPhoneBinding(outcome.ownerId, {
+          phoneBound: true,
+          maskedPhone: outcome.maskedPhone,
+        })
+        toast(rebinding ? '手机号已换绑' : '手机号已绑定')
+      } finally {
+        bindingRef.current = false
+        setBinding(false)
+      }
+    })()
+  }
 
   const onLogout = () => {
     if (loggingOut) return
@@ -205,6 +307,25 @@ export default function Settings() {
             <Text className="st__rlabel">教育邮箱</Text>
             <Text className="st__rvalue">{verified ? '已验证' : '去验证'}</Text>
             <View className="st__arrow" />
+          </View>
+
+          {/* 手机号（#204）：这里必须是原生 <Button> —— `open-type="getPhoneNumber"`
+              只能挂在 button 上，普通 View + onClick 拿不到微信的一次性 code。
+              未绑定时点它授权绑定；已绑定时同一个按钮再点一次是换绑（后端覆盖）。 */}
+          <View className="st__row">
+            <View className="st__ric">
+              <Image className="st__ric-ic" src={ICONS.serviceMuted} mode="aspectFit" />
+            </View>
+            <Text className="st__rlabel">手机号</Text>
+            <Text className="st__rvalue">{phoneValue}</Text>
+            <Button
+              className={`st__bind${binding ? ' is-off' : ''}`}
+              openType="getPhoneNumber"
+              disabled={binding}
+              onGetPhoneNumber={onGetPhoneNumber}
+            >
+              {bindLabel}
+            </Button>
           </View>
         </View>
 
