@@ -1306,9 +1306,14 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
     // 冷静期拦截（#464）问的是**请求进入时**的账号状态，而这条链路中间要等微信上游。
     // 这里在换号那一步把账号改成注销申请态，复现「守卫已放行、写库还没发生」的那个 20s 窗口。
     const { restore } = stubWechat(async () => {
+      // 三态与两个时间戳必须同进同出（users 的 check 约束），否则这条 UPDATE 自己会失败
       await scratch
         .update(users)
-        .set({ accountStatus: 'DELETION_REQUESTED' })
+        .set({
+          accountStatus: 'DELETION_REQUESTED',
+          deletionRequestedAt: new Date(),
+          purgeScheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        })
         .where(eq(users.studentNo, studentNo))
       return new Response(
         JSON.stringify({
