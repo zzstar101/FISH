@@ -80,9 +80,3 @@ export async function reportSubscribeGrants(
     return null
   }
 }
-
-/** 仅测试用：清掉模块级缓存。 */
-export function resetSubscribeConfigCacheForTest(): void {
-  cached = null
-  inFlight = null
-}
