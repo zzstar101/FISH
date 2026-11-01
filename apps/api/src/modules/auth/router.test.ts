@@ -1299,7 +1299,8 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
   })
 
   test('换号途中账号进入冷静期：403 ACCOUNT_DELETION_PENDING，号码一行都没写', async () => {
-    const studentNo = '202101000302'
+    // 学号必须独占：这条用例会把账号留在注销申请态，撞上后面的「code 无效」用例会让它 403
+    const studentNo = '202101000306'
     await register({ studentNo, nickname: '冷静期竞争用户' })
     const cookie = sessionCookie(await login(studentNo))
 
