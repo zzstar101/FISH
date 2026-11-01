@@ -368,7 +368,34 @@ AI_POLISH_TRANSPORT=live
 AI_POLISH_BASE_URL=https://api.deepseek.com
 AI_POLISH_API_KEY=REPLACE_ME_UPSTREAM_KEY
 AI_POLISH_MODEL=deepseek-flash
+
+# #462 微信订阅消息（仅 API 加载；三项都可选，留空 = 该 kind 未开通）
+# 值是「微信公众平台 → 功能 → 订阅消息」里的 priTmplId（43 位），不是模板标题。
+WECHAT_SUBSCRIBE_TMPL_CHAT=dfuovKQoKXQJzo5t3ayKnQvW1ZunS8pwB7X0ZoZzzF8
+WECHAT_SUBSCRIBE_TMPL_TX=31NYOZH2qjoGUp93gRTy3RhOON5fW_RxoOgVHyUex4M
+WECHAT_SUBSCRIBE_TMPL_REVIEW=mskwaeWwNkJnu9_qG_7sBrh50Qe2pvr5URzQa2vgfVo
 ```
+
+**#462 订阅消息**的三项是**可选**的：留空（或整行不写）表示该 kind 未开通，启动不受影响。
+只有 `WECHAT_TRANSPORT=live` **且**对应模板 ID 非空时才真的推送；两个条件缺一个，整个功能关闭
+（端上从 `GET /subscribe-messages/config` 拿到 `null`，因此不会弹授权框；写接口返回
+`503 SUBSCRIBE_MESSAGES_DISABLED`）。模板 ID 形状是 20–64 位 `[A-Za-z0-9_-]`，写错（空格、引号、
+中文占位符）在**启动时**就失败，错误信息只报变量名、不回显值。
+
+模板字段必须与 `apps/api/src/modules/subscribe-messages/templates.ts` 里的键名一一对应
+（CHAT：`thing4/thing2/thing28/time3`，TX：`thing6/phrase3/time8/thing5`，
+REVIEW：`thing2/phrase1/date3/thing7`）；**换模板就要改代码**，运维只改 ID 是发不出去的
+（字段对不上，微信回 `47003`，投递行转 `FAILED`，`last_errcode` 记 47003）。
+
+投递循环跑在 **API 进程**里（15 秒一轮，随 `Bun.serve` 一起 `start()`，SIGINT/SIGTERM 时 `stop()`），
+不占 worker 的常驻名额——它复用 API 已有的 `createWechatAccessTokenService`（那是唯一的
+access_token 缓存），另起一份会互相打 `40001`。滚动重启时最坏丢 15 秒的一轮登记，下一轮会补上
+（登记按「来源 × 收件人」唯一键去重，重启重扫不会重复推送）。额度是**一次性订阅**：
+用户在端上每「允许」一次该 kind +1（封顶 50），每发出一条 -1，为 0 时不发并把投递行标成
+`SKIPPED`（`last_error=no_quota`）。查失败原因：
+`SELECT kind, status, attempts, last_errcode, last_error FROM subscribe_message_deliveries
+WHERE status <> 'SENT' ORDER BY created_at DESC LIMIT 50;`（这张表只有脱敏原因，没有 openid、
+token 与消息正文）。
 
 `SMTP_PASS` 是飞书邮箱后台为该账号生成的 **SMTP 专用密码**，不是登录密码。`SMTP_PORT` /
 `SMTP_SECURE` 可省略（默认 465 / true）；只支持隐式 TLS，不支持 587 STARTTLS；`SMTP_SECURE=false`
