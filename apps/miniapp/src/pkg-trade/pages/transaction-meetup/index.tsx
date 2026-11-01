@@ -9,6 +9,7 @@ import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { requestSubscribe } from '@/features/subscribe/request'
 import {
   confirmTransaction,
   fetchMeetupTokenStatus,
@@ -371,6 +372,8 @@ export default function TransactionMeetup() {
     if (!canAcquire(submitLock.current, epoch)) return
     submitLock.current = epoch
     writeSeq.current += 1
+    // #462：确认交易（核销后自动 confirm）时请求 TX 订阅授权；不 await，失败不影响确认。
+    void requestSubscribe(['TX'])
     setSubmitting(true)
     setInputError('')
     // 核验态：核销请求在飞期间页面只显示一个转圈（稿 ③）
@@ -481,6 +484,8 @@ export default function TransactionMeetup() {
     if (!tx || !canAcquire(submitLock.current, epoch)) return
     submitLock.current = epoch
     writeSeq.current += 1
+    // #462：重试确认同样是「确认交易」这个动作，也要一个 TX 授权（不 await）。
+    void requestSubscribe(['TX'])
     setSubmitting(true)
     try {
       const dto = await confirmTransaction(tx.id)

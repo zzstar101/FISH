@@ -15,6 +15,7 @@ import {
   SETTINGS_STORAGE_KEY,
 } from '@/features/settings/preferences'
 import { NOTIFY_PREFS_EVENT } from '@/features/settings/unread-badge'
+import { requestAllSubscribeKinds } from '@/features/subscribe/request'
 import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
 import { settings } from '@/lib/settings-defaults'
 import type { MockSettings } from '@/mock/types'
@@ -228,6 +229,37 @@ export default function Settings() {
             >
               <View className="st__sw-knob" />
             </View>
+          </View>
+
+          {/*
+            #462 微信订阅消息：**一次请求首批三个模板**（Owner 冻结的授权入口清单里
+            「设置页增加『微信消息提醒』入口，一次请求这三个模板」）。
+
+            与上面那些本地开关是两件事：上面管「站内通知要不要显示」，这里管「微信能不能
+            在站外提醒我」。微信的一次性订阅是"允许一次 = 一条额度"，所以这里是一个动作
+            而不是一个常驻开关 —— 没有"已开启"这个状态可存。
+          */}
+          <View
+            className="st__row"
+            onClick={() => {
+              // 必须在点击回调里同步发起（微信硬约束）：`requestAllSubscribeKinds`
+              // 内部不先 await 任何东西，这里也只在它返回后再处理结果。
+              void requestAllSubscribeKinds().then((result) => {
+                if (result === null) {
+                  toast('微信消息提醒暂未开通')
+                  return
+                }
+                const { CHAT, TX, REVIEW } = result.remaining
+                toast(`微信提醒剩余 ${CHAT + TX + REVIEW} 次`)
+              })
+            }}
+          >
+            <View className="st__ric">
+              <Image className="st__ric-ic" src={ICONS.bellInk} mode="aspectFit" />
+            </View>
+            <Text className="st__rlabel">微信消息提醒</Text>
+            <Text className="st__rvalue">去开启</Text>
+            <View className="st__arrow" />
           </View>
         </View>
 

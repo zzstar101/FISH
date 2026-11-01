@@ -344,6 +344,13 @@
       "when": 1791486903216,
       "tag": "20261009031503_violet_kingpin",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1793544951197,
+      "tag": "20261101225551_modern_pride",
+      "breakpoints": true
     }
   ]
 }

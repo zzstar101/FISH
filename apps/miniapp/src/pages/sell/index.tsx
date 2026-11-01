@@ -16,6 +16,7 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { createListing, fetchListingDetail, updateListing } from '@/features/listing/api'
 import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
+import { requestSubscribe } from '@/features/subscribe/request'
 import { pickPhotos, uploadListingImage } from '@/features/upload/api'
 import { cancellable } from '@/lib/cancellable'
 import { categoryLabel } from '@/lib/listing-labels'
@@ -603,6 +604,9 @@ export default function Sell() {
     const ownerId = ownerRef.current
     if (!ownerId) return
     const task = beginTask(epochRef.current, ownerId)
+    // #462：发布 / 编辑商品提交时请求 REVIEW 订阅授权（审核结果站外可达）。不 await：
+    // 用户拒绝授权照样能把商品发出去，审核结果仍在站内通知里。
+    void requestSubscribe(['REVIEW'])
     setSubmitting(true)
     setFieldErrors({})
     setBlockMessage('')

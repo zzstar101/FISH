@@ -17,6 +17,10 @@ import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
 import { sessions } from '@fish/db/schema/sessions'
+import {
+  subscribeMessageDeliveries,
+  subscribeMessageGrants,
+} from '@fish/db/schema/subscribe-messages'
 import { transactions } from '@fish/db/schema/transactions'
 import { userInterestProfiles } from '@fish/db/schema/user-interest-profiles'
 import { users, wechatIdentities } from '@fish/db/schema/users'
@@ -197,6 +201,20 @@ async function seedPrivateData(seeded: Seeded): Promise<void> {
   await db
     .insert(notifications)
     .values({ id: newId(), userId, type: 'TX', payload: { event: 'ACCEPTED' } })
+  // #462：订阅消息的授权记账（按 user_id）与投递行（按收件人）都属于本人私域数据。
+  await db.insert(subscribeMessageGrants).values([
+    { userId, kind: 'CHAT', remaining: 2 },
+    { userId, kind: 'TX', remaining: 1 },
+  ])
+  await db.insert(subscribeMessageDeliveries).values({
+    id: newId(),
+    sourceType: 'NOTIFICATION',
+    sourceId: newId(),
+    recipientId: userId,
+    kind: 'TX',
+    data: { thing6: '注销验收商品' },
+    page: 'pkg-trade/pages/orders-buy/index',
+  })
   const embedding = new Array<number>(EMBEDDING_DIMENSIONS).fill(0)
   embedding[0] = 1
   await db.insert(userInterestProfiles).values({
@@ -329,6 +347,8 @@ describe('到期去标识化：整份隐私清掉，历史证据留下', () => {
     expect(outcome.counts.follows).toBe(2)
     expect(outcome.counts.wishesClosed).toBe(1)
     expect(outcome.counts.feedbackContactsCleared).toBe(1)
+    expect(outcome.counts.subscribeMessageGrants).toBe(2)
+    expect(outcome.counts.subscribeMessageDeliveries).toBe(1)
 
     // ① 私域数据：一行不留。
     expect(await countSessions(userId)).toBe(0)
@@ -342,6 +362,15 @@ describe('到期去标识化：整份隐私清掉，历史证据留下', () => {
     expect(await db.$count(follows, eq(follows.followingId, userId))).toBe(0)
     expect(await db.$count(listingViewHistory, eq(listingViewHistory.userId, userId))).toBe(0)
     expect(await db.$count(notifications, eq(notifications.userId, userId))).toBe(0)
+    expect(await db.$count(subscribeMessageGrants, eq(subscribeMessageGrants.userId, userId))).toBe(
+      0,
+    )
+    expect(
+      await db.$count(
+        subscribeMessageDeliveries,
+        eq(subscribeMessageDeliveries.recipientId, userId),
+      ),
+    ).toBe(0)
     expect(await db.$count(userInterestProfiles, eq(userInterestProfiles.userId, userId))).toBe(0)
     expect(await db.$count(aiPolishRequests, eq(aiPolishRequests.userId, userId))).toBe(0)
     // 反馈：联系方式清掉，正文留作处理记录。
