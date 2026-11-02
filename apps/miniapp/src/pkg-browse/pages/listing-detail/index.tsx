@@ -236,6 +236,11 @@ function CommentAvatar({
   onOpen: () => void
 }) {
   const [failed, setFailed] = useState(false)
+  // 同一 comment id 复用组件时，头像 URL 可能变（作者换头像/重试成功）；
+  // 不重置的话一次 404 会把首字回退永久锁死到组件卸载。
+  useEffect(() => {
+    if (node.authorAvatarUrl) setFailed(false)
+  }, [node.authorAvatarUrl])
   return (
     <View className={`detail__cav${reply ? ' detail__cav--reply' : ''}`} onClick={onOpen}>
       {node.authorAvatarUrl && !failed ? (
