@@ -5,7 +5,7 @@ import {
 import { RECOMMENDATION_EVENT_RETENTION_DAYS } from '@fish/contracts/recommendation/observability'
 import {
   composeRecommendationStrategyVersion,
-  RANK_NEGATIVE_FEEDBACK_EVENT_TYPES,
+  RANK_HIDDEN_EVENT_TYPES,
   RANK_STRATEGY_VERSION,
   RECOMMENDATION_SNAPSHOT_MAX_ITEMS,
   RECOMMENDATION_STRATEGY_VERSION_RULE,
@@ -15,6 +15,7 @@ import {
   RECOMMENDATION_FEED_ATTRIBUTED_EVENT_TYPES,
   RECOMMENDATION_SERVER_CONFIRMED_EVENT_TYPES,
   RECOMMENDATION_STRATEGY_VERSION_NONE,
+  type RecommendationDegradeReason,
   type RecommendationEventIngestResponse,
   type RecommendationEventInput,
   type RecommendationEventType,
@@ -34,10 +35,17 @@ import { decodeRecommendationCursor, encodeRecommendationCursor } from './cursor
 import { resolveRecommendationIdentity } from './identity'
 import type { InterestRefreshQueue } from './interest-queue'
 import { cooldownListingIds } from './rank/cooldown'
-import { buildNegativeFeedbackSignals, type NegativeFeedbackSignals } from './rank/feedback'
+import {
+  buildNegativeFeedbackSignals,
+  emptyNegativeFeedbackSignals,
+  NEGATIVE_FEEDBACK_HALF_LIFE_MS,
+  NEGATIVE_FEEDBACK_SQL_WEIGHTS,
+  type NegativeFeedbackSignals,
+} from './rank/feedback'
 import { rerankCandidates } from './rank/rerank'
 import { type ScoredCandidate, scoreCandidates } from './rank/score'
 import type { RecommendationRecall } from './recall/service'
+import type { RecallCandidate, RecallResult } from './recall/types'
 import type {
   RecommendationEventRecord,
   RecommendationRequestItemRecord,
@@ -259,17 +267,33 @@ export function createRecommendationService(deps: {
    * `requestId` 必须是这条 `rec-v1-none` 行：客户端按它上报的 `position`/`source` 走 R1 口径
    * （`position ?? null`、`source ?? 'fresh'`）被原样接受，而不是拿着一个查不到快照的 ranked
    * `requestId` 去撞 `attribution_not_found`（N10）。
+   *
+   * #524：降级不再静默 —— 原因落 `degrade_reason` 列、打一行结构化日志、计入进程内指标。
+   * `no_candidates`（冷启动 / 空库：召回一个候选都没有）是业务上可接受的，其余三种是故障，日志级别也分开。
    */
-  async function serveDegradedFeed(input: {
-    viewerId: string | null
-    sessionId: string
-    limit: number
-  }): Promise<RecommendationFeedResponse> {
+  async function serveDegradedFeed(
+    input: { viewerId: string | null; sessionId: string; limit: number },
+    reason: RecommendationDegradeReason,
+    error?: unknown,
+  ): Promise<RecommendationFeedResponse> {
+    // 先记指标与日志、再写库：降级往往正是数据库出问题的时候，写库再抛也不能把原因吞掉。
+    const requestId = newId()
+    metrics?.recordDegradedFeed(reason)
+    const log = JSON.stringify({
+      event: 'recommendation.feed_degraded',
+      reason,
+      requestId,
+      identity: input.viewerId === null ? 'anonymous' : 'user',
+      ...(error === undefined ? {} : { error: describeError(error) }),
+    })
+    if (reason === 'no_candidates') console.info(log)
+    else console.error(log)
     const request = await store.createRequest({
-      id: newId(),
+      id: requestId,
       userId: input.viewerId,
       anonymousSessionId: input.sessionId,
       strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
+      degradeReason: reason,
     })
     return serveByNewest({
       viewerId: input.viewerId,
@@ -279,26 +303,37 @@ export function createRecommendationService(deps: {
     })
   }
 
-  /** 读排序用的负反馈信号；失败返回 `null`（`negativeFeedback` 进明细的 `missing`，不是 0）。 */
-  async function loadNegativeFeedback(
-    viewerId: string | null,
-    sessionId: string,
-    now: Date,
-  ): Promise<NegativeFeedbackSignals | null> {
+  /**
+   * 读排序用的负反馈信号；失败返回 `null`（`negativeFeedback` 进明细的 `missing`，不是 0）。
+   *
+   * #524：聚合在 SQL 里做，且只回传与**本批候选**相关的卖家与隐藏商品 —— 返回行数有上界，
+   * 不随用户历史负反馈的条数增长。
+   */
+  async function loadNegativeFeedback(input: {
+    viewerId: string | null
+    sessionId: string
+    candidates: readonly RecallCandidate[]
+    now: Date
+  }): Promise<NegativeFeedbackSignals | null> {
     const identity = resolveRecommendationIdentity({
-      userId: viewerId,
-      anonymousSessionId: sessionId,
+      userId: input.viewerId,
+      anonymousSessionId: input.sessionId,
     })
     // 无身份 = 冷启动，没有"这个人的负反馈"可言：空信号是**已知的** 0，不是未知。
-    if (identity === null) return buildNegativeFeedbackSignals({ events: [], now })
+    if (identity === null) return emptyNegativeFeedbackSignals()
     try {
-      const events = await store.findNegativeFeedbackEvents({
+      const aggregate = await store.aggregateNegativeFeedback({
         identity,
         // 复用 R2 的长期回看窗口（180 天）+ 长期半衰期（14 天）：负反馈是"态度"，不是瞬时状态。
-        since: interestLookbackStart(now),
-        eventTypes: RANK_NEGATIVE_FEEDBACK_EVENT_TYPES,
+        since: interestLookbackStart(input.now),
+        now: input.now,
+        weights: NEGATIVE_FEEDBACK_SQL_WEIGHTS,
+        halfLifeMs: NEGATIVE_FEEDBACK_HALF_LIFE_MS,
+        hiddenEventTypes: RANK_HIDDEN_EVENT_TYPES,
+        candidateListingIds: input.candidates.map((candidate) => candidate.listingId),
+        candidateSellerIds: [...new Set(input.candidates.map((candidate) => candidate.sellerId))],
       })
-      return buildNegativeFeedbackSignals({ events, now })
+      return buildNegativeFeedbackSignals(aggregate)
     } catch (error) {
       console.warn('[recommendation] 负反馈读取失败，本次排序缺少 negativeFeedback 特征：', error)
       return null
@@ -348,6 +383,10 @@ export function createRecommendationService(deps: {
    * **快照的顺序按"真正发出去的卡片"编号**：`listCardsByIds` 是可见性的最终真值，它可能丢掉
    * 在召回之后、发卡片之前被下架的商品。丢掉的那几条从快照里移除，其余位置顺延 —— 否则客户端
    * 数出来的第 N 位与服务端记下的第 N 位会错开，归因真值当场失效。
+   *
+   * 降级原因（#524）按失败发生的阶段区分：召回抛错 → `recall_error`；召回没抛但候选为空，且有
+   * 通道 / 合并因 provider 故障降级 → `recall_error`，否则 `no_candidates`；打分 / 重排抛错 →
+   * `rank_error`；快照写失败 → `snapshot_write_failed`。
    */
   async function createRankedFeed(input: {
     viewerId: string | null
@@ -357,45 +396,71 @@ export function createRecommendationService(deps: {
     const requestId = newId()
     const now = clock()
 
-    let scored: ScoredCandidate[] = []
-    let feedback: NegativeFeedbackSignals | null = null
+    let recalled: RecallResult
     try {
-      const recalled = await recall.recall({
+      recalled = await recall.recall({
         userId: input.viewerId,
         anonymousSessionId: input.sessionId,
       })
-      feedback = await loadNegativeFeedback(input.viewerId, input.sessionId, now)
-      scored = scoreCandidates({ candidates: recalled.candidates, feedback })
     } catch (error) {
       // 召回层自己保证不抛；这一层是纵深防御 —— 首页不能因为推荐管线里任何一处没守约而 500。
-      console.warn('[recommendation] 召回/排序失败，本次 Feed 降级为 newest 透传：', error)
-      scored = []
+      return serveDegradedFeed(input, 'recall_error', error)
     }
 
-    if (scored.length === 0) {
-      // 冷启动（新用户、空库）或整条管线失败：退化成 R1 行为（newest + `rec-v1-none`），并且
+    if (recalled.candidates.length === 0) {
+      // 冷启动（新用户、空库）或召回故障：退化成 R1 行为（newest + `rec-v1-none`），并且
       // **不写快照** —— 翻页继续走商品游标，语义与 R1 完全一致。
-      return serveDegradedFeed(input)
+      const failed =
+        recalled.mergeDegradedReason === 'provider_error' ||
+        recalled.channels.some((channel) => channel.degradedReason === 'provider_error')
+      return serveDegradedFeed(input, failed ? 'recall_error' : 'no_candidates')
     }
 
-    // 冷却在**重排之前**算：它是硬排除，不参与约束松弛谈判，也不该让被冷却的候选占掉 limit。
-    const cooldown = await loadCooldown({
-      viewerId: input.viewerId,
-      sessionId: input.sessionId,
-      listingIds: scored.map((item) => item.candidate.listingId),
-      now,
-    })
+    let ordered: ScoredCandidate[]
+    let exploreListingIds: ReadonlySet<string>
+    try {
+      const feedback = await loadNegativeFeedback({
+        viewerId: input.viewerId,
+        sessionId: input.sessionId,
+        candidates: recalled.candidates,
+        now,
+      })
+      const scored = scoreCandidates({ candidates: recalled.candidates, feedback })
 
-    const reranked = rerankCandidates({
-      scored,
-      hiddenListingIds: feedback?.hiddenListingIds ?? new Set(),
-      cooldownListingIds: cooldown,
-      // 探索打散用 requestId 当种子：同一请求可重放，不同请求看到不同的探索位。
-      seed: requestId,
-      limit: RECOMMENDATION_SNAPSHOT_MAX_ITEMS,
-    })
+      // 冷却在**重排之前**算：它是硬排除，不参与约束松弛谈判，也不该让被冷却的候选占掉 limit。
+      const cooldown = await loadCooldown({
+        viewerId: input.viewerId,
+        sessionId: input.sessionId,
+        listingIds: scored.map((item) => item.candidate.listingId),
+        now,
+      })
 
-    const ordered = reranked.items
+      const reranked = rerankCandidates({
+        scored,
+        hiddenListingIds: feedback?.hiddenListingIds ?? new Set(),
+        cooldownListingIds: cooldown,
+        // 探索位与探索打散都用 requestId 当种子：同一请求可重放，不同请求看到不同的探索位。
+        seed: requestId,
+        limit: RECOMMENDATION_SNAPSHOT_MAX_ITEMS,
+      })
+      ordered = reranked.items
+      exploreListingIds = reranked.exploreListingIds
+      const relaxedExploreSlots = reranked.summary.relaxations.explore
+      if (relaxedExploreSlots > 0) {
+        // 探索位只在探索池为空时让出；记下来，否则"探索占比没兑现"在线上不可见。
+        metrics?.recordExploreSlotsRelaxed(relaxedExploreSlots)
+        console.info(
+          JSON.stringify({
+            event: 'recommendation.explore_relaxed',
+            requestId,
+            relaxedSlots: relaxedExploreSlots,
+          }),
+        )
+      }
+    } catch (error) {
+      return serveDegradedFeed(input, 'rank_error', error)
+    }
+
     // 没有 primary source（`recallSources` 为空）的候选**不能发出去**：R4 起 position/source 只信
     // 服务端快照，而快照行必须有 primary source ⇒ 这种卡片在库里没有真值，交出去等于让它的曝光被
     // `attribution_not_found` 静默拒收。出厂 recall 不会产出空 `recallSources`，这里 fail-closed
@@ -422,7 +487,7 @@ export function createRecommendationService(deps: {
       RANK_STRATEGY_VERSION,
     ])
 
-    const rows = buildSnapshotRows(requestId, snapshotIds, orderedById)
+    const rows = buildSnapshotRows(requestId, snapshotIds, orderedById, exploreListingIds)
 
     let request: RecommendationRequestRow
     try {
@@ -443,8 +508,7 @@ export function createRecommendationService(deps: {
       // position/source 只信快照），R6 的 `empty_ranked_feed_requests` 还会把这条孤儿行报成
       // 数据质量异常。所以整个请求降级成 `rec-v1-none` + newest 透传：返回的上下文、实际投递的
       // 内容、库里的真值三者一致（N10）。
-      console.error('[recommendation] 推荐快照写入失败，本次 Feed 降级为 newest 透传：', error)
-      return serveDegradedFeed(input)
+      return serveDegradedFeed(input, 'snapshot_write_failed', error)
     }
 
     // 只有原子写成功才给后续页游标：快照不在，`offset` 就没有可解释的主体。
@@ -813,18 +877,26 @@ export function createRecommendationService(deps: {
   }
 }
 
-/** 把重排后的顺序写成快照行；`position` 用输出下标，保证与发出去的顺序一一对应。 */
+/**
+ * 把重排后的顺序写成快照行；`position` 用输出下标，保证与发出去的顺序一一对应。
+ *
+ * `primarySource`（#524）：占了**探索位**的候选记 `explore` —— 它是因为探索配额才排到这里的，
+ * 归因要能看出来；其余候选记带它进池的最高优先级通道（`recallSources[0]`）。
+ */
 function buildSnapshotRows(
   requestId: string,
   listingIds: readonly string[],
   orderedById: ReadonlyMap<string, ScoredCandidate>,
+  exploreListingIds: ReadonlySet<string>,
 ): RecommendationRequestItemRecord[] {
   const rows: RecommendationRequestItemRecord[] = []
   for (const listingId of listingIds) {
     const item = orderedById.get(listingId)
     if (item === undefined) continue
-    // `recallSources` 由 R3 保证按通道优先级有序，`[0]` 即 primarySource。
-    const primarySource = item.candidate.recallSources[0]
+    // `recallSources` 由 R3 保证按通道优先级有序，`[0]` 即非探索位的 primarySource。
+    const primarySource = exploreListingIds.has(listingId)
+      ? 'explore'
+      : item.candidate.recallSources[0]
     if (primarySource === undefined) continue
     rows.push({
       requestId,
@@ -837,4 +909,9 @@ function buildSnapshotRows(
     })
   }
   return rows
+}
+
+/** 结构化日志里的错误摘要：只取 name/message，不把整个堆栈塞进一行 JSON。 */
+function describeError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }

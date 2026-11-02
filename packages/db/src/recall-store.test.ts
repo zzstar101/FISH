@@ -3,21 +3,25 @@ import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb, type Db } from './client'
 import { newId } from './ids'
 import {
+  aggregateNegativeFeedback,
   countListingImpressions,
   findCategoryRecallCandidates,
-  findExploreRecallCandidates,
   findExposureHistory,
   findFreshRecallCandidates,
   findPopularRecallCandidates,
   findSemanticRecallCandidates,
   findSessionCategoryWeights,
+  findUnderexposedRecallCandidates,
   findVisibleListingRefs,
   findWishRecallCandidates,
 } from './recall-store'
 import { EMBEDDING_DIMENSIONS, embeddings } from './schema/embeddings'
+import { favorites } from './schema/favorites'
 import { listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { recommendationEvents } from './schema/recommendation-events'
+import { recommendationRequestItems } from './schema/recommendation-request-items'
+import { recommendationRequests } from './schema/recommendation-requests'
 import { users } from './schema/users'
 import { wishes } from './schema/wishes'
 import { reserveTestListingNo } from './testing/listing-no'
@@ -66,7 +70,7 @@ afterAll(async () => {
 // 造的商品会落进下一个用例的窗口。逐用例清表比"把断言写宽"更值：断言才能保持精确。
 beforeEach(async () => {
   await db.$client.unsafe(
-    'truncate table recommendation_events, embeddings, matches, wishes, listings, users restart identity cascade',
+    'truncate table recommendation_events, recommendation_request_items, recommendation_requests, favorites, embeddings, matches, wishes, listings, users restart identity cascade',
   )
 })
 
@@ -252,35 +256,71 @@ describe('findFreshRecallCandidates', () => {
   })
 })
 
+const POPULARITY_INPUT = {
+  limit: 10,
+  viewerUserId: null,
+  weights: [{ eventType: 'DETAIL_VIEW' as const, weight: 1 }],
+  favoriteWeight: 3,
+  actionHalfLifeMs: 3 * DAY,
+  listingAgeHalfLifeMs: 7 * DAY,
+}
+
+async function addFavorite(input: { userId: string; listingId: string; createdAt: Date }) {
+  await db.insert(favorites).values(input)
+}
+
+/** 一条真实服务端快照：请求行 + 一件商品的快照项（匿名热度只认这种归因）。 */
+async function createSnapshot(input: {
+  anonymousSessionId: string
+  listingId: string
+}): Promise<string> {
+  const requestId = newId()
+  await db.insert(recommendationRequests).values({
+    id: requestId,
+    anonymousSessionId: input.anonymousSessionId,
+    strategyVersion: 'test',
+  })
+  await db.insert(recommendationRequestItems).values({
+    requestId,
+    position: 0,
+    listingId: input.listingId,
+    primarySource: 'fresh',
+    sources: ['fresh'],
+    rankScore: 0,
+    rankBreakdown: {},
+  })
+  return requestId
+}
+
 describe('findPopularRecallCandidates', () => {
-  test('按行为权重 × 行为衰减 × 商品年龄衰减排序，窗口外与零权行为不计', async () => {
+  test('按行为权重 × 行为衰减 × 商品年龄衰减排序，窗口外与零权行为不计，收藏取 favorites 表', async () => {
     const seller = await createUser()
     const viewer = await createUser()
     const now = new Date('2026-01-15T12:00:00.000Z')
-    const weights = [
-      { eventType: 'DETAIL_VIEW' as const, weight: 1 },
-      { eventType: 'FAVORITE' as const, weight: 3 },
-    ]
 
     // 商品创建时刻 = now：年龄衰减因子恰好是 1，断言能直接落在行为项上。
-    const hot = await createListing({ sellerId: seller, createdAt: now })
-    const oldFavorite = await createListing({ sellerId: seller, createdAt: now })
+    const viewed = await createListing({ sellerId: seller, createdAt: now })
+    const favorited = await createListing({ sellerId: seller, createdAt: now })
     const impressionOnly = await createListing({ sellerId: seller, createdAt: now })
     const outsideWindow = await createListing({ sellerId: seller, createdAt: now })
 
-    for (let index = 0; index < 3; index += 1) {
-      await addEvent({
-        userId: viewer,
-        listingId: hot.id,
-        eventType: 'DETAIL_VIEW',
-        occurredAt: new Date(now.getTime() - DAY),
-      })
-    }
     await addEvent({
       userId: viewer,
-      listingId: oldFavorite.id,
+      listingId: viewed.id,
+      eventType: 'DETAIL_VIEW',
+      occurredAt: new Date(now.getTime() - DAY),
+    })
+    await addFavorite({
+      userId: viewer,
+      listingId: favorited.id,
+      createdAt: new Date(now.getTime() - 3 * DAY),
+    })
+    // 事件流里的 FAVORITE 不在权重表里：只有 favorites 表的当前状态算数。
+    await addEvent({
+      userId: viewer,
+      listingId: impressionOnly.id,
       eventType: 'FAVORITE',
-      occurredAt: new Date(now.getTime() - 10 * DAY),
+      occurredAt: new Date(now.getTime() - HOUR),
     })
     await addEvent({
       userId: viewer,
@@ -296,24 +336,92 @@ describe('findPopularRecallCandidates', () => {
     })
 
     const rows = await findPopularRecallCandidates(db, {
-      limit: 10,
-      viewerUserId: null,
+      ...POPULARITY_INPUT,
       windowStart: new Date(now.getTime() - 14 * DAY),
       now,
-      weights,
-      actionHalfLifeMs: 3 * DAY,
-      listingAgeHalfLifeMs: 7 * DAY,
     })
 
-    expect(ids(rows)).toEqual([hot.id, oldFavorite.id])
-    expect(rows[0]?.popularity).toBeCloseTo(3 * 0.5 ** (1 / 3), 6)
-    expect(rows[1]?.popularity).toBeCloseTo(3 * 0.5 ** (10 / 3), 6)
+    expect(ids(rows)).toEqual([favorited.id, viewed.id])
+    expect(rows[0]?.popularity).toBeCloseTo(3 * 0.5, 6)
+    expect(rows[1]?.popularity).toBeCloseTo(0.5 ** (1 / 3), 6)
   })
 
-  test('商品年龄衰减把"老爆款"压下去（同样的行为量，新商品排前面）', async () => {
+  test('#524 回归：单身份刷量按 (身份, 事件类型) 去重，压不过多个真实用户', async () => {
+    const seller = await createUser()
+    const spammer = await createUser()
+    const now = new Date('2026-01-15T12:00:00.000Z')
+
+    const spammed = await createListing({ sellerId: seller, createdAt: now })
+    const organic = await createListing({ sellerId: seller, createdAt: now })
+
+    // 同一个人对同一件商品刷 30 次详情：v1 记 30 倍热度，v2 只记一次（取最近一次的衰减）。
+    for (let index = 0; index < 30; index += 1) {
+      await addEvent({
+        userId: spammer,
+        listingId: spammed.id,
+        eventType: 'DETAIL_VIEW',
+        occurredAt: new Date(now.getTime() - DAY - index * MINUTE),
+      })
+    }
+    for (let index = 0; index < 2; index += 1) {
+      await addEvent({
+        userId: await createUser(),
+        listingId: organic.id,
+        eventType: 'DETAIL_VIEW',
+        occurredAt: new Date(now.getTime() - DAY),
+      })
+    }
+
+    const rows = await findPopularRecallCandidates(db, {
+      ...POPULARITY_INPUT,
+      windowStart: new Date(now.getTime() - 14 * DAY),
+      now,
+    })
+
+    expect(ids(rows)).toEqual([organic.id, spammed.id])
+    expect(rows[0]?.popularity).toBeCloseTo(2 * 0.5 ** (1 / 3), 6)
+    expect(rows[1]?.popularity).toBeCloseTo(0.5 ** (1 / 3), 6)
+  })
+
+  test('#524 回归：匿名事件只有归因到真实服务端快照才计入', async () => {
     const seller = await createUser()
     const now = new Date('2026-01-15T12:00:00.000Z')
-    const weights = [{ eventType: 'DETAIL_VIEW' as const, weight: 1 }]
+
+    const forged = await createListing({ sellerId: seller, createdAt: now })
+    const attributed = await createListing({ sellerId: seller, createdAt: now })
+
+    // 伪造：每次换一个 session id、不带 request_id（或带一个不存在的 request_id）直接上报。
+    for (let index = 0; index < 10; index += 1) {
+      await addEvent({
+        anonymousSessionId: newId(),
+        listingId: forged.id,
+        eventType: 'DETAIL_VIEW',
+        occurredAt: new Date(now.getTime() - DAY),
+        ...(index % 2 === 0 ? {} : { requestId: newId() }),
+      })
+    }
+    // 快照里确有这件商品：计入。
+    const session = newId()
+    await addEvent({
+      anonymousSessionId: session,
+      listingId: attributed.id,
+      eventType: 'DETAIL_VIEW',
+      occurredAt: new Date(now.getTime() - DAY),
+      requestId: await createSnapshot({ anonymousSessionId: session, listingId: attributed.id }),
+    })
+
+    const rows = await findPopularRecallCandidates(db, {
+      ...POPULARITY_INPUT,
+      windowStart: new Date(now.getTime() - 14 * DAY),
+      now,
+    })
+
+    expect(ids(rows)).toEqual([attributed.id])
+  })
+
+  test('商品年龄衰减把"老爆款"压下去；listingIds 只算给定商品', async () => {
+    const seller = await createUser()
+    const now = new Date('2026-01-15T12:00:00.000Z')
 
     const brandNew = await createListing({ sellerId: seller, createdAt: now })
     const ancient = await createListing({
@@ -322,26 +430,20 @@ describe('findPopularRecallCandidates', () => {
     })
     for (const listingId of [brandNew.id, ancient.id]) {
       await addEvent({
-        userId: null,
-        anonymousSessionId: newId(),
+        userId: await createUser(),
         listingId,
         eventType: 'DETAIL_VIEW',
         occurredAt: new Date(now.getTime() - DAY),
       })
     }
 
-    const rows = await findPopularRecallCandidates(db, {
-      limit: 10,
-      viewerUserId: null,
-      windowStart: new Date(now.getTime() - 14 * DAY),
-      now,
-      weights,
-      actionHalfLifeMs: 3 * DAY,
-      listingAgeHalfLifeMs: 7 * DAY,
-    })
-
+    const input = { ...POPULARITY_INPUT, windowStart: new Date(now.getTime() - 14 * DAY), now }
+    const rows = await findPopularRecallCandidates(db, input)
     expect(ids(rows)).toEqual([brandNew.id, ancient.id])
     expect(rows[1]?.popularity).toBeCloseTo(0.5 ** (1 / 3) * 0.5 ** (60 / 7), 6)
+
+    const scoped = await findPopularRecallCandidates(db, { ...input, listingIds: [ancient.id] })
+    expect(ids(scoped)).toEqual([ancient.id])
   })
 })
 
@@ -442,6 +544,14 @@ describe('findWishRecallCandidates', () => {
       [first.id, 80],
       [second.id, 60],
     ])
+
+    // 排序层给全部候选补 feature：只取给定商品。
+    const scoped = await findWishRecallCandidates(db, {
+      userId: wishOwner,
+      limit: 10,
+      listingIds: [second.id, foreign.id],
+    })
+    expect(ids(scoped)).toEqual([second.id])
   })
 })
 
@@ -483,87 +593,83 @@ describe('findCategoryRecallCandidates', () => {
   })
 })
 
-describe('findExploreRecallCandidates', () => {
-  test('新商品 / 新卖家 / 冷门类目三块，去重后空位让给新商品', async () => {
+describe('findUnderexposedRecallCandidates', () => {
+  test('只取窗口内去重曝光身份数低于阈值的可见商品，曝光少者优先、同曝光按发布时间倒序', async () => {
+    const seller = await createUser()
     const viewer = await createUser()
-    const now = new Date()
-    const newSeller = await createUser({ createdAt: new Date(now.getTime() - 2 * DAY) })
-    const oldSeller = await createUser({ createdAt: new Date(now.getTime() - 200 * DAY) })
+    const now = new Date('2026-01-15T12:00:00.000Z')
+    const windowStart = new Date(now.getTime() - 7 * DAY)
 
-    // 新卖家 + 新商品（同一件商品同时命中两块：去重后只能出现一次）。
-    const both = await createListing({
-      sellerId: newSeller,
-      category: 'BOOKS',
-      createdAt: new Date(now.getTime() - 1 * DAY),
+    const unseenOld = await createListing({
+      sellerId: seller,
+      createdAt: new Date(now.getTime() - 5 * DAY),
     })
-    // 老卖家的新商品：只命中"新商品"。
-    const newListing = await createListing({
-      sellerId: oldSeller,
-      category: 'DAILY',
-      createdAt: new Date(now.getTime() - 2 * DAY),
-    })
-    // 老卖家的老商品 + 冷门类目：只命中"冷门类目"。
-    const cold = await createListing({
-      sellerId: oldSeller,
-      category: 'SPORTS',
-      createdAt: new Date(now.getTime() - 100 * DAY),
-    })
-    // 老卖家的老商品、非冷门类目：三块都不命中。
-    await createListing({
-      sellerId: oldSeller,
-      category: 'DIGITAL',
-      createdAt: new Date(now.getTime() - 100 * DAY),
-    })
+    const unseenNew = await createListing({ sellerId: seller, createdAt: now })
+    const seenOnce = await createListing({ sellerId: seller, createdAt: now })
+    const saturated = await createListing({ sellerId: seller, createdAt: now })
+    const staleExposure = await createListing({ sellerId: seller, createdAt: now })
+    const sold = await createListing({ sellerId: seller, status: 'SOLD' })
+    const own = await createListing({ sellerId: viewer })
 
-    const rows = await findExploreRecallCandidates(db, {
-      limit: 10,
-      newListingLimit: 2,
-      newSellerLimit: 2,
-      coldCategoryLimit: 1,
-      newListingWindowStart: new Date(now.getTime() - 3 * DAY),
-      newSellerWindowStart: new Date(now.getTime() - 30 * DAY),
-      coldCategories: ['SPORTS'],
-      viewerUserId: viewer,
-    })
-
-    const bySubSource = rows.map((row) => [row.listingId, row.subSource])
-    expect(bySubSource).toEqual([
-      [both.id, 'new_listing'],
-      [newListing.id, 'new_listing'],
-      [cold.id, 'cold_category'],
-    ])
-    // 去重：`both` 同时是新商品与新卖家的商品，只出现一次。
-    expect(new Set(ids(rows)).size).toBe(rows.length)
-  })
-
-  test('新商品块配额用尽后，空位由后续新商品补上（不让探索位空着）', async () => {
-    const viewer = await createUser()
-    const seller = await createUser({ createdAt: new Date(Date.now() - 200 * DAY) })
-    const now = new Date()
-    const created: string[] = []
-    for (let index = 0; index < 3; index += 1) {
-      const listing = await createListing({
-        sellerId: seller,
-        category: 'DIGITAL',
-        createdAt: new Date(now.getTime() - (index + 1) * HOUR),
+    // 同一身份曝光 5 次 = 1 个身份（一个人刷 Feed 不能把商品推出探索池）。
+    for (let index = 0; index < 5; index += 1) {
+      await addEvent({
+        userId: viewer,
+        listingId: seenOnce.id,
+        eventType: 'IMPRESSION',
+        occurredAt: new Date(now.getTime() - HOUR),
       })
-      created.push(listing.id)
+    }
+    // 两个不同身份（一个登录、一个匿名）= 达到阈值 2 → 不再算曝光不足。
+    await addEvent({
+      userId: viewer,
+      listingId: saturated.id,
+      eventType: 'IMPRESSION',
+      occurredAt: new Date(now.getTime() - HOUR),
+    })
+    await addEvent({
+      anonymousSessionId: newId(),
+      listingId: saturated.id,
+      eventType: 'IMPRESSION',
+      occurredAt: new Date(now.getTime() - HOUR),
+    })
+    // 窗口外的曝光不计。
+    for (let index = 0; index < 3; index += 1) {
+      await addEvent({
+        userId: await createUser(),
+        listingId: staleExposure.id,
+        eventType: 'IMPRESSION',
+        occurredAt: new Date(now.getTime() - 8 * DAY),
+      })
     }
 
-    const rows = await findExploreRecallCandidates(db, {
-      limit: 3,
-      newListingLimit: 1,
-      newSellerLimit: 0,
-      coldCategoryLimit: 0,
-      newListingWindowStart: new Date(now.getTime() - 3 * DAY),
-      newSellerWindowStart: new Date(now.getTime() - 30 * DAY),
-      coldCategories: [],
+    const rows = await findUnderexposedRecallCandidates(db, {
+      limit: 10,
       viewerUserId: viewer,
+      windowStart,
+      maxExposedIdentities: 2,
     })
 
-    // 配额 1 + 空位补 2 = 全部 3 件新商品，且都是 new_listing。
-    expect(ids(rows)).toEqual(created)
-    expect(rows.every((row) => row.subSource === 'new_listing')).toBe(true)
+    expect(rows.map((row) => [row.listingId, row.exposedIdentities])).toEqual([
+      // 0 曝光：按发布时间倒序（unseenNew / staleExposure 同刻发布时按 id 倒序兜底）。
+      ...[unseenNew.id, staleExposure.id]
+        .sort()
+        .reverse()
+        .map((id) => [id, 0]),
+      [unseenOld.id, 0],
+      [seenOnce.id, 1],
+    ])
+    expect(ids(rows)).not.toContain(saturated.id)
+    expect(ids(rows)).not.toContain(sold.id)
+    expect(ids(rows)).not.toContain(own.id)
+
+    const limited = await findUnderexposedRecallCandidates(db, {
+      limit: 1,
+      viewerUserId: viewer,
+      windowStart,
+      maxExposedIdentities: 2,
+    })
+    expect(limited).toHaveLength(1)
   })
 })
 
@@ -894,5 +1000,74 @@ describe('findSessionCategoryWeights', () => {
     })
 
     expect(rows).toEqual([])
+  })
+})
+
+describe('aggregateNegativeFeedback', () => {
+  test('#524：在 SQL 里按类目/卖家聚合衰减权重，卖家与硬排除只限本次候选', async () => {
+    const viewer = await createUser()
+    const sellerA = await createUser()
+    const sellerB = await createUser()
+    const now = new Date('2026-01-15T12:00:00.000Z')
+
+    const hiddenCandidate = await createListing({ sellerId: sellerA, category: 'BOOKS' })
+    const hiddenElsewhere = await createListing({ sellerId: sellerB, category: 'BOOKS' })
+    const skipped = await createListing({ sellerId: sellerB, category: 'DIGITAL' })
+
+    await addEvent({
+      userId: viewer,
+      listingId: hiddenCandidate.id,
+      eventType: 'HIDE',
+      occurredAt: now,
+    })
+    await addEvent({
+      userId: viewer,
+      listingId: hiddenElsewhere.id,
+      eventType: 'HIDE',
+      occurredAt: new Date(now.getTime() - 14 * DAY),
+    })
+    await addEvent({
+      userId: viewer,
+      listingId: skipped.id,
+      eventType: 'QUICK_SKIP',
+      occurredAt: now,
+    })
+    // 窗口外与别人的负反馈都不计。
+    await addEvent({
+      userId: viewer,
+      listingId: skipped.id,
+      eventType: 'HIDE',
+      occurredAt: new Date(now.getTime() - 200 * DAY),
+    })
+    await addEvent({
+      userId: await createUser(),
+      listingId: skipped.id,
+      eventType: 'HIDE',
+      occurredAt: now,
+    })
+
+    const result = await aggregateNegativeFeedback(db, {
+      identity: { kind: 'user', id: viewer },
+      since: new Date(now.getTime() - 180 * DAY),
+      now,
+      weights: [
+        { eventType: 'HIDE', weight: 3 },
+        { eventType: 'QUICK_SKIP', weight: 0.5 },
+      ],
+      halfLifeMs: 14 * DAY,
+      hiddenEventTypes: ['HIDE'],
+      candidateListingIds: [hiddenCandidate.id, skipped.id],
+      candidateSellerIds: [sellerA],
+    })
+
+    const byCategory = new Map(result.categoryWeights.map((row) => [row.category, row.weight]))
+    expect(byCategory.size).toBe(2)
+    expect(byCategory.get('BOOKS')).toBeCloseTo(3 + 3 * 0.5, 6)
+    expect(byCategory.get('DIGITAL')).toBeCloseTo(0.5, 6)
+    // 卖家只算候选里出现的 sellerA；sellerB 虽有负反馈但不在候选里。
+    expect(result.sellerWeights.map((row) => row.sellerId)).toEqual([sellerA])
+    expect(result.sellerWeights[0]?.weight).toBeCloseTo(3, 6)
+    // 硬排除只回本次候选里的商品；hiddenElsewhere 不在候选里，不回传。
+    expect(result.hiddenListingIds).toEqual([hiddenCandidate.id])
   })
 })

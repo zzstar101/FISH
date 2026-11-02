@@ -1,0 +1,2 @@
+ALTER TABLE "recommendation_requests" ADD COLUMN "degrade_reason" varchar(32);--> statement-breakpoint
+ALTER TABLE "recommendation_requests" ADD CONSTRAINT "recommendation_requests_degrade_reason_valid" CHECK ("recommendation_requests"."degrade_reason" IS NULL OR ("recommendation_requests"."strategy_version" = 'rec-v1-none' AND "recommendation_requests"."degrade_reason" IN ('no_candidates', 'recall_error', 'rank_error', 'snapshot_write_failed')));
