@@ -24,7 +24,13 @@ function sliceFrom(code: string, start: string, end: string): string {
 
 describe('#516 会话页语音 · 接线', () => {
   test('startVoice 保持同步，隐私 gate 不在触摸序列里 await', async () => {
-    const block = sliceFrom(await source(), 'const startVoice = () => {', 'const finishVoice')
+    /*
+      锚点只钉到函数名、不钉参数表：`startVoice` 的参数在 #535 里扩成了
+      `(event?: unknown)`（要取「按下的起点 Y」做上滑取消的基准）。钉死 `() =>` 会让
+      「同步」这条真需求被一个形参签名绑架；这里钉住的仍然是**函数体里没有 async/await**
+      （= 隐私授权不许 await 在触摸序列里）。
+    */
+    const block = sliceFrom(await source(), 'const startVoice =', 'const finishVoice')
     expect(block).not.toContain('async')
     expect(block).not.toContain('await')
   })

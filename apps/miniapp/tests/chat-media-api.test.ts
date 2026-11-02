@@ -723,7 +723,10 @@ describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#
     const next = startVoiceRecording(undefined, (recorded) => autoStops.push(recorded.durationMs))
     const nextStopped = next.stop()
     recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/next.wav', duration: 59_000 })
-    await expect(nextStopped).resolves.toEqual({ path: 'wxfile://tmp/next.wav', durationMs: 59_000 })
+    await expect(nextStopped).resolves.toEqual({
+      path: 'wxfile://tmp/next.wav',
+      durationMs: 59_000,
+    })
   })
 
   /*
