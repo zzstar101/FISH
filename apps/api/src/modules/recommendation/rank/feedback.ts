@@ -1,7 +1,7 @@
 /**
  * 负反馈信号构造（#323 R4 / M4 的 `negativeFeedbackPenalty`）。
  *
- * 纯函数：不查库、不读时钟以外的东西。输入是 `findNegativeFeedbackEvents` 的原始事件行，
+ * 纯函数：不查库。输入是 `aggregateNegativeFeedback` 的 SQL 聚合（#524），
  * 输出给排序层与重排层共用的两类信号：
  *
  * - **listing 级硬排除**（`hiddenListingIds`）：M6「已划走/隐藏的内容不重复推荐」；
@@ -14,12 +14,12 @@
 
 import { INTEREST_HALF_LIFE_MS } from '@fish/contracts/recommendation/interest'
 import {
-  RANK_HIDDEN_EVENT_TYPES,
+  RANK_NEGATIVE_FEEDBACK_EVENT_TYPES,
   RANK_NEGATIVE_FEEDBACK_HALF_SATURATION,
   RANK_NEGATIVE_FEEDBACK_WEIGHTS,
   saturatingRatio,
 } from '@fish/contracts/recommendation/rank'
-import type { NegativeFeedbackEvent } from '@fish/db/recall-store'
+import type { NegativeFeedbackAggregate } from '@fish/db/recall-store'
 
 export type NegativeFeedbackSignals = {
   /** 本次不应再出现的商品（listing 级硬排除）。 */
@@ -42,65 +42,44 @@ export function pickNegativeFeedback(
   return Math.max(byCategory, bySeller)
 }
 
-const HIDDEN_EVENT_TYPES: ReadonlySet<string> = new Set(RANK_HIDDEN_EVENT_TYPES)
-
 /**
- * 权重表的查表副本。
- *
- * 事件行的 `eventType` 是**全量**枚举（DB 列的类型），而权重表只有三个键，直接下标会以
- * "索引签名不存在"编译失败；用 `Map` 查表既不需要断言，也让"不在表里的类型权重为 0"成为
- * 显式的缺省值而不是隐式行为（`findNegativeFeedbackEvents` 已经按事件类型过滤过，这里是兜底）。
+ * 喂给 `aggregateNegativeFeedback` 的权重表：`|INTEREST_ACTION_WEIGHTS[t]|`（HIDE 3 / UNFAVORITE 2 /
+ * QUICK_SKIP 0.5）。同一个"这个行为有多负"只在 R2 的画像权重表里定义一次；衰减用 R2 的**长期**
+ * 半衰期（`NEGATIVE_FEEDBACK_HALF_LIFE_MS`）：负反馈是"我对这类东西的态度"，不该半小时就复位。
  */
-const WEIGHT_BY_EVENT_TYPE: ReadonlyMap<string, number> = new Map(
-  Object.entries(RANK_NEGATIVE_FEEDBACK_WEIGHTS),
+export const NEGATIVE_FEEDBACK_SQL_WEIGHTS = RANK_NEGATIVE_FEEDBACK_EVENT_TYPES.map(
+  (eventType) => ({ eventType, weight: RANK_NEGATIVE_FEEDBACK_WEIGHTS[eventType] }),
 )
 
+export const NEGATIVE_FEEDBACK_HALF_LIFE_MS = INTEREST_HALF_LIFE_MS.longTerm
+
 /**
- * 时间衰减后的负反馈权重：`|actionWeight| × 0.5 ** (age / 长期半衰期)`。
+ * SQL 聚合（`aggregateNegativeFeedback`，#524）→ 排序层信号：只做饱和映射。
  *
- * 权重取 `|INTEREST_ACTION_WEIGHTS[t]|`（HIDE 3 / UNFAVORITE 2 / QUICK_SKIP 0.5）：同一个
- * "这个行为有多负"只在 R2 的画像权重表里定义一次。半衰期用 R2 的**长期**口径（14 天）而不是
- * session 口径（30 分钟）：负反馈是"我对这类东西的态度"，不该因为半小时没动作就复位。
+ * v1 在这里把窗口内全部原始事件逐条衰减累加，查询无上界；v2 把"衰减 × 权重 × 分组求和"
+ * 下推到 SQL，返回行数受类目枚举与候选数约束，这里只剩 `saturatingRatio`。
  */
-function decayedWeight(event: NegativeFeedbackEvent, now: Date): number {
-  const weight = WEIGHT_BY_EVENT_TYPE.get(event.eventType) ?? 0
-  const ageMs = now.getTime() - event.occurredAt.getTime()
-  // 非法/未来时间戳按"刚刚发生"（age = 0）算满权重，而不是让 NaN 传播进累加。
-  const decay = Number.isFinite(ageMs)
-    ? 0.5 ** (Math.max(ageMs, 0) / INTEREST_HALF_LIFE_MS.longTerm)
-    : 1
-  return weight * decay
-}
-
-export function buildNegativeFeedbackSignals(input: {
-  events: readonly NegativeFeedbackEvent[]
-  now: Date
-}): NegativeFeedbackSignals {
-  const hiddenListingIds = new Set<string>()
-  const categoryWeights = new Map<string, number>()
-  const sellerWeights = new Map<string, number>()
-
-  for (const event of input.events) {
-    if (HIDDEN_EVENT_TYPES.has(event.eventType)) hiddenListingIds.add(event.listingId)
-
-    const weight = decayedWeight(event, input.now)
-    if (weight === 0) continue
-    categoryWeights.set(event.category, (categoryWeights.get(event.category) ?? 0) + weight)
-    sellerWeights.set(event.sellerId, (sellerWeights.get(event.sellerId) ?? 0) + weight)
-  }
-
-  const normalize = (weights: Map<string, number>): Map<string, number> =>
+export function buildNegativeFeedbackSignals(
+  aggregate: NegativeFeedbackAggregate,
+): NegativeFeedbackSignals {
+  const normalize = (rows: readonly { key: string; weight: number }[]): Map<string, number> =>
     new Map(
-      [...weights].map(([key, value]) => [
-        key,
-        saturatingRatio(value, RANK_NEGATIVE_FEEDBACK_HALF_SATURATION),
-      ]),
+      rows
+        .filter((row) => Number.isFinite(row.weight) && row.weight > 0)
+        .map((row) => [
+          row.key,
+          saturatingRatio(row.weight, RANK_NEGATIVE_FEEDBACK_HALF_SATURATION),
+        ]),
     )
 
   return {
-    hiddenListingIds,
-    categoryPenalty: normalize(categoryWeights),
-    sellerPenalty: normalize(sellerWeights),
+    hiddenListingIds: new Set(aggregate.hiddenListingIds),
+    categoryPenalty: normalize(
+      aggregate.categoryWeights.map((row) => ({ key: row.category, weight: row.weight })),
+    ),
+    sellerPenalty: normalize(
+      aggregate.sellerWeights.map((row) => ({ key: row.sellerId, weight: row.weight })),
+    ),
   }
 }
 

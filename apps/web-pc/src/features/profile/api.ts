@@ -392,18 +392,29 @@ export function listingDeleteError(error: unknown): { message: string; refresh: 
   return { message: '删除失败，请稍后重试', refresh: false }
 }
 
-/** 商品上下架失败的可执行分支：状态漂移必须刷新，而不是把失败当成功。 */
-export function listingActionError(error: unknown): { message: string; refresh: boolean } {
+/**
+ * 商品上下架失败的可执行分支：状态漂移必须刷新，而不是把失败当成功。
+ * `phoneRequired`：重新上架（`POST /listings/:id/online`）被发布门禁拦下（#514，未绑定手机号），
+ * 页面改展示去小程序绑定的引导卡，而不是普通错误文案。
+ */
+export function listingActionError(error: unknown): {
+  message: string
+  refresh: boolean
+  phoneRequired: boolean
+} {
   if (error instanceof ApiError) {
+    if (error.code === 'PHONE_REQUIRED') {
+      return { message: error.message, refresh: false, phoneRequired: true }
+    }
     if (error.code === 'LISTING_NOT_EDITABLE') {
-      return { message: '商品状态已变化，正在刷新最新状态', refresh: true }
+      return { message: '商品状态已变化，正在刷新最新状态', refresh: true, phoneRequired: false }
     }
     if (error.code === 'LISTING_NOT_FOUND') {
-      return { message: '商品不存在或当前账号无权操作', refresh: true }
+      return { message: '商品不存在或当前账号无权操作', refresh: true, phoneRequired: false }
     }
-    return { message: error.message, refresh: false }
+    return { message: error.message, refresh: false, phoneRequired: false }
   }
-  return { message: '操作失败，请稍后重试', refresh: false }
+  return { message: '操作失败，请稍后重试', refresh: false, phoneRequired: false }
 }
 
 /** 交易确认 / 取消失败的可执行分支：终态漂移只接受服务端最新状态。 */

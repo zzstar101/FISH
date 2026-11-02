@@ -36,6 +36,7 @@ import {
   type ChatImageMime,
   imageRejectReason,
   mediaObjectUrl,
+  normalizeRecordedWav,
   type VoiceMime,
   voiceMimeFromBytes,
 } from './media'
@@ -219,8 +220,9 @@ export async function uploadChatVoice(
   isActive?: () => boolean,
 ): Promise<UploadedVoice> {
   assertMediaActive(isActive)
-  const buffer = await readLocalFile(voice.path, '语音读取失败，请重试')
+  const raw = await readLocalFile(voice.path, '语音读取失败，请重试')
   assertMediaActive(isActive)
+  const buffer = normalizeRecordedWav(raw)
   const contentType: VoiceMime | null = voiceMimeFromBytes(buffer)
   if (!contentType) {
     const bytes = new Uint8Array(buffer)

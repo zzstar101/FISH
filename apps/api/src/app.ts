@@ -12,12 +12,14 @@ import type { UserPresence } from '@fish/contracts/users/schema'
 import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import { VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS } from '@fish/contracts/visual/schema'
 import { createDb } from '@fish/db/client'
+import { countListingEmbeddingsByModel } from '@fish/db/embedding-store'
 import { isListingImageKeyPendingDeletion } from '@fish/db/listing-image-deletions'
 import type {
   AiPolishEnv,
   ContentModerationEnv,
   MailTransportEnv,
   MeetupTokenEnv,
+  RecommendationEmbeddingModelEnv,
   ServerEnv,
   SubscribeMessageTemplatesEnv,
   VisualEmbeddingEnv,
@@ -29,10 +31,10 @@ import {
   loadMeetupTokenEnv,
   loadRecommendationRateLimitEnv,
   loadSubscribeMessageTemplatesEnv,
+  STUB_EMBEDDING_MODEL,
 } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
-import { STUB_VISUAL_EMBEDDING_MODEL } from '@fish/visual-embedding/providers/stub'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -47,6 +49,7 @@ import {
   createResendEmailVerificationProvider,
   createSmtpEmailVerificationProvider,
 } from './modules/auth/email-providers'
+import { requirePhoneBound } from './modules/auth/require-phone'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
 import { createBlocksRouter } from './modules/blocks/router'
@@ -97,6 +100,7 @@ import { createSqlProfileStore } from './modules/profile/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
+import { checkRecommendationEmbeddingModel } from './modules/recommendation/embedding-check'
 import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
 import { createTokenBucketLimiter } from './modules/recommendation/rate-limit'
 import { createRecommendationRecall } from './modules/recommendation/recall/service'
@@ -216,7 +220,23 @@ export function createApp(
    * `createApp` 只**造**调度器并经这里交出去，`index.ts` 在 `Bun.serve` 之后启动、在退出信号里
    * 停止。测试不传 ⇒ 调度器从不启动（不会被一个 15 秒定时器拖住 `bun test`）。
    */
-  lifecycle: { onSubscribeScheduler?: (scheduler: SubscribeMessageScheduler) => void } = {},
+  lifecycle: {
+    onSubscribeScheduler?: (scheduler: SubscribeMessageScheduler) => void
+    /**
+     * 推荐 embedding 模型自检（#524）：同样只**造**、不跑 —— `index.ts` 在监听之后跑一次；
+     * 测试不传 ⇒ 不会在每个 `createApp` 背后多一条悬空的数据库查询。
+     */
+    onRecommendationEmbeddingCheck?: (run: () => Promise<unknown>) => void
+  } = {},
+  /**
+   * 推荐读侧的文本向量模型名（#524）：`index.ts` 用 `loadRecommendationEmbeddingModel()` 校验后
+   * 传入，与 worker 写向量用的 `EMBEDDING_MODEL` 是**同一个变量**。
+   *
+   * 不能从 `visualEmbeddingEnv` 推：那是拍照搜图的图片向量模型（另一张表、另一个维度），v1
+   * 曾把它当成召回模型，结果语义召回 / 会话兴趣 / 长期画像在线上全部落空且无人察觉。
+   * 测试不传 ⇒ 与 worker 的 stub 同名（`STUB_EMBEDDING_MODEL`）。
+   */
+  recommendationEmbedding: RecommendationEmbeddingModelEnv = { model: STUB_EMBEDDING_MODEL },
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -385,6 +405,7 @@ export function createApp(
       resolveClientIp: (c) =>
         trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
       guard: restrictionGuard,
+      requirePhone: requirePhoneBound,
     }),
   )
   // #323 R1：行为埋点与推荐上下文。推荐 Feed 与事件写入都**匿名可用**（未登录访客也要能看首页，
@@ -428,15 +449,13 @@ export function createApp(
       maxSubjects: RECOMMENDATION_RATE_LIMIT_MAX_SUBJECTS,
     }),
   }
-  const recallEmbeddingModel =
-    visualEmbeddingEnv.transport === 'live' ? visualEmbeddingEnv.model : STUB_VISUAL_EMBEDDING_MODEL
   const recommendationService = createRecommendationService({
     store: createSqlRecommendationStore(db),
     listings: listingService,
     // 多路召回（R3）：六路各自降级、整体不抛，因此 Feed 不需要为它准备 500 分支。
     recall: createRecommendationRecall({
       db,
-      embeddingModel: recallEmbeddingModel,
+      embeddingModel: recommendationEmbedding.model,
       latency: latencyRecorder,
     }),
     // 长期画像重算的出队口：行为一落库就投 `REFRESH_USER_INTEREST`，由 worker 全量重算
@@ -695,6 +714,7 @@ export function createApp(
     getUserId: (c) => c.get('userId'),
     matchQueue: createDbWishMatchQueue(db),
     guard: restrictionGuard,
+    requirePhone: requirePhoneBound,
   })
   app.use('/wishes/*', auth.requireAuth)
   app.route('/wishes', wishes)
@@ -916,6 +936,13 @@ export function createApp(
     }),
   )
   lifecycle.onSubscribeScheduler?.(subscribeScheduler)
+  lifecycle.onRecommendationEmbeddingCheck?.(() =>
+    checkRecommendationEmbeddingModel({
+      model: recommendationEmbedding.model,
+      countListingEmbeddings: (model) => countListingEmbeddingsByModel(db, model),
+      onMismatch: () => recommendationProcessMetrics.recordEmbeddingModelMismatch(),
+    }),
+  )
 
   // 商品描述 AI 润色（#141）：单个端点 `POST /ai/polish-candidates`，整体要求登录
   // （未登录 401，不给匿名者烧配额）。装配在 modules/ai 内，这里只接线；AI 的上游密钥

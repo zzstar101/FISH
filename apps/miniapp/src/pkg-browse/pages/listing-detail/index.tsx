@@ -137,6 +137,12 @@ type CommentNode = {
   id: string
   authorName: string
   authorInitial: string
+  /**
+   * 作者公开 id / 头像（#517）。
+   * `null` 只出现在「没有真实数据」的两处：本地乐观占位与演示 mock 留言 —— 此时不跳主页。
+   */
+  authorId: string | null
+  authorAvatarUrl: string | null
   isSeller: boolean
   content: string
   timeLabel: string
@@ -162,6 +168,8 @@ function localComment(content: string): CommentNode {
     id: `${PENDING_COMMENT_PREFIX}${localSeq}`,
     authorName: '我',
     authorInitial: '我',
+    authorId: null,
+    authorAvatarUrl: null,
     isSeller: false,
     content,
     timeLabel: '刚刚',
@@ -186,6 +194,9 @@ function dtoToNode(comment: CommentDto): CommentNode {
     authorName: comment.author.nickname,
     // 头像契约里可为 null；昵称首字兜底，与 mock 的 authorInitial 同语义
     authorInitial: comment.author.nickname.trim().charAt(0) || '鱼',
+    // #517：契约 `CommentAuthorSchema` 自带 id/avatarUrl，原样带到页面节点
+    authorId: comment.author.id,
+    authorAvatarUrl: comment.author.avatarUrl,
     isSeller: comment.isSeller,
     content: comment.content,
     timeLabel: relativeTime(comment.createdAt),
@@ -199,11 +210,51 @@ function mockCommentToNode(comment: MockComment): CommentNode {
     id: comment.id,
     authorName: comment.authorName,
     authorInitial: comment.authorInitial,
+    // MockComment 没有作者 id/头像（见 mock/types.ts）：不编假身份，点击时给一句提示
+    authorId: null,
+    authorAvatarUrl: null,
     isSeller: comment.isSeller,
     content: comment.content,
     timeLabel: comment.timeLabel,
     replies: [],
   }
+}
+
+/**
+ * 留言头像（#517）。
+ *
+ * 有真实头像就显示图片；URL 失效时回退昵称首字 —— 只判 `authorAvatarUrl`
+ * 是否为空不够，断网/CDN 404 时 `<Image>` 会留下一个空白圆。
+ */
+function CommentAvatar({
+  node,
+  reply = false,
+  onOpen,
+}: {
+  node: CommentNode
+  reply?: boolean
+  onOpen: () => void
+}) {
+  const [failed, setFailed] = useState(false)
+  // 同一 comment id 复用组件时，头像 URL 可能变（作者换头像/重试成功）；
+  // 不重置的话一次 404 会把首字回退永久锁死到组件卸载。
+  useEffect(() => {
+    if (node.authorAvatarUrl) setFailed(false)
+  }, [node.authorAvatarUrl])
+  return (
+    <View className={`detail__cav${reply ? ' detail__cav--reply' : ''}`} onClick={onOpen}>
+      {node.authorAvatarUrl && !failed ? (
+        <Image
+          className="detail__cav-img"
+          src={node.authorAvatarUrl}
+          mode="aspectFill"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <Text className="detail__cav-text">{node.authorInitial}</Text>
+      )}
+    </View>
+  )
 }
 
 /**
@@ -1384,6 +1435,29 @@ export default function ListingDetail() {
     void Taro.navigateTo({ url: `/pkg-trade/pages/report-listing/index?${query}` })
   }
 
+  /**
+   * 卖家主页（#517）：点区是整块 `.detail__seller`（头像 + 昵称 + 进TA主页按钮）。
+   * 子级 `detail__go` 不再挂第二个 handler —— 同一目标挂两次会跳两页
+   * （`watchers/index.tsx:330-332` 的教训）。
+   */
+  const openSellerHome = () => {
+    if (!data) return
+    void Taro.navigateTo({
+      url: `/pkg-browse/pages/user/index?id=${encodeURIComponent(data.seller.id)}`,
+    })
+  }
+
+  /** 留言作者主页（#517）：本地乐观占位与演示 mock 没有真实 id，给一句提示而不是静默。 */
+  const openCommentAuthor = (target: CommentNode) => {
+    if (!target.authorId) {
+      void Taro.showToast({ title: '这位用户的主页暂不可打开', icon: 'none' })
+      return
+    }
+    void Taro.navigateTo({
+      url: `/pkg-browse/pages/user/index?id=${encodeURIComponent(target.authorId)}`,
+    })
+  }
+
   return (
     <View className="detail">
       {/*
@@ -1556,7 +1630,7 @@ export default function ListingDetail() {
 
             {/* ---------------------------------------------------- 卖家 */}
             <View className="detail__seller-section">
-              <View className="detail__seller">
+              <View className="detail__seller" onClick={openSellerHome}>
                 <Image className="detail__avatar" src={data.seller.avatarUrl} mode="aspectFill" />
                 <View className="detail__sinfo">
                   {/* 昵称行只有昵称 + 认证勾（稿子口径）：校区不在这里显示 */}
@@ -1597,15 +1671,9 @@ export default function ListingDetail() {
                   ) : null}
                 </View>
                 {/* #122：他人主页已接真实公开资料，这里不再是 toast 占位。
-                    跳转带 `seller.id`（契约 `ListingDetail.seller.id`），与页面顶部卖家行同一来源。 */}
-                <View
-                  className="detail__go"
-                  onClick={() =>
-                    void Taro.navigateTo({
-                      url: `/pkg-browse/pages/user/index?id=${data.seller.id}`,
-                    })
-                  }
-                >
+                    #517：点区上提到 `.detail__seller`，本块只留视觉提示 —— 子级再挂
+                    handler 会让同一次点击跳两次（watchers/index.tsx:330-332 的教训）。 */}
+                <View className="detail__go">
                   <Text>进TA主页</Text>
                   <Image
                     className="detail__go-img"
@@ -1691,12 +1759,12 @@ export default function ListingDetail() {
                   <View className="detail__cmts">
                     {visibleComments.map((comment) => (
                       <View key={comment.id} className="detail__cmt">
-                        <View className="detail__cav">
-                          <Text className="detail__cav-text">{comment.authorInitial}</Text>
-                        </View>
+                        <CommentAvatar node={comment} onOpen={() => openCommentAuthor(comment)} />
                         <View className="detail__cbody">
                           <View className="detail__chd">
-                            <Text className="detail__cn">{comment.authorName}</Text>
+                            <Text className="detail__cn" onClick={() => openCommentAuthor(comment)}>
+                              {comment.authorName}
+                            </Text>
                             {comment.isSeller ? <Text className="detail__ctag">卖家</Text> : null}
                             <Text className="detail__ct">{comment.timeLabel}</Text>
                           </View>
@@ -1733,12 +1801,19 @@ export default function ListingDetail() {
                             <View className="detail__replies">
                               {comment.replies.map((reply) => (
                                 <View key={reply.id} className="detail__cmt detail__cmt--reply">
-                                  <View className="detail__cav detail__cav--reply">
-                                    <Text className="detail__cav-text">{reply.authorInitial}</Text>
-                                  </View>
+                                  <CommentAvatar
+                                    node={reply}
+                                    reply
+                                    onOpen={() => openCommentAuthor(reply)}
+                                  />
                                   <View className="detail__cbody">
                                     <View className="detail__chd">
-                                      <Text className="detail__cn">{reply.authorName}</Text>
+                                      <Text
+                                        className="detail__cn"
+                                        onClick={() => openCommentAuthor(reply)}
+                                      >
+                                        {reply.authorName}
+                                      </Text>
                                       {reply.isSeller ? (
                                         <Text className="detail__ctag">卖家</Text>
                                       ) : null}

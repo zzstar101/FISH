@@ -5,6 +5,7 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { allowRestrictionGuard } from '../governance/testing'
 import { createListingsRouter } from './router'
 import { type ListingService, ListingServiceError } from './service'
@@ -58,10 +59,17 @@ function fakeService(overrides: Partial<ListingService> = {}): ListingService {
  * 测试用的父 app 模拟 `app.ts` 的接线：只在写路由上挂登录守卫，读路由不挂。
  * 这正是契约 §0.2 的分界（读匿名可用、写必须登录），所以要在路由器层验证。
  */
+/** 手机号门禁替身：默认放行，只有专门测门禁挂载点的用例才换成拒绝版。 */
+const allowPhone: MiddlewareHandler<{ Variables: AuthVariables }> = async (_c, next) => {
+  await next()
+}
+
 function buildApp(options: {
   service: ListingService
   authed?: boolean
   viewerId?: string | null
+  requirePhone?: MiddlewareHandler<{ Variables: AuthVariables }>
+  guard?: RestrictionGuard
 }) {
   const authed = options.authed ?? true
   const root = new Hono()
@@ -76,8 +84,9 @@ function buildApp(options: {
     '/listings',
     createListingsRouter({
       service: options.service,
-      guard: allowRestrictionGuard,
+      guard: options.guard ?? allowRestrictionGuard,
       requireAuth,
+      requirePhone: options.requirePhone ?? allowPhone,
       resolveViewerId: async () => options.viewerId ?? null,
       resolveClientIp: () => '127.0.0.1',
       numberLookup: {
@@ -148,6 +157,7 @@ describe('listings router — 读接口匿名可用', () => {
       createListingsRouter({
         service: fakeService(),
         guard: allowRestrictionGuard,
+        requirePhone: allowPhone,
         requireAuth: async (c, next) => {
           c.set('userId', SELLER_ID)
           await next()
@@ -265,6 +275,45 @@ describe('listings router — 写接口要求登录', () => {
       const res = await app.request(path, init)
       expect(res.status).toBe(401)
       expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UNAUTHENTICATED')
+    }
+  })
+
+  // #514：手机号门禁只挂「新建」与「重新上架」，且在治理守卫之前（被拦的请求不开守卫事务）。
+  test('mounts the phone gate on create and re-online only, ahead of the restriction guard', async () => {
+    const guarded: string[] = []
+    const recordingGuard: MiddlewareHandler = async (c, next) => {
+      guarded.push(`${c.req.method} ${c.req.path}`)
+      await next()
+    }
+    const app = buildApp({
+      service: fakeService(),
+      authed: true,
+      requirePhone: async (c) => c.json(errorBody('PHONE_REQUIRED', '发布前请先绑定手机号'), 403),
+      guard: { publish: recordingGuard, write: recordingGuard },
+    })
+
+    for (const [path, init] of [
+      ['/listings', json(validCreateBody)],
+      [`/listings/${LISTING_ID}/online`, { method: 'POST' }],
+    ] as [string, RequestInit][]) {
+      const res = await app.request(path, init)
+      expect(res.status).toBe(403)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PHONE_REQUIRED')
+    }
+    expect(guarded).toEqual([])
+
+    for (const [path, init] of [
+      [
+        `/listings/${LISTING_ID}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: '新标题' }),
+        },
+      ],
+      [`/listings/${LISTING_ID}/offline`, { method: 'POST' }],
+    ] as [string, RequestInit][]) {
+      expect((await app.request(path, init)).status).not.toBe(403)
     }
   })
 

@@ -226,13 +226,22 @@ export function isListingReview(detail: { moderationStatus: string | null }): bo
 export function listingErrorView(error: unknown): {
   fieldErrors: PublishFieldErrors
   message: string | null
+  /** 服务端发布门禁（#514）：未绑定手机号。页面改渲染绑定引导卡，而不是把 message 当普通错误。 */
+  phoneRequired: boolean
 } {
   if (!(error instanceof ApiError)) {
-    return { fieldErrors: {}, message: '请求失败，请检查网络后重试' }
+    return { fieldErrors: {}, message: '请求失败，请检查网络后重试', phoneRequired: false }
+  }
+  if (error.code === 'PHONE_REQUIRED') {
+    return { fieldErrors: {}, message: null, phoneRequired: true }
   }
   if (error.code === 'LISTING_CONTENT_BLOCKED') {
     const fieldErrors = publishFieldErrorsFromDetails(error.details)
-    return { fieldErrors, message: publishBlockMessage(fieldErrors) }
+    return { fieldErrors, message: publishBlockMessage(fieldErrors), phoneRequired: false }
   }
-  return { fieldErrors: publishFieldErrorsFromDetails(error.details), message: error.message }
+  return {
+    fieldErrors: publishFieldErrorsFromDetails(error.details),
+    message: error.message,
+    phoneRequired: false,
+  }
 }

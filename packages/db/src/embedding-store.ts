@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt, ne, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, lt, ne, type SQL, sql } from 'drizzle-orm'
 import type { Db } from './client'
 import { newId } from './ids'
 import { embeddings } from './schema/embeddings'
@@ -198,6 +198,27 @@ export async function hasEmbeddingFromOtherModel(
     .limit(1)
 
   return rows.length > 0
+}
+
+/**
+ * 商品向量总数与其中属于 `model` 的条数（#524 启动自检）。
+ *
+ * API 读侧与 worker 写侧必须用同一个 `EMBEDDING_MODEL`：配错时语义召回 / 画像全部静默落空，
+ * 线上曾因此整条语义链路失效而无人察觉。`total > 0 && matching === 0` 就是这种配错的指纹。
+ */
+export async function countListingEmbeddingsByModel(
+  db: Db,
+  model: string,
+): Promise<{ total: number; matching: number }> {
+  const [row] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      matching: sql<number>`count(*) filter (where ${embeddings.model} = ${model})::int`,
+    })
+    .from(embeddings)
+    .where(isNotNull(embeddings.listingId))
+
+  return { total: Number(row?.total ?? 0), matching: Number(row?.matching ?? 0) }
 }
 
 /**

@@ -51,11 +51,12 @@ type ItemSpec = {
 }
 
 function scored(spec: ItemSpec): ScoredCandidate {
+  const recallSources = spec.recallSources ?? [spec.primarySource ?? 'fresh']
   const candidate: RecallCandidate = {
     listingId: spec.listingId,
     sellerId: spec.sellerId ?? `seller-${spec.listingId}`,
     category: spec.category ?? 'DIGITAL',
-    recallSources: spec.recallSources ?? [spec.primarySource ?? 'fresh'],
+    recallSources,
     semanticScore: null,
     wishScore: null,
     popularity: null,
@@ -64,6 +65,7 @@ function scored(spec: ItemSpec): ScoredCandidate {
     createdAt: NOW,
     alreadySeenCount: 0,
     sellerExposure: 1,
+    exploreEligible: recallSources.includes('explore'),
   }
   return { candidate, rankScore: spec.rankScore, breakdown: zeroBreakdown() }
 }
@@ -363,6 +365,73 @@ describe('explore 配额', () => {
     }
     // 两个探索候选都被选到过 ⇒ 哈希确实在打散，而不是永远给同一条（那就失去了"探索"的意义）。
     expect(chosen.size).toBe(2)
+  })
+})
+
+describe('explore 位（#524：显式探索位）', () => {
+  test('#524 回归：探索资格看整个 recallSources，不要求 explore 是首个来源', () => {
+    // v1 只认 `recallSources[0] === 'explore'`；而 explore 优先级最低，与 fresh 重叠的候选
+    // 首个来源永远是 fresh ⇒ 探索配额从来兑现不了。
+    const pool = [
+      ...['n1', 'n2', 'n3', 'n4', 'n5'].map((id, index) =>
+        scored({ listingId: id, rankScore: 100 - index, category: categoryAt(index) }),
+      ),
+      scored({
+        listingId: 'e1',
+        rankScore: 0,
+        recallSources: ['fresh', 'explore'],
+        category: 'TRANSPORT',
+      }),
+    ]
+    const { items, exploreListingIds } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      seed: 'seed-a',
+      limit: RERANK_EXPLORE_WINDOW,
+    })
+
+    expect(ids(items)).toContain('e1')
+    expect([...exploreListingIds]).toEqual(['e1'])
+  })
+
+  test('探索池够用时每个窗口恰好一个探索位（20%），且位置随 seed 变化、同 seed 可复现', () => {
+    const build = (seed: string) => {
+      const pool = [
+        ...Array.from({ length: 20 }, (_, index) =>
+          scored({ listingId: `n${String(index).padStart(2, '0')}`, rankScore: 100 - index }),
+        ),
+        ...Array.from({ length: 10 }, (_, index) =>
+          scored({ listingId: `e${index}`, rankScore: index * 0.01, primarySource: 'explore' }),
+        ),
+      ].map((item, index) => ({
+        ...item,
+        // 卖家/类目都打散，让这个用例只测探索位规则。
+        candidate: { ...item.candidate, category: categoryAt(index) },
+      }))
+      return rerankCandidates({ scored: pool, hiddenListingIds: NO_HIDDEN, seed, limit: 20 })
+    }
+
+    const result = build('seed-a')
+    expect(result.exploreListingIds.size).toBe(4)
+    expect(result.summary.relaxations.explore).toBe(0)
+    const placedIds = ids(result.items)
+    for (let window = 0; window < 4; window += 1) {
+      const slice = placedIds.slice(
+        window * RERANK_EXPLORE_WINDOW,
+        (window + 1) * RERANK_EXPLORE_WINDOW,
+      )
+      expect(slice.filter((id) => result.exploreListingIds.has(id))).toHaveLength(1)
+    }
+    expect(ids(build('seed-a').items)).toEqual(placedIds)
+
+    const offsets = new Set<number>()
+    for (let index = 0; index < 20; index += 1) {
+      const run = build(`seed-${index}`)
+      const first = ids(run.items).findIndex((id) => run.exploreListingIds.has(id))
+      offsets.add(first)
+    }
+    // 探索位在窗口内的位置由 seed 决定，而不是永远钉在同一格。
+    expect(offsets.size).toBeGreaterThan(1)
   })
 })
 

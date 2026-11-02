@@ -55,6 +55,41 @@ export function voiceMimeFromBytes(buffer: ArrayBuffer): VoiceMime | null {
   return null
 }
 
+/**
+ * #542：仅规范化已取证的固定 44B PCM WAV 头部缺陷，不是通用坏文件修复。
+ * 两个尺寸均比实际多 44B，blockAlign 为 4 而非 mono/16bit 的 2。
+ * 只复制并改头，不改 PCM、不猜时长；服务端仍按真实字节解析并执行 60s 上限。
+ */
+export function normalizeRecordedWav(buffer: ArrayBuffer): ArrayBuffer {
+  const size = buffer.byteLength
+  if (size <= 44 || (size - 44) % 2 !== 0) return buffer
+  const bytes = new Uint8Array(buffer)
+  const view = new DataView(buffer)
+  if (
+    ascii(bytes, 0, 4) !== 'RIFF' ||
+    ascii(bytes, 8, 12) !== 'WAVE' ||
+    ascii(bytes, 12, 16) !== 'fmt ' ||
+    view.getUint32(16, true) !== 16 ||
+    view.getUint16(20, true) !== 1 ||
+    view.getUint16(22, true) !== 1 ||
+    view.getUint32(24, true) !== 16000 ||
+    view.getUint32(28, true) !== 32000 ||
+    view.getUint16(32, true) !== 4 ||
+    view.getUint16(34, true) !== 16 ||
+    ascii(bytes, 36, 40) !== 'data' ||
+    view.getUint32(4, true) !== size + 36 ||
+    view.getUint32(40, true) !== size
+  ) {
+    return buffer
+  }
+  const normalized = buffer.slice(0)
+  const header = new DataView(normalized)
+  header.setUint32(4, size - 8, true)
+  header.setUint16(32, 2, true)
+  header.setUint32(40, size - 44, true)
+  return normalized
+}
+
 function ascii(bytes: Uint8Array, from: number, to: number): string {
   let out = ''
   for (let index = from; index < to; index += 1) out += String.fromCharCode(bytes[index] ?? 0)

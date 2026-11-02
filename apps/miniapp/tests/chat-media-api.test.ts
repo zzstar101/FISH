@@ -20,13 +20,19 @@ import { MEDIA_MAX_VOICE_DURATION_MS } from '@fish/contracts/chat/schema'
  */
 
 type ApiCall = { path: string; method?: string; body?: unknown }
-type UploadCall = { url: string; method?: string; header?: Record<string, string> }
+type UploadCall = {
+  url: string
+  method?: string
+  header?: Record<string, string>
+  data?: ArrayBuffer
+}
 
 const apiCalls: ApiCall[] = []
 const uploads: UploadCall[] = []
 const downloads: { url: string; header?: Record<string, string> }[] = []
 
 let presignResponse: unknown = null
+let localFile = new Uint8Array([1, 2, 3, 4]).buffer
 let uploadStatus = 200
 let downloadStatus = 200
 
@@ -45,14 +51,12 @@ const recorderHooks: {
   onError: ((error: { errMsg: string }) => void) | null
 } = { onError: null }
 let recorderStartOptions: { duration?: number } | null = null
-/** `readFile` 每次返回的字节；语音容器用例按需替换，图片用例保持 4 字节 */
-let readBytes = [1, 2, 3, 4]
 
 mock.module('@tarojs/taro', () => ({
   default: {
     getFileSystemManager: () => ({
       readFile: (option: { filePath: string; success: (res: { data: unknown }) => void }) => {
-        option.success({ data: new Uint8Array(readBytes).buffer })
+        option.success({ data: localFile })
         duringRead?.()
       },
     }),
@@ -67,7 +71,7 @@ mock.module('@tarojs/taro', () => ({
       stop: () => undefined,
     }),
     request: async (option: UploadCall) => {
-      uploads.push({ url: option.url, method: option.method, header: option.header })
+      uploads.push({ ...option })
       return { statusCode: uploadStatus }
     },
     downloadFile: async (option: { url: string; header?: Record<string, string> }) => {
@@ -126,16 +130,104 @@ beforeEach(() => {
   clearMediaCache()
   duringRead = null
   duringDownload = null
+  localFile = new Uint8Array([1, 2, 3, 4]).buffer
   uploadStatus = 200
   downloadStatus = 200
   recorderStartOptions = null
-  readBytes = [1, 2, 3, 4]
   presignResponse = {
     uploadUrl: 'http://localhost:9000/fish/chat-media/up',
     objectKey: `chat-media/${CONVERSATION}/me/1.png`,
     headers: {},
     expiresAt: '2026-01-01T00:00:00.000Z',
   }
+})
+
+describe('uploadChatVoice —— #542 已取证 WAV 头部规范化', () => {
+  test('只纠正已知 PCM 头，再把完整字节交给 PUT；原文件与 payload 不变', async () => {
+    localFile = await Bun.file(
+      new URL('./fixtures/542-voice-silence.wav', import.meta.url),
+    ).arrayBuffer()
+    // 非零合成采样值：避免全静音掩盖实现意外清空 payload。
+    new Uint8Array(localFile).set([0x12, 0x34], 44)
+    const original = localFile.slice(0)
+    const result = await uploadChatVoice(CONVERSATION, {
+      path: 'wxfile://tmp/voice.wav',
+      durationMs: 9999,
+    })
+    expect(uploads).toHaveLength(1)
+    const uploaded = uploads[0]?.data
+    expect(uploaded).toBeDefined()
+    if (!uploaded) throw new Error('missing PUT body')
+    const header = new DataView(uploaded)
+    expect(header.getUint32(4, true)).toBe(43404)
+    expect(header.getUint32(40, true)).toBe(43368)
+    expect(header.getUint16(32, true)).toBe(2)
+    expect(new Uint8Array(uploaded).subarray(44)).toEqual(new Uint8Array(original).subarray(44))
+    expect(new Uint8Array(localFile)).toEqual(new Uint8Array(original))
+    expect(uploaded.byteLength).toBe(43412)
+    expect(apiCalls[0]?.body).toEqual({ kind: 'VOICE', contentType: 'audio/wav', sizeBytes: 43412 })
+    expect(uploads[0]?.header?.['content-type']).toBe('audio/wav')
+    expect(result).toMatchObject({ contentType: 'audio/wav', sizeBytes: 43412, durationMs: 9999 })
+  })
+})
+
+describe('uploadChatVoice —— 不猜修其他字节形状', () => {
+  const fields = [
+    { name: 'fmt chunk 大小', offset: 16, value: 18, width: 4 },
+    { name: '非 PCM', offset: 20, value: 3, width: 2 },
+    { name: '双声道', offset: 22, value: 2, width: 2 },
+    { name: '采样率', offset: 24, value: 8000, width: 4 },
+    { name: 'byteRate', offset: 28, value: 16000, width: 4 },
+    { name: 'blockAlign 已为 2', offset: 32, value: 2, width: 2 },
+    { name: '位宽', offset: 34, value: 8, width: 2 },
+    { name: '只有 RIFF 长度异常', offset: 40, value: 43368, width: 4 },
+    { name: '只有 data 长度异常', offset: 4, value: 43404, width: 4 },
+    { name: 'RIFF 占位值', offset: 4, value: 0xffffffff, width: 4 },
+    { name: '非 fmt chunk', offset: 12, value: 0, width: 4 },
+    { name: '非 data chunk', offset: 36, value: 0, width: 4 },
+  ]
+  test.each(fields)('$name 时原样上传，仍由服务端判定', async ({ offset, value, width }) => {
+    localFile = await Bun.file(
+      new URL('./fixtures/542-voice-silence.wav', import.meta.url),
+    ).arrayBuffer()
+    const header = new DataView(localFile)
+    if (width === 2) header.setUint16(offset, value, true)
+    else header.setUint32(offset, value, true)
+    // 快照必须在上传**之前**取：只比引用（`toBe`）证明不了「原样上传」——原地改写字节的
+    // 实现会把 localFile 一起改掉，引用比较照样通过（#550 审查：此前的断言正是如此）。
+    const snapshot = new Uint8Array(localFile.slice(0))
+    await uploadChatVoice(CONVERSATION, { path: 'wxfile://tmp/voice.wav', durationMs: 1000 })
+    const uploaded = uploads[0]?.data
+    expect(uploaded).toBeDefined()
+    if (!uploaded) throw new Error('missing PUT body')
+    // 输入逐字节不变 + 上传体逐字节等于快照：两条合起来才排除「顺手猜修」。
+    expect(new Uint8Array(localFile)).toEqual(snapshot)
+    expect(new Uint8Array(uploaded)).toEqual(snapshot)
+  })
+
+  test.each(['normal', 'empty', 'odd', 'short', 'mp4', 'webm'])('%s 文件不变', async (shape) => {
+    localFile = await Bun.file(
+      new URL('./fixtures/542-voice-silence.wav', import.meta.url),
+    ).arrayBuffer()
+    if (shape === 'normal') {
+      const header = new DataView(localFile)
+      header.setUint32(4, localFile.byteLength - 8, true)
+      header.setUint32(40, localFile.byteLength - 44, true)
+      header.setUint16(32, 2, true)
+    } else if (shape === 'empty' || shape === 'odd') {
+      localFile = localFile.slice(0, shape === 'empty' ? 44 : localFile.byteLength - 1)
+      const header = new DataView(localFile)
+      header.setUint32(4, localFile.byteLength + 36, true)
+      header.setUint32(40, localFile.byteLength, true)
+    } else if (shape === 'short') localFile = localFile.slice(0, 42)
+    else if (shape === 'mp4')
+      localFile = new Uint8Array([0, 0, 0, 12, 102, 116, 121, 112, 0, 0, 0, 0]).buffer
+    else if (shape === 'webm') localFile = new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]).buffer
+    const before = localFile.slice(0)
+    await uploadChatVoice(CONVERSATION, { path: 'wxfile://tmp/voice', durationMs: 1000 })
+    expect(uploads[0]?.data).toBe(localFile)
+    expect(new Uint8Array(localFile)).toEqual(new Uint8Array(before))
+  })
 })
 
 describe('downloadChatMedia —— 下载回来时身份已经变了（#67 复查 #222）', () => {
@@ -280,7 +372,7 @@ describe('uploadChatVoice —— 容器不可识别时必须在 presign 前失�
   ]
 
   test('ADTS：抛 VoiceContainerError，size/header 可取证，且一个请求都不发', async () => {
-    readBytes = ADTS
+    localFile = new Uint8Array(ADTS).buffer
     const error = await uploadChatVoice(CONVERSATION, {
       path: 'wxfile://tmp/voice.aac',
       durationMs: 1200,
@@ -296,7 +388,7 @@ describe('uploadChatVoice —— 容器不可识别时必须在 presign 前失�
   })
 
   test('RIFF/WAVE：正常 presign → PUT，content-type 是 audio/wav', async () => {
-    readBytes = RIFF_WAV
+    localFile = new Uint8Array(RIFF_WAV).buffer
     const uploaded = await uploadChatVoice(
       CONVERSATION,
       { path: 'wxfile://tmp/voice.wav', durationMs: 1200 },
@@ -320,7 +412,7 @@ describe('uploadChatVoice —— 容器不可识别时必须在 presign 前失�
   })
 
   test('PUT 非 2xx：抛 MediaUploadError，保留 HTTP 状态且文案不暴露状态码', async () => {
-    readBytes = RIFF_WAV
+    localFile = new Uint8Array(RIFF_WAV).buffer
     uploadStatus = 503
     const error = await uploadChatVoice(CONVERSATION, {
       path: 'wxfile://tmp/voice.wav',

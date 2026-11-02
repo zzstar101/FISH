@@ -70,6 +70,11 @@ type FavoriteBase = {
   /** 整数分（契约口径）；页面用 `lib/money` 的 `formatAmount` 投影成「760」 */
   priceCents: number
   seller: string
+  /**
+   * 卖家公开 id（#517）：真实行取契约 `listing.seller.id`；演示 fixture 没有真实身份，
+   * 填 `null`，页面据此只给提示、不猜人。
+   */
+  sellerId: string | null
   /** 头像色块（`AVATAR_BLOCKS` 的下标，见文件头「色块不新增色值」） */
   avatarUrl: string
   verified: boolean
@@ -98,7 +103,7 @@ export type FavoriteItem = FavoriteBase &
   ({ segment: 'sale' } | { segment: 'gone'; goneReason: FavoriteGoneReason })
 
 /** fixture 的原始表：`goneReason` 一给就是失效行（`segment` 由它派生，不可能对不上） */
-type RawFavorite = Omit<FavoriteBase, 'avatarUrl' | 'coverUrl' | 'demo'> &
+type RawFavorite = Omit<FavoriteBase, 'avatarUrl' | 'coverUrl' | 'demo' | 'sellerId'> &
   ({ segment?: 'sale'; goneReason?: undefined } | { goneReason: FavoriteGoneReason }) & {
     /** `AVATAR_BLOCKS` 下标 */
     avatarIndex: number
@@ -220,6 +225,7 @@ export const DEMO_FAVORITES: FavoriteItem[] = RAW.map((row) => {
     title: row.title,
     priceCents: row.priceCents,
     seller: row.seller,
+    sellerId: null,
     avatarUrl: AVATAR_BLOCKS[row.avatarIndex] ?? '',
     verified: row.verified,
     wants: row.wants,
@@ -337,6 +343,7 @@ export function toFavoriteItems(
       title: listing.title,
       priceCents: listing.priceCents,
       seller: listing.seller?.nickname ?? '',
+      sellerId: listing.seller?.id ?? null,
       // 契约的 `avatarUrl` 可为 `null`（库里是无约束 text）。缺图给通用占位色块，
       // 与 `features/listing/adapt.ts` 同一取法 —— 占位图是「这张图没有」的呈现，
       // 不是编造这个人的身份。
