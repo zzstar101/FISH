@@ -65,7 +65,7 @@ export function lastTxAcceptedId(messages: readonly MessageDto[]): string | null
  *
  * `tx.proposal` / `tx.rejected` / `tx.accepted` 翻成中文，其余（含普通文本系统消息）
  * 按原文。`tx.accepted` 说的是**这条消息发生过什么**（「已接受交易」），不是
- * 「这笔交易现在在哪一步」—— 后者由吸底进度卡按交易行渲染（#522 的教训：
+ * 「这笔交易现在在哪一步」—— 后者由页头交易状态条按交易行渲染（#522 的教训：
  * 把不可变消息当实时状态，成交后就会一直停在「待面交」）。
  */
 export function systemPillText(content: string): string {
