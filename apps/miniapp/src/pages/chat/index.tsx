@@ -1,5 +1,5 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
-import type { TransactionDto, TransactionSystemEvent } from '@fish/contracts/transactions/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -24,6 +24,7 @@ import {
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
 import { fetchAllTransactions } from '@/features/transaction/api'
+import type { TxMessageEvent } from '@/features/transaction/tx-signal'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import type { MockNotification } from '@/mock/types'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
@@ -133,7 +134,7 @@ export default function Chat() {
    * 只认 `lastMessage` 会让胶囊凭空消失（与「我的发布」的「待确认」段同一口径）。
    * 扫描有请求上限（`MAX_PROPOSAL_SCANS`）：超出的会话按「不知道」处理，不显示胶囊。
    */
-  const [txSignals, setTxSignals] = useState<Map<string, TransactionSystemEvent | null>>(new Map())
+  const [txSignals, setTxSignals] = useState<Map<string, TxMessageEvent | null>>(new Map())
 
   /**
    * 加载代次：并发加载（快速换账号 / 连点重试）时只有最后一次的响应落地。
@@ -199,13 +200,11 @@ export default function Chat() {
    * 失败与超限都按「不知道」处理（该会话不显示胶囊），不打断会话列表渲染 ——
    * 胶囊是列表的增强信息。`lastMessage` 已经是 `tx.*` 的会话零成本短路，不进扫描。
    */
-  const proposalCache = useRef(
-    new Map<string, { at: string; event: TransactionSystemEvent | null }>(),
-  )
+  const proposalCache = useRef(new Map<string, { at: string; event: TxMessageEvent | null }>())
   const scanProposals = useCallback(
     async (list: ConversationDto[], txSnapshot: Map<string, TransactionDto>, epoch: number) => {
       const pending: string[] = []
-      const found = new Map<string, TransactionSystemEvent | null>()
+      const found = new Map<string, TxMessageEvent | null>()
       for (const item of list) {
         if (pending.length >= MAX_PROPOSAL_SCANS) break
         if (!needsProposalScan(item, txSnapshot)) continue
@@ -756,7 +755,7 @@ export default function Chat() {
                         <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
                       ) : null}
                     </View>
-                    <Text className="chat__msg">{previewOf(item)}</Text>
+                    <Text className="chat__msg">{previewOf(item, txMap.get(item.id))}</Text>
                     {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
                     <Text className="chat__tm num">
                       {conversationTimeLabel(item.lastMessageAt, now)}

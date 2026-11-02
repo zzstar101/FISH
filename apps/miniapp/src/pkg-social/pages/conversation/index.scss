@@ -418,15 +418,6 @@
   text-align: center;
 }
 
-/* 胶囊 + 卡片的组合（tx.accepted / tx.completed）：竖排居中，间距即稿子的 8pt */
-.conv__syswrap {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-}
-
 /* 消息行：头像 + 气泡列（稿子 .msg / .col） */
 .conv__row {
   display: flex;
@@ -916,6 +907,26 @@
   color: var(--surface);
   font-size: var(--fs-xs);
   font-weight: 600;
+}
+
+/* 模式①：吸附在输入栏上方（#521 / #522）。与消息流里那张卡同一套底座，
+   只多一条与输入行的间距；状态差异只体现在图标 / 文案 / CTA 颜色上。 */
+.conv__txcard--dock {
+  margin-bottom: 16px;
+}
+
+/* CTA 随状态换色：待面交=品牌蓝（默认）、待对方确认=信息蓝、已完成=绿、已取消=灰。
+   色值与消息列表胶囊（pages/chat/index.scss 的 .chat__pill）同一族。 */
+.conv__txcard.is-ok .conv__txcard-act {
+  background: var(--ok-ink);
+}
+
+.conv__txcard.is-pending .conv__txcard-act {
+  background: #3b74dd;
+}
+
+.conv__txcard.is-plain .conv__txcard-act {
+  background: #5f6e8a;
 }
 
 /* 「已完成」评价卡（稿子 .ratecard / tx.completed）已整块删除：
