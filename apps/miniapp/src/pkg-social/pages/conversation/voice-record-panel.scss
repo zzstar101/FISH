@@ -1,0 +1,79 @@
+/*
+ * 录音反馈面板（#535）。
+ *
+ * 挂在 `.conv__bar`（`position: relative`）内部，靠 `bottom: calc(100% + 12px)` 浮在输入栏上方；
+ * bar 带 `padding-bottom: env(safe-area-inset-bottom)`，面板相对的是 padding box，
+ * 安全区不会改变它的偏移；引用栏 / 「+」面板把 bar 撑高时面板自动上移。
+ *
+ * 波形用 `transform: scaleY()`（不触发布局），只有「是否高亮」由取消态决定。
+ */
+.vrec {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: calc(100% + 12px);
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 24px;
+  border-radius: 28px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: 0 12px 32px rgb(27 37 64 / 12%);
+  /* 层叠上下文由 `.conv__bar`（z-index: 20）建立，这里只需压过 bar 自身内容 */
+  z-index: 1;
+
+  &.is-cancel {
+    border-color: var(--danger);
+
+    .vrec__bar {
+      background: var(--danger);
+    }
+
+    .vrec__hint {
+      color: var(--danger);
+    }
+  }
+}
+
+.vrec__wave {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+}
+
+.vrec__bar {
+  width: 8px;
+  height: 34px;
+  border-radius: 4px;
+  background: var(--brand);
+  transform-origin: center;
+  animation: vrec-wave 0.9s ease-in-out infinite;
+}
+
+.vrec__time {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.vrec__hint {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  color: var(--muted-2);
+}
+
+@keyframes vrec-wave {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+    opacity: 0.55;
+  }
+
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}

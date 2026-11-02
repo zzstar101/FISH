@@ -32,6 +32,7 @@ import {
   downloadChatMedia,
   loadMediaPage,
   pickChatImages,
+  type RecordedVoice,
   startVoiceRecording,
   uploadChatImage,
   uploadChatVoice,
@@ -101,14 +102,8 @@ import {
   startMediaRetry,
   systemPillText,
 } from './view'
-import {
-  isVoiceCancelArmed,
-  voiceElapsedSeconds,
-  voiceRecordingClock,
-} from './voice-recording-view'
-
-/** 波形条数量（#535）：5 条，靠 animationDelay 错位形成流动感 */
-const REC_WAVE_BARS = [0, 1, 2, 3, 4] as const
+import VoiceRecordPanel from './voice-record-panel'
+import { isVoiceCancelArmed } from './voice-recording-view'
 
 /** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
 function touchClientY(event: unknown): number {
@@ -318,28 +313,24 @@ export default function Conversation() {
   const pendingMediaRef = useRef<PendingMedia[]>([])
   /** 当前这次录音的句柄（`null` = 没在录） */
   const recordingRef = useRef<VoiceRecording | null>(null)
-  /* ---------------- 录音期反馈（#535）：计时 + 上滑取消 ---------------- */
-  /** 面板上的已录秒数（250ms 刷一次，值由起点算出，不累加） */
-  const [recordSeconds, setRecordSeconds] = useState(0)
+  /* ---------------- 录音期反馈（#535）：上滑取消 ---------------- */
   /** 是否已滑到「松开取消」区（只驱动渲染，松手判定读 ref） */
   const [cancelArmed, setCancelArmed] = useState(false)
-  const recordStartedAtRef = useRef(0)
   const recordOriginYRef = useRef(Number.NaN)
   const cancelArmedRef = useRef(false)
-  const recordTickerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  /** 收掉录音期的显示态（计时器 + 取消态）。所有「录音结束」路径都必须过这里 */
-  const resetRecordingUi = () => {
-    if (recordTickerRef.current !== null) {
-      clearInterval(recordTickerRef.current)
-      recordTickerRef.current = null
-    }
-    recordStartedAtRef.current = 0
+  /**
+   * 收掉录音期的显示态（取消态）。
+   *
+   * 计时器与秒数在 `VoiceRecordPanel` 内部（审查 medium：放页面会让整页消息流每秒重渲染），
+   * 面板随 `recording` 卸载时自己清 interval —— 所以这里只需复位取消态。
+   * 所有「录音结束」路径都必须过这里。
+   */
+  const resetRecordingUi = useCallback(() => {
     recordOriginYRef.current = Number.NaN
     cancelArmedRef.current = false
     setCancelArmed(false)
-    setRecordSeconds(0)
-  }
+  }, [])
   /** 语音播放器（切歌 / 离页 / 换账号都要先停掉） */
   const audioRef = useRef<ReturnType<typeof Taro.createInnerAudioContext> | null>(null)
   /** 正在下载的媒体 id：兜住「推送与 HTTP 同时把一条媒体放进流」造成的重复下载 */
@@ -683,12 +674,15 @@ export default function Conversation() {
       aliveRef.current = false
       recordingRef.current?.abort()
       recordingRef.current = null
+      // 卸载不一定会走 useDidHide：这里必须把录音期显示态收掉，
+      // 否则计时面板的 interval 会随页面一起变成孤儿（#535 审查 medium）
+      resetRecordingUi()
       audioRef.current?.destroy()
       audioRef.current = null
       // 在途的语音下载到此失效（与身份清场同理）：离页后回来不许出声
       playSeqRef.current += 1
     }
-  }, [])
+  }, [resetRecordingUi])
 
   /**
   /**
@@ -1406,17 +1400,11 @@ export default function Conversation() {
     if (!canSend || recordingRef.current) return
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
-      recordingRef.current = startVoiceRecording(handleVoiceFailure)
-      recordStartedAtRef.current = Date.now()
+      // 第二个回调管「录音器自己停了」（时长上限）：不接的话面板会继续计时且无提示
+      recordingRef.current = startVoiceRecording(handleVoiceFailure, handleVoiceAutoStop)
       recordOriginYRef.current = touchClientY(event)
       cancelArmedRef.current = false
       setCancelArmed(false)
-      setRecordSeconds(0)
-      if (recordTickerRef.current !== null) clearInterval(recordTickerRef.current)
-      // 250ms 一拍：秒数由起点算出（不累加，避免漂移），波形交给 CSS animation
-      recordTickerRef.current = setInterval(() => {
-        setRecordSeconds(voiceElapsedSeconds(recordStartedAtRef.current, Date.now()))
-      }, 250)
       setRecording(true)
     } catch (error) {
       recordingRef.current = null
@@ -1442,6 +1430,47 @@ export default function Conversation() {
   /** 松手：取消态已武装就丢弃这一段，否则发送（判定读 ref，不吃 setState 的延迟） */
   const endVoice = () => finishVoice(cancelArmedRef.current)
 
+  /**
+   * 把录好的语音交去发送（松手发送 / 达到时长上限自动停 两条路径共用）。
+   *
+   * 同 `pickAndSendImages`：记**身份**而不是代次（#364 审查）。录音同样要好几秒，
+   * 期间一次 `load()` 推进的只是 epoch —— 那段录音还是当前账号录的，不该被丢掉。
+   */
+  const sendRecordedVoice = (recorded: RecordedVoice) => {
+    const identity: MediaTaskIdentity = {
+      cookie: sessionCookieHeader() ?? '',
+      userId: userIdRef.current,
+    }
+    // 离页（卸载）：这段录音已经没人接了，静默丢弃
+    if (!aliveRef.current) return
+    if (isStaleMediaIdentity(identity, currentIdentity())) {
+      // 录了音却什么都没发生会被当成页面坏了，必须说清楚
+      void Taro.showToast({ title: '账号已切换，请重新录制语音', icon: 'none' })
+      return
+    }
+    sendMedia({
+      kind: 'VOICE',
+      clientRequestId: randomUuidV4(),
+      path: recorded.path,
+      durationMs: recorded.durationMs,
+    })
+  }
+
+  /**
+   * 录音达到时长上限（录音器自己停了，见 `startVoiceRecording` 的 `onAutoStop`）。
+   *
+   * 以前这条路径没人接：面板会继续计时、按钮还写着「松开 发送」，实际上已经不在录了 ——
+   * 用户松手时才把这段当正常录音发出去（或更早被丢弃）。现在：复位 + 明确提示 + 直接发送
+   * 这一段（与微信「到时自动发送」一致，也避免用户刚录满的一分钟凭空消失）。
+   */
+  const handleVoiceAutoStop = (recorded: RecordedVoice) => {
+    recordingRef.current = null
+    setRecording(false)
+    resetRecordingUi()
+    void Taro.showToast({ title: '已达最长录音时长，已发送', icon: 'none' })
+    sendRecordedVoice(recorded)
+  }
+
   /** 松手：结束录音并发送（`cancelled` = 手指移开 / 取消，放弃这一段） */
   const finishVoice = (cancelled: boolean) => {
     const session = recordingRef.current
@@ -1453,31 +1482,9 @@ export default function Conversation() {
       session.abort()
       return
     }
-    /**
-     * 同 `pickAndSendImages`：记**身份**而不是代次（#364 审查）。录音同样要好几秒，
-     * 期间一次 `load()` 推进的只是 epoch —— 那段录音还是当前账号录的，不该被丢掉。
-     */
-    const identity: MediaTaskIdentity = {
-      cookie: sessionCookieHeader() ?? '',
-      userId: userIdRef.current,
-    }
     void session
       .stop()
-      .then((recorded) => {
-        // 离页（卸载）：这段录音已经没人接了，静默丢弃
-        if (!aliveRef.current) return
-        if (isStaleMediaIdentity(identity, currentIdentity())) {
-          // 录了音却什么都没发生会被当成页面坏了，必须说清楚
-          void Taro.showToast({ title: '账号已切换，请重新录制语音', icon: 'none' })
-          return
-        }
-        sendMedia({
-          kind: 'VOICE',
-          clientRequestId: randomUuidV4(),
-          path: recorded.path,
-          durationMs: recorded.durationMs,
-        })
-      })
+      .then(sendRecordedVoice)
       .catch((error) => {
         handleVoiceFailure(error)
       })
@@ -2408,24 +2415,8 @@ export default function Conversation() {
         空内容时「发送」置灰（稿子 .send.is-off）。
       */}
       <View className="conv__bar">
-        {/* 录音反馈面板（#535）：按住说话期间浮在输入栏上方。
-            计时 250ms 刷一次；波形是纯 CSS animation（不靠 setState 驱动）；
-            手指上滑越过阈值翻成「松开 取消」红色态，松手即丢弃这一段。 */}
-        {recording ? (
-          <View className={`conv__recpanel${cancelArmed ? ' is-cancel' : ''}`}>
-            <View className="conv__recwave">
-              {REC_WAVE_BARS.map((bar) => (
-                <View
-                  key={bar}
-                  className="conv__recbar"
-                  style={{ animationDelay: `${bar * 110}ms` }}
-                />
-              ))}
-            </View>
-            <Text className="conv__rectime num">{voiceRecordingClock(recordSeconds)}</Text>
-            <Text className="conv__rechint">{cancelArmed ? '松开 取消' : '上滑取消'}</Text>
-          </View>
-        ) : null}
+        {/* 录音反馈面板（#535）：计时与波形在子组件内部，消息流不随秒数重渲染 */}
+        {recording ? <VoiceRecordPanel cancelArmed={cancelArmed} /> : null}
         {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
         {replyTarget ? (
           <View className="conv__replybar">
@@ -2460,13 +2451,15 @@ export default function Conversation() {
               取消只能靠不把这段音频交给上传。
             */
             <View
-              className={`conv__hold${recording ? ' is-on' : ''}`}
+              className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
               onTouchStart={startVoice}
               onTouchMove={moveVoice}
               onTouchEnd={endVoice}
               onTouchCancel={() => finishVoice(true)}
             >
-              <Text className="conv__hold-tx">{recording ? '松开 发送' : '按住 说话'}</Text>
+              <Text className="conv__hold-tx">
+                {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
+              </Text>
             </View>
           ) : (
             <Textarea

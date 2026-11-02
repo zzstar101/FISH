@@ -412,7 +412,11 @@ const VOICE_RECORD_MAX_MS = MEDIA_MAX_VOICE_DURATION_MS - 1000
  * 松手**时就到 —— 不在这里上报的话，页面要等到 `stop()` 的 catch 才知道失败，期间按钮
  * 还写着「松开 发送」，用户以为在录、其实什么都没录。
  */
-export function startVoiceRecording(onError?: (error: Error) => void): VoiceRecording {
+export function startVoiceRecording(
+  onError?: (error: Error) => void,
+  /** 录音达到时长上限、录音器**自己停了**（没有人调用 `stop()`）时的回调（#535 审查） */
+  onAutoStop?: (recorded: RecordedVoice) => void,
+): VoiceRecording {
   const manager = recorder()
   /**
    * `stop()` 已经调过：此后同一个错误会从 `done` 的 reject 走到 `stop()` 的 catch，
@@ -421,7 +425,12 @@ export function startVoiceRecording(onError?: (error: Error) => void): VoiceReco
   let stopping = false
   const done = new Promise<RecordedVoice>((resolve, reject) => {
     voiceHandlers = {
-      resolve,
+      resolve: (recorded) => {
+        resolve(recorded)
+        // `stopping === false` = 录音器自己停的（时长上限 / 系统打断）：
+        // 这时页面还没松手，也就没人消费 `stop()`，必须带外通知，否则面板会继续计时
+        if (!stopping) onAutoStop?.(recorded)
+      },
       reject: (error) => {
         reject(error)
         if (!stopping) onError?.(error)

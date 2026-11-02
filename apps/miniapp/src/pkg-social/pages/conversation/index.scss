@@ -988,81 +988,10 @@
   color: var(--muted-2);
 }
 
-/* ------------------------------------------------------------------ 录音反馈面板（#535）
-
-   按住说话期间浮在输入栏上方：5 条波形 + 计时 + 上滑提示。
-   波形高度只由 CSS animation 驱动（不接 setState），计时器 250ms 只刷秒数，
-   低端机上也不会因为每帧渲染整页会话掉帧。
-   滑到取消区时整块翻成 danger 描边 + 红波形 + 文案改「松开 取消」。 */
-.conv__recpanel {
-  position: absolute;
-  left: 24px;
-  right: 24px;
-  bottom: calc(100% + 12px);
-  z-index: 21;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 18px 24px;
-  border-radius: 28px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-  box-shadow: 0 12px 32px rgb(27 37 64 / 12%);
-
-  &.is-cancel {
-    border-color: var(--danger);
-
-    .conv__recbar {
-      background: var(--danger);
-    }
-
-    .conv__rechint {
-      color: var(--danger);
-    }
-  }
+/* 按住说话进入「松开取消」态：与录音面板的 danger 视觉同步（#535） */
+.conv__hold.is-cancel {
+  background: var(--danger-weak);
 }
-
-.conv__recwave {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 40px;
-}
-
-.conv__recbar {
-  width: 8px;
-  height: 14px;
-  border-radius: 4px;
-  background: var(--brand);
-  animation: conv-rec-wave 0.9s ease-in-out infinite;
-}
-
-.conv__rectime {
-  font-size: var(--fs-sm);
-  font-weight: 700;
-  color: var(--muted-2);
-  font-variant-numeric: tabular-nums;
-}
-
-.conv__rechint {
-  margin-left: auto;
-  font-size: var(--fs-2xs);
-  color: var(--muted-2);
-}
-
-@keyframes conv-rec-wave {
-  0%,
-  100% {
-    height: 14px;
-    opacity: 0.55;
-  }
-
-  50% {
-    height: 34px;
-    opacity: 1;
-  }
-}
-
 /* 「+」：展开态深墨底 + 图标转白 + 转 45°（语义从「更多」变成「收起」） */
 .conv__plus {
   flex: 0 0 auto;
