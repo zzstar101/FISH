@@ -850,6 +850,8 @@ describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#
     `onStop` 会去清**下一段**的槽（正是单槽记账要防的「上一段收尾打死新一段」）。
   */
   test('中断→abort 之后：中断结束（未过宽限期）不重发 stop()，闸门仍只由终态事件打开', () => {
+    // 冻结墙钟：这条用例靠「还没到宽限期」成立，卡顿超过 5s 会假红（相邻用例同样钉时间）
+    setSystemTime(new Date(Date.now()))
     let session: ReturnType<typeof startVoiceRecording> | null = null
     session = startVoiceRecording(undefined, undefined, () => session?.abort())
 
@@ -860,6 +862,7 @@ describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#
     recorderHooks.onInterruptionEnd?.()
     expect(recorderStopCalls).toBe(stopCallsBefore)
     expect(() => startVoiceRecording()).toThrow(VoiceRecordingBusyError)
+    setSystemTime()
 
     // 真正的终态事件到了才销账（放弃的那一段不交付）
     recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/late.wav', duration: 20_000 })
