@@ -117,6 +117,9 @@ beforeAll(async () => {
       studentNo: '202401000903',
       passwordHash,
       nickname: '卖家',
+      // 已绑手机号：#514 的手机号门禁挂在治理守卫之前，未绑定会先回 403 PHONE_REQUIRED，
+      // 下面「重新上架被挡 409」「受限后建商品 403 USER_RESTRICTED」就测不到治理本身了
+      phone: '19900009903',
       createdAt: new Date('2026-10-01T00:00:00Z'),
       role: 'USER',
     },
@@ -517,6 +520,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
       }),
     })
     expect(created.status).toBe(403)
+    expect(await created.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })
 
     // 重复限制 → 409（并发下由部分唯一索引兜底）
     const again = await app.request(

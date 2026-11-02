@@ -83,6 +83,14 @@ type RequestOptions = {
    * 那是跟着**别人的**请求走的带外上下文，塞进任何业务 body 都会给该契约加无关字段。
    */
   headers?: Record<string, string>
+  /**
+   * 单次请求超时（毫秒），缺省用 `REQUEST_TIMEOUT_MS`（15s）。
+   *
+   * 只有「服务端自己就可能跑得比 15s 更久」的端点才需要覆盖它 —— 目前只有手机号绑定
+   * （`features/auth/api.ts` 的 `bindPhone`：服务端最坏 ≈ 20s，token 冷启动与换号各自
+   * 5s、凭证失效再各一次）。客户端先超时会让用户看到「网络异常」，而号码其实已经落库。
+   */
+  timeout?: number
 }
 
 /**
@@ -157,7 +165,7 @@ export async function apiRequestWithMeta(
     method: options.method ?? 'GET',
     header,
     data: options.body === undefined ? undefined : options.body,
-    timeout: REQUEST_TIMEOUT_MS,
+    timeout: options.timeout ?? REQUEST_TIMEOUT_MS,
   })
 
   // 登录成功会下发新的会话 cookie，这里接住并持久化。

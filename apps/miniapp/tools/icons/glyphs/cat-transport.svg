@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <title>cat-transport</title>
+  <circle cx="7.25" cy="15" r="3.25"/>
+  <circle cx="16.75" cy="15" r="3.25"/>
+  <path d="M7.25 15L10 9.5h6l.75 5.5M10 9.5L13 15H7.25M9 6.5h2.5M16 9.5l-.75-2.5h2"/>
+</svg>

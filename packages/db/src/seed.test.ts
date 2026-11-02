@@ -14,6 +14,7 @@ import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { messages } from './schema/messages'
 import { notifications } from './schema/notifications'
+import { subscribeMessageDeliveries, subscribeMessageGrants } from './schema/subscribe-messages'
 import { transactions } from './schema/transactions'
 import { userInterestProfiles } from './schema/user-interest-profiles'
 import { users } from './schema/users'
@@ -68,6 +69,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       disputeAttachments,
       disputeEvidenceMessages,
       notifications,
+      subscribeMessageGrants,
+      subscribeMessageDeliveries,
       jobs,
       userInterestProfiles,
     })) {
@@ -103,12 +106,15 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // 它们**测不到 TRUNCATE 清单漏列**：清单漏掉任何一张被引用的表时，seed() 自身的
       // TRUNCATE 会先抛 0A000（实测 detail: Table "dispute_attachments" references
       // "users"），根本走不到下面的 counts —— 换成父提交 d170f609 的旧 counts 在同一处
-      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 41 张业务表，本 counts
-      // 只覆盖其中 17 张，其余 24 张靠 seed() 抛出的 0A000 把关。
+      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 43 张业务表，本 counts
+      // 只覆盖其中 19 张，其余 24 张靠 seed() 抛出的 0A000 把关。
       disputes: 0,
       disputeAttachments: 0,
       disputeEvidenceMessages: 0,
       notifications: 0,
+      // #462：订阅消息的授权记账与投递行由真实授权 / 调度循环产生，seed 不预置。
+      subscribeMessageGrants: 0,
+      subscribeMessageDeliveries: 0,
       jobs: 1,
       // #323 R2：兴趣画像由 worker 的 REFRESH_USER_INTEREST job 从真实行为聚合产出，
       // seed 不预置（假向量/假画像落进 seed 库比空表更误导，同 embeddings 的取舍）。

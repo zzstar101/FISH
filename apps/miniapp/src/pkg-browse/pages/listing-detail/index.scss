@@ -579,6 +579,13 @@
   justify-content: center;
 }
 
+.detail__cav-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: block;
+}
+
 .detail__cav-text {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 24px;
@@ -711,8 +718,8 @@
 }
 
 .detail__cmt-more-img {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   transition: transform 0.22s ease;
 
   &.is-open {
@@ -744,8 +751,8 @@
 }
 
 .detail__seclabel-img {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 
@@ -863,8 +870,8 @@
 }
 
 .detail__fav-img {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
 }
 
 .detail__btn {
@@ -886,8 +893,8 @@
 
 /* 稿子 `.btn svg{width:19px;height:19px}` = 38rpx */
 .detail__btn-img {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
 }
 

@@ -1,3 +1,4 @@
+import type { Me } from '@fish/contracts/auth/user'
 import type { ListingCard, ListingStatus } from '@fish/contracts/listings/schema'
 import {
   AlertDialog,
@@ -15,12 +16,13 @@ import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { categoryLabel } from '../../lib/labels'
 import { useAuth } from '../auth/auth-provider'
+import { PhoneRequiredNotice } from '../auth/phone-required-notice'
 import { WatchersDialog } from '../watchers/watchers-dialog'
 import type { MyListingStatusFilter } from './api'
 import { listingActionError, listingDeleteError } from './api'
@@ -52,6 +54,17 @@ export function MyListPage() {
 function MyListContent({ ownerId }: { ownerId: string }) {
   const [status, setStatus] = useState<MyListingStatusFilter>('ALL')
   const [notice, setNotice] = useState<string | null>(null)
+  // 重新上架被发布门禁拦下（#514）：在 notice 位换成绑定引导卡，不展示普通错误文案。
+  // 记下被拦时的 `me` 并重拉：用户去小程序绑好、切回窗口时 `/me` 重拉成 phoneBound=true，
+  // 引用变了卡片就自己消失（与 /publish 同一判据）。
+  const { me, refetch: refetchMe } = useAuth()
+  const meRef = useRef(me)
+  meRef.current = me
+  const [phoneRequiredFor, setPhoneRequiredFor] = useState<Me | null>(null)
+  const setPhoneRequired = (required: boolean) =>
+    setPhoneRequiredFor(required ? meRef.current : null)
+  const phoneRequired =
+    phoneRequiredFor !== null && (me?.phoneBound !== true || phoneRequiredFor === me)
   const [editing, setEditing] = useState<ListingCard | null>(null)
   const [watching, setWatching] = useState<ListingCard | null>(null)
   const [deleting, setDeleting] = useState<ListingCard | null>(null)
@@ -63,10 +76,16 @@ function MyListContent({ ownerId }: { ownerId: string }) {
   async function toggle(item: ListingCard) {
     const target = item.status === 'ACTIVE' ? 'OFFLINE' : 'ACTIVE'
     setNotice(null)
+    setPhoneRequired(false)
     try {
       await setStatusMutation.mutateAsync({ id: item.id, status: target })
     } catch (error) {
       const view = listingActionError(error)
+      if (view.phoneRequired) {
+        setPhoneRequired(true)
+        refetchMe()
+        return
+      }
       setNotice(view.message)
       if (view.refresh) await listings.refetch()
     }
@@ -74,6 +93,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
 
   async function remove(item: ListingCard) {
     setNotice(null)
+    setPhoneRequired(false)
     try {
       await deleteMutation.mutateAsync(item.id)
     } catch (error) {
@@ -114,6 +134,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
               onClick={() => {
                 setStatus(tab.value)
                 setNotice(null)
+                setPhoneRequired(false)
               }}
               type="button"
             >
@@ -128,6 +149,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
           {notice}
         </p>
       ) : null}
+      {phoneRequired ? <PhoneRequiredNotice /> : null}
 
       {listings.isPending ? <LoadingState label="正在加载我的发布…" /> : null}
       {listings.isError ? (

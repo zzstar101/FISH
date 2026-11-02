@@ -23,6 +23,7 @@ import {
 } from '@/features/listing/api'
 import { requestSellEdit, requestSellPrefill } from '@/features/listing/edit-target'
 import { rejectionNote } from '@/features/listing/moderation-reason'
+import { requestSubscribe } from '@/features/subscribe/request'
 import { acceptTransaction, rejectProposal } from '@/features/transaction/api'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -794,6 +795,8 @@ export default function MyList() {
   const declineProposal = (row: Row) => {
     const proposal = row.proposal
     if (!proposal || pendingBusy !== null) return
+    // 拒绝**不请求** TX 授权（#511 审查 high）：拒绝之后没有交易，也就没有「订单状态更新」
+    // 可推 —— 在这里弹授权框是把一次永远不会兑现的允许卖给用户。
     setPendingBusy(proposal.conversationId)
     void (async () => {
       try {
@@ -821,6 +824,9 @@ export default function MyList() {
   const acceptProposal = (row: Row) => {
     const proposal = row.proposal
     if (!proposal || pendingBusy !== null) return
+    // #462：**同意**提案时请求 TX 订阅授权（Owner 冻结的授权入口）。必须放在用户手势的
+    // 同步阶段、且不 await：授权被拒或失败都不影响这次同意，站内通知照旧。
+    void requestSubscribe(['TX'])
     setPendingBusy(proposal.conversationId)
     void (async () => {
       try {
@@ -982,7 +988,7 @@ export default function MyList() {
             {!failed && shown.length === 0 ? (
               <View className="ml__empty">
                 <View className="ml__empty-disc">
-                  <Image className="ml__empty-ic" src={ICONS.box} mode="aspectFit" />
+                  <Image className="ml__empty-ic" src={ICONS.boxMuted} mode="aspectFit" />
                 </View>
                 {/*
                   列表不完整时不能说「这个状态下还没有东西」—— 那是拿一份已知不完整的数据
@@ -1081,7 +1087,7 @@ export default function MyList() {
                       */}
                       {item.rejection ? (
                         <View className="ml__reject">
-                          <Image className="ml__reject-ic" src={ICONS.warnInk} mode="aspectFit" />
+                          <Image className="ml__reject-ic" src={ICONS.warnFg} mode="aspectFit" />
                           <Text className="ml__reject-tx">{item.rejection}</Text>
                         </View>
                       ) : null}
@@ -1213,7 +1219,7 @@ export default function MyList() {
       </View>
 
       <View className="ml__fab" onClick={goPublish}>
-        <Image className="ml__fab-ic" src={ICONS.plusLine} mode="aspectFit" />
+        <Image className="ml__fab-ic" src={ICONS.plusBrand} mode="aspectFit" />
         <Text>发布</Text>
       </View>
 

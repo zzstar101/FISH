@@ -1,6 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import { probeImage, probeVoiceDuration } from './media-probe'
 
+test('#542 原始异常头仍拒绝；按真实 PCM 长度规范化后解析为 1355ms', async () => {
+  // 与客户端上传回归共用脱敏样本：真实 44B 头 + 同长度静音，不含原录音。
+  const bytes = new Uint8Array(
+    await Bun.file(
+      new URL('../../../../miniapp/tests/fixtures/542-voice-silence.wav', import.meta.url),
+    ).arrayBuffer(),
+  )
+  expect(probeVoiceDuration(bytes, 'audio/wav')).toBeNull()
+  const canonical = bytes.slice()
+  const header = new DataView(canonical.buffer)
+  header.setUint32(4, 43404, true)
+  header.setUint16(32, 2, true)
+  header.setUint32(40, 43368, true)
+  expect(probeVoiceDuration(canonical, 'audio/wav')).toEqual({ durationMs: 1355 })
+})
+
 // 构造字节的小工具
 function bytes(...values: number[]): Uint8Array {
   return new Uint8Array(values)

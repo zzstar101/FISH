@@ -1,10 +1,18 @@
 import { describe, expect, test } from 'bun:test'
+import { COMMUNITY_GUIDELINES_DOC } from '../src/features/legal/community-guidelines'
 import {
   applyConsent,
+  crossLinkUrl,
   isEntryFromAuth,
+  LEGAL_PAGES,
   markConsent,
   takeConsent,
 } from '../src/features/legal/entry'
+import { INFO_COLLECTION_DOC } from '../src/features/legal/info-collection'
+import { PRIVACY_DOC } from '../src/features/legal/privacy'
+import { TERMS_DOC } from '../src/features/legal/terms'
+import { THIRD_PARTY_SHARING_DOC } from '../src/features/legal/third-party-sharing'
+import type { Block, LegalDoc, Run } from '../src/features/legal/types'
 
 /**
  * 法务页入口来源与同意决定的回传。
@@ -62,5 +70,121 @@ describe('applyConsent —— 决定怎么落到登录页的勾选态上', () =>
   test('没有待处理的决定时保持原值，不擅自改动用户的勾选', () => {
     expect(applyConsent(null, true)).toBe(true)
     expect(applyConsent(null, false)).toBe(false)
+  })
+})
+
+describe('crossLinkUrl —— 五份法务文档互跳保留登录来源，跳意见反馈不带', () => {
+  test('从登录进入（entry=true）时，五份法务页互跳均延续 ?from=login', () => {
+    expect(LEGAL_PAGES.size).toBe(5)
+    for (const page of LEGAL_PAGES) {
+      expect(crossLinkUrl(page, true)).toBe(`${page}?from=login`)
+      expect(crossLinkUrl(page, false)).toBe(page)
+    }
+  })
+
+  test('跳往意见反馈等非法务页时，无论 entry 为何都不追加 ?from=login', () => {
+    expect(crossLinkUrl('/pkg-legal/pages/feedback/index', true)).toBe(
+      '/pkg-legal/pages/feedback/index',
+    )
+  })
+})
+
+function collectDocRuns(doc: LegalDoc): { where: string; runs: Run[] }[] {
+  const out: { where: string; runs: Run[] }[] = []
+  for (const [i, runs] of doc.meta.entries()) out.push({ where: `meta[${i}]`, runs })
+  if (doc.brief) {
+    out.push({ where: 'brief.lead', runs: doc.brief.lead })
+    for (const [i, runs] of doc.brief.items.entries()) {
+      out.push({ where: `brief.items[${i}]`, runs })
+    }
+  }
+  if (doc.callout) out.push({ where: 'callout.runs', runs: doc.callout.runs })
+  for (const [i, runs] of doc.footNote.entries()) out.push({ where: `footNote[${i}]`, runs })
+  for (const sec of doc.sections) {
+    for (const block of sec.blocks) {
+      collectBlockRuns(block, `${sec.id}/${block.key}`, out)
+    }
+  }
+  return out
+}
+
+function collectBlockRuns(
+  block: Block,
+  prefix: string,
+  out: { where: string; runs: Run[] }[],
+): void {
+  if (block.kind === 'list') {
+    for (const item of block.items) {
+      out.push({ where: `${prefix}/${item.key}.name`, runs: item.name })
+      out.push({ where: `${prefix}/${item.key}.use`, runs: item.use })
+    }
+    return
+  }
+  out.push({ where: prefix, runs: block.runs })
+}
+
+/**
+ * 各文档当前版本：#514 把「绑定手机号」从可选改为发布前置条件，隐私政策 / 用户协议 /
+ * 收集清单升到 v2.1（2026-11-02）；第三方共享清单与社区规范内容未变，仍是 v2.0。
+ */
+const DOC_VERSIONS: Record<string, [version: string, date: string]> = {
+  terms: ['v2.1', '2026-11-02'],
+  privacy: ['v2.1', '2026-11-02'],
+  'info-collection': ['v2.1', '2026-11-02'],
+  'third-party-sharing': ['v2.0', '2026-11-01'],
+  'community-guidelines': ['v2.0', '2026-11-01'],
+}
+
+describe('五份法务文档数据模型不变量', () => {
+  const DOCS: [string, LegalDoc][] = [
+    ['terms', TERMS_DOC],
+    ['privacy', PRIVACY_DOC],
+    ['info-collection', INFO_COLLECTION_DOC],
+    ['third-party-sharing', THIRD_PARTY_SHARING_DOC],
+    ['community-guidelines', COMMUNITY_GUIDELINES_DOC],
+  ]
+
+  test('版本与日期符合 DOC_VERSIONS，不含 ph 占位或「待填」字样，React key 无冲突', () => {
+    for (const [name, doc] of DOCS) {
+      const metaText = doc.meta.map((line) => line.map((r) => r.t).join('')).join(' | ')
+      const [version, date] = DOC_VERSIONS[name] ?? ['', '']
+      expect(metaText).toContain(version)
+      expect(metaText).toContain(date)
+
+      const secIds = new Set<string>()
+      const blockKeys = new Set<string>()
+      const itemKeys = new Set<string>()
+      for (const sec of doc.sections) {
+        expect(secIds.has(sec.id)).toBe(false)
+        secIds.add(sec.id)
+        for (const block of sec.blocks) {
+          expect(blockKeys.has(block.key)).toBe(false)
+          blockKeys.add(block.key)
+          if (block.kind === 'list') {
+            for (const item of block.items) {
+              expect(itemKeys.has(item.key)).toBe(false)
+              itemKeys.add(item.key)
+            }
+          }
+        }
+      }
+
+      for (const { where, runs } of collectDocRuns(doc)) {
+        const runKeys = new Set<string>()
+        for (const r of runs) {
+          expect(r.ph, `${name}:${where} 仍含 ph 占位`).toBeUndefined()
+          expect(r.t.includes('待填'), `${name}:${where} 仍含「待填」文本`).toBe(false)
+          const rk = r.k ?? r.t
+          expect(runKeys.has(rk), `${name}:${where} 存在重复 Run key "${rk}"`).toBe(false)
+          runKeys.add(rk)
+        }
+      }
+
+      const linkPages = new Set<string>()
+      for (const link of doc.links) {
+        expect(linkPages.has(link.page)).toBe(false)
+        linkPages.add(link.page)
+      }
+    }
   })
 })

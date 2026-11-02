@@ -1,7 +1,7 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useMemo } from 'react'
-import brandMark from '@/assets/brand/brand-mark.png'
+import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import { APP_VERSION } from '@/lib/app-meta'
@@ -27,7 +27,7 @@ import './index.scss'
  * 稿自己标注了「仓内常量当前为 1.4.0，落地需对齐」，读同一个常量才不会出现
  * 「设置页写 1.4.0、本页写 1.0.0」的两处版本号打架。构建号不展示（设置页页脚已有）。
  *
- * 品牌标记用真实资产 `assets/brand/brand-mark.png`（稿的取舍 ②：稿里那个渐变方块 +
+ * 品牌标记用真实资产 `BRAND.mark`（`@/assets/brand`；稿的取舍 ②：稿里那个渐变方块 +
  * 「鱼」字是占位，落地整块换成本图）。页脚版权行取稿的原文（来源
  * `apps/api/src/modules/auth/mail-template.ts` 的那一句）。
  *
@@ -46,7 +46,7 @@ export default function About() {
 
       {/* 品牌区：冰蓝渐变 + 底部圆角，压住漂浮导航 */}
       <View className="ab__brand" style={{ paddingTop: `${navHeight + 8}px` }}>
-        <Image className="ab__mark" src={brandMark} mode="aspectFit" />
+        <Image className="ab__mark" src={BRAND.mark} mode="aspectFit" />
         <View className="ab__name-row">
           <Text className="ab__name">鱼小应</Text>
           <Text className="ab__name-en">FISH</Text>
@@ -58,7 +58,7 @@ export default function About() {
       <View className="ab__card">
         <View className="ab__row">
           <View className="ab__row-ic">
-            <Image className="ab__row-ic-img" src={ICONS.app} mode="aspectFit" />
+            <Image className="ab__row-ic-img" src={ICONS.gridFg} mode="aspectFit" />
           </View>
           <Text className="ab__row-label">版本号</Text>
           <Text className="ab__row-val num">{`v${APP_VERSION}`}</Text>
@@ -73,6 +73,27 @@ export default function About() {
         </View>
         <View className="ab__row is-act" onClick={() => go('/pkg-legal/pages/privacy/index')}>
           <Text className="ab__row-label">隐私政策</Text>
+          <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
+        <View
+          className="ab__row is-act"
+          onClick={() => go('/pkg-legal/pages/info-collection/index')}
+        >
+          <Text className="ab__row-label">个人信息收集清单</Text>
+          <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
+        <View
+          className="ab__row is-act"
+          onClick={() => go('/pkg-legal/pages/third-party-sharing/index')}
+        >
+          <Text className="ab__row-label">第三方信息共享清单</Text>
+          <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
+        </View>
+        <View
+          className="ab__row is-act"
+          onClick={() => go('/pkg-legal/pages/community-guidelines/index')}
+        >
+          <Text className="ab__row-label">社区规范与交易安全须知</Text>
           <Image className="ab__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
         </View>
         {/* 占位条目：条目名与是否收录待 zzstar 定（稿的条目口径 ③） */}

@@ -54,6 +54,11 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-legal/pages/about/index': () => import('@/pkg-legal/pages/about/index'),
   '/pkg-legal/pages/terms/index': () => import('@/pkg-legal/pages/terms/index'),
   '/pkg-legal/pages/privacy/index': () => import('@/pkg-legal/pages/privacy/index'),
+  '/pkg-legal/pages/info-collection/index': () => import('@/pkg-legal/pages/info-collection/index'),
+  '/pkg-legal/pages/third-party-sharing/index': () =>
+    import('@/pkg-legal/pages/third-party-sharing/index'),
+  '/pkg-legal/pages/community-guidelines/index': () =>
+    import('@/pkg-legal/pages/community-guidelines/index'),
   '/pkg-legal/pages/feedback/index': () => import('@/pkg-legal/pages/feedback/index'),
 }
 

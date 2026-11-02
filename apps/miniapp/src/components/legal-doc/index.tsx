@@ -4,7 +4,8 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
-import { markConsent } from '@/features/legal/entry'
+import { crossLinkUrl, markConsent } from '@/features/legal/entry'
+import { mergeEdgePunctuation } from '@/features/legal/runs'
 import type { Block, LegalDoc, LegalSection, ListItem, Run } from '@/features/legal/types'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
@@ -69,12 +70,15 @@ type Props = {
  *
  * key 优先用数据的 `k`（生成时只给「同一数组里有重复文本」的那几个数组补上），
  * 否则用文本本身：片段数组是静态数据，位置就是稳定标识。
+ *
+ * 渲染前先过 `mergeEdgePunctuation`：每个片段是独立的 `<text>` 盒，标点若独占片段边界，
+ * 断行时句读会落到行首、开括号留在行尾（#515）。
  */
 function Runs({ runs }: { runs: Run[] }) {
   return (
     <>
-      {runs.map((run) => (
-        <Text key={run.k ?? run.t} className={runClass(run)}>
+      {mergeEdgePunctuation(runs).map((run) => (
+        <Text key={run.k ?? run.t} className={runClass(run)} userSelect>
           {run.t}
         </Text>
       ))}
@@ -95,22 +99,6 @@ function runClass(run: Run): string | undefined {
   if (run.em) cls.push('ld__em')
   if (run.ph) cls.push('ld__ph')
   return cls.length > 0 ? cls.join(' ') : undefined
-}
-
-/** 法务文档之间互链的两个目标；只有它们需要继承「从登录流程进入」这个来源 */
-const LEGAL_PAGES = new Set(['/pkg-legal/pages/terms/index', '/pkg-legal/pages/privacy/index'])
-
-/**
- * 页脚互链的落点。
- *
- * 从登录流程进来的实例带着 `?from=login`（同意条据此显示）。互链**必须把它传下去**，
- * 否则：登录 → 用户协议（有同意条）→ 页脚《隐私政策》（**没有**同意条）→ 再互链回用户协议
- * 又是个新实例、仍然没有 —— 用户读到一半发现同意条整段消失，得连按几次返回才回到有它的那层。
- * 稿的页脚是裸 `<a href>`（静态稿里没有「来源」这个概念），这里按落地需要补上。
- * 意见反馈不是法务文档，不带这个参数。
- */
-function crossLinkUrl(page: string, entry: boolean): string {
-  return entry && LEGAL_PAGES.has(page) ? `${page}?from=login` : page
 }
 
 /** 信息清单的一条：名称 + 必要性标签 + 用途 */
@@ -170,7 +158,7 @@ function BlockView({ block }: { block: Block }) {
       return (
         <View className="ld__callout">
           <View className="ld__callout-hd">
-            <Image className="ld__callout-hd-ic" src={ICONS.warnInk} mode="aspectFit" />
+            <Image className="ld__callout-hd-ic" src={ICONS.warnFg} mode="aspectFit" />
             <Text>{block.head}</Text>
           </View>
           <Text className="ld__callout-tx">
@@ -367,7 +355,7 @@ export default function LegalDocView({ doc, entry }: Props) {
         {doc.brief ? (
           <View className="ld__brief">
             <View className="ld__brief-hd">
-              <Image className="ld__brief-hd-ic" src={ICONS.lock} mode="aspectFit" />
+              <Image className="ld__brief-hd-ic" src={ICONS.lockFg} mode="aspectFit" />
               <Text>{doc.brief.head}</Text>
             </View>
             <Text className="ld__brief-lead">
@@ -376,7 +364,7 @@ export default function LegalDocView({ doc, entry }: Props) {
             <View className="ld__brief-ul">
               {doc.brief.items.map((item) => (
                 <View key={item.map((run) => run.t).join('')} className="ld__brief-li">
-                  <Image className="ld__brief-li-ic" src={ICONS.checkAccent} mode="aspectFit" />
+                  <Image className="ld__brief-li-ic" src={ICONS.checkBrand} mode="aspectFit" />
                   <Text className="ld__brief-li-tx">
                     <Runs runs={item} />
                   </Text>
@@ -394,7 +382,7 @@ export default function LegalDocView({ doc, entry }: Props) {
         <View className="ld__toc">
           {/* 标题行即抽屉入口（稿里抽屉只由机身外控制条打开，屏内没有入口） */}
           <View className="ld__toc-hd" onClick={() => setTocOpen(true)}>
-            <Image className="ld__toc-hd-ic" src={ICONS.category} mode="aspectFit" />
+            <Image className="ld__toc-hd-ic" src={ICONS.tagMuted} mode="aspectFit" />
             <Text className="ld__toc-hd-tx">目录</Text>
             <Text className="ld__toc-hd-cnt num">{`共 ${doc.sections.length} 章`}</Text>
           </View>
@@ -464,7 +452,7 @@ export default function LegalDocView({ doc, entry }: Props) {
       {entry ? (
         <View className="ld__agree">
           <View className="ld__agree-note">
-            <Image className="ld__agree-note-ic" src={ICONS.checkAccent} mode="aspectFit" />
+            <Image className="ld__agree-note-ic" src={ICONS.checkBrand} mode="aspectFit" />
             <Text>{doc.agree.note}</Text>
           </View>
           <View
@@ -501,11 +489,11 @@ export default function LegalDocView({ doc, entry }: Props) {
           <View className="ld__sheet">
             <View className="ld__sheet-grip" />
             <View className="ld__sheet-hd">
-              <Image className="ld__sheet-hd-ic" src={ICONS.category} mode="aspectFit" />
+              <Image className="ld__sheet-hd-ic" src={ICONS.tagMuted} mode="aspectFit" />
               <Text className="ld__sheet-title">章节导航</Text>
               <Text className="ld__sheet-cnt num">{`共 ${doc.sections.length} 章`}</Text>
               <View className="ld__sheet-close" onClick={() => setTocOpen(false)}>
-                <Image className="ld__sheet-close-ic" src={ICONS.closeInk} mode="aspectFit" />
+                <Image className="ld__sheet-close-ic" src={ICONS.closeFg} mode="aspectFit" />
               </View>
             </View>
             <ScrollView className="ld__sheet-body" scrollY>

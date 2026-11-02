@@ -31,6 +31,11 @@
  * 反过来，`serverConfirmedEventType` **不能**被并进别的桶——它意味着"客户端在伪造只能由
  * 服务端确认的行为"（成交/开聊），是刷量信号里最有信息量的一类。
  */
+import {
+  RECOMMENDATION_DEGRADE_REASONS,
+  type RecommendationDegradeReason,
+} from '@fish/contracts/recommendation/schema'
+
 export type RecommendationRejectionReason =
   | 'attributionNotFound'
   | 'identityMismatch'
@@ -57,13 +62,30 @@ export type RecommendationProcessMetrics = {
   /** 被 429 拒绝的请求数（埋点与 Feed 两份桶都算）。 */
   rateLimitedRequests: number
   eventRejectionReasons: RecommendationEventRejectionCounts
+  /** 个性化 Feed 退回 newest 的次数，按原因分桶（#524）。 */
+  degradedFeedReasons: RecommendationDegradedFeedCounts
+  /**
+   * 启动自检发现"库里有商品向量、但没有一条属于当前 `EMBEDDING_MODEL`"（#524）。
+   * 这种配错会让语义召回 / 画像全部静默落空，所以单独暴露成一个布尔，而不是只打一行日志。
+   */
+  embeddingModelMismatch: boolean
+  /**
+   * 因探索池为空而让出的探索位总数（#524）。持续增长 ⇒ 曝光不足池长期为空，
+   * 约 20% 的探索占比没有兑现。
+   */
+  exploreSlotsRelaxed: number
 }
+
+export type RecommendationDegradedFeedCounts = Record<RecommendationDegradeReason, number>
 
 export interface RecommendationProcessMetricsRecorder {
   recordEventWriteAttempt(): void
   recordEventWriteFailure(): void
   recordRateLimitedRequest(): void
   recordEventRejection(reason: RecommendationRejectionReason): void
+  recordDegradedFeed(reason: RecommendationDegradeReason): void
+  recordEmbeddingModelMismatch(): void
+  recordExploreSlotsRelaxed(count: number): void
   /** 只读快照：admin 每次请求读一份，拿到的是副本（调用方改不动计数器）。 */
   snapshot(): RecommendationProcessMetrics
 }
@@ -71,6 +93,14 @@ export interface RecommendationProcessMetricsRecorder {
 function emptyRejectionCounts(): RecommendationEventRejectionCounts {
   const counts = {} as RecommendationEventRejectionCounts
   for (const reason of RECOMMENDATION_REJECTION_REASONS) {
+    counts[reason] = 0
+  }
+  return counts
+}
+
+function emptyDegradedFeedCounts(): RecommendationDegradedFeedCounts {
+  const counts = {} as RecommendationDegradedFeedCounts
+  for (const reason of RECOMMENDATION_DEGRADE_REASONS) {
     counts[reason] = 0
   }
   return counts
@@ -86,7 +116,10 @@ export function createRecommendationProcessMetrics(): RecommendationProcessMetri
   let eventWriteAttempts = 0
   let eventWriteFailures = 0
   let rateLimitedRequests = 0
+  let embeddingModelMismatch = false
+  let exploreSlotsRelaxed = 0
   const eventRejectionReasons = emptyRejectionCounts()
+  const degradedFeedReasons = emptyDegradedFeedCounts()
 
   return {
     recordEventWriteAttempt(): void {
@@ -101,12 +134,24 @@ export function createRecommendationProcessMetrics(): RecommendationProcessMetri
     recordEventRejection(reason: RecommendationRejectionReason): void {
       eventRejectionReasons[reason] += 1
     },
+    recordDegradedFeed(reason: RecommendationDegradeReason): void {
+      degradedFeedReasons[reason] += 1
+    },
+    recordEmbeddingModelMismatch(): void {
+      embeddingModelMismatch = true
+    },
+    recordExploreSlotsRelaxed(count: number): void {
+      exploreSlotsRelaxed += count
+    },
     snapshot(): RecommendationProcessMetrics {
       return {
         eventWriteAttempts,
         eventWriteFailures,
         rateLimitedRequests,
         eventRejectionReasons: { ...eventRejectionReasons },
+        degradedFeedReasons: { ...degradedFeedReasons },
+        embeddingModelMismatch,
+        exploreSlotsRelaxed,
       }
     },
   }
@@ -124,4 +169,7 @@ export const NO_RECOMMENDATION_PROCESS_METRICS: RecommendationProcessMetrics = {
   eventWriteFailures: 0,
   rateLimitedRequests: 0,
   eventRejectionReasons: emptyRejectionCounts(),
+  degradedFeedReasons: emptyDegradedFeedCounts(),
+  embeddingModelMismatch: false,
+  exploreSlotsRelaxed: 0,
 }

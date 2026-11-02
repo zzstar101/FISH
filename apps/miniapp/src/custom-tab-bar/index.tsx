@@ -55,41 +55,41 @@ const TAB_ITEMS: TabItem[] = [
     label: '首页',
     path: '/pages/home/index',
     route: 'pages/home/index',
-    icon: ICONS.tabHome,
-    iconOn: ICONS.tabHomeOn,
+    icon: ICONS.tabHomeMuted,
+    iconOn: ICONS.tabHomeBrand,
   },
   {
     key: 'wish',
     label: '许愿',
     path: '/pages/wish/index',
     route: 'pages/wish/index',
-    icon: ICONS.tabWish,
-    iconOn: ICONS.tabWishOn,
+    icon: ICONS.tabWishMuted,
+    iconOn: ICONS.tabWishBrand,
   },
-  // 中间「出物」是凸起钮，没有图标资源
+  // 中间「出物」是凸起钮：品牌渐变圆底 + 反白加号，与其余 4 个槽位一样用图标资源绘制
   {
     key: 'sell',
     label: '出物',
     path: '/pages/sell/index',
     route: 'pages/sell/index',
-    icon: '',
-    iconOn: '',
+    icon: ICONS.plusWhite,
+    iconOn: ICONS.plusWhite,
   },
   {
     key: 'chat',
     label: '消息',
     path: '/pages/chat/index',
     route: 'pages/chat/index',
-    icon: ICONS.tabMessage,
-    iconOn: ICONS.tabMessageOn,
+    icon: ICONS.tabMessageMuted,
+    iconOn: ICONS.tabMessageBrand,
   },
   {
     key: 'profile',
     label: '我的',
     path: '/pages/profile/index',
     route: 'pages/profile/index',
-    icon: ICONS.tabProfile,
-    iconOn: ICONS.tabProfileOn,
+    icon: ICONS.tabMeMuted,
+    iconOn: ICONS.tabMeBrand,
   },
 ]
 
@@ -322,7 +322,7 @@ export default function CustomTabBar() {
               onClick={() => go(item)}
             >
               <View className="tabbar__pub">
-                <View className="tabbar__plus" />
+                <Image className="tabbar__plus" src={item.icon} mode="aspectFit" />
               </View>
               <Text className="tabbar__label">{item.label}</Text>
             </View>

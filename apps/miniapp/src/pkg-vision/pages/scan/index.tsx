@@ -82,8 +82,12 @@ type ScanCodeDetail = { result?: string }
  * 相机对识别不出的画面不触发 onScanCode，本页没有「解析失败」分支；
  * 空结果由 handleScanCode 的入口守卫拦下。 */
 function classifyScan(rawValue: string): ReasonKey {
-  if (parseMeetupQrPayload(rawValue) !== null) return 'is-txn'
-  return 'unsupported'
+  // 解析兜底同 scan-pr（#536）：解析异常按「不支持的码」处理，不得打断扫码回调。
+  try {
+    return parseMeetupQrPayload(rawValue) !== null ? 'is-txn' : 'unsupported'
+  } catch {
+    return 'unsupported'
+  }
 }
 
 export default function ScanQr() {

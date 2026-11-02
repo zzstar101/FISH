@@ -26,13 +26,18 @@ export function isDemoSource(item: Pick<OrderCardView, 'source'>): boolean {
   return item.source === 'demo'
 }
 
+/** 「打开二维码 / 交易码」的地址。id 只在这里拼一次：订单卡与会话页共用。 */
+export function meetupUrlById(transactionId: string): string {
+  return `/pkg-trade/pages/transaction-meetup/index?id=${transactionId}`
+}
+
 /**
  * 「打开二维码 / 交易码」→ 面交页地址。演示来源返回 `null`：`t-*` 进真实页必然 404，
  * 调用方拿到 `null` 就只给一句说明、不跳页。
  */
 export function meetupUrlOf(item: Pick<OrderCardView, 'id' | 'source'>): string | null {
   if (isDemoSource(item)) return null
-  return `/pkg-trade/pages/transaction-meetup/index?id=${item.id}`
+  return meetupUrlById(item.id)
 }
 
 /**

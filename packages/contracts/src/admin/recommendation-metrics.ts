@@ -231,6 +231,28 @@ export const RecommendationGuardrailsSchema = z.object({
      */
     serverConfirmedEventType: z.number().int().nonnegative(),
   }),
+  /**
+   * 个性化 Feed 退回 newest 的次数，按原因分桶；进程内（#524）。
+   *
+   * `noCandidates` 是业务上可接受的冷启动 / 空库（召回为空）；其余三项是故障，需要排查。库里同一口径的
+   * 真值在 `recommendation_requests.degrade_reason`（只有 `rec-v1-none` 行有值）。
+   */
+  degradedFeedReasons: z.object({
+    noCandidates: z.number().int().nonnegative(),
+    recallError: z.number().int().nonnegative(),
+    rankError: z.number().int().nonnegative(),
+    snapshotWriteFailed: z.number().int().nonnegative(),
+  }),
+  /**
+   * 启动自检：库里有商品向量，但没有一条属于 API 当前的 `EMBEDDING_MODEL`（#524）。
+   * 为 `true` 时语义召回与兴趣画像全部落空，通常是 API 与 worker 的模型配置不一致。
+   */
+  embeddingModelMismatch: z.boolean(),
+  /**
+   * 因探索池（近 7 天曝光不足的商品）为空而让出的探索位总数；进程内（#524）。
+   * 持续增长说明约 20% 的探索占比没有兑现。
+   */
+  exploreSlotsRelaxed: z.number().int().nonnegative(),
 })
 
 export type RecommendationGuardrails = z.infer<typeof RecommendationGuardrailsSchema>
