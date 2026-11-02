@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
-import { lastEventOfMessages } from '../src/features/chat/capsule'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
   applyMediaRecalled,
@@ -50,7 +49,7 @@ import {
   sortMessages,
   startMediaRetry,
   systemPillText,
-  txCardView,
+  txBarView,
 } from '../src/pkg-social/pages/conversation/view'
 
 /**
@@ -157,7 +156,7 @@ describe('lastTxAcceptedId —— 交易接口失败时的兜底入口', () => {
   })
 })
 
-describe('txCardView —— 吸底交易进度卡（#522）', () => {
+describe('txBarView —— 页头商品交易状态条（#551）', () => {
   function tx(overrides: Partial<TransactionDto> = {}): TransactionDto {
     return {
       id: 'txn_1',
@@ -186,146 +185,275 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
     }
   }
 
-  test('待面交：二维码入口 +「查看交易码」，点进去就是这一笔', () => {
-    expect(txCardView(tx())).toMatchObject({
-      tone: 'is-warn',
-      icon: 'qr',
-      title: '待面交',
-      actionLabel: '查看交易码',
-      transactionId: 'txn_1',
-    })
-  })
+  /** 默认（没有交易也没有提案）的入参：每个用例只覆盖自己关心的那几个字段 */
+  function input(overrides: Partial<Parameters<typeof txBarView>[0]> = {}) {
+    return {
+      role: 'buyer' as const,
+      listingStatus: 'ACTIVE',
+      tx: null,
+      lastEvent: null,
+      fallbackTxId: null,
+      failed: false,
+      reviewed: null,
+      ...overrides,
+    }
+  }
 
-  test('我方已确认（买卖两侧对称）→ 待对方确认', () => {
-    expect(txCardView(tx({ buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }))).toMatchObject({
-      tone: 'is-pending',
-      title: '待对方确认',
-    })
-    expect(
-      txCardView(tx({ role: 'seller', sellerConfirmedAt: '2026-09-21T05:00:00.000Z' })),
-    ).toMatchObject({ tone: 'is-pending', title: '待对方确认' })
-  })
-
-  test('终态：已完成 / 已取消 各自换图标与 CTA，金额进描述', () => {
-    expect(txCardView(tx({ status: 'COMPLETED' }))).toMatchObject({
-      tone: 'is-ok',
-      icon: 'check',
-      title: '交易已完成',
-      actionLabel: '查看交易',
-      action: 'open',
-      desc: '¥150 · 订单已完成。',
-    })
-    // 已取消不给交易码入口（#522 验收）：卡面只陈述终态
-    expect(txCardView(tx({ status: 'CANCELLED' }))).toMatchObject({
+  test('没有交易、也没有提案：退回商品状态 +「查看」，点进商品详情', () => {
+    expect(txBarView(input())).toMatchObject({
       tone: 'is-plain',
-      icon: 'close',
-      title: '交易已取消',
-      actionLabel: '',
-      action: 'none',
-      desc: '¥150 · 这笔交易已取消。',
+      status: '在售',
+      label: '查看',
+      action: { kind: 'listing' },
     })
+    expect(txBarView(input({ listingStatus: 'SOLD' })).status).toBe('已售出')
+    expect(txBarView(input({ listingStatus: undefined })).status).toBe('商品已下架')
   })
 
-  test('交易接口失败但有消息里的 id → 降级卡保留入口；两者都没有 → 不显示', () => {
-    expect(txCardView(null, 'txn_msg')).toMatchObject({
-      tone: 'is-warn',
-      title: '交易状态待更新',
-      actionLabel: '查看交易码',
-      action: 'open',
-      transactionId: 'txn_msg',
-    })
-    expect(txCardView(null, null)).toBeNull()
-  })
-
-  test('失败时只有「另一笔」才提示查看本笔：当前这笔的胶囊没有该入口', () => {
-    // fallback 就是缓存这笔：消息胶囊仍是「已接受交易」，不能把用户指向不存在的入口
-    expect(txCardView(tx({ status: 'COMPLETED' }), 'txn_1', { failed: true })?.desc).not.toContain(
-      '查看本笔',
-    )
-    // fallback 是另一笔：历史胶囊确实有「查看本笔」
-    expect(txCardView(tx({ status: 'COMPLETED' }), 'txn_msg', { failed: true })?.desc).toContain(
-      '查看本笔',
-    )
-  })
-
-  test('查询失败：不信上一份状态，永远给就地重试（有 id 时入口留在消息胶囊上）', () => {
-    expect(txCardView(tx({ status: 'CANCELLED' }), 'txn_msg', { failed: true })).toMatchObject({
-      tone: 'is-warn',
-      icon: 'refresh',
-      title: '交易状态待更新',
-      actionLabel: '重新加载',
-      action: 'retry',
-      transactionId: '',
-    })
-    expect(txCardView(null, null, { failed: true })).toMatchObject({
-      tone: 'is-warn',
-      icon: 'refresh',
-      title: '交易状态待更新',
-      actionLabel: '重新加载',
-      action: 'retry',
-      transactionId: '',
-    })
-    // 缓存里这一笔还没成交：文案可以退回「待面交」，但 CTA 仍要是重试
-    expect(txCardView(tx({ status: 'PENDING_MEETUP' }), 'txn_1', { failed: true })).toMatchObject({
-      title: '待面交',
-      actionLabel: '重新加载',
-      action: 'retry',
-    })
-  })
-
-  test('取消后又有新提案：旧交易卡收起，不跟胶囊的「待同意 / 待接受」打架', () => {
+  test('提案待卖家点头：卖家「待确认」按钮，金额取自提案消息', () => {
     expect(
-      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: 'tx.proposal' }),
-    ).toBeNull()
-    expect(txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: null })).toMatchObject({
-      title: '交易已取消',
+      txBarView(input({ role: 'seller', lastEvent: { type: 'tx.proposal', amountCents: 12000 } })),
+    ).toMatchObject({
+      tone: 'is-pending',
+      status: '买家已申请面交',
+      label: '待确认',
+      action: { kind: 'confirm', amountCents: 12000 },
+      // 卖家必须能就地拒绝（#551 Owner 追加）：只有「待确认」时，不想卖的卖家只能装没看见
+      secondary: { label: '拒绝', action: { kind: 'reject' } },
     })
-    // 老 accepted 没有 id，但它是最后一条交易事件：取消卡必须照常显示
-    expect(
-      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: 'tx.accepted' }),
-    ).toMatchObject({ title: '交易已取消' })
   })
 
-  test('取消后新提案的判据直接取消息流（最后一条是 TEXT 也找得到提案）', () => {
-    const messages = [
-      {
-        id: 'm-1',
-        conversationId: 'c-1',
-        senderId: null,
-        sender: null,
-        type: 'SYSTEM',
-        content: JSON.stringify({
-          type: 'tx.accepted',
-          transactionId: 'txn_1',
-          amountCents: 15000,
+  test('提案待卖家点头：买家只有「待卖家确认」的字样，没有可点的动作', () => {
+    const buyer = txBarView(
+      input({ role: 'buyer', lastEvent: { type: 'tx.proposal', amountCents: 12000 } }),
+    )
+    expect(buyer).toMatchObject({
+      tone: 'is-pending',
+      status: '待卖家确认',
+      label: '',
+      action: { kind: 'wait' },
+    })
+    // 拒绝是卖家侧的动作：买家没有撤回入口（不在本 Issue 范围），不能凭空多一颗钮
+    expect(buyer.secondary).toBeUndefined()
+  })
+
+  test('提案还在、商品却已被别人买走 / 下架：不给必然 409 的「待确认」，如实说商品现状', () => {
+    // `tx.proposal` 是不可变历史，商品却是活的：非 ACTIVE 时接受必然 409，按钮点了也没用
+    for (const [listingStatus, status] of [
+      ['RESERVED', '已预订'],
+      ['SOLD', '已售出'],
+      ['OFFLINE', '已下架'],
+    ] as const) {
+      expect(
+        txBarView(
+          input({
+            role: 'seller',
+            listingStatus,
+            lastEvent: { type: 'tx.proposal', amountCents: 12000 },
+          }),
+        ),
+      ).toMatchObject({ tone: 'is-warn', status, label: '查看', action: { kind: 'listing' } })
+      // 商品都已被别的买家订走 / 下架了，拒绝也无事可做：动作整体退回查看
+      expect(
+        txBarView(
+          input({
+            role: 'seller',
+            listingStatus,
+            lastEvent: { type: 'tx.proposal', amountCents: 12000 },
+          }),
+        ).secondary,
+      ).toBeUndefined()
+      // 买家侧同样不能停在「待卖家确认」：那件事不会发生了
+      expect(
+        txBarView(input({ role: 'buyer', listingStatus, lastEvent: { type: 'tx.proposal' } }))
+          .action,
+      ).toEqual({ kind: 'listing' })
+    }
+  })
+
+  test('提案消息没带金额：不给凭空的金额，交给页面提示让对方重新发起', () => {
+    expect(txBarView(input({ role: 'seller', lastEvent: { type: 'tx.proposal' } })).action).toEqual(
+      { kind: 'confirm', amountCents: null },
+    )
+  })
+
+  test('待面交：卖家「打开交易码」带这一笔的 id，买家「开启扫码」', () => {
+    expect(txBarView(input({ role: 'seller', tx: tx() }))).toMatchObject({
+      tone: 'is-warn',
+      status: '待面交',
+      label: '打开交易码',
+      action: { kind: 'code', transactionId: 'txn_1' },
+    })
+    expect(txBarView(input({ role: 'buyer', tx: tx() }))).toMatchObject({
+      tone: 'is-warn',
+      status: '待面交',
+      label: '开启扫码',
+      action: { kind: 'scan' },
+    })
+  })
+
+  test('我方已确认（买卖两侧对称）→「待对方确认」，入口不消失', () => {
+    expect(
+      txBarView(input({ role: 'buyer', tx: tx({ buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }) })),
+    ).toMatchObject({ tone: 'is-pending', status: '待对方确认', action: { kind: 'scan' } })
+    expect(
+      txBarView(
+        input({
+          role: 'seller',
+          tx: tx({ role: 'seller', sellerConfirmedAt: '2026-09-21T05:00:00.000Z' }),
         }),
-        createdAt: '2026-10-01T02:00:00.000Z',
-      },
-      {
-        id: 'm-2',
-        conversationId: 'c-1',
-        senderId: null,
-        sender: null,
-        type: 'SYSTEM',
-        content: JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }),
-        createdAt: '2026-10-01T02:10:00.000Z',
-      },
-      {
-        id: 'm-3',
-        conversationId: 'c-1',
-        senderId: 'u-2',
-        sender: null,
-        type: 'TEXT',
-        content: '那我再挂一次，还能按这个价吗',
-        createdAt: '2026-10-01T02:20:00.000Z',
-      },
-    ] as MessageDto[]
+      ),
+    ).toMatchObject({
+      tone: 'is-pending',
+      status: '待对方确认',
+      action: { kind: 'code', transactionId: 'txn_1' },
+    })
+  })
 
-    const lastTxEventType = lastEventOfMessages(messages)?.type
-    expect(lastTxEventType).toBe('tx.proposal')
+  /**
+   * `myConfirmedAt` 取 `tx.role`、主钮文案取入参 `role` —— 两者在真实数据里必然一致
+   * （同一笔交易 ⟷ 同一条会话的商品），但类型上各自独立、互不校验。这条用例把这份约定
+   * 写死在测试里：**确认时间戳属于交易行那一侧**，所以「待面交 / 待对方确认」由 `tx.role`
+   * 决定。故意构造一个不一致的组合，钉住「状态词跟着 `tx.role`、文案跟着入参 `role`」，
+   * 免得日后有人把 `currentTx.role` 「简化」成入参 `role` 而无人察觉。
+   */
+  test('确认时间戳按交易行的 role 取（与入参 role 不一致时，状态词仍以 tx.role 为准）', () => {
+    const view = txBarView(
+      input({
+        role: 'seller',
+        tx: tx({ role: 'buyer', buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }),
+      }),
+    )
+    // 交易行写明「我在买家侧」且买家已确认 → 按 tx.role 读 buyerConfirmedAt ⇒「待对方确认」。
+    // 若改成读入参 role（seller），读到的是 sellerConfirmedAt = null ⇒ 退成「待面交」，本断言即红。
+    expect(view.status).toBe('待对方确认')
+    expect(view.tone).toBe('is-pending')
+    // 主钮文案仍来自会话侧入参 role：卖家 →「打开交易码」
+    expect(view.label).toBe('打开交易码')
+    expect(view.action).toEqual({ kind: 'code', transactionId: 'txn_1' })
+  })
+
+  test('已完成且我还没评价 →「评价」进面交页（端上唯一评价入口）', () => {
+    expect(txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: false }))).toMatchObject({
+      tone: 'is-ok',
+      status: '已完成交易',
+      label: '评价',
+      action: { kind: 'review', transactionId: 'txn_1' },
+    })
+  })
+
+  test('评价态没查到（reviewed === null）不虚报「待评价」：文案中性，目的地仍是面交页', () => {
+    // `null` = 还没查（首帧）/ 查询失败，不是「确认未评价」：写着「评价」等于替用户断言
+    // 他没评过。但入口不能一起丢 —— 面交页是端上唯一的评价入口，且它自己会按服务端
+    // 现状渲染，所以按钮文案退回中性措辞，去向仍是那一笔的面交页。
+    //
+    // 措辞必须是「查看交易」这种带宾语的写法：光写「查看」与上面两档「查看 → 商品详情」
+    // 完全撞名，同一个字点下去却去面交页，用户无从判断。
+    const unknown = txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: null }))
+    expect(unknown).toMatchObject({
+      tone: 'is-ok',
+      status: '已完成交易',
+      label: '查看交易',
+    })
+    expect(unknown.label).not.toBe('评价')
+    // 不许与「查看（商品详情）」撞名 —— 两档都在读「查看」，去向却不同
+    expect(unknown.label).not.toBe('查看')
+    expect(unknown.action).toEqual({ kind: 'review', transactionId: 'txn_1' })
+    // 三态必须真的分开：null（未知）与 true（已评）文案相同、去向不同
+    expect(txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: true })).action).toEqual({
+      kind: 'listing',
+    })
+  })
+
+  test('已完成且我评过 → 终态「已完成交易」+「查看」，不再引流到评价', () => {
+    expect(txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: true }))).toMatchObject({
+      tone: 'is-ok',
+      status: '已完成交易',
+      label: '查看',
+      action: { kind: 'listing' },
+    })
+  })
+
+  test('已取消：只陈述终态，不给交易码入口（#522 验收）', () => {
+    expect(txBarView(input({ role: 'seller', tx: tx({ status: 'CANCELLED' }) }))).toMatchObject({
+      tone: 'is-plain',
+      status: '交易已取消',
+      label: '查看',
+      action: { kind: 'listing' },
+    })
+  })
+
+  test('取消之后又来了新提案：以提案为准，不把「待接受」说成「已取消」', () => {
     expect(
-      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: lastTxEventType }),
-    ).toBeNull()
+      txBarView(
+        input({
+          role: 'seller',
+          tx: tx({ status: 'CANCELLED' }),
+          lastEvent: { type: 'tx.proposal', amountCents: 9000 },
+        }),
+      ),
+    ).toMatchObject({
+      status: '买家已申请面交',
+      action: { kind: 'confirm', amountCents: 9000 },
+    })
+  })
+
+  test('查询失败：不信旧终态，一律「交易状态待更新」+ 就地重试', () => {
+    expect(
+      txBarView(input({ tx: tx({ status: 'COMPLETED' }), failed: true, reviewed: true })),
+    ).toMatchObject({
+      tone: 'is-warn',
+      status: '交易状态待更新',
+      label: '重新加载',
+      action: { kind: 'retry' },
+    })
+  })
+
+  test('查询失败但缓存仍是待面交：保留成交前状态词，主钮切回「重新加载」', () => {
+    // 相对 main 的 `txCardView`（`actionLabel: failed ? '重新加载' : '查看交易码'`）不能回退：
+    // 这一档下顶部若照旧摆「开启扫码」，查询失败就被静默吞掉了（#551 改动三第 3 点）。
+    expect(txBarView(input({ role: 'buyer', tx: tx(), failed: true }))).toMatchObject({
+      tone: 'is-warn',
+      status: '待面交',
+      label: '重新加载',
+      action: { kind: 'retry' },
+    })
+    // 「我已确认」那一档同样：状态词照旧是成交前口径，但按钮必须是重试，不是扫码 / 交易码
+    expect(
+      txBarView(
+        input({
+          role: 'seller',
+          tx: tx({ role: 'seller', sellerConfirmedAt: '2026-09-21T05:00:00.000Z' }),
+          failed: true,
+        }),
+      ),
+    ).toMatchObject({
+      tone: 'is-warn',
+      status: '待对方确认',
+      label: '重新加载',
+      action: { kind: 'retry' },
+    })
+  })
+
+  test('消息里有 tx.accepted、交易行却没取回来：状态说取不到，入口按 id 留着', () => {
+    expect(txBarView(input({ fallbackTxId: 'txn_msg' }))).toMatchObject({
+      tone: 'is-warn',
+      status: '交易状态待更新',
+      label: '查看交易码',
+      action: { kind: 'code', transactionId: 'txn_msg' },
+    })
+  })
+
+  test('提案优先于「查不到交易行」的降级：提案态不等于状态未知', () => {
+    expect(
+      txBarView(
+        input({
+          role: 'buyer',
+          fallbackTxId: 'txn_msg',
+          lastEvent: { type: 'tx.proposal', amountCents: 8000 },
+        }),
+      ),
+    ).toMatchObject({ status: '待卖家确认', action: { kind: 'wait' } })
   })
 })
 
