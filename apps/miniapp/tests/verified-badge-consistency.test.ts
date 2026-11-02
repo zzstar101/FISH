@@ -62,6 +62,16 @@ async function scssBlock(relPath: string, cls: string): Promise<string> {
   return text.slice(start, text.indexOf('}', start))
 }
 
+/** 扫 `src/**\/*.scss`，返回源码里出现 `needle` 的文件（相对 `src/`，已排序） */
+async function scssConsumersOf(needle: string): Promise<string[]> {
+  const glob = new Bun.Glob('**/*.scss')
+  const files: string[] = []
+  for await (const file of glob.scan({ cwd: SRC_DIR })) {
+    if ((await Bun.file(new URL(file, SRC)).text()).includes(needle)) files.push(file)
+  }
+  return files.sort()
+}
+
 function pxOf(decls: string, prop: 'width' | 'height'): number | null {
   const m = new RegExp(`(?:^|[;{\\s])${prop}:\\s*(\\d+)px;`).exec(decls)
   return m?.[1] === undefined ? null : Number(m[1])
@@ -150,10 +160,25 @@ describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/
     expect([...new Set([...viaDot, ...viaIndex])].sort()).toEqual(
       [...new Set(BADGE_DISPLAY.map((e) => e.tsx))].sort(),
     )
-    // scss 里直连 png 会绕过上面的 ts/tsx 扫描，也必须为零
-    expect((await consumersOf('.png')).filter((f) => f.includes('badge/verified-badge'))).toEqual(
-      [],
-    )
+    // scss 里直连 png 会绕过上面的 ts/tsx 扫描（background-image: url(...)），必须单独扫一遍：
+    // 用 consumersOf 扫 `.png` 是空转的 —— 它只遍历 `**/*.{ts,tsx}`，scss 根本不进扫描面
+    expect(await scssConsumersOf('.png')).toEqual([])
+    expect(await scssConsumersOf('assets/badge')).toEqual([])
+  })
+
+  test('大徽章的每个 <Image> 都是 aspectFit（比例正确但 mode 写错一样会拉伸）', async () => {
+    for (const tsx of [...new Set(BADGE_DISPLAY.map((e) => e.tsx))]) {
+      const text = await source(tsx)
+      const tails = text.split('BADGE.verified').slice(1)
+      expect({ tsx, consumed: tails.length > 0 }).toEqual({ tsx, consumed: true })
+      for (const tail of tails) {
+        const tag = tail.slice(0, tail.indexOf('>'))
+        expect({ tsx, aspectFit: tag.includes('mode="aspectFit"') }).toEqual({
+          tsx,
+          aspectFit: true,
+        })
+      }
+    }
   })
 
   test('大徽章的显示尺寸按设计稿比例缩放（非正方形，不拉伸、不留白）', async () => {
