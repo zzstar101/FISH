@@ -10,7 +10,10 @@ import { z } from 'zod'
  * 边界：
  * - 手机号授权失败不能破坏已有微信登录会话（本端点只追加绑定，不动 session）；
  * - `Me` 只回 `phoneBound` / `maskedPhone` 派生态（见 `auth/user.ts`）；
- * - 「哪些动作必须绑定手机号」的权限矩阵由产品另行冻结，本契约不含授权判断；
+ * - 「哪些动作必须绑定手机号」的权限矩阵（#514 冻结）：`POST /listings`（新建商品）、
+ *   `POST /listings/:id/online`（重新上架）、`POST /wishes`（发布求购）三处要求已绑定，
+ *   未绑定返回 403 `PHONE_REQUIRED`（`auth/session.ts` 的 `AuthErrorCodeSchema`）；
+ *   编辑 / 下架 / 删除 / 关闭等其余写入口不要求。判据只读 `Me.phoneBound`，本端点本身不含授权判断；
  * - 同一用户重复提交同一号码 = 幂等成功（200）；号码被**其他**账号占用 = 409
  *   `PHONE_ALREADY_BOUND`；
  * - 失败面三分（#204 起 live 生效），端上引导各不相同：

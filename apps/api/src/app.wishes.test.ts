@@ -33,7 +33,16 @@ beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   db = createDb(scratchUrl)
   await migrate(db, { migrationsFolder })
-  app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
+  // 微信传输走 stub：发布求购要求已绑定手机号（#514），注册后要经 `POST /auth/phone/bind` 绑一次
+  app = createApp(
+    { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+    undefined,
+    undefined,
+    undefined,
+    {
+      transport: 'stub',
+    },
+  )
 })
 
 afterAll(async () => {
@@ -68,6 +77,9 @@ async function registerUser(serial: string): Promise<string> {
     .find((value) => value.startsWith('fish_session='))
     ?.split(';')[0]
   if (!cookie) throw new Error('注册未下发 fish_session cookie')
+  // #514：未绑定手机号不能发布求购。stub 传输下 code 即 11 位号码；serial 两位，号码各不相同
+  const bind = await app.request('/auth/phone/bind', post({ code: `199000000${serial}` }, cookie))
+  expect(bind.status).toBe(200)
   return cookie
 }
 

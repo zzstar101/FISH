@@ -10,10 +10,13 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
+import PhoneBindSheet from '@/components/phone-bind-sheet'
 import TopBar from '@/components/top-bar'
 import { fetchPolishCandidates } from '@/features/ai/api'
 import { useAuthGuard } from '@/features/auth/guard'
+import { isPhoneRequiredError, needsPhoneBeforePublish } from '@/features/auth/phone'
 import { useAuth } from '@/features/auth/store'
+import { usePhoneBind } from '@/features/auth/use-phone-bind'
 import { createListing, fetchListingDetail, updateListing } from '@/features/listing/api'
 import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
 import { requestSubscribe } from '@/features/subscribe/request'
@@ -188,6 +191,8 @@ export default function Sell() {
   const [submitting, setSubmitting] = useState(false)
   /** 审核中的商品 id：非 null 时整页换成结果视图 */
   const [pendingReviewId, setPendingReviewId] = useState<string | null>(null)
+  /** 发布前绑定手机号的 sheet（#514）；声明在换号清场之前，换号时一并关掉。 */
+  const [phoneSheetOpen, setPhoneSheetOpen] = useState(false)
 
   /**
    * 换账号（含退出到匿名）时**在渲染期**同步清场（#170 判据 C）。
@@ -201,6 +206,7 @@ export default function Sell() {
    */
   if (ownerChanged(prevUserId, userId)) {
     setPrevUserId(userId)
+    setPhoneSheetOpen(false)
     epochRef.current += 1
     // 冷启动把身份从 unknown 解析出来不算换号：那之前记下的编辑目标要留给新身份交接
     if (shouldDropPendingTarget(prevUserId)) pendingEditRef.current = null
@@ -251,6 +257,15 @@ export default function Sell() {
   const toast = (text: string) => {
     void Taro.showToast({ title: text, icon: 'none' })
   }
+
+  /**
+   * 发布前绑定手机号（#514）。绑好只关 sheet + 提示再点一次，**不**自动重发：表单 / 图片原样
+   * 保留（`applyPhoneBinding` 不换 `user.id`，上面的换号清场不会触发），由用户自己确认发布。
+   */
+  const phoneBind = usePhoneBind({
+    onBound: () => setPhoneSheetOpen(false),
+    boundToast: '手机号已绑定，请再次点击发布',
+  })
 
   /** 0 元送时价格与议价都锁定（稿子第 04 帧的 is-locked 行） */
   const toggleFree = () => {
@@ -552,6 +567,11 @@ export default function Sell() {
 
   /** 服务端拒绝 → 字段级错误落位；认不出的字段不猜，退到整块提示条 */
   const handleSubmitError = (error: unknown) => {
+    // 端上 `phoneBound` 可能过期（别的设备上解绑 / 会话里的 me 是旧的）：以服务端 403 为准
+    if (isPhoneRequiredError(error)) {
+      setPhoneSheetOpen(true)
+      return
+    }
     if (isApiError(error) && error.details && error.details.length > 0) {
       const errors = sellFieldErrorsFromDetails(error.details)
       setFieldErrors(errors)
@@ -600,6 +620,11 @@ export default function Sell() {
     }
     // 类型收窄：validateSellForm 已经挡下这两个分支
     if (priceCents === null || category === null) return
+    // #514：新建前没绑手机号就先弹绑定 sheet，不发 create（编辑已有商品服务端不挡，这里也不挡）
+    if (needsPhoneBeforePublish({ phoneBound: user?.phoneBound, editing })) {
+      setPhoneSheetOpen(true)
+      return
+    }
 
     const ownerId = ownerRef.current
     if (!ownerId) return
@@ -1259,6 +1284,11 @@ export default function Sell() {
           <Text className="sell__hint-text">
             发布即表示你已阅读校内交易规范；违规商品会被下架，审核结果会在「我的发布」里显示。
           </Text>
+          {needsPhoneBeforePublish({ phoneBound: user?.phoneBound, editing }) ? (
+            <Text className="sell__hint-text sell__hint-text--phone">
+              未绑定手机号，发布前需先绑定
+            </Text>
+          ) : null}
         </View>
 
         <View className="sell__submit" onClick={submit}>
@@ -1367,6 +1397,13 @@ export default function Sell() {
           </View>
         </>
       ) : null}
+
+      <PhoneBindSheet
+        open={phoneSheetOpen}
+        binding={phoneBind.binding}
+        onGetPhoneNumber={phoneBind.onGetPhoneNumber}
+        onClose={() => setPhoneSheetOpen(false)}
+      />
     </View>
   )
 }

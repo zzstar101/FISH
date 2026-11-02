@@ -1,3 +1,4 @@
+import type { Me } from '@fish/contracts/auth/user'
 import {
   ListingCategorySchema,
   ListingConditionSchema,
@@ -21,6 +22,7 @@ import { CATEGORY_LABEL, CONDITION_LABEL } from '../../lib/labels'
 import { currentHref } from '../../lib/redirect'
 import { currentSessionGeneration } from '../../lib/session-cache'
 import { useAuth } from '../auth/auth-provider'
+import { PhoneRequiredNotice } from '../auth/phone-required-notice'
 import { AiPolishPanel, type PolishState } from './ai-polish-panel'
 import {
   imagePreparationMessage,
@@ -65,10 +67,11 @@ export function PublishPage() {
   // me 在 RequireAuth 下必定存在；仍显式收口，避免类型分支散落页面。
   if (!me) return null
   // 换号时整页重挂载，旧的异步任务也无法再把状态写回新账号。
-  return <PublishForm key={me.id} />
+  return <PublishForm key={me.id} me={me} />
 }
 
-function PublishForm() {
+function PublishForm({ me }: { me: Me }) {
+  const { refetch: refetchMe } = useAuth()
   const navigate = useNavigate()
   const createListing = useCreateListing()
   const polishCandidates = usePolishCandidates()
@@ -81,7 +84,14 @@ function PublishForm() {
   const [polishCooldownUntil, setPolishCooldownUntil] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [reviewResult, setReviewResult] = useState<ListingDetail | null>(null)
+  /**
+   * 服务端回 403 `PHONE_REQUIRED` 时手里的那份 `me`（#514）：本地 `phoneBound` 过期了。
+   * 同时重拉 `/me`——拿到新对象（未绑定）后由 `me.phoneBound` 接管拦截；用户去小程序绑完、
+   * 切回标签页再拉到新对象（已绑定）时，这个引用不再相等，拦截自然解除。
+   */
+  const [phoneRequiredFor, setPhoneRequiredFor] = useState<Me | null>(null)
 
+  const meRef = useRef(me)
   const mountedRef = useRef(false)
   const formEpochRef = useRef(0)
   const formRef = useRef(form)
@@ -90,6 +100,7 @@ function PublishForm() {
   const polishControllerRef = useRef<AbortController | null>(null)
   const submitControllerRef = useRef<AbortController | null>(null)
 
+  meRef.current = me
   formRef.current = form
   imagesRef.current = images
 
@@ -427,6 +438,11 @@ function PublishForm() {
     } catch (error) {
       if (!isTaskCurrent(task) || controller.signal.aborted || isPublishTaskCancelled(error)) return
       const view = listingErrorView(error)
+      if (view.phoneRequired) {
+        setPhoneRequiredFor(meRef.current)
+        refetchMe()
+        return
+      }
       setFieldErrors(view.fieldErrors)
       setSubmitError(view.message)
     } finally {
@@ -438,6 +454,8 @@ function PublishForm() {
   }
 
   if (reviewResult) return <ReviewSubmitted listing={reviewResult} onReset={resetForm} />
+  // 发布门禁（#514）：未绑定手机号不给可填表单。只换渲染、不卸载本组件，草稿与已传图片都保留。
+  if (me.phoneBound !== true || phoneRequiredFor === me) return <PhoneRequiredGate />
 
   const imageCheck = publishImageCheck(images)
   const imageHelper = publishImageHelperText(images)
@@ -675,6 +693,15 @@ function PublishForm() {
           </p>
         </aside>
       </div>
+    </div>
+  )
+}
+
+function PhoneRequiredGate() {
+  return (
+    <div className="mx-auto max-w-[680px] space-y-6">
+      <h1 className="font-semibold text-[26px] tracking-[-0.03em]">发布闲置</h1>
+      <PhoneRequiredNotice />
     </div>
   )
 }

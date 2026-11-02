@@ -49,6 +49,7 @@ import {
   createResendEmailVerificationProvider,
   createSmtpEmailVerificationProvider,
 } from './modules/auth/email-providers'
+import { requirePhoneBound } from './modules/auth/require-phone'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
 import { createBlocksRouter } from './modules/blocks/router'
@@ -404,6 +405,7 @@ export function createApp(
       resolveClientIp: (c) =>
         trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
       guard: restrictionGuard,
+      requirePhone: requirePhoneBound,
     }),
   )
   // #323 R1：行为埋点与推荐上下文。推荐 Feed 与事件写入都**匿名可用**（未登录访客也要能看首页，
@@ -712,6 +714,7 @@ export function createApp(
     getUserId: (c) => c.get('userId'),
     matchQueue: createDbWishMatchQueue(db),
     guard: restrictionGuard,
+    requirePhone: requirePhoneBound,
   })
   app.use('/wishes/*', auth.requireAuth)
   app.route('/wishes', wishes)

@@ -123,7 +123,19 @@ function collectBlockRuns(
   out.push({ where: prefix, runs: block.runs })
 }
 
-describe('五份法务文档数据模型不变量（v2.0）', () => {
+/**
+ * 各文档当前版本：#514 把「绑定手机号」从可选改为发布前置条件，隐私政策 / 用户协议 /
+ * 收集清单升到 v2.1（2026-11-02）；第三方共享清单与社区规范内容未变，仍是 v2.0。
+ */
+const DOC_VERSIONS: Record<string, [version: string, date: string]> = {
+  terms: ['v2.1', '2026-11-02'],
+  privacy: ['v2.1', '2026-11-02'],
+  'info-collection': ['v2.1', '2026-11-02'],
+  'third-party-sharing': ['v2.0', '2026-11-01'],
+  'community-guidelines': ['v2.0', '2026-11-01'],
+}
+
+describe('五份法务文档数据模型不变量', () => {
   const DOCS: [string, LegalDoc][] = [
     ['terms', TERMS_DOC],
     ['privacy', PRIVACY_DOC],
@@ -132,11 +144,12 @@ describe('五份法务文档数据模型不变量（v2.0）', () => {
     ['community-guidelines', COMMUNITY_GUIDELINES_DOC],
   ]
 
-  test('全部升级至 v2.0（2026-11-01），不含 ph 占位或「待填」字样，React key 无冲突', () => {
+  test('版本与日期符合 DOC_VERSIONS，不含 ph 占位或「待填」字样，React key 无冲突', () => {
     for (const [name, doc] of DOCS) {
       const metaText = doc.meta.map((line) => line.map((r) => r.t).join('')).join(' | ')
-      expect(metaText).toContain('v2.0')
-      expect(metaText).toContain('2026-11-01')
+      const [version, date] = DOC_VERSIONS[name] ?? ['', '']
+      expect(metaText).toContain(version)
+      expect(metaText).toContain(date)
 
       const secIds = new Set<string>()
       const blockKeys = new Set<string>()

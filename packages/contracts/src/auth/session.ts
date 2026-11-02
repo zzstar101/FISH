@@ -70,6 +70,11 @@ export const AuthErrorCodeSchema = z.enum([
   'PHONE_UPSTREAM_FAILED',
   /** #86 C：手机号已被其他账号绑定（唯一索引兜底并发换绑）。409。 */
   'PHONE_ALREADY_BOUND',
+  /**
+   * #514：已登录但未绑定手机号，不能使用该写入口（权限矩阵见 `auth/phone.ts`）。403。
+   * 端上据此弹出绑定引导（小程序）或给出去小程序绑定的路径（PC），而不是当作普通失败。
+   */
+  'PHONE_REQUIRED',
 ])
 
 export type AuthErrorCode = z.infer<typeof AuthErrorCodeSchema>
