@@ -536,7 +536,7 @@ function settleOverdue(session: VoiceSession, nowMs: number): boolean {
  * 还写着「松开 发送」，用户以为在录、其实什么都没录。
  *
  * `onAutoStop`：录音器**自己停了**（时长上限 / 被系统打断）时的带外通知。`capped` 由
- * 「有没有被中断过」+「时长是否贴着上限」两件事共同判定，见 `voiceCapped`。
+ * 「**此刻**是否仍处于中断态」+「时长是否贴着上限」两件事共同判定，见 `voiceCapped`。
  *
  * **抛错**：上一段还没交回收尾事件、录音器仍被它占着时同步抛 `VoiceRecordingBusyError`
  * （与平台 `start()` 失败不同，那一条仍照旧直接抛出，见函数体）。两者都走页面的
