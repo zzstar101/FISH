@@ -2,7 +2,6 @@ import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contrac
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
 import type { AllowedImageMime } from '@/features/upload/mime'
-import { formatAmount } from '@/lib/money'
 
 /**
  * 会话页的展示逻辑（#89：从 fixture 改为真实历史 / 发送 / 已读）。
@@ -94,15 +93,20 @@ export function systemPillText(content: string): string {
  * | 没有交易、也没有提案 | 商品状态（在售 / 已售出…） | 「查看」→ 商品详情 |
  * | 提案待卖家点头 | 卖家「买家已申请面交」／买家「待卖家确认」 | 卖家「待确认」（二次确认后接受）／买家无按钮 |
  * | `PENDING_MEETUP` | 「待面交」；我已确认则「待对方确认」 | 卖家「打开交易码」→ 面交页；买家「开启扫码」→ 扫码页 |
- * | `COMPLETED` 且我还没评价 | 「已完成交易」 | 「评价」→ 面交页（端上唯一评价入口） |
- * | `COMPLETED` 已评价 / `CANCELLED` | 「已完成交易」／「交易已取消」 | 「查看」→ 商品详情 |
+ * | `COMPLETED` 且我还没评价（`reviewed === false`） | 「已完成交易」 | 「评价」→ 面交页（端上唯一评价入口） |
+ * | `COMPLETED` 已评价（`reviewed === true`） | 「已完成交易」 | 「查看」→ 商品详情 |
+ * | `COMPLETED` 评价态**没查到**（`reviewed === null`） | 「已完成交易」 | 「查看」→ 面交页（中性文案，不替用户断言他没评过） |
+ * | `CANCELLED` | 「交易已取消」 | 「查看」→ 商品详情 |
  * | 交易查询失败（有交易证据） | 「交易状态待更新」 | 「重新加载」 |
  *
  * 几个被验收钉住的取舍：
  * - **已取消不给交易码入口**（#522）：面交页标题仍是「交易码」，即便它渲的是取消结果卡，
  *   入口语义也与验收冲突 —— 顶部只陈述终态。
- * - **评价态查不到（`reviewed === null`）按未评价给入口**：面交页自己会按服务端现状渲染，
- *   多给一次入口比少给一次安全（少给的话，用户没有任何地方能评）。
+ * - **评价态是严格三态**（`reviewed: boolean | null`）：只有 404 `REVIEW_NOT_FOUND` 才落
+ *   `false`（= 待评价），成功落 `true`；`null` 是「还没查 / 查不到」，**不能**当成
+ *   「已确认未评价」写「评价」—— 那是在替用户断言一件没查清的事。但入口也不丢：按钮文案
+ *   退回中性的「查看」，去向仍是那一笔的面交页（端上唯一评价入口，且该页自己按服务端
+ *   现状渲染评价块），所以未知态既不说谎，也不会让用户无处可评。
  * - **失败不信任旧终态**：只有仍在 `PENDING_MEETUP` 的缓存可以继续用（它不是终态，
  *   文案本来就是成交前口径），其余一律「交易状态待更新 + 重新加载」。
  */
@@ -233,15 +237,29 @@ export function txBarView(input: {
     /**
      * 终态文案替换掉原来那句「我们正在聊这件」（Owner 定版）：成交之后还写着正在聊这件，
      * 等于把已完成说成进行中。
+     *
+     * 「待评价」只认 `reviewed === false`（404 `REVIEW_NOT_FOUND` 才落到这个值）。`null`
+     * 是**没查到**（首帧还没查回来 / 网络失败），不是「未评价」—— 写成「评价」就是替用户
+     * 断言他没评过。未知态退回中性的「查看」，去向仍是那一笔的面交页：页面上只有那里
+     * 有评价入口，且面交页会按服务端现状渲染，所以既不说谎也不会让用户无处可评。
      */
-    return reviewed === true
-      ? { tone: 'is-ok', status: '已完成交易', label: '查看', action: { kind: 'listing' } }
-      : {
-          tone: 'is-ok',
-          status: '已完成交易',
-          label: '评价',
-          action: { kind: 'review', transactionId },
-        }
+    if (reviewed === true) {
+      return { tone: 'is-ok', status: '已完成交易', label: '查看', action: { kind: 'listing' } }
+    }
+    if (reviewed === false) {
+      return {
+        tone: 'is-ok',
+        status: '已完成交易',
+        label: '评价',
+        action: { kind: 'review', transactionId },
+      }
+    }
+    return {
+      tone: 'is-ok',
+      status: '已完成交易',
+      label: '查看',
+      action: { kind: 'review', transactionId },
+    }
   }
   if (currentTx.status === 'CANCELLED') {
     return { tone: 'is-plain', status: '交易已取消', label: '查看', action: { kind: 'listing' } }

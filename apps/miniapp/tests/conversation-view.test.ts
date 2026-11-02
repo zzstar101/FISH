@@ -319,10 +319,21 @@ describe('txBarView —— 页头商品交易状态条（#551）', () => {
     })
   })
 
-  test('与既有验收一致：评价态查不到（reviewed === null）按未评价给入口', () => {
-    expect(txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: null })).action).toEqual({
-      kind: 'review',
-      transactionId: 'txn_1',
+  test('评价态没查到（reviewed === null）不虚报「待评价」：文案中性，目的地仍是面交页', () => {
+    // `null` = 还没查（首帧）/ 查询失败，不是「确认未评价」：写着「评价」等于替用户断言
+    // 他没评过。但入口不能一起丢 —— 面交页是端上唯一的评价入口，且它自己会按服务端
+    // 现状渲染，所以按钮文案退回中性的「查看」，去向仍是那一笔的面交页。
+    const unknown = txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: null }))
+    expect(unknown).toMatchObject({
+      tone: 'is-ok',
+      status: '已完成交易',
+      label: '查看',
+    })
+    expect(unknown.label).not.toBe('评价')
+    expect(unknown.action).toEqual({ kind: 'review', transactionId: 'txn_1' })
+    // 三态必须真的分开：null（未知）与 true（已评）文案相同、去向不同
+    expect(txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: true })).action).toEqual({
+      kind: 'listing',
     })
   })
 

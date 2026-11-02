@@ -2219,9 +2219,11 @@ export default function Conversation() {
   const fallbackTxId = useMemo(() => lastTxAcceptedId(messages), [messages])
 
   /**
-   * 交易完成为「待评价」时查一次我的评价（#551）。只有 404 `REVIEW_NOT_FOUND` 才算
-   * 「我还没评」；其余失败留在 `null`（按未评价给入口，见 `view.ts` 的 `txBarView`），
-   * 不猜。`alive` 挡住「换了交易之后旧响应才回来」的串档。
+   * 交易完成为「待评价」时查一次我的评价（#551）。评价态是**三态**：只有 404
+   * `REVIEW_NOT_FOUND` 才算「我还没评」（`reviewed: false`），成功是 `true`；其余失败
+   * （网络 / 500）**不写 `false`** —— 那等于替用户断言一件没查清的事 —— 而是回到未知态
+   * `null`，由 `view.ts` 的 `txBarView` 用中性文案 + 面交页入口收尾。`alive` 挡住
+   * 「换了交易之后旧响应才回来」的串档。
    *
    * 依赖里除了交易 id 还有 `txReviewTick`：**评价是在面交页写的**，写完返回本页时
    * 交易 id 没变，只有每回到本页重查一次，顶栏才会从「评价」变成「查看」。
@@ -2245,6 +2247,8 @@ export default function Conversation() {
           return
         }
         console.warn('[miniapp] 会话交易评价状态加载失败', error)
+        // 查不到 ≠ 没评过：连上一轮的结论一起作废，退回未知态（文案中性、入口仍在）
+        setTxReview(null)
       })
     return () => {
       alive = false
@@ -2322,9 +2326,13 @@ export default function Conversation() {
              * 已非在售），所以不报「接受没成功」这种口吻 —— 但它也不是「什么都没发生」：
              * 什么提示都不给，用户面对的还是一颗必然再 409 的「待确认」。于是：说一句商品
              * 现状 + 重查本页（`listing.status` 要跟着变，否则顶部不会自己退到「已预订」）。
+             *
+             * 口径只到「已不在售」：这个码**不区分成因**（下架 / 已被别人订走或卖掉 /
+             * 上一次其实成功、这次是响应丢失后的重试），写成「已被其他买家预订」在另外两种
+             * 情况下就是假消息。
              */
             if (isApiError(error) && error.code === 'LISTING_NOT_ACTIVE') {
-              void Taro.showToast({ title: '这件商品已被其他买家预订', icon: 'none' })
+              void Taro.showToast({ title: '这件商品已不在售，已为你刷新', icon: 'none' })
               retryTx()
               void loadRef.current({ silent: true })
               return
