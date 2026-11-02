@@ -33,6 +33,46 @@ function stripComments(code: string): string {
   return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 }
 
+/** 把一段请求代码切成它**实际**的回调体：`.then(...)` / `.catch(...)` 的 `{ … }`（按花括号配对，不引解析器） */
+function callbackBodies(slice: string, label: string): string[] {
+  const opener = /\.(then|catch)\(\(?[^()]*\)?\s*=>\s*\{/g
+  const bodies: string[] = []
+  for (let hit = opener.exec(slice); hit; hit = opener.exec(slice)) {
+    const from = hit.index + hit[0].length
+    let depth = 1
+    let i = from
+    while (i < slice.length && depth > 0) {
+      if (slice[i] === '{') depth += 1
+      else if (slice[i] === '}') depth -= 1
+      i += 1
+    }
+    // 片段本身可能正好截在最后一个回调的 `}` 之前（例如 load 段的终点就是 .catch 里的那句），
+    // 这时候取到片段末尾即可：要断言的「守卫 → return → 写状态」都在片段内，不受影响。
+    bodies.push(slice.slice(from, depth === 0 ? i - 1 : slice.length))
+  }
+  expect(bodies.length, `${label}：应该切出实际回调`).toBeGreaterThan(0)
+  return bodies
+}
+
+const TX_SEQ_GUARD = 'txSeq !== txSeqRef.current'
+
+/**
+ * latest-wins 要**每个实际回调各自**守：守卫在同一段请求里凑够条数不算数 ——
+ * `.catch` 的守卫挪进 `.then`、条数不变时，迟到的失败结果仍会覆盖新到的成功结果。
+ * 每个回调里的顺序固定为「守卫 → return → 写状态」，`.then` 写 `applyTx(tx)`、`.catch` 写 `setTxLoad(...)`。
+ */
+function expectEachCallbackGuarded(slice: string, label: string): void {
+  for (const body of callbackBodies(slice, label)) {
+    const guard = body.indexOf(TX_SEQ_GUARD)
+    expect(guard, `${label}：每个回调里都要有 latest-wins 守卫`).toBeGreaterThanOrEqual(0)
+    const bail = body.indexOf('return', guard)
+    expect(bail, `${label}：守卫后面要 return 掉迟到的结果`).toBeGreaterThan(guard)
+    const write = body.search(/applyTx\(tx\)|setTxLoad\(/)
+    expect(write, `${label}：回调里应有状态写入`).toBeGreaterThanOrEqual(0)
+    expect(write, `${label}：守卫必须在这个回调写状态之前`).toBeGreaterThan(bail)
+  }
+}
+
 describe('#521 / #522 会话页交易进度卡 · 接线', () => {
   test('每次 load 都按会话查交易，并把首屏 tx.accepted 的 id 作为精确查询的首选', async () => {
     const code = await source()
@@ -76,7 +116,6 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     const code = stripComments(await source())
     expect(code).toContain('const txSeqRef = useRef(0)')
     const takes = (slice: string) => slice.match(/const txSeq = \+\+txSeqRef\.current/g) ?? []
-    const guards = (slice: string) => slice.match(/txSeq !== txSeqRef\.current/g) ?? []
 
     // 进页 / 返回 / 补刷：取号一次，.then 与 .catch 各守一次
     const load = sliceFrom(
@@ -86,12 +125,12 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     )
     expect(load).toContain('lastTxAcceptedId(page.items)')
     expect(takes(load)).toHaveLength(1)
-    expect(guards(load)).toHaveLength(2)
+    expectEachCallbackGuarded(load, 'load')
 
     // 20s 轮询两条路径（失败重试列表 / PENDING 按 id 查详情）：各自取号，四个回调各自守
     const poll = sliceFrom(code, 'timer = setInterval(', 'presenceSeq.current += 1')
     expect(takes(poll)).toHaveLength(2)
-    expect(guards(poll)).toHaveLength(4)
+    expectEachCallbackGuarded(poll, 'poll')
 
     // 失败卡「重新加载」：同样取号一次、两个回调各自守
     const retry = sliceFrom(
@@ -100,7 +139,7 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
       '}, [applyTx, conversation, conversationId, fallbackTxId])',
     )
     expect(takes(retry)).toHaveLength(1)
-    expect(guards(retry)).toHaveLength(2)
+    expectEachCallbackGuarded(retry, 'retry')
   })
 
   test('取消后新提案的判据来自消息流（详情里的 lastMessage 会滞后）', async () => {
@@ -116,7 +155,13 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
       'const renderSystem = (message: MessageDto) => {',
       'const renderListing = (',
     )
-    expect(capsule).toContain("event?.type === 'tx.accepted'")
+    // 判据本身要带 tx.accepted 谓词：同一片段里的 noIdHint 也有这串字面量，全文/整段搜会被它顶替
+    const criterion = sliceFrom(
+      capsule,
+      'const historical =',
+      'const historicalTxId = historical ? txId : null',
+    )
+    expect(criterion).toContain("event?.type === 'tx.accepted'")
     // 判据：与当前交易行不同就算历史；查不到当前交易行（接口失败 / 数据缺失）时也要保留入口
     expect(capsule).toContain('txLoad.tx === null || txId !== txLoad.tx.id')
     expect(capsule).toContain('已接受交易 · 查看本笔')
