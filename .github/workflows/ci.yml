@@ -75,7 +75,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version-file: package.json
 
       - name: Compute change scope
         id: range
@@ -113,7 +113,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version-file: package.json
 
       # lockfile 防线（#27）：本机默认 registry 若是镜像源（如 npmmirror），`bun add` 会把已存在的
       # **每一个**包条目都改写成带镜像 URL 的形式，产生数百行无关 diff；而 `bun install
@@ -170,7 +170,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version-file: package.json
 
       - name: Install
         run: bun install --frozen-lockfile
@@ -304,7 +304,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version-file: package.json
 
       - name: Install
         run: bun install --frozen-lockfile
@@ -342,7 +342,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version-file: package.json
 
       - name: Install
         run: bun install --frozen-lockfile
@@ -367,7 +367,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version-file: package.json
 
       - name: Install
         run: bun install --frozen-lockfile
@@ -418,7 +418,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version-file: package.json
 
       - name: Install
         run: bun install --frozen-lockfile

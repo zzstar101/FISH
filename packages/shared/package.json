@@ -7,7 +7,7 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun check --no-script -p tsconfig.json"
   },
   "dependencies": {
     "typeid-js": "^1.2.0",

@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/zzstar101/FISH/actions/workflows/ci.yml"><img src="https://github.com/zzstar101/FISH/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.0-000000?logo=bun&logoColor=white" alt="Bun" />
+  <img src="https://img.shields.io/badge/Bun-%E2%89%A51.4.4-000000?logo=bun&logoColor=white" alt="Bun" />
   <img src="https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/React-19-087EA4?logo=react&logoColor=white" alt="React" />
   <img src="https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL" />
@@ -51,7 +51,7 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 
 | 层 | 选型 |
 | --- | --- |
-| Runtime / 包管理 | **Bun**（`packageManager: bun@1.4.0`，`engines.bun >= 1.4.0`） |
+| Runtime / 包管理 | **Bun**（`packageManager: bun@1.4.4`，`engines.bun >= 1.4.4`） |
 | 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React 19 + Vite + TypeScript，`apps/web-pc`） |
 | 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
 | UI | Tailwind CSS v4 + 自有 `@fish/ui` 组件 |
@@ -61,7 +61,7 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 | 异步 | PostgreSQL `jobs` 表 + 独立 Bun Worker 轮询 |
 | 实时 | Hono / Bun 原生 WebSocket |
 | 对象存储 | S3 兼容（本地 MinIO） |
-| 质量 | Biome（lint + format）· TypeScript 7（原生 `tsc --noEmit`）· `bun test` · GitHub Actions |
+| 质量 | Biome（lint + format）· TypeScript 7 · Bun 内置 `bun check` 类型检查（对齐 tsc 7）· `bun test` · GitHub Actions |
 
 **V1 明确不引入**：Redis、Kafka、OpenSearch、K8s、微服务、平台支付、物流、购物车、结构化报价 / 反价、地图。
 

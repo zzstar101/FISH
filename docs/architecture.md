@@ -15,7 +15,7 @@
 
 | 层 | 选型 |
 | --- | --- |
-| Runtime / 包管理 | Bun（`packageManager: bun@1.4.0`，`engines.bun >= 1.4.0`） |
+| Runtime / 包管理 | Bun（`packageManager: bun@1.4.4`，`engines.bun >= 1.4.4`） |
 | 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React + Vite + TypeScript，`apps/web-pc`） |
 | 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
 | UI | Tailwind CSS v4（shadcn/ui 由前端 Owner 接入） |
@@ -26,7 +26,7 @@
 | 实时 | Hono / Bun 原生 WebSocket |
 | 对象存储 | S3 兼容（本地 MinIO） |
 | 搜索（V1） | PostgreSQL FTS / `pg_trgm` |
-| 代码质量 | Biome（lint + format）· TypeScript 7（原生 `tsc --noEmit`）· `bun test` |
+| 代码质量 | Biome（lint + format）· TypeScript 7 · Bun 内置 `bun check` 类型检查（对齐 tsc 7）· `bun test` |
 
 **V1 明确不引入**：Redis、Kafka、OpenSearch、K8s、微服务、平台支付、物流、购物车、结构化报价/反价、复杂推荐与信用、地图、无关 AI Chatbot。
 

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun check --no-script -p tsconfig.json"
   },
   "dependencies": {
     "@fish/contracts": "workspace:*",

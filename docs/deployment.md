@@ -54,7 +54,7 @@
 | --- | --- | --- |
 | 系统 | Ubuntu 24.04 LTS；安装 PostgreSQL 18 前按 [PGDG 官方指南](https://www.postgresql.org/download/linux/ubuntu/) 配置仓库 | Ubuntu 24.04 自带的旧版 PostgreSQL 不支持 `uuidv7()` |
 | PostgreSQL | **18 + pgvector**；应用迁移用 `uuidv7()` DB default；本期不提前创建向量表 | 本地 `pgvector/pgvector:pg18`（PostgreSQL 18.6、pgvector 0.8.6）实测 `uuidv7()` 与 `CREATE EXTENSION vector` 可用；宿主机部署仍需单独验证 |
-| Bun | `>= 1.4.0`（本手册钉 `1.4.0`） | 根 `package.json` 的 `engines.bun` / `packageManager` |
+| Bun | `>= 1.4.4`（本手册钉 `1.4.4`） | 根 `package.json` 的 `engines.bun` / `packageManager` |
 | Node.js | **不需要**。`db:migrate` 由 Bun + Drizzle ORM migrator 执行 | `packages/db/src/migrate.ts` |
 | 域名 | 两个 A 记录：主域名 + 对象存储子域（`s3.<域名>`） | §6 的 SigV4 约束 |
 | 端口 | 只对外开放 80 / 443 | 下面 ufw 那一步（目标环境只给一个端口时见 §11） |
@@ -68,8 +68,8 @@ sudo apt update && sudo apt install -y curl git unzip ca-certificates ufw rsync
 # Bun 系统级安装（不要装进某个用户的 ~/.bun，systemd 的 service 用户读不到）。
 # 注意安装脚本读的是 **bash 进程**的 BUN_INSTALL（`install_dir=${!install_env:-$HOME/.bun}`），
 # 所以变量要写在 bash 那一侧，不能写在 curl 前面。
-curl -fsSL https://bun.sh/install | sudo BUN_INSTALL=/usr/local bash -s "bun-v1.4.0"
-/usr/local/bin/bun --version    # 期望 1.4.0
+curl -fsSL https://bun.sh/install | sudo BUN_INSTALL=/usr/local bash -s "bun-v1.4.4"
+/usr/local/bin/bun --version    # 期望 1.4.4
 
 # 运行用户与代码目录
 sudo useradd --system --create-home --shell /usr/sbin/nologin fish

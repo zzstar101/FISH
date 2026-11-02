@@ -8,7 +8,7 @@
     "dev:weapp": "taro build --type weapp --watch",
     "build:weapp": "taro build --type weapp && bun run check:es5",
     "check:es5": "bun scripts/check-es5.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "bun check --no-script -p tsconfig.json",
     "icons": "bun tools/icons/build.ts",
     "brand": "bun tools/brand/build.ts"
   },
