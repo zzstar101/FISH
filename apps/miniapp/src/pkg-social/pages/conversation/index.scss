@@ -1006,6 +1006,10 @@
   color: var(--muted-2);
 }
 
+/* 按住说话进入「松开取消」态：与录音面板的 danger 视觉同步（#535） */
+.conv__hold.is-cancel {
+  background: var(--danger-weak);
+}
 /* 「+」：展开态深墨底 + 图标转白 + 转 45°（语义从「更多」变成「收起」） */
 .conv__plus {
   flex: 0 0 auto;

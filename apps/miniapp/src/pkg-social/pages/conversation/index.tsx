@@ -35,6 +35,7 @@ import {
   downloadChatMedia,
   loadMediaPage,
   pickChatImages,
+  type RecordedVoice,
   startVoiceRecording,
   uploadChatImage,
   uploadChatVoice,
@@ -125,6 +126,9 @@ import {
   type TxBarAction,
   txBarView,
 } from './view'
+import VoiceRecordPanel from './voice-record-panel'
+import { applyVoiceAutoStop, applyVoiceRelease, isVoiceCancelArmed } from './voice-recording-view'
+
 import './index.scss'
 
 /**
@@ -198,6 +202,12 @@ const EMPTY_IDS: ReadonlySet<string> = new Set()
  * 同守卫，拆成两条 20s 轮询只会让同一端点每 20s 被请求两次，且两条的守卫还不一致。
  */
 const DETAIL_POLL_MS = 20_000
+
+/** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
+function touchClientY(event: unknown): number {
+  const touch = (event as { touches?: Array<{ clientY?: number }> } | null)?.touches?.[0]
+  return typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN
+}
 
 export default function Conversation() {
   const authStatus = useAuthGuard()
@@ -381,6 +391,29 @@ export default function Conversation() {
   const pendingMediaRef = useRef<PendingMedia[]>([])
   /** 当前这次录音的句柄（`null` = 没在录） */
   const recordingRef = useRef<VoiceRecording | null>(null)
+  /* ---------------- 录音期反馈（#535）：上滑取消 ---------------- */
+  /** 是否已滑到「松开取消」区（只驱动渲染，松手判定读 ref） */
+  const [cancelArmed, setCancelArmed] = useState(false)
+  const recordOriginYRef = useRef(Number.NaN)
+  const cancelArmedRef = useRef(false)
+  /**
+   * 这次录音属于哪个身份（#364 审查的判据，复审指出重构后退化成恒假）：
+   * 必须**起录时**拍，才能守住「松手 → 拿到音频」这段窗口里换号的情况。
+   */
+  const voiceIdentityRef = useRef<MediaTaskIdentity>({ cookie: '', userId: null })
+
+  /**
+   * 收掉录音期的显示态（取消态）。
+   *
+   * 计时器与秒数在 `VoiceRecordPanel` 内部（审查 medium：放页面会让整页消息流每秒重渲染），
+   * 面板随 `recording` 卸载时自己清 interval —— 所以这里只需复位取消态。
+   * 所有「录音结束」路径都必须过这里。
+   */
+  const resetRecordingUi = useCallback(() => {
+    recordOriginYRef.current = Number.NaN
+    cancelArmedRef.current = false
+    setCancelArmed(false)
+  }, [])
   /** 隐私授权弹窗在途：连点麦克风按钮时只弹一次，避免重复弹窗 */
   const privacyPendingRef = useRef(false)
   /** 语音授权在途的代次：await 回来时用户可能已经开了面板/离开页面，旧结果不许落地 */
@@ -465,6 +498,7 @@ export default function Conversation() {
      */
     recordingRef.current?.abort()
     recordingRef.current = null
+    resetRecordingUi()
     audioRef.current?.destroy()
     audioRef.current = null
     downloadingRef.current.clear()
@@ -769,6 +803,7 @@ export default function Conversation() {
      */
     recordingRef.current?.abort()
     recordingRef.current = null
+    resetRecordingUi()
     setRecording(false)
     /**
      * 语音播放也要停（#364 审查）：`navigateTo` 子页（商品详情 / 交易码页）只 hide
@@ -784,12 +819,15 @@ export default function Conversation() {
       aliveRef.current = false
       recordingRef.current?.abort()
       recordingRef.current = null
+      // 卸载不一定会走 useDidHide：这里必须把录音期显示态收掉，
+      // 否则计时面板的 interval 会随页面一起变成孤儿（#535 审查 medium）
+      resetRecordingUi()
       audioRef.current?.destroy()
       audioRef.current = null
       // 在途的语音下载到此失效（与身份清场同理）：离页后回来不许出声
       playSeqRef.current += 1
     }
-  }, [])
+  }, [resetRecordingUi])
 
   /**
   /**
@@ -1585,17 +1623,30 @@ export default function Conversation() {
    * - `startVoiceRecording` 的 `onError` —— 录音**还在进行中**（用户手指还按着）；
    * - `finishVoice` 的 `.catch` —— 松手之后才失败。
    *
-   * 无论从哪来，`recording` 都必须先复位：不复位的话按钮还写着「松开 发送」，
-   * 用户以为在录、其实什么都没录。
+   * 通常 `recording` 必须先复位：不复位的话按钮还写着「松开 发送」，用户以为在录、其实
+   * 什么都没录。但**上一段**的失败可能晚到——那时用户已经在录下一段了，复位就会把正在录的
+   * 那一段打死（面板消失、按钮回到「按住 说话」，这一段从此没人收尾），所以由调用方用
+   * `resetUi` 说明「现在复位是否还安全」（#535 follow-up F1）。同一条判断也决定**提不提示**：
+   * 晚到的失败与用户当下的操作无关，弹出来只会让他以为刚说的话没录上（#549 审查 L3）。
    *
    * 权限被拒要给「去设置」入口，用的是与扫码页（`pages/scan` / `pages/scan-pr`）同一范式：
    * `Taro.getSetting` 先确认这个 scope 真的是被用户拒的，再 `Taro.openSetting` 把人送进
    * 设置页。不是被拒（例如麦克风被别的应用占着）就别拉设置页，那会让用户白跑一趟。
    */
-  const handleVoiceFailure = (error: unknown) => {
+  const handleVoiceFailure = (error: unknown, options: { resetUi?: boolean } = {}) => {
     console.error('[miniapp] 录音失败', error)
-    recordingRef.current = null
-    setRecording(false)
+    const resetUi = options.resetUi ?? true
+    if (resetUi) {
+      recordingRef.current = null
+      setRecording(false)
+      resetRecordingUi()
+    }
+    /*
+      `resetUi === false` 说明这是**上一段**晚到的失败（用户已经在录下一段）：除了不许复位
+      正在录的那一段，也不许用打断式 toast / 弹窗抢注意力 —— 他既分不清这条提示说的是哪一段，
+      还会以为刚说的那句话没录上。降级成上面的 `console.error`（#549 独立审查 L3）。
+    */
+    if (!resetUi) return
     const failure = voiceError(error)
     if (failure instanceof VoicePrivacyError) {
       // 平台在录音阶段才报 privacy：先退回键盘态，下一次点话筒会重新走授权闸；
@@ -1650,17 +1701,52 @@ export default function Conversation() {
   }
 
   /**
+   * 来电 / 视频通话占用了麦克风（`RecorderManager.onInterruptionBegin`，见
+   * `startVoiceRecording` 的 `onInterrupted`）。
+   *
+   * 平台的中断语义是「录音被暂停」：暂停期间用户说的话不会被录进去，这一段的音频是截断的。
+   * 所以**当场**放弃这一段（不等松手）：复位面板 + 明确提示重录 —— 等松手才提示的话，用户
+   * 已经对着面板又说了半分钟。放弃之后闸门会一直关到这一段自己的收尾事件到达，这期间重按
+   * 会得到「稍后再按」的提示（与取消后立刻重按同一条路径）。
+   */
+  const handleVoiceInterrupted = () => {
+    const session = recordingRef.current
+    if (!session) return
+    recordingRef.current = null
+    setRecording(false)
+    resetRecordingUi()
+    session.abort()
+    // 只说「这一段已丢弃」，**不**承诺「稍后重按就能重录」：闸门要等这一段自己的终态事件
+    // 才开（`onInterruptionEnd` 只尽力补发一次 `stop()`，假设 A4/A6 成立才催得回来），
+    // 催不回来时下一次按下会得到「录音器没有响应，请关闭小程序后重新打开再试」——
+    // 承诺「稍后」就会当场被那句话打脸（#549 Quality 审查 L2）。
+    void Taro.showToast({ title: '录音已被来电打断，这一段已丢弃', icon: 'none' })
+  }
+
+  /**
    * 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态。
    *
    * 这里必须是**同步**的：`onTouchStart → onTouchEnd` 是一段不可打断的触摸序列。隐私授权
    * 若放在这里 await，弹窗期间用户松手会让 `finishVoice` 看不到 `recordingRef` 而直接
    * return，授权完成后反而在没有手指按着时开始录音（#526 审查）。
+   *
+   * `event` 只为取「按下的起点 Y」（#535 上滑取消的基准），不做任何异步阻塞。
    */
-  const startVoice = () => {
+  const startVoice = (event?: unknown) => {
     if (!canSend || recordingRef.current) return
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
-      recordingRef.current = startVoiceRecording(handleVoiceFailure)
+      // 第二个回调管「录音器自己停了」（时长上限）：不接的话面板会继续计时且无提示
+      // 第三个回调管「被来电 / 视频通话打断」：那一段音频是截断的，当场放弃并提示重录
+      voiceIdentityRef.current = currentIdentity()
+      recordingRef.current = startVoiceRecording(
+        handleVoiceFailure,
+        handleVoiceAutoStop,
+        handleVoiceInterrupted,
+      )
+      recordOriginYRef.current = touchClientY(event)
+      cancelArmedRef.current = false
+      setCancelArmed(false)
       setRecording(true)
     } catch (error) {
       recordingRef.current = null
@@ -1668,43 +1754,114 @@ export default function Conversation() {
     }
   }
 
+  /**
+   * 手指移动：上滑超过阈值进入「松开取消」（#535）。
+   * `onTouchMove` 高频触发，只在取消态翻转时 setState，避免每帧重渲染整页。
+   */
+  const moveVoice = (event: unknown) => {
+    if (!recordingRef.current) return
+    const originY = recordOriginYRef.current
+    const currentY = touchClientY(event)
+    if (!Number.isFinite(originY) || !Number.isFinite(currentY)) return
+    const armed = isVoiceCancelArmed(currentY - originY)
+    if (armed === cancelArmedRef.current) return
+    cancelArmedRef.current = armed
+    setCancelArmed(armed)
+  }
+
+  /** 松手：取消态已武装就丢弃这一段，否则发送（判定读 ref，不吃 setState 的延迟） */
+  const endVoice = () => finishVoice(cancelArmedRef.current)
+
+  /**
+   * 把录好的语音交去发送（松手发送 / 达到时长上限自动停 两条路径共用）。
+   *
+   * 同 `pickAndSendImages`：记**身份**而不是代次（#364 审查）。录音同样要好几秒，
+   * 期间一次 `load()` 推进的只是 epoch —— 那段录音还是当前账号录的，不该被丢掉。
+   *
+   * `identity` 是**参数**而不是在这里读 `voiceIdentityRef`（#535 follow-up F3）：发送是
+   * 异步的（`stop()` 回来才走到这里），背靠背两段录音时页面级 ref 可能已经被下一段覆盖 ——
+   * 那样第一段就拿着第二段的身份去过 `isStaleMediaIdentity`。两个调用点都在同步点，
+   * 各自把「这一刻」的快照传进来。
+   */
+  const sendRecordedVoice = (recorded: RecordedVoice, identity: MediaTaskIdentity) => {
+    // 离页（卸载）：这段录音已经没人接了，静默丢弃
+    if (!aliveRef.current) return
+    if (isStaleMediaIdentity(identity, currentIdentity())) {
+      // 录了音却什么都没发生会被当成页面坏了，必须说清楚
+      void Taro.showToast({ title: '账号已切换，请重新录制语音', icon: 'none' })
+      return
+    }
+    sendMedia({
+      kind: 'VOICE',
+      clientRequestId: randomUuidV4(),
+      path: recorded.path,
+      durationMs: recorded.durationMs,
+    })
+  }
+
+  /**
+   * 录音达到时长上限（录音器自己停了，见 `startVoiceRecording` 的 `onAutoStop`）。
+   *
+   * 以前这条路径没人接：面板会继续计时、按钮还写着「松开 发送」，实际上已经不在录了 ——
+   * 用户松手时才把这段当正常录音发出去（或更早被丢弃）。现在：复位 + 明确提示 + 直接发送
+   * 这一段（与微信「到时自动发送」一致，也避免用户刚录满的一分钟凭空消失）。
+   *
+   * 「取消 / 被打断 / 录满」的取舍收在 `applyVoiceAutoStop` 里（#535 复审）：那是有行为
+   * 用例的纯逻辑，页面只负责把取消态与是否录满交过去、接上提示与发送。
+   */
+  const handleVoiceAutoStop = (recorded: RecordedVoice, capped: boolean) => {
+    const cancelled = cancelArmedRef.current
+    /** 自停是同步回调（页面还握着这一段），这里的快照就是**这一段**的身份 */
+    const identity = voiceIdentityRef.current
+    recordingRef.current = null
+    setRecording(false)
+    resetRecordingUi()
+    applyVoiceAutoStop(
+      { cancelled, capped },
+      {
+        toast: (title) => void Taro.showToast({ title, icon: 'none' }),
+        send: () => sendRecordedVoice(recorded, identity),
+      },
+    )
+  }
+
   /** 松手：结束录音并发送（`cancelled` = 手指移开 / 取消，放弃这一段） */
   const finishVoice = (cancelled: boolean) => {
     const session = recordingRef.current
     if (!session) return
+    /** 同上：松手这一刻页面还握着这一段，先把身份快照取下来再放异步链 */
+    const identity = voiceIdentityRef.current
+    /*
+      松手这一刻录音是否仍处于中断态（来电 / 视频通话把录音暂停了，还没结束）。
+      必须是**此刻**的快照：「中断发生过」不算数，中断结束之后这一段仍应照常发送（#549）。
+    */
+    const interrupted = session.wasInterrupted()
     recordingRef.current = null
     setRecording(false)
+    resetRecordingUi()
     if (cancelled) {
       session.abort()
       return
     }
-    /**
-     * 同 `pickAndSendImages`：记**身份**而不是代次（#364 审查）。录音同样要好几秒，
-     * 期间一次 `load()` 推进的只是 epoch —— 那段录音还是当前账号录的，不该被丢掉。
-     */
-    const identity: MediaTaskIdentity = {
-      cookie: sessionCookieHeader() ?? '',
-      userId: userIdRef.current,
-    }
     void session
       .stop()
-      .then((recorded) => {
-        // 离页（卸载）：这段录音已经没人接了，静默丢弃
-        if (!aliveRef.current) return
-        if (isStaleMediaIdentity(identity, currentIdentity())) {
-          // 录了音却什么都没发生会被当成页面坏了，必须说清楚
-          void Taro.showToast({ title: '账号已切换，请重新录制语音', icon: 'none' })
-          return
-        }
-        sendMedia({
-          kind: 'VOICE',
-          clientRequestId: randomUuidV4(),
-          path: recorded.path,
-          durationMs: recorded.durationMs,
-        })
-      })
+      .then((recorded) =>
+        // 中断态下这段音频是截断的：丢掉并让用户重录，而不是静默发半句（判定见纯逻辑用例）
+        applyVoiceRelease(
+          { interrupted },
+          {
+            toast: (title) => void Taro.showToast({ title, icon: 'none' }),
+            send: () => sendRecordedVoice(recorded, identity),
+          },
+        ),
+      )
       .catch((error) => {
-        handleVoiceFailure(error)
+        /*
+          这一段失败时用户可能已经又按下了下一段（`recordingRef` 换成新的那段，`stop()` 的
+          失败晚于下一次 `startVoice`）：那时只提示，**不许**把正在录的那一段的界面复位 ——
+          否则面板消失、按钮回到「按住 说话」，而麦克风还在录（#535 follow-up F1）。
+         */
+        handleVoiceFailure(error, { resetUi: recordingRef.current === null })
       })
   }
 
@@ -1937,6 +2094,7 @@ export default function Conversation() {
     if (!session) return
     recordingRef.current = null
     setRecording(false)
+    resetRecordingUi()
     session.abort()
   }
 
@@ -3211,6 +3369,8 @@ export default function Conversation() {
         空内容时「发送」置灰（稿子 .send.is-off）。
       */}
       <View className="conv__bar">
+        {/* 录音反馈面板（#535）：计时与波形在子组件内部，消息流不随秒数重渲染 */}
+        {recording ? <VoiceRecordPanel cancelArmed={cancelArmed} /> : null}
         {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
         {replyTarget ? (
           <View className="conv__replybar">
@@ -3245,12 +3405,15 @@ export default function Conversation() {
               取消只能靠不把这段音频交给上传。
             */
             <View
-              className={`conv__hold${recording ? ' is-on' : ''}`}
+              className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
               onTouchStart={startVoice}
-              onTouchEnd={() => finishVoice(false)}
+              onTouchMove={moveVoice}
+              onTouchEnd={endVoice}
               onTouchCancel={() => finishVoice(true)}
             >
-              <Text className="conv__hold-tx">{recording ? '松开 发送' : '按住 说话'}</Text>
+              <Text className="conv__hold-tx">
+                {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
+              </Text>
             </View>
           ) : (
             <Textarea
