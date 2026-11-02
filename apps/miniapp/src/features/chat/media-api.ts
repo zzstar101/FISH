@@ -390,7 +390,7 @@ export function clearMediaCache(): void {
   | A3 | `onInterruptionBegin` **必达**，且代表「录音被暂停 / 音频被截断」 | 平台只暂停却不发 Begin：既无标志也无提示，松手时 `wasInterrupted()===false` → **截断音频被当正常语音发出**。本设计唯一无法从代码侧兜住的平台面空白（探针 D4） |
   | A4 | 中断期间 / 中断之后调用 `stop()` 仍会投一次 `onStop`（否则闸门关到重启） | 「中断一次 = 本会话内语音不可用」（探针 D8） |
   | A5 | 到达 `duration`（`VOICE_RECORD_MAX_MS` = 59s）后录音器自停并投 `onStop`，且回报的 `duration` ≥ 58500 | 「接近一分钟自动发送」这条需求不成立：完整录音会被判成「被打断」而丢弃。`voiceCapped` 的 `- 500ms` 余量就是为它留的（探针 D6） |
-  | A6 | 对**同一条已 `stop` / 已放弃的账**重复 `stop()` 幂等或至少无害（不伤到别的段），且能促成终态事件（`onInterruptionEnd` 里补发 `stop()` 的前提，见那里的注释） | 中断后仍可能一直关闸（探针 D8）。数据面不受影响：补发只发生在「账还挂着、闸门关着」时，此时**不可能**有别的段在录（单槽记账），闸门仍只由终态事件打开 |
+  | A6 | 对**同一条已 `stop` / 已放弃的账**重复 `stop()` 幂等或至少无害（不伤到别的段），且能促成终态事件（`onInterruptionEnd` **每次**都对已 `stopRequested` / `abandoned` 的账补发一次 `stop()` 的**唯一**前提，与中断时长无关，见那里的注释） | 中断后仍可能一直关闸（探针 D8）。数据面不受影响：补发只发生在「账还挂着、闸门关着」时，此时**不可能**有别的段在录（单槽记账），闸门仍只由终态事件打开 |
 
   端上最小探针（真机 / 微信开发者工具；每条**记录原始事件序列**，不要只记结论）
   -----------------------------------------------------------------------------
@@ -417,10 +417,11 @@ export function clearMediaCache(): void {
     「抛错 ⇒ 已收尾」证据时选择的 fail-closed 方向；解闸只由终态事件决定，不加 TTL。
   - **终态事件丢失 = 本会话内语音不可用**（A1 / A4 不成立的后果）：唯一恢复是重开小程序。
     `onInterruptionEnd` 里补发的 `stop()` 只是尽力催收，**不是**解闸依据。
-  - **短中断不会触发催收**：催收要求「已过 `VOICE_RECORD_SETTLE_GRACE_MS`（5s）」，而
-    `onInterruptionEnd` 每段只来一次 —— 中断在 5s 内结束（最常见）时那一刻不满足条件，
-    之后也没有第二次机会。所以短中断若平台不补发终态事件，闸门照旧关到重开小程序；
-    这是「不猜时间」的直接代价，不是漏做（探针 D8 记录真实时长分布后再决定要不要改判据）。
+  - **短中断与长中断走同一条催收路径**（#549 Quality 审查 M1）：`onInterruptionEnd` 对已
+    `stopRequested` / `abandoned` 的账**每次**补发一次 `stop()`，不再要求「中断已持续 ≥
+    `VOICE_RECORD_SETTLE_GRACE_MS`」——那个常量现在只管拒绝文案。剩下的失效面全在平台侧
+    （A4：中断期间 / 之后的 `stop()` 是否被接受；A6：重复 `stop()` 能否促成终态事件）：两条
+    都不成立时闸门仍关到重开小程序，出口同上一条「D8 若不成立」。
   - 编号沿革：更早一轮的登记把「切后台」「来电后能否继续录」「中断后 `stop()` 与收尾」
     分成三条（旧 D3 / D8 / D9），本表把它们合并进 **D3 / D8** 并补齐「多投」一项；
     A1–A5 口径不变，**A6 为本轮新增**。
@@ -537,14 +538,31 @@ function recorder(): VoiceRecorder {
       带外通知（#549，需求 4 的「中断」失效路径）：平台的语义是「录音被暂停」—— 暂停期间
       用户说的话不会被录进去，这一段音频是截断的。只记一个布尔的话，用户要等到松手（或被
       平台自停）才知道出事，那时他已经对着面板又说了半天。页面收到通知就放弃这一段、复位
-      面板并明确提示重录；`interrupted` 标记留着兜住「通知晚于松手」的竞态
-      （松手投递读 `wasInterrupted`，见 `applyVoiceRelease`）。
+      面板并明确提示重录。
+
+      `interrupted` 这个「当前中断态」标记只对**没有接 `onInterrupted` 的调用方**有效
+      （`voiceCapped` 的「不算录满」、`wasInterrupted()` 的松手投递判据）：真实接线
+      （`apps/miniapp/src/pkg-social/pages/conversation/index.tsx` 的 `handleVoiceInterrupted`）
+      在收到通知的同一刻就 `abort()` 并清掉 `recordingRef`，之后 `stopRequested` 已为真 ——
+      `liveSession()` 对这一段返回 `undefined`，页面松手时 `finishVoice` 也早就
+      `if (!recordingRef.current) return` 了。所以「通知晚于松手」那条竞态在当前接线里
+      **跑不到**这两个判据；留着它们只是给不接 `onInterrupted` 的调用方（用例
+      `chat-media-api.test.ts` 的「被打断后自停」「中断结束后继续录满」）兜底。
     */
     session.onInterrupted?.()
   })
   manager.onInterruptionEnd(() => {
     const session = voiceSession
     if (!session) return
+    /**
+     * 只对**这一次中断真的打断过的那一段**催收（#549 增量复审）：`interrupted` 就在账上，
+     * 由 `onInterruptionBegin` 置真。不加这道判据，迟到的 `onInterruptionEnd` 会给
+     * 「与这次中断无关、但恰好已 `stopRequested`」的**后继段**再补一次 `stop()`，
+     * 从而放大本文件假设 A1「同一段被投两份终态事件」的暴露面（第二份落在「上一段已销账、
+     * 下一段已起录」之间时，`onStop` 第一行的 `voiceSession = null` 会清掉**下一段**的账）。
+     * 「账没销」只说明现在没有别的录音在走，推不出「账上的就是它」。
+     */
+    if (!session.interrupted) return
     // 还在录的那一段：中断结束 = 录音恢复，历史标记不许多留一刻（#549 收口判据 2）。
     if (!session.stopRequested && !session.abandoned) {
       session.interrupted = false
@@ -558,13 +576,18 @@ function recorder(): VoiceRecorder {
       中断恢复本身是平台证据，却不是**这一段的**终态事件。
 
       能做的只有对**这一段自己的账**再补一次 `stop()`，把终态事件催回来：
-      - 只对这一段的账（`voiceSession` 仍是它），此时**不可能**有别的录音在走 —— 起录有闸
-        （见 `startVoiceRecording`），账没销就起不来新的一段，所以这次 `stop()` 不会误停别人；
-      - 过了 `VOICE_RECORD_SETTLE_GRACE_MS` 才发：正常收尾是毫秒级，没过窗口就重发只是噪音；
+      - 前提是这道账**就是被这次中断打断的那一段**（上一段的 `session.interrupted` 判据）：
+        账没销只说明「现在没有别的录音在走」，推不出「账上的就是它」；
+      - **无条件发，不设时间窗**（#549 Quality 审查 M1）：`onInterruptionEnd` 对一段录音只来
+        一次，而 `stopRequestedAtMs` 记的是**中断开始**的时刻，所以任何「等过了 X 毫秒再补发」
+        的判据实际比较的都是「中断持续了多久」—— 短中断（来电一秒挂断、快速切后台，恰恰是最
+        常见的那一半）于是会一次都不补发，此后没有第二次机会。按本段声明的基线「正常收尾是
+        毫秒级」，`onInterruptionEnd` 到达时终态事件本就没来，此刻该催；催收也**不是**「猜时间
+        解闸」：账还挂着 = 这一段自己的终态事件确实没到，重发只是把已知的收尾请求再说一遍
+        （假设 A6：对同一条已 `stop` / 已放弃的账重复 `stop()` 幂等或至少无害）；
       - 抛错吞掉（平台回调里没人接），**不解闸** —— 闸门只由终态事件打开；
       - 它是一次**尽力**催收，不是判据：真催不回来就维持 fail-closed（探针 D8 / 假设 A6）。
     */
-    if (!settleOverdue(session, Date.now())) return
     try {
       manager.stop()
     } catch (error) {
@@ -600,15 +623,16 @@ export type VoiceRecording = {
 const VOICE_RECORD_MAX_MS = MEDIA_MAX_VOICE_DURATION_MS - 1000
 
 /**
- * 收尾事件的宽限（毫秒）：只决定**说法**与**要不要补发一次 `stop()`**，**不用于放行**
- * （#549 收口判据 3 / 4）。
+ * 收尾事件的宽限（毫秒）：**只**决定拒绝文案的说法，**不用于放行、也不用于决定要不要
+ * 补发 `stop()`**（#549 收口判据 3 / 4，Quality 审查 M1）。
  *
  * 正常的收尾窗口是毫秒级（`stop()` → `onStop`）。松手之后 5s 还没有任何收尾事件，就说明
  * 这一段的收尾大概率丢了：能让用户等到的只有「下次再按」，而重按永远不会成功 —— 必须把
- * 「怎么办」说出来（`VoiceRecordingBusyError` 的 `overdue`）。同一个判据还决定
- * `onInterruptionEnd` 要不要对已放弃的段补发一次 `stop()` 去催终态事件（见那里）。
- * 但它**不是**解闸依据：这里没有任何时间判据会把账销掉（判据 4 禁止任意 TTL 清账），
- * 账单只由「收尾事件到了」或「起录被平台拒绝」来销。
+ * 「怎么办」说出来（`VoiceRecordingBusyError` 的 `overdue`）。
+ *
+ * 它**不是**解闸依据：这里没有任何时间判据会把账销掉（判据 4 禁止任意 TTL 清账），账单只由
+ * 「收尾事件到了」或「起录被平台拒绝」来销。它同样**不**参与 `onInterruptionEnd` 的催收
+ * （见那里）：催收一旦按「中断持续了多久」卡阈值，就会把短中断排除在外。
  */
 const VOICE_RECORD_SETTLE_GRACE_MS = 5_000
 
@@ -616,8 +640,8 @@ const VOICE_RECORD_SETTLE_GRACE_MS = 5_000
  * 这一段是不是已经**远超**「本该收到收尾事件」的时刻。
  *
  * 基线取两者中较晚者：叫过 `stop()` / `abort()` 就是那一刻（收尾本该几毫秒内到）；没叫过
- * 就是「起录时刻 + 录音上限」（录音器最迟在自己录满时收尾）。只喂给文案与「要不要补发
- * `stop()`」，**不参与解闸**。
+ * 就是「起录时刻 + 录音上限」（录音器最迟在自己录满时收尾）。**只喂给拒绝文案**，既不参与
+ * 解闸，也不决定要不要补发 `stop()`（#549 Quality 审查 M1）。
  */
 function settleOverdue(session: VoiceSession, nowMs: number): boolean {
   const dueAtMs = session.stopRequestedAtMs ?? session.startedAtMs + VOICE_RECORD_MAX_MS

@@ -542,6 +542,10 @@ describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364
     「被打断」。平台有真正的信号（`RecorderManager.onInterruptionBegin`：来电 /
     视频通话占用麦克风），中断标记必须参与判定，否则 58.5s 之后被打断的半句会被
     当成「录满」自动发给对方。
+
+    这条守的是**不接 `onInterrupted` 的调用方**（#549 Quality 审查 L1）：真实接线里页面
+    收到通知当场 `abort()`，此后 `liveSession()` 对这一段返回 undefined，`voiceCapped` 的
+    中断判据在那条路径上跑不到 —— 这里不传第三个回调，正是为了覆盖它仍然生效的形态。
   */
   test('被系统打断后自停（59s 上限前的最后 500ms）：不算「录满」，不自动发送', () => {
     const calls: Array<{ durationMs: number; capped: boolean }> = []
@@ -556,6 +560,7 @@ describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364
     expect(calls).toEqual([{ durationMs: 58_900, capped: false }])
   })
 
+  // 同上的调用方形态：不接 `onInterrupted`（真实接线里中断当场 abort，跑不到这里）
   test('中断结束后继续录满：仍按「录满」处理（中断标记不外溢到正常收尾）', () => {
     const calls: Array<{ capped: boolean }> = []
     startVoiceRecording(undefined, (_recorded, capped) => calls.push({ capped }))
@@ -840,29 +845,49 @@ describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#
   })
 
   /*
-    #549 独立 Spec 审查 M2：中断（`onInterruptionBegin`）→ 页面当场 `abort()` 之后，
-    这一段的账只能靠**平台补发终态事件**销。而 `onInterruptionEnd` 虽然是「录音已恢复」的
-    平台证据，却**不是**这一段的终态事件 —— 修复前它对已放弃的段完全无效（`liveSession()`
-    对它返回 undefined），所以平台若一直不补 `onStop` / `onError`，闸门就关到重开小程序。
+    #549 独立 Spec 审查 M2 + Quality 审查 M1：中断（`onInterruptionBegin`）→ 页面当场
+    `abort()` 之后，这一段的账只能靠**平台补发终态事件**销。而 `onInterruptionEnd` 虽然是
+    「录音已恢复」的平台证据，却**不是**这一段的终态事件 —— 修复前它对已放弃的段完全无效
+    （`liveSession()` 对它返回 undefined），所以平台若一直不补 `onStop` / `onError`，闸门就
+    关到重开小程序。
 
     允许的补救只有一条：对**这一段自己的账**再补一次 `stop()`，把终态事件催回来；闸门
     **仍然只由终态事件打开**。绝不许提前把 `voiceSession` 置空 —— 那样平台随后补发的
     `onStop` 会去清**下一段**的槽（正是单槽记账要防的「上一段收尾打死新一段」）。
+
+    补发不设时间窗（Quality 审查 M1）：`onInterruptionEnd` 对一段录音只来**一次**，而
+    `stopRequestedAtMs` 记的是**中断开始**的时刻，所以任何「等过了 X 毫秒再补发」的判据实际
+    比较的是「中断持续了多久」—— 短中断（来电一秒挂断、快速切后台，恰恰是最常见的那一半）
+    会一次都不补发，此后没有任何机会。以前这条用例把那个缺口钉成了期望行为。
   */
-  test('中断→abort 之后：中断结束（未过宽限期）不重发 stop()，闸门仍只由终态事件打开', () => {
-    // 冻结墙钟：这条用例靠「还没到宽限期」成立，卡顿超过 5s 会假红（相邻用例同样钉时间）
+  test('短中断（2s）结束同样补发一次 stop()；补发不解闸，没收到终态事件就仍然拒绝起录', () => {
+    // 冻结墙钟：下面靠「2s 中断」这个确定的间隔表达短中断
     setSystemTime(new Date(Date.now()))
     let session: ReturnType<typeof startVoiceRecording> | null = null
     session = startVoiceRecording(undefined, undefined, () => session?.abort())
 
     recorderHooks.onInterruptionBegin?.()
+    // 来电 2s 就挂断：远短于 5s 宽限期，但已经远超毫秒级的正常收尾窗口
+    setSystemTime(new Date(Date.now() + 2_000))
     const stopCallsBefore = recorderStopCalls
-
-    // 正常收尾窗口内（毫秒级）：不乱催，也不放行
     recorderHooks.onInterruptionEnd?.()
-    expect(recorderStopCalls).toBe(stopCallsBefore)
+
+    // 短中断也要催一次：账还挂着 = 这一段自己的终态事件确实没到
+    expect(recorderStopCalls).toBe(stopCallsBefore + 1)
     expect(() => startVoiceRecording()).toThrow(VoiceRecordingBusyError)
+
+    // 催收不是解闸：补发之后平台仍不投终态事件，再过多久都不许放行
+    // （文案升级成可执行的恢复动作，闸门一个字节都没松）
+    setSystemTime(new Date(Date.now() + 10 * 60_000))
+    let refused: unknown = null
+    try {
+      startVoiceRecording()
+    } catch (error) {
+      refused = error
+    }
     setSystemTime()
+    expect(refused).toBeInstanceOf(VoiceRecordingBusyError)
+    expect((refused as Error).message).toContain('重新打开')
 
     // 真正的终态事件到了才销账（放弃的那一段不交付）
     recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/late.wav', duration: 20_000 })
@@ -870,6 +895,32 @@ describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#
     const stopped = next.stop()
     recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/next.wav', duration: 1_000 })
     return expect(stopped).resolves.toEqual({ path: 'wxfile://tmp/next.wav', durationMs: 1_000 })
+  })
+
+  /*
+    #549 增量复审：补发的前提必须是「这道账就是被这次中断打断的那一段」（`session.interrupted`），
+    而不是「账上恰好有一个已 stopRequested 的段」。否则一次**迟到**的 `onInterruptionEnd` 会给
+    与这次中断无关的后继段再补一次 `stop()`，放大假设 A1「同一段被投两份终态事件」的暴露面。
+  */
+  test('迟到的 onInterruptionEnd 不给与中断无关的后继段补 stop()', () => {
+    // 第一段：被中断 → 页面当场放弃 → 自己的终态事件到达（账销、闸门打开）
+    let first: ReturnType<typeof startVoiceRecording> | null = null
+    first = startVoiceRecording(undefined, undefined, () => first?.abort())
+    recorderHooks.onInterruptionBegin?.()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/interrupted.wav', duration: 3_000 })
+
+    // 第二段：与那次中断无关，用户正常松手（stopRequested=true），正在等自己的收尾
+    const second = startVoiceRecording()
+    const stopping = second.stop()
+    const stopCallsAfterSecond = recorderStopCalls
+
+    // 迟到的中断结束事件：账上只有「第二段」这道账，它从没被中断过
+    recorderHooks.onInterruptionEnd?.()
+    expect(recorderStopCalls).toBe(stopCallsAfterSecond)
+    expect(second.wasInterrupted()).toBe(false)
+
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/second.wav', duration: 1_000 })
+    return expect(stopping).resolves.toEqual({ path: 'wxfile://tmp/second.wav', durationMs: 1_000 })
   })
 
   test('中断→abort 之后过了宽限期：为这一段自己的账补发一次 stop()，闸门照旧 fail-closed', () => {

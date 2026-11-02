@@ -123,12 +123,6 @@ import {
 import VoiceRecordPanel from './voice-record-panel'
 import { applyVoiceAutoStop, applyVoiceRelease, isVoiceCancelArmed } from './voice-recording-view'
 
-/** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
-function touchClientY(event: unknown): number {
-  const touch = (event as { touches?: Array<{ clientY?: number }> } | null)?.touches?.[0]
-  return typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN
-}
-
 import './index.scss'
 
 /**
@@ -202,6 +196,12 @@ const EMPTY_IDS: ReadonlySet<string> = new Set()
  * 同守卫，拆成两条 20s 轮询只会让同一端点每 20s 被请求两次，且两条的守卫还不一致。
  */
 const DETAIL_POLL_MS = 20_000
+
+/** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
+function touchClientY(event: unknown): number {
+  const touch = (event as { touches?: Array<{ clientY?: number }> } | null)?.touches?.[0]
+  return typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN
+}
 
 export default function Conversation() {
   const authStatus = useAuthGuard()
@@ -1690,7 +1690,11 @@ export default function Conversation() {
     setRecording(false)
     resetRecordingUi()
     session.abort()
-    void Taro.showToast({ title: '录音已被来电打断，请稍后再按住重录', icon: 'none' })
+    // 只说「这一段已丢弃」，**不**承诺「稍后重按就能重录」：闸门要等这一段自己的终态事件
+    // 才开（`onInterruptionEnd` 只尽力补发一次 `stop()`，假设 A4/A6 成立才催得回来），
+    // 催不回来时下一次按下会得到「录音器没有响应，请关闭小程序后重新打开再试」——
+    // 承诺「稍后」就会当场被那句话打脸（#549 Quality 审查 L2）。
+    void Taro.showToast({ title: '录音已被来电打断，这一段已丢弃', icon: 'none' })
   }
 
   /**

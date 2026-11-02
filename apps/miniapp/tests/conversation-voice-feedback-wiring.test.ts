@@ -88,13 +88,20 @@ describe('录音反馈接线契约（#535）', () => {
     expect(finish).not.toMatch(/if \(interrupted\)/)
   })
 
-  test('来电中断当场放弃这一段：复位面板 + 明确提示重录（#549 / 需求 4 失效路径）', async () => {
+  test('来电中断当场放弃这一段：复位面板 + 明确告知已丢弃（#549 / 需求 4 失效路径）', async () => {
     const text = await read(PAGE)
     const interrupted = between(text, 'const handleVoiceInterrupted', '\n  }')
     expect(interrupted).toContain('resetRecordingUi()')
     expect(interrupted).toContain('setRecording(false)')
     expect(interrupted).toContain('session.abort()')
-    expect(interrupted).toContain('录音已被来电打断，请稍后再按住重录')
+    /*
+      文案只说「这一段已丢弃」，**不**承诺「稍后重按就能重录」（#549 Quality 审查 L2）：
+      闸门要等这一段自己的终态事件才开，中断结束时的补发 `stop()` 只是尽力催收
+      （假设 A4 / A6），催不回来时下一次按下得到的是「录音器没有响应，请关闭小程序后
+      重新打开再试」。承诺「稍后」会被那句话当场打脸，所以这里连「重录」两个字都不留。
+    */
+    expect(interrupted).toContain('录音已被来电打断，这一段已丢弃')
+    expect(interrupted).not.toContain('请稍后再按住重录')
     /*
       处置的顺序也是判据（#549 独立审查 L1）：必须在**收尾事件到达之前**就放弃这一段，
       而且是「先把界面收回去（复位面板）再撤麦克风」。顺序反了就是「面板还在计时、麦克风
