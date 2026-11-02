@@ -372,6 +372,13 @@ type VoiceSession = {
   abandoned: boolean
   /** 被系统占用打断过（`onInterruptionBegin`）：自停不能算「录满」 */
   interrupted: boolean
+  /**
+   * 平台已经回过 `onStart`：这一段**真的开始录了**。
+   *
+   * 这是平台唯一给出的「这一段起录成功」凭据（`RecorderManager.onStart`）：起录失败的那一段
+   * 永远收不到。`onError` 的归属靠它分辨，见 `takeErroredSession`。
+   */
+  started: boolean
   /** 录音**进行中**失败（页面据此立刻复位 + 提示） */
   onError?: (error: Error) => void
   /** 录音器**自己停了**（没人调用 `stop()`）时的回调 */
@@ -382,12 +389,14 @@ type VoiceSession = {
 const voiceSessions: VoiceSession[] = []
 
 /**
- * 销账：`onStop` / `onError` 到达时挑出它属于哪一段。
+ * 销账：`onStop` 到达时挑出它属于哪一段。
  *
- * 1. 先找「自己叫过 `stop()` / `abort()`」的最早一段 —— 松手 / 取消那一段的收尾事件
- *    一定先于任何后续录音的事件到达（同一台设备一次只录一段，事件按 stop 的先后送达）；
+ * 1. 先找「自己叫过 `stop()` / `abort()`」的最早一段 —— 只有真的起录过的那一段才可能回
+ *    onStop，而收尾事件按 `stop()` 的先后送达（同一台设备一次只录一段）；
  * 2. 都没有 → 没有人在等收尾，那就是**录音器自己停了**，只能是当前还在录的那一段
  *    （跳过已经放弃的账）。
+ *
+ * `onError` **不能**照这条分：先到的错误可能是下一段起录失败，见 `takeErroredSession`。
  */
 function takeSettlingSession(): VoiceSession | null {
   const requested = voiceSessions.findIndex((session) => session.stopRequested)
@@ -395,6 +404,30 @@ function takeSettlingSession(): VoiceSession | null {
   const live = voiceSessions.findIndex((session) => !session.abandoned)
   if (live !== -1) return voiceSessions.splice(live, 1)[0] ?? null
   return voiceSessions.shift() ?? null
+}
+
+/**
+ * 销账：`onError` 到达时挑出它属于哪一段（与 `takeSettlingSession` 分开，#535 follow-up）。
+ *
+ * 上一段还在等收尾、用户又按下了下一段时，先到的那条错误有两种来源：
+ * - **下一段起录失败**（录音器还被上一段占着，`start()` 当场失败）：它没收到过 `onStart`；
+ * - **上一段自己的 stop 失败**（晚到的收尾错误）：它早收到过 `onStart`。
+ *
+ * 所以「账上有一段起录过、又有一段没起录」时，错误属于没起录的那一段 —— 判据是平台给的
+ * 生命周期事实（who actually started），不是「哪条事件该先到」的猜测。反过来把方向写死
+ * （错误一律给正在录的那一段）会让「上一段 stop 失败晚到」把正在录的那一段打死。
+ *
+ * 一条 `onStart` 都没收到时（真机上不该发生）**不猜**：退回 `takeSettlingSession` 的规则，
+ * 行为与修复前一致，而不是拿「没回 onStart」当证据改归属。
+ */
+function takeErroredSession(): VoiceSession | null {
+  if (voiceSessions.some((session) => session.started)) {
+    for (let index = voiceSessions.length - 1; index >= 0; index -= 1) {
+      const candidate = voiceSessions[index]
+      if (candidate && !candidate.started) return voiceSessions.splice(index, 1)[0] ?? null
+    }
+  }
+  return takeSettlingSession()
 }
 
 /** 把一段录音从账上摘掉（它的事件永远不会来了，例如 `stop()` 就抛了错）。 */
@@ -426,13 +459,18 @@ function recorder(): VoiceRecorder {
     if (!session.stopRequested) session.onAutoStop?.(recorded, voiceCapped(session, recorded))
   })
   manager.onError((error) => {
-    const session = takeSettlingSession()
+    const session = takeErroredSession()
     if (!session) return
     if (session.abandoned) return
     const failure = voiceError(error)
     session.reject(failure)
     // `stop()` 之后才到的错误会从 `done` 的 reject 走到 `stop()` 的 catch，这里不再重复上报
     if (!session.stopRequested) session.onError?.(failure)
+  })
+  // 起录成功才有的事件：给账上最早一段「还没起录」的账打标记（`start()` 按调用顺序处理）
+  manager.onStart(() => {
+    const session = voiceSessions.find((pending) => !pending.started)
+    if (session) session.started = true
   })
   // 来电 / 视频通话占用麦克风：这一段不是「录满收尾」
   manager.onInterruptionBegin(() => {
@@ -492,6 +530,7 @@ export function startVoiceRecording(
     stopRequested: false,
     abandoned: false,
     interrupted: false,
+    started: false,
     onError,
     onAutoStop,
   }
@@ -533,7 +572,19 @@ export function startVoiceRecording(
   return {
     stop: () => {
       session.stopRequested = true
-      manager.stop()
+      try {
+        manager.stop()
+      } catch (error) {
+        /*
+          `stop()` 都没发出去就永远等不到这一段的 onStop（同 `abort()` 的处理，`abort()` 早就
+          这么写了、`stop()` 漏了 —— #535 follow-up）：当场销账，否则这笔「等收尾」的账会吃掉
+          下一段录音的 onStop。失败必须以 **promise** 交出去：同步抛出的话页面
+          `session.stop().then().catch()` 这条链根本没建立，异常会一路冒进触摸事件处理。
+         */
+        dropSession(session)
+        console.error('[chat-media] 停止录音失败', error)
+        return Promise.reject(voiceError(error))
+      }
       return done
     },
     abort: () => {

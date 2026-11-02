@@ -64,19 +64,46 @@ describe('录音反馈接线契约（#535）', () => {
     */
     expect(auto).toContain('applyVoiceAutoStop(')
     expect(auto).toContain('const cancelled = cancelArmedRef.current')
-    expect(auto.match(/sendRecordedVoice\(recorded\)/g) ?? []).toHaveLength(1)
+    expect(auto.match(/sendRecordedVoice\(recorded, identity\)/g) ?? []).toHaveLength(1)
     expect(auto).not.toMatch(/if \(cancelled\)/)
     expect(auto).not.toMatch(/if \(!capped\)/)
   })
 
-  test('身份快照在起录时拍下（守住「松手 → 拿到音频」窗口换号，复审 medium）', async () => {
+  test('身份按「这一段」传下去（起录时拍下，发送不再读页面级 ref）', async () => {
     const text = await read(PAGE)
     const start = between(text, 'const startVoice', 'catch (error)')
     expect(start).toContain('voiceIdentityRef.current = currentIdentity()')
+    /*
+      发送是异步的（`stop()` 回来才走到），背靠背两段录音时页面级 ref 可能已经被下一段
+      覆盖：那样第一段会拿第二段的身份去过 `isStaleMediaIdentity`（#535 follow-up F3）。
+      所以 identity 必须是参数，两个同步点各自传自己那一刻的快照。
+    */
     const send = between(text, 'const sendRecordedVoice', 'if (!aliveRef.current)')
-    expect(send).toContain('const identity = voiceIdentityRef.current')
+    expect(send).toContain('identity: MediaTaskIdentity')
+    expect(send).not.toContain('voiceIdentityRef.current')
     // 发送路径不再自己取当前身份（否则判据恒假）
     expect(send).not.toContain('currentIdentity()')
+
+    for (const site of ['const handleVoiceAutoStop', 'const finishVoice']) {
+      const body = between(text, site, '\n  }')
+      expect(body).toContain('const identity = voiceIdentityRef.current')
+      expect(body).toContain('sendRecordedVoice(recorded, identity)')
+    }
+  })
+
+  test('上一段的失败晚到不许复位正在录的那一段（#535 follow-up F1）', async () => {
+    const text = await read(PAGE)
+    /*
+      松手后 `stop()` 的失败是异步回来的，那时用户可能已经又按下第二段：`recordingRef`
+      已经不是失败的那一段。复位就等于把还在录的那一段打死（面板消失、按钮回到「按住
+      说话」，麦克风却还在录）。
+    */
+    const finish = between(text, 'const finishVoice', 'resetUi: recordingRef.current === null })')
+    expect(finish).toContain(
+      'handleVoiceFailure(error, { resetUi: recordingRef.current === null })',
+    )
+    const failure = between(text, 'const handleVoiceFailure', 'const failure = voiceError')
+    expect(failure).toContain('options.resetUi ?? true')
   })
 
   test('所有结束路径都过 resetRecordingUi（松手 / 放弃 / 失败 / 卸载）', async () => {

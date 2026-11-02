@@ -1365,17 +1365,21 @@ export default function Conversation() {
    * - `startVoiceRecording` 的 `onError` —— 录音**还在进行中**（用户手指还按着）；
    * - `finishVoice` 的 `.catch` —— 松手之后才失败。
    *
-   * 无论从哪来，`recording` 都必须先复位：不复位的话按钮还写着「松开 发送」，
-   * 用户以为在录、其实什么都没录。
+   * 通常 `recording` 必须先复位：不复位的话按钮还写着「松开 发送」，用户以为在录、其实
+   * 什么都没录。但**上一段**的失败可能晚到——那时用户已经在录下一段了，复位就会把正在录的
+   * 那一段打死（面板消失、按钮回到「按住 说话」，这一段从此没人收尾），所以由调用方用
+   * `resetUi` 说明「现在复位是否还安全」（#535 follow-up F1）。
    *
    * 权限被拒要给「去设置」入口，用的是与扫码页（`pages/scan` / `pages/scan-pr`）同一范式：
    * `Taro.getSetting` 先确认这个 scope 真的是被用户拒的，再 `Taro.openSetting` 把人送进
    * 设置页。不是被拒（例如麦克风被别的应用占着）就别拉设置页，那会让用户白跑一趟。
    */
-  const handleVoiceFailure = (error: unknown) => {
-    recordingRef.current = null
-    setRecording(false)
-    resetRecordingUi()
+  const handleVoiceFailure = (error: unknown, options: { resetUi?: boolean } = {}) => {
+    if (options.resetUi ?? true) {
+      recordingRef.current = null
+      setRecording(false)
+      resetRecordingUi()
+    }
     const failure = voiceError(error)
     if (!(failure instanceof VoicePermissionError)) {
       void Taro.showToast({ title: failure.message, icon: 'none' })
@@ -1441,9 +1445,13 @@ export default function Conversation() {
    *
    * 同 `pickAndSendImages`：记**身份**而不是代次（#364 审查）。录音同样要好几秒，
    * 期间一次 `load()` 推进的只是 epoch —— 那段录音还是当前账号录的，不该被丢掉。
+   *
+   * `identity` 是**参数**而不是在这里读 `voiceIdentityRef`（#535 follow-up F3）：发送是
+   * 异步的（`stop()` 回来才走到这里），背靠背两段录音时页面级 ref 可能已经被下一段覆盖 ——
+   * 那样第一段就拿着第二段的身份去过 `isStaleMediaIdentity`。两个调用点都在同步点，
+   * 各自把「这一刻」的快照传进来。
    */
-  const sendRecordedVoice = (recorded: RecordedVoice) => {
-    const identity = voiceIdentityRef.current
+  const sendRecordedVoice = (recorded: RecordedVoice, identity: MediaTaskIdentity) => {
     // 离页（卸载）：这段录音已经没人接了，静默丢弃
     if (!aliveRef.current) return
     if (isStaleMediaIdentity(identity, currentIdentity())) {
@@ -1471,6 +1479,8 @@ export default function Conversation() {
    */
   const handleVoiceAutoStop = (recorded: RecordedVoice, capped: boolean) => {
     const cancelled = cancelArmedRef.current
+    /** 自停是同步回调（页面还握着这一段），这里的快照就是**这一段**的身份 */
+    const identity = voiceIdentityRef.current
     recordingRef.current = null
     setRecording(false)
     resetRecordingUi()
@@ -1478,7 +1488,7 @@ export default function Conversation() {
       { cancelled, capped },
       {
         toast: (title) => void Taro.showToast({ title, icon: 'none' }),
-        send: () => sendRecordedVoice(recorded),
+        send: () => sendRecordedVoice(recorded, identity),
       },
     )
   }
@@ -1487,6 +1497,8 @@ export default function Conversation() {
   const finishVoice = (cancelled: boolean) => {
     const session = recordingRef.current
     if (!session) return
+    /** 同上：松手这一刻页面还握着这一段，先把身份快照取下来再放异步链 */
+    const identity = voiceIdentityRef.current
     recordingRef.current = null
     setRecording(false)
     resetRecordingUi()
@@ -1496,9 +1508,14 @@ export default function Conversation() {
     }
     void session
       .stop()
-      .then(sendRecordedVoice)
+      .then((recorded) => sendRecordedVoice(recorded, identity))
       .catch((error) => {
-        handleVoiceFailure(error)
+        /*
+          这一段失败时用户可能已经又按下了下一段（`recordingRef` 换成新的那段，`stop()` 的
+          失败晚于下一次 `startVoice`）：那时只提示，**不许**把正在录的那一段的界面复位 ——
+          否则面板消失、按钮回到「按住 说话」，而麦克风还在录（#535 follow-up F1）。
+         */
+        handleVoiceFailure(error, { resetUi: recordingRef.current === null })
       })
   }
 
