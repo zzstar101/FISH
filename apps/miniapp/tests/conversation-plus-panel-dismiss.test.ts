@@ -92,7 +92,13 @@ describe('会话页「+」面板点外部收起（#541）', () => {
     expect(source).toContain('onFocus={() => setPanelOpen(false)}')
     // 开面板退回键盘态的互斥规则（abortRecording + setVoiceMode(false)）仍在 togglePanel 里
     const toggleAt = source.indexOf('const togglePanel = () => {')
-    const toggleBody = source.slice(toggleAt, source.indexOf('setPanelOpen(!panelOpen)', toggleAt))
+    const setterAt = source.indexOf('setPanelOpen(!panelOpen)', toggleAt)
+    // 「+」必须真的切换面板状态：少了这一句按钮就再也开关不了面板；而且截取范围的
+    // 结束位置会退化成 -1（切到文件末尾），让下面两条互斥断言在空实现上误绿
+    expect(setterAt).toBeGreaterThan(toggleAt)
+    const toggleBody = source.slice(toggleAt, setterAt)
+    // 互斥调用必须挂在「打开面板」分支上：条件反转（关闭时才 abortRecording）同样是回归
+    expect(toggleBody).toContain('if (!panelOpen) {')
     expect(toggleBody).toContain('abortRecording()')
     expect(toggleBody).toContain('setVoiceMode(false)')
   })
