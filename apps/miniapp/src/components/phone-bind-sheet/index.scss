@@ -1,0 +1,77 @@
+@use '@/styles/mixins' as *;
+
+/* 发布前绑定手机号弹层（#514）。版式沿用设置页「退出登录」确认 sheet（`pkg-auth/pages/settings`） */
+
+.pbs__scrim {
+  @include scrim;
+}
+
+.pbs {
+  @include sheet;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 48px 40px calc(48px + env(safe-area-inset-bottom));
+}
+
+.pbs__title {
+  display: block;
+  font-size: 38px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.pbs__text {
+  display: block;
+  margin-top: 14px;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.pbs__acts {
+  display: flex;
+  gap: 20px;
+  width: 100%;
+  margin-top: 40px;
+}
+
+.pbs__cancel,
+.pbs__ok {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  margin: 0;
+  padding: 0;
+  border-radius: 48px;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.pbs__cancel {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+}
+
+/* 原生 Button：清掉微信默认的 ::after 描边与 disabled 灰底 */
+.pbs__ok {
+  border: none;
+  background: var(--grad-brand);
+  color: #fff;
+
+  &::after {
+    border: none;
+  }
+
+  &.is-off,
+  &[disabled] {
+    background: var(--grad-brand);
+    color: #fff;
+    opacity: 0.6;
+  }
+}

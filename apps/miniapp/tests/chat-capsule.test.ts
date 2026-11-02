@@ -172,6 +172,14 @@ describe('capsuleFor —— 交易行状态', () => {
       cls: 'is-plain',
     })
   })
+
+  test('已取消 + 老 accepted（无 id）→ 仍是已取消，不能退回待同意', () => {
+    const cancelled = new Map([
+      ['c-1', tx({ status: 'CANCELLED', cancelledAt: '2026-09-21T04:00:00.000Z' })],
+    ])
+    const scanned = new Map([['c-1', { type: 'tx.accepted' as const, amountCents: 15000 }]])
+    expect(capsuleFor(dto(), cancelled, scanned)).toEqual({ label: '已取消', cls: 'is-plain' })
+  })
 })
 
 describe('capsuleFor —— 提案阶段（不落 transactions 表）', () => {
@@ -371,6 +379,20 @@ describe('lastEventOfMessages —— 取最后一个交易事件，不是最后�
       lastEventOfMessages([systemMessage('你的学号认证已通过'), textMessage('在吗')]),
     ).toBeNull()
   })
+
+  /*
+   * 老数据的 accepted 没有 `transactionId`（#521 明确要求兼容）。契约 schema 把它判为
+   * 非法，读路径若跟着严格解析，最后一个事件会退回更早的 proposal —— 已取消的行就会
+   * 显示成「待同意」，与预览的「交易已取消」自相矛盾。
+   */
+  test('缺 transactionId 的老 accepted 仍然算事件（不能被严格 schema 丢掉）', () => {
+    expect(
+      lastEventOfMessages([
+        systemMessage(PROPOSAL_CONTENT),
+        systemMessage(JSON.stringify({ type: 'tx.accepted', amountCents: 15000 })),
+      ]),
+    ).toEqual({ type: 'tx.accepted', amountCents: 15000 })
+  })
 })
 
 describe('transactionsByConversation', () => {
@@ -402,5 +424,19 @@ describe('transactionsByConversation', () => {
     const map = transactionsByConversation([newer, older], [])
     expect(map.get('c-1')?.id).toBe('t-new')
     expect(capsuleFor(dto(), map)).toEqual({ label: '待面交', cls: 'is-warn' })
+  })
+
+  test('createdAt 相同毫秒时保留列表里更靠前的那笔（DESC = 更新）', () => {
+    const sameMs = '2026-09-21T00:00:00.000Z'
+    const newer = tx({ id: 't-new', conversationId: 'c-1', createdAt: sameMs })
+    const older = tx({
+      id: 't-old',
+      conversationId: 'c-1',
+      status: 'CANCELLED',
+      cancelledAt: '2026-09-20T00:00:00.000Z',
+      createdAt: sameMs,
+    })
+    const map = transactionsByConversation([newer, older], [])
+    expect(map.get('c-1')?.id).toBe('t-new')
   })
 })

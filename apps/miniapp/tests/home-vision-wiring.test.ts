@@ -112,7 +112,7 @@ describe('识图在途守卫', () => {
 })
 
 describe('命中区几何：热区变大、视觉零位移', () => {
-  test('热区 = 图标 30×30 + 等量负 margin 还宽', async () => {
+  test('热区 = 图标 32×32 + 等量负 margin 还宽', async () => {
     const hit = await rule('.home__search-cam-hit')
     const padding = /padding:\s*(\d+)px\s+(\d+)px/.exec(hit)
     const margin = /margin:\s*0\s+-(\d+)px/.exec(hit)
@@ -125,11 +125,11 @@ describe('命中区几何：热区变大、视觉零位移', () => {
     expect(pulledBack).toBe(horizontal)
     // 图标本体尺寸：热区是它加出来的，不是换了张更大的图
     const icon = await rule('.home__search-cam')
-    expect(icon).toContain('width: 30px')
-    expect(icon).toContain('height: 30px')
+    expect(icon).toContain('width: 32px')
+    expect(icon).toContain('height: 32px')
     // 热区尺寸 = 图标 + 两侧 padding（这里只钉算术，不钉具体数值口径）
-    expect(30 + 2 * horizontal).toBeGreaterThan(30)
-    expect(30 + 2 * vertical).toBeGreaterThan(30)
+    expect(32 + 2 * horizontal).toBeGreaterThan(32)
+    expect(32 + 2 * vertical).toBeGreaterThan(32)
     // 纵向不需要补偿：父级 `align-items: center` 已经把多出来的高度对称吃掉
     expect(hit).not.toContain('margin: -')
   })

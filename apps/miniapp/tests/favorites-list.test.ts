@@ -205,12 +205,15 @@ describe('toFavoriteItems —— 契约行 → 本页行（#397 接真数据的�
       0,
     )[0]
     expect(withSeller?.seller).toBe('阿星')
+    expect(withSeller?.sellerId).toBe(SELLER_ID)
     expect(withSeller?.verified).toBe(true)
     expect(withSeller?.avatarUrl).toBe('data:image/png;base64,BBB')
 
     const withoutSeller = toFavoriteItems([saved()], 0)[0]
     // 昵称缺席就留空（页面不画这一行），但**不能编一个名字**
     expect(withoutSeller?.seller).toBe('')
+    // #517：没有卖家就没有可跳的主页 —— 留 null，页面据此只给提示
+    expect(withoutSeller?.sellerId).toBeNull()
     expect(withoutSeller?.verified).toBe(false)
     // 头像缺席落既有占位块（`features/listing/adapt.ts` 同一取法），不是空串
     expect(withoutSeller?.avatarUrl.startsWith('data:image/png;base64,')).toBe(true)

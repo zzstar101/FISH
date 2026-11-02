@@ -1,8 +1,7 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import brandMark from '@/assets/brand/brand-mark.png'
-import brandWordmark from '@/assets/brand/brand-wordmark.png'
+import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
@@ -172,8 +171,8 @@ export default function Login() {
       <View className="login__body" style={{ paddingTop: `${navHeight}px` }}>
         {/* ---- 品牌区（稿：mark / wordmark 两张图 + tagline） ---- */}
         <View className="login__brand">
-          <Image className="login__mark" src={brandMark} mode="aspectFit" />
-          <Image className="login__wordmark" src={brandWordmark} mode="aspectFit" />
+          <Image className="login__mark" src={BRAND.mark} mode="aspectFit" />
+          <Image className="login__wordmark" src={BRAND.wordmark} mode="aspectFit" />
           <Text className="login__tagline">同校面交 · 让闲置在校园里流动起来</Text>
         </View>
 

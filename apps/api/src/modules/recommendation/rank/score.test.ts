@@ -3,6 +3,7 @@ import {
   RANK_FEATURE_KEYS,
   RANK_FEATURE_WEIGHTS,
   RANK_POPULARITY_HALF_SATURATION,
+  RANK_POSITIVE_WEIGHT_SUM,
   RANK_REPEATED_EXPOSURE_HALF_SATURATION,
   RANK_WISH_SCORE_MAX,
   type RankFeatureKey,
@@ -43,6 +44,7 @@ function candidate(overrides: Partial<RecallCandidate> = {}): RecallCandidate {
     createdAt: NOW,
     alreadySeenCount: 0,
     sellerExposure: 1,
+    exploreEligible: false,
     ...overrides,
   }
 }
@@ -171,6 +173,72 @@ describe('scoreCandidates 的"缺失 ≠ 0"', () => {
       12,
     )
     expect(penalized.rankScore).toBeLessThan(clean.rankScore)
+  })
+})
+
+describe('缺失处理（#524）', () => {
+  test('请求级整列缺失：该特征权重记 0，其余正权重放大回 RANK_POSITIVE_WEIGHT_SUM', () => {
+    // 匿名冷启动：没有兴趣向量、没有愿望、没有类目行为 ⇒ semantic/wish/category 整列为 null。
+    const scored = scoreCandidates({
+      candidates: [
+        candidate({ listingId: 'a', freshness: 1, popularity: 5 }),
+        candidate({ listingId: 'b', freshness: 0.5, popularity: 0 }),
+      ],
+      feedback: NO_FEEDBACK,
+    })
+    const first = scored[0]
+    if (!first) throw new Error('排序结果为空')
+
+    for (const feature of ['semantic', 'wish', 'category'] as const) {
+      expect(first.breakdown[feature].weight).toBe(0)
+      expect(first.breakdown[feature].contribution).toBe(0)
+      expect(first.breakdown.missing).toContain(feature)
+    }
+    const positive = RANK_FEATURE_KEYS.filter((key) => RANK_FEATURE_WEIGHTS[key] > 0)
+    const effective = positive.reduce((sum, key) => sum + first.breakdown[key].weight, 0)
+    expect(effective).toBeCloseTo(RANK_POSITIVE_WEIGHT_SUM, 12)
+    // 负权重不随之放大：惩罚力度不因别的特征缺失而变。
+    expect(first.breakdown.repeatedExposure.weight).toBe(RANK_FEATURE_WEIGHTS.repeatedExposure)
+    expect(first.breakdown.negativeFeedback.weight).toBe(RANK_FEATURE_WEIGHTS.negativeFeedback)
+    // 两项可用特征各占一半（0.15 : 0.15 → 0.5 : 0.5）：新鲜且热门的 a 正向满分是 0.5 + 0.25。
+    expect(first.candidate.listingId).toBe('a')
+    expect(first.rankScore).toBeCloseTo(0.5 * 1 + 0.5 * 0.5, 12)
+  })
+
+  test('候选级个别缺失：按本次请求该特征的均值填充，并记入 missing', () => {
+    const scored = scoreCandidates({
+      candidates: [
+        candidate({ listingId: 'a', semanticScore: 0.8 }),
+        candidate({ listingId: 'b', semanticScore: null }),
+        candidate({ listingId: 'c', semanticScore: 0.4 }),
+      ],
+      feedback: NO_FEEDBACK,
+    })
+    const byId = new Map(scored.map((item) => [item.candidate.listingId, item]))
+    const b = byId.get('b')
+    const a = byId.get('a')
+    if (!b || !a) throw new Error('缺少候选')
+
+    expect(b.breakdown.semantic.normalized).toBeCloseTo(0.6, 12)
+    expect(b.breakdown.missing).toContain('semantic')
+    expect(a.breakdown.missing).not.toContain('semantic')
+    // 有值的候选不被填充影响；整列有值时权重不变（再按可用特征放大）。
+    expect(a.breakdown.semantic.normalized).toBeCloseTo(0.8, 12)
+    expect(a.breakdown.semantic.weight).toBe(b.breakdown.semantic.weight)
+    expect(a.breakdown.semantic.weight).toBeGreaterThan(0)
+  })
+
+  test('#524 回归：同一请求里"缺 semantic"的候选不再因缺失被压到底', () => {
+    // v1 把缺失当 0：semantic 0.35 的权重让"商品没有向量"直接等于"与兴趣完全无关"。
+    const scored = scoreCandidates({
+      candidates: [
+        candidate({ listingId: 'low', semanticScore: 0.2 }),
+        candidate({ listingId: 'unknown', semanticScore: null }),
+        candidate({ listingId: 'high', semanticScore: 0.9 }),
+      ],
+      feedback: NO_FEEDBACK,
+    })
+    expect(scored.map((item) => item.candidate.listingId)).toEqual(['high', 'unknown', 'low'])
   })
 })
 

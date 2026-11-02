@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <title>cat-beauty</title>
+  <rect x="8.5" y="12" width="7" height="8" rx="1.5"/>
+  <path d="M9.5 12V9h5v3M10.5 9V6l3-1.5V9"/>
+</svg>

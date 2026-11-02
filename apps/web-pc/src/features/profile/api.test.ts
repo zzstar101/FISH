@@ -165,6 +165,7 @@ describe('profile api errors', () => {
     expect(listingActionError(new ApiError('LISTING_NOT_EDITABLE', 409, '状态变化'))).toEqual({
       message: '商品状态已变化，正在刷新最新状态',
       refresh: true,
+      phoneRequired: false,
     })
     expect(
       transactionActionError(new ApiError('TRANSACTION_NOT_IN_PENDING', 409, '状态变化')),
@@ -172,6 +173,13 @@ describe('profile api errors', () => {
       message: '订单状态已变化，正在刷新最新状态',
       refresh: true,
     })
+  })
+
+  test('relist blocked by the phone gate maps to the binding notice, not a refresh (#514)', () => {
+    const view = listingActionError(new ApiError('PHONE_REQUIRED', 403, '发布前请先绑定手机号'))
+    expect(view.phoneRequired).toBe(true)
+    expect(view.refresh).toBe(false)
+    expect(listingActionError(new ApiError('FORBIDDEN', 403, '无权操作')).phoneRequired).toBe(false)
   })
 
   test('delete failures surface the server wording and never claim success', () => {

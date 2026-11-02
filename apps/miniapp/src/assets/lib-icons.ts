@@ -1,279 +1,189 @@
 /**
- * 图标资产出口（唯一入口）。
+ * 图标资产出口（唯一入口）。**本文件由 `tools/icons/build.ts` 生成，不要手改。**
  *
- * 来源分两处，页面不需要关心区别：
- * 1. `D:\index\组件库\SVG图标库`（380 个 24×24 **填充式**矢量图标）
- *    → `D:\FISH\miniprogram\tools\build-lib-icons.mjs` 直接光栅化成 PNG。
- *    等价于「切图 + 去白底」，但边缘是解析式抗锯齿、任意倍率都清晰，也不会把分割线抠进来。
- * 2. 设计稿自身抽出的几何（`build-icons.mjs`）：库内没有等价图形的少数几个，
- *    例如「更多」在库里是毛绒玩具而不是省略号、返回/上下箭头库里没有。
- *    这些以 `-ink` / `-accent` / `-muted` 后缀命名，同时说明了来源。
+ * 真源：`tools/icons/glyphs/*.svg`（字形）× `tools/icons/manifest.ts`（每个字形用到的语义色）。
+ * 重出图：`bun run --filter @fish/miniapp icons`。
  *
- * `build-lib-icons.mjs` 里 `local: true` 的几条（lock / warn / refresh / key / mail /
- * info / check-circle / camera-off / voice-wave / plus-line）走的是 tools/src/icons/
- * 下的本地几何：图标库里确实没有语义对应的图形，按待设计页面.md §5 的约定
- * 「缺什么列出来由实现侧补」，而不是拿一个「看起来差不多」的顶替。
- *
- * 约定：页面与组件**只从这里取图标**，不要直接 import 具体 png。
- * 换图标 = 改工具的映射表 + 重新生成，业务代码零改动。
- *
- * 文件位置：包内副本在 `src/assets/lib-icons/`；真源与生成器在 `D:\FISH\miniprogram`（不进包）。
+ * 命名 = 字形 + 语义色：`Brand` 品牌蓝 / `Fg` 主文字 / `Muted` 次要灰 / `White` 反白 /
+ * `Danger` 警示红；`tab*Brand`（TabBar 选中态）与 `entry*Brand`（「我的」交易入口）是加粗描边 + 半透明错位填充。页面与组件**只从这里取图标**，不要直接 import 具体 png。
+ * 显示尺寸只用 24 / 32 / 40 / 48（SCSS px = rpx）四档。
  */
-import ai from '@/assets/lib-icons/ai@3x.png'
-import app from '@/assets/lib-icons/app@3x.png'
-import appMuted from '@/assets/lib-icons/app-muted@3x.png'
-import backInk from '@/assets/lib-icons/back-ink@3x.png'
-import bellInk from '@/assets/lib-icons/bell-ink@3x.png'
-import book from '@/assets/lib-icons/book@3x.png'
-import bookMuted from '@/assets/lib-icons/book-muted@3x.png'
-import box from '@/assets/lib-icons/box@3x.png'
-import browse from '@/assets/lib-icons/browse@3x.png'
-import browseMuted from '@/assets/lib-icons/browse-muted@3x.png'
-import camera from '@/assets/lib-icons/camera@3x.png'
-import cameraOff from '@/assets/lib-icons/camera-off@3x.png'
-import card from '@/assets/lib-icons/card@3x.png'
-import cart from '@/assets/lib-icons/cart@3x.png'
-import catApparel from '@/assets/lib-icons/cat-apparel@3x.png'
-import catBeauty from '@/assets/lib-icons/cat-beauty@3x.png'
-import catBooks from '@/assets/lib-icons/cat-books@3x.png'
-import catDaily from '@/assets/lib-icons/cat-daily@3x.png'
-import catDigital from '@/assets/lib-icons/cat-digital@3x.png'
-import catOther from '@/assets/lib-icons/cat-other@3x.png'
-import catSports from '@/assets/lib-icons/cat-sports@3x.png'
-import catTransport from '@/assets/lib-icons/cat-transport@3x.png'
-import category from '@/assets/lib-icons/category@3x.png'
-import chat from '@/assets/lib-icons/chat@3x.png'
-import chatInk from '@/assets/lib-icons/chat-ink@3x.png'
+import backFg from '@/assets/lib-icons/back-fg@3x.png'
+import bellFg from '@/assets/lib-icons/bell-fg@3x.png'
+import boxMuted from '@/assets/lib-icons/box-muted@3x.png'
+import cameraMuted from '@/assets/lib-icons/camera-muted@3x.png'
+import cartFg from '@/assets/lib-icons/cart-fg@3x.png'
+import catApparelBrand from '@/assets/lib-icons/cat-apparel-brand@3x.png'
+import catBeautyBrand from '@/assets/lib-icons/cat-beauty-brand@3x.png'
+import catBooksBrand from '@/assets/lib-icons/cat-books-brand@3x.png'
+import catDailyBrand from '@/assets/lib-icons/cat-daily-brand@3x.png'
+import catDigitalBrand from '@/assets/lib-icons/cat-digital-brand@3x.png'
+import catOtherBrand from '@/assets/lib-icons/cat-other-brand@3x.png'
+import catSportsBrand from '@/assets/lib-icons/cat-sports-brand@3x.png'
+import catTransportBrand from '@/assets/lib-icons/cat-transport-brand@3x.png'
+import chatFg from '@/assets/lib-icons/chat-fg@3x.png'
 import chatWhite from '@/assets/lib-icons/chat-white@3x.png'
-import checkAccent from '@/assets/lib-icons/check-accent@3x.png'
-import checkCircle from '@/assets/lib-icons/check-circle@3x.png'
-import checkCircleWhite from '@/assets/lib-icons/check-circle-white@3x.png'
-import checkMuted from '@/assets/lib-icons/check-muted@3x.png'
+import checkBrand from '@/assets/lib-icons/check-brand@3x.png'
+import checkCircleBrand from '@/assets/lib-icons/check-circle-brand@3x.png'
+import checkDoubleBrand from '@/assets/lib-icons/check-double-brand@3x.png'
+import checkDoubleMuted from '@/assets/lib-icons/check-double-muted@3x.png'
 import checkWhite from '@/assets/lib-icons/check-white@3x.png'
 import chevronDownMuted from '@/assets/lib-icons/chevron-down-muted@3x.png'
-import chevronRightMuted from '@/assets/lib-icons/chevron-right-muted-solid@3x.png'
+import chevronRightMuted from '@/assets/lib-icons/chevron-right-muted@3x.png'
 import chevronUpMuted from '@/assets/lib-icons/chevron-up-muted@3x.png'
-import clock from '@/assets/lib-icons/clock@3x.png'
-import clockInk from '@/assets/lib-icons/clock-ink@3x.png'
+import clockFg from '@/assets/lib-icons/clock-fg@3x.png'
 import clockMuted from '@/assets/lib-icons/clock-muted@3x.png'
-import closeInk from '@/assets/lib-icons/close-ink-solid@3x.png'
-import comment from '@/assets/lib-icons/comment@3x.png'
+import closeFg from '@/assets/lib-icons/close-fg@3x.png'
 import commentMuted from '@/assets/lib-icons/comment-muted@3x.png'
-import coupon from '@/assets/lib-icons/coupon@3x.png'
-import credit from '@/assets/lib-icons/credit@3x.png'
-import deleteIcon from '@/assets/lib-icons/delete@3x.png'
-import doc from '@/assets/lib-icons/doc@3x.png'
-import docInk from '@/assets/lib-icons/doc-ink@3x.png'
+import crownBrand from '@/assets/lib-icons/crown-brand@3x.png'
+import docFg from '@/assets/lib-icons/doc-fg@3x.png'
 import docMuted from '@/assets/lib-icons/doc-muted@3x.png'
-import editAccent from '@/assets/lib-icons/edit-accent@3x.png'
-import editImage from '@/assets/lib-icons/edit-image@3x.png'
-import feedback from '@/assets/lib-icons/feedback@3x.png'
+import editBrand from '@/assets/lib-icons/edit-brand@3x.png'
+import entryBoughtBrand from '@/assets/lib-icons/entry-bought-brand@3x.png'
+import entryOnsaleBrand from '@/assets/lib-icons/entry-onsale-brand@3x.png'
+import entryReportBrand from '@/assets/lib-icons/entry-report-brand@3x.png'
+import entryReviewBrand from '@/assets/lib-icons/entry-review-brand@3x.png'
+import entrySoldBrand from '@/assets/lib-icons/entry-sold-brand@3x.png'
+import feedbackFg from '@/assets/lib-icons/feedback-fg@3x.png'
 import feedbackMuted from '@/assets/lib-icons/feedback-muted@3x.png'
-import file from '@/assets/lib-icons/file@3x.png'
-import gift from '@/assets/lib-icons/gift@3x.png'
+import fileFg from '@/assets/lib-icons/file-fg@3x.png'
+import gridFg from '@/assets/lib-icons/grid-fg@3x.png'
+import headsetMuted from '@/assets/lib-icons/headset-muted@3x.png'
+import heartFillBrand from '@/assets/lib-icons/heart-fill-brand@3x.png'
 import heartMuted from '@/assets/lib-icons/heart-muted@3x.png'
-import heartOn from '@/assets/lib-icons/heart-on@3x.png'
 import heartWhite from '@/assets/lib-icons/heart-white@3x.png'
-import history from '@/assets/lib-icons/history@3x.png'
-import historyMuted from '@/assets/lib-icons/history-muted@3x.png'
-import hot from '@/assets/lib-icons/hot@3x.png'
-import image from '@/assets/lib-icons/image@3x.png'
+import homeMuted from '@/assets/lib-icons/home-muted@3x.png'
 import imageMuted from '@/assets/lib-icons/image-muted@3x.png'
-import info from '@/assets/lib-icons/info@3x.png'
+import infoFg from '@/assets/lib-icons/info-fg@3x.png'
 import infoMuted from '@/assets/lib-icons/info-muted@3x.png'
-import key from '@/assets/lib-icons/key@3x.png'
-import keyboard from '@/assets/lib-icons/keyboard@3x.png'
-import location from '@/assets/lib-icons/location@3x.png'
-import lock from '@/assets/lib-icons/lock@3x.png'
-import lockWhite from '@/assets/lib-icons/lock-white@3x.png'
-import mail from '@/assets/lib-icons/mail@3x.png'
-import mic from '@/assets/lib-icons/mic@3x.png'
-import micWhite from '@/assets/lib-icons/mic-white@3x.png'
-import moon from '@/assets/lib-icons/moon@3x.png'
-import moreInk from '@/assets/lib-icons/more-ink@3x.png'
-import order from '@/assets/lib-icons/order@3x.png'
+import keyFg from '@/assets/lib-icons/key-fg@3x.png'
+import keyboardFg from '@/assets/lib-icons/keyboard-fg@3x.png'
+import lockFg from '@/assets/lib-icons/lock-fg@3x.png'
+import mailFg from '@/assets/lib-icons/mail-fg@3x.png'
+import micFg from '@/assets/lib-icons/mic-fg@3x.png'
+import orderFg from '@/assets/lib-icons/order-fg@3x.png'
 import orderMuted from '@/assets/lib-icons/order-muted@3x.png'
-import personAdd from '@/assets/lib-icons/person-add@3x.png'
-import plus from '@/assets/lib-icons/plus@3x.png'
-import plusInk from '@/assets/lib-icons/plus-ink@3x.png'
-import plusLine from '@/assets/lib-icons/plus-line@3x.png'
-import power from '@/assets/lib-icons/power@3x.png'
-import profileBought from '@/assets/lib-icons/profile-bought@3x.png'
-import profileFollow from '@/assets/lib-icons/profile-follow@3x.png'
-import profileHeart from '@/assets/lib-icons/profile-heart@3x.png'
-import profileHistory from '@/assets/lib-icons/profile-history@3x.png'
-import profileOnsale from '@/assets/lib-icons/profile-onsale@3x.png'
-import profileOrder from '@/assets/lib-icons/profile-order@3x.png'
-import profileReview from '@/assets/lib-icons/profile-review@3x.png'
-import profileSold from '@/assets/lib-icons/profile-sold@3x.png'
-import profileWish from '@/assets/lib-icons/profile-wish@3x.png'
-import qr from '@/assets/lib-icons/qr@3x.png'
-import rank from '@/assets/lib-icons/rank@3x.png'
-import readallAccent from '@/assets/lib-icons/readall-accent@3x.png'
-import readallMuted from '@/assets/lib-icons/readall-muted@3x.png'
-import refresh from '@/assets/lib-icons/refresh@3x.png'
-import safeAccent from '@/assets/lib-icons/safe-accent@3x.png'
-import safeMuted from '@/assets/lib-icons/safe-muted@3x.png'
-import scan from '@/assets/lib-icons/scan@3x.png'
-import scanAccent from '@/assets/lib-icons/scan-accent@3x.png'
-import search from '@/assets/lib-icons/search@3x.png'
-import send from '@/assets/lib-icons/send@3x.png'
-import serviceMuted from '@/assets/lib-icons/service-muted@3x.png'
+import plusBrand from '@/assets/lib-icons/plus-brand@3x.png'
+import plusWhite from '@/assets/lib-icons/plus-white@3x.png'
+import powerDanger from '@/assets/lib-icons/power-danger@3x.png'
+import qrFg from '@/assets/lib-icons/qr-fg@3x.png'
+import refreshBrand from '@/assets/lib-icons/refresh-brand@3x.png'
+import scanBrand from '@/assets/lib-icons/scan-brand@3x.png'
+import searchMuted from '@/assets/lib-icons/search-muted@3x.png'
 import settingsMuted from '@/assets/lib-icons/settings-muted@3x.png'
-import share from '@/assets/lib-icons/share@3x.png'
-import shieldLine from '@/assets/lib-icons/shield-line@3x.png'
-import shieldWhite from '@/assets/lib-icons/shield-white@3x.png'
-import starAccent from '@/assets/lib-icons/star-accent@3x.png'
-import starLine from '@/assets/lib-icons/star-line@3x.png'
-import study from '@/assets/lib-icons/study@3x.png'
-import tabHome from '@/assets/lib-icons/tab-home@3x.png'
-import tabHomeOn from '@/assets/lib-icons/tab-home-on@3x.png'
-import tabMessage from '@/assets/lib-icons/tab-message@3x.png'
-import tabMessageOn from '@/assets/lib-icons/tab-message-on@3x.png'
-import tabProfile from '@/assets/lib-icons/tab-profile@3x.png'
-import tabProfileOn from '@/assets/lib-icons/tab-profile-on@3x.png'
-import tabWish from '@/assets/lib-icons/tab-wish@3x.png'
-import tabWishOn from '@/assets/lib-icons/tab-wish-on@3x.png'
-import user from '@/assets/lib-icons/user@3x.png'
-import verifiedAccent from '@/assets/lib-icons/verified-accent@3x.png'
-import voiceWave from '@/assets/lib-icons/voice-wave@3x.png'
-import walletMuted from '@/assets/lib-icons/wallet-muted@3x.png'
-import warn from '@/assets/lib-icons/warn@3x.png'
-import warnInk from '@/assets/lib-icons/warn-ink@3x.png'
+import shareFg from '@/assets/lib-icons/share-fg@3x.png'
+import shieldBrand from '@/assets/lib-icons/shield-brand@3x.png'
+import shieldCheckBrand from '@/assets/lib-icons/shield-check-brand@3x.png'
+import shieldFg from '@/assets/lib-icons/shield-fg@3x.png'
+import shieldMuted from '@/assets/lib-icons/shield-muted@3x.png'
+import sparkleBrand from '@/assets/lib-icons/sparkle-brand@3x.png'
+import starBrand from '@/assets/lib-icons/star-brand@3x.png'
+import tabHomeBrand from '@/assets/lib-icons/tab-home-brand@3x.png'
+import tabHomeMuted from '@/assets/lib-icons/tab-home-muted@3x.png'
+import tabMeBrand from '@/assets/lib-icons/tab-me-brand@3x.png'
+import tabMeMuted from '@/assets/lib-icons/tab-me-muted@3x.png'
+import tabMessageBrand from '@/assets/lib-icons/tab-message-brand@3x.png'
+import tabMessageMuted from '@/assets/lib-icons/tab-message-muted@3x.png'
+import tabWishBrand from '@/assets/lib-icons/tab-wish-brand@3x.png'
+import tabWishMuted from '@/assets/lib-icons/tab-wish-muted@3x.png'
+import tagMuted from '@/assets/lib-icons/tag-muted@3x.png'
+import trashFg from '@/assets/lib-icons/trash-fg@3x.png'
+import trashWhite from '@/assets/lib-icons/trash-white@3x.png'
+import userAddBrand from '@/assets/lib-icons/user-add-brand@3x.png'
+import userFg from '@/assets/lib-icons/user-fg@3x.png'
+import verifiedBrand from '@/assets/lib-icons/verified-brand@3x.png'
+import warnDanger from '@/assets/lib-icons/warn-danger@3x.png'
+import warnFg from '@/assets/lib-icons/warn-fg@3x.png'
+import wishMuted from '@/assets/lib-icons/wish-muted@3x.png'
 
 export const ICONS = {
-  /* TabBar（未选中灰 / 选中品牌蓝） */
-  tabHome,
-  tabHomeOn,
-  tabWish,
-  tabWishOn,
-  tabMessage,
-  tabMessageOn,
-  tabProfile,
-  tabProfileOn,
-
-  /* 导航与操作 */
-  backInk,
-  search,
-  closeInk,
-  moreInk,
-  plus,
-  plusInk,
-  plusLine,
+  tabHomeMuted,
+  tabHomeBrand,
+  tabWishMuted,
+  tabWishBrand,
+  tabMessageMuted,
+  tabMessageBrand,
+  tabMeMuted,
+  tabMeBrand,
+  entryOnsaleBrand,
+  entrySoldBrand,
+  entryBoughtBrand,
+  entryReviewBrand,
+  entryReportBrand,
+  backFg,
+  closeFg,
+  searchMuted,
+  plusBrand,
+  plusWhite,
   chevronRightMuted,
   chevronDownMuted,
   chevronUpMuted,
-  checkMuted,
-  checkAccent,
+  checkBrand,
   checkWhite,
-  checkCircle,
-  checkCircleWhite,
-  delete: deleteIcon,
-  refresh,
-  scan,
-  qr,
-
-  /* 账号 / 认证 */
-  user,
-  lock,
-  lockWhite,
-  card,
-  mail,
-  key,
-  shieldLine,
-  shieldWhite,
-  safeAccent,
-  safeMuted,
-  verifiedAccent,
-  personAdd,
-
-  /* 内容与状态 */
-  bellInk,
-  camera,
-  cameraOff,
-  category,
-  book,
-  bookMuted,
-  share,
-  starLine,
-  starAccent,
-  commentMuted,
-  comment,
-  heartMuted,
-  heartOn,
-  heartWhite,
-  historyMuted,
-  history,
-  clock,
-  clockInk,
-  clockMuted,
-  order,
-  orderMuted,
-  settingsMuted,
-  send,
-  rank,
-  hot,
-  ai,
-  info,
-  infoMuted,
-  warn,
-  warnInk,
-  power,
-  moon,
-  feedback,
-  feedbackMuted,
-  app,
-  appMuted,
-  doc,
-  docInk,
-  docMuted,
-  file,
-  image,
+  checkCircleBrand,
+  checkDoubleBrand,
+  checkDoubleMuted,
+  trashFg,
+  trashWhite,
+  refreshBrand,
+  scanBrand,
+  qrFg,
+  shareFg,
+  editBrand,
+  userAddBrand,
+  lockFg,
+  mailFg,
+  keyFg,
+  shieldBrand,
+  shieldMuted,
+  shieldFg,
+  shieldCheckBrand,
+  verifiedBrand,
+  bellFg,
+  cameraMuted,
   imageMuted,
-  readallAccent,
-  readallMuted,
-  box,
-  browse,
-  browseMuted,
-  chat,
-  chatInk,
+  tagMuted,
+  starBrand,
+  heartMuted,
+  heartWhite,
+  heartFillBrand,
+  commentMuted,
+  chatFg,
   chatWhite,
-  mic,
-  micWhite,
-  voiceWave,
-  keyboard,
-  location,
-  cart,
-  coupon,
-  credit,
-  gift,
-  walletMuted,
-  study,
-  editImage,
-
-  /* 「我的」页 3版稿（图标卡片 / 帮助与设置行 / 头部编辑与扫码） */
-  profileHeart,
-  profileHistory,
-  profileFollow,
-  profileWish,
-  profileOrder,
-  profileOnsale,
-  profileSold,
-  profileBought,
-  profileReview,
-  editAccent,
-  scanAccent,
-  serviceMuted,
-
-  /* 商品一级分类（首页横滑圆盘） */
-  catBooks,
-  catDigital,
-  catDaily,
-  catApparel,
-  catSports,
-  catTransport,
-  catBeauty,
-  catOther,
+  feedbackFg,
+  feedbackMuted,
+  clockFg,
+  clockMuted,
+  orderFg,
+  orderMuted,
+  boxMuted,
+  docFg,
+  docMuted,
+  fileFg,
+  gridFg,
+  crownBrand,
+  sparkleBrand,
+  infoFg,
+  infoMuted,
+  warnFg,
+  warnDanger,
+  powerDanger,
+  settingsMuted,
+  headsetMuted,
+  micFg,
+  keyboardFg,
+  cartFg,
+  catBooksBrand,
+  catDigitalBrand,
+  catDailyBrand,
+  catApparelBrand,
+  catSportsBrand,
+  catTransportBrand,
+  catBeautyBrand,
+  catOtherBrand,
+  homeMuted,
+  wishMuted,
+  userFg,
 } as const
 
 export type IconName = keyof typeof ICONS

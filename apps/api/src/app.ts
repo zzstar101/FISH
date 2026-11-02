@@ -12,24 +12,29 @@ import type { UserPresence } from '@fish/contracts/users/schema'
 import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import { VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS } from '@fish/contracts/visual/schema'
 import { createDb } from '@fish/db/client'
+import { countListingEmbeddingsByModel } from '@fish/db/embedding-store'
 import { isListingImageKeyPendingDeletion } from '@fish/db/listing-image-deletions'
 import type {
   AiPolishEnv,
   ContentModerationEnv,
   MailTransportEnv,
   MeetupTokenEnv,
+  RecommendationEmbeddingModelEnv,
   ServerEnv,
+  SubscribeMessageTemplatesEnv,
   VisualEmbeddingEnv,
   VisualParseEnv,
+  WechatEnv,
 } from '@fish/shared/env'
 import {
   loadAiPolishEnv,
   loadMeetupTokenEnv,
   loadRecommendationRateLimitEnv,
+  loadSubscribeMessageTemplatesEnv,
+  STUB_EMBEDDING_MODEL,
 } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
-import { STUB_VISUAL_EMBEDDING_MODEL } from '@fish/visual-embedding/providers/stub'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -44,6 +49,7 @@ import {
   createResendEmailVerificationProvider,
   createSmtpEmailVerificationProvider,
 } from './modules/auth/email-providers'
+import { requirePhoneBound } from './modules/auth/require-phone'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
 import { createBlocksRouter } from './modules/blocks/router'
@@ -94,12 +100,27 @@ import { createSqlProfileStore } from './modules/profile/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
+import { checkRecommendationEmbeddingModel } from './modules/recommendation/embedding-check'
 import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
 import { createTokenBucketLimiter } from './modules/recommendation/rate-limit'
 import { createRecommendationRecall } from './modules/recommendation/recall/service'
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
+import {
+  createSubscribeMessageClient,
+  miniprogramStateOf,
+} from './modules/subscribe-messages/client'
+import { createSubscribeMessagesRouter } from './modules/subscribe-messages/router'
+import {
+  createSubscribeMessageScheduler,
+  type SubscribeMessageScheduler,
+} from './modules/subscribe-messages/scheduler'
+import {
+  createSubscribeMessageService,
+  resolveCapability,
+} from './modules/subscribe-messages/service'
+import { createSqlSubscribeMessageStore } from './modules/subscribe-messages/store'
 import { createTransactionReviewsRouter } from './modules/transaction-reviews/router'
 import { createTransactionReviewService } from './modules/transaction-reviews/service'
 import { createSqlTransactionReviewStore } from './modules/transaction-reviews/store'
@@ -166,7 +187,7 @@ export function createApp(
    * transport 无默认值（off/stub/live），生产禁 stub；`off` 时登录/绑定入口 503 关闭。
    * 测试传 `{ transport: 'stub' }` 显式开启；不传即 off，不会静默降级。
    */
-  wechatEnv: import('@fish/shared/env').WechatEnv = { transport: 'off' },
+  wechatEnv: WechatEnv = { transport: 'off' },
   lookupNetwork: { peerIp: (request: Request) => string | null; trustedProxyIp: string | null } = {
     peerIp: () => null,
     trustedProxyIp: null,
@@ -189,6 +210,33 @@ export function createApp(
    * 也不把查询图再发一次；开启后文本路才参与召回（见 `visual-search/parse.ts` 的 fail-open）。
    */
   visualParseEnv: VisualParseEnv = { transport: 'off' },
+  /**
+   * 微信订阅消息模板（#462）：API-only，`index.ts` 用 `loadSubscribeMessageTemplatesEnv()` 校验后
+   * 传入。三个都可选 —— 未配置即"能力未开通"（端上拿到 null 不弹授权），不是启动失败。
+   */
+  subscribeTemplatesEnv: SubscribeMessageTemplatesEnv = loadSubscribeMessageTemplatesEnv(),
+  /**
+   * 进程生命周期钩子（#462）：投递循环的 `start()` / `stop()` 属于进程，不属于请求 ——
+   * `createApp` 只**造**调度器并经这里交出去，`index.ts` 在 `Bun.serve` 之后启动、在退出信号里
+   * 停止。测试不传 ⇒ 调度器从不启动（不会被一个 15 秒定时器拖住 `bun test`）。
+   */
+  lifecycle: {
+    onSubscribeScheduler?: (scheduler: SubscribeMessageScheduler) => void
+    /**
+     * 推荐 embedding 模型自检（#524）：同样只**造**、不跑 —— `index.ts` 在监听之后跑一次；
+     * 测试不传 ⇒ 不会在每个 `createApp` 背后多一条悬空的数据库查询。
+     */
+    onRecommendationEmbeddingCheck?: (run: () => Promise<unknown>) => void
+  } = {},
+  /**
+   * 推荐读侧的文本向量模型名（#524）：`index.ts` 用 `loadRecommendationEmbeddingModel()` 校验后
+   * 传入，与 worker 写向量用的 `EMBEDDING_MODEL` 是**同一个变量**。
+   *
+   * 不能从 `visualEmbeddingEnv` 推：那是拍照搜图的图片向量模型（另一张表、另一个维度），v1
+   * 曾把它当成召回模型，结果语义召回 / 会话兴趣 / 长期画像在线上全部落空且无人察觉。
+   * 测试不传 ⇒ 与 worker 的 stub 同名（`STUB_EMBEDDING_MODEL`）。
+   */
+  recommendationEmbedding: RecommendationEmbeddingModelEnv = { model: STUB_EMBEDDING_MODEL },
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -357,6 +405,7 @@ export function createApp(
       resolveClientIp: (c) =>
         trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
       guard: restrictionGuard,
+      requirePhone: requirePhoneBound,
     }),
   )
   // #323 R1：行为埋点与推荐上下文。推荐 Feed 与事件写入都**匿名可用**（未登录访客也要能看首页，
@@ -400,15 +449,13 @@ export function createApp(
       maxSubjects: RECOMMENDATION_RATE_LIMIT_MAX_SUBJECTS,
     }),
   }
-  const recallEmbeddingModel =
-    visualEmbeddingEnv.transport === 'live' ? visualEmbeddingEnv.model : STUB_VISUAL_EMBEDDING_MODEL
   const recommendationService = createRecommendationService({
     store: createSqlRecommendationStore(db),
     listings: listingService,
     // 多路召回（R3）：六路各自降级、整体不抛，因此 Feed 不需要为它准备 500 分支。
     recall: createRecommendationRecall({
       db,
-      embeddingModel: recallEmbeddingModel,
+      embeddingModel: recommendationEmbedding.model,
       latency: latencyRecorder,
     }),
     // 长期画像重算的出队口：行为一落库就投 `REFRESH_USER_INTEREST`，由 worker 全量重算
@@ -667,6 +714,7 @@ export function createApp(
     getUserId: (c) => c.get('userId'),
     matchQueue: createDbWishMatchQueue(db),
     guard: restrictionGuard,
+    requirePhone: requirePhoneBound,
   })
   app.use('/wishes/*', auth.requireAuth)
   app.route('/wishes', wishes)
@@ -846,6 +894,53 @@ export function createApp(
     createNotificationsRouter({
       service: createNotificationService({ store: createSqlNotificationStore(db) }),
       getUserId: (c) => c.get('userId'),
+    }),
+  )
+
+  /*
+   * 微信订阅消息（#462）：`GET /subscribe-messages/config`（匿名，模板 ID 或 null）与
+   * `POST /me/subscribe-messages/grants`（登录 + 写守卫，上报 `requestSubscribeMessage` 结果）。
+   *
+   * 能力开关只算一次（`resolveCapability`），三处共用同一份结论：配置接口下发什么、
+   * grants 是否 503、投递循环是否启动。模板 ID 与 `WECHAT_TRANSPORT` 缺一即整体关闭 ——
+   * 没有 live 的 transport 就没有 `access_token`，模板配好也发不出去。
+   *
+   * 发送客户端（`createSubscribeMessageClient`）**必须**复用 auth 模块里那唯一的
+   * `wechatAccessTokens` 实例：一个 appid 在微信侧只有一份有效凭证（见 access-token.ts）。
+   */
+  const subscribeCapability = resolveCapability({
+    transport: wechatEnv.transport,
+    templates: subscribeTemplatesEnv,
+  })
+  const subscribeStore = createSqlSubscribeMessageStore(db)
+  const subscribeScheduler = createSubscribeMessageScheduler({
+    db,
+    client:
+      wechatEnv.transport === 'live' && auth.wechatAccessTokens !== null
+        ? createSubscribeMessageClient({
+            tokens: auth.wechatAccessTokens,
+            miniprogramState: miniprogramStateOf(wechatEnv.qrEnvVersion),
+          })
+        : null,
+    capability: subscribeCapability,
+  })
+  app.route(
+    '/',
+    createSubscribeMessagesRouter({
+      service: createSubscribeMessageService({
+        store: subscribeStore,
+        capability: subscribeCapability,
+      }),
+      requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
+    }),
+  )
+  lifecycle.onSubscribeScheduler?.(subscribeScheduler)
+  lifecycle.onRecommendationEmbeddingCheck?.(() =>
+    checkRecommendationEmbeddingModel({
+      model: recommendationEmbedding.model,
+      countListingEmbeddings: (model) => countListingEmbeddingsByModel(db, model),
+      onMismatch: () => recommendationProcessMetrics.recordEmbeddingModelMismatch(),
     }),
   )
 

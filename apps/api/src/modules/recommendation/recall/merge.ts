@@ -134,13 +134,18 @@ export function mergeRecallCandidates(input: MergeRecallCandidatesInput): Recall
         semanticScore: null,
         wishScore: null,
         popularity: null,
-        userCategoryAffinity: input.categoryAffinity.get(listing.category) ?? null,
+        // 有类目兴趣时，兴趣之外的类目是真实的 0（"不感兴趣"）；没有任何类目兴趣才是"未知"。
+        userCategoryAffinity:
+          input.categoryAffinity.size === 0
+            ? null
+            : (input.categoryAffinity.get(listing.category) ?? 0),
         freshness: freshnessOf(listing.createdAt, input.now),
         createdAt: listing.createdAt,
         // 查不到 = 0（问过了确实没有）；整体未知（null）= 保持 null —— 排序层要区分这两者。
         alreadySeenCount:
           input.impressions === null ? null : (input.impressions.get(raw.listingId) ?? 0),
         sellerExposure: 0,
+        exploreEligible: false,
       }
       applyChannelFeature(candidate, channel.channel, raw.score)
       merged.set(raw.listingId, candidate)
@@ -153,6 +158,7 @@ export function mergeRecallCandidates(input: MergeRecallCandidatesInput): Recall
   }
   for (const candidate of merged.values()) {
     candidate.sellerExposure = sellerCounts.get(candidate.sellerId) ?? 0
+    candidate.exploreEligible = candidate.recallSources.includes('explore')
   }
 
   return [...merged.values()].sort(compareRecallCandidates).slice(0, maxCandidates)

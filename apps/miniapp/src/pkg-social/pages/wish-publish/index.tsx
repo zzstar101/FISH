@@ -5,7 +5,11 @@ import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
+import PhoneBindSheet from '@/components/phone-bind-sheet'
 import { useAuthGuard } from '@/features/auth/guard'
+import { isPhoneRequiredError, needsPhoneBeforePublish } from '@/features/auth/phone'
+import { useAuth } from '@/features/auth/store'
+import { usePhoneBind } from '@/features/auth/use-phone-bind'
 import { createWish } from '@/features/wish/api'
 import { markWishesDirty } from '@/features/wish/refresh'
 import { categoryLabel, WISH_CATEGORIES } from '@/lib/listing-labels'
@@ -60,6 +64,15 @@ export default function WishPublish() {
   const [errors, setErrors] = useState<FieldErrors>({})
   /** 防连点重复提交（页面没有「发布中」的展示位，用 ref 不必触发重渲染） */
   const submittingRef = useRef(false)
+  /**
+   * 发布前绑定手机号（#514）。绑好只关 sheet + 提示再点一次，**不**自动重发、不清表单。
+   */
+  const { user } = useAuth()
+  const [phoneSheetOpen, setPhoneSheetOpen] = useState(false)
+  const phoneBind = usePhoneBind({
+    onBound: () => setPhoneSheetOpen(false),
+    boundToast: '手机号已绑定，请再次点击发布',
+  })
 
   const back = () => {
     const pages = Taro.getCurrentPages()
@@ -103,6 +116,11 @@ export default function WishPublish() {
 
     setErrors(next)
     if (next.keyword || next.budget) return
+    // #514：没绑手机号就先弹绑定 sheet，不发 POST /wishes（许愿只有新建，没有编辑态）
+    if (needsPhoneBeforePublish({ phoneBound: user?.phoneBound, editing: false })) {
+      setPhoneSheetOpen(true)
+      return
+    }
 
     submittingRef.current = true
     try {
@@ -120,6 +138,11 @@ export default function WishPublish() {
       markWishesDirty()
       back()
     } catch (error) {
+      // 端上 `phoneBound` 可能过期：以服务端 403 PHONE_REQUIRED 为准，弹绑定 sheet 而不是 toast
+      if (isPhoneRequiredError(error)) {
+        setPhoneSheetOpen(true)
+        return
+      }
       // 「同时 ACTIVE 最多 10 条」由服务端判定（409）；本地不再预检，避免两套口径
       void Taro.showToast({
         title: isApiError(error) ? error.message : '发布失败，请重试',
@@ -155,7 +178,7 @@ export default function WishPublish() {
           />
           {errors.keyword ? (
             <View className="wp__err">
-              <Image className="wp__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="wp__err-ic" src={ICONS.warnFg} mode="aspectFit" />
               <Text className="wp__err-tx">{errors.keyword}</Text>
             </View>
           ) : null}
@@ -209,7 +232,7 @@ export default function WishPublish() {
           </View>
           {errors.budget ? (
             <View className="wp__err">
-              <Image className="wp__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="wp__err-ic" src={ICONS.warnFg} mode="aspectFit" />
               <Text className="wp__err-tx">{errors.budget}</Text>
             </View>
           ) : null}
@@ -259,6 +282,13 @@ export default function WishPublish() {
           <Text>发布愿望</Text>
         </View>
       </View>
+
+      <PhoneBindSheet
+        open={phoneSheetOpen}
+        binding={phoneBind.binding}
+        onGetPhoneNumber={phoneBind.onGetPhoneNumber}
+        onClose={() => setPhoneSheetOpen(false)}
+      />
     </View>
   )
 }

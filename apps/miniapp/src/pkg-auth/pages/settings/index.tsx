@@ -1,11 +1,12 @@
 import { ACCOUNT_DELETION_COOLING_OFF_DAYS } from '@fish/contracts/account-deletion/schema'
-import { Image, Text, View } from '@tarojs/components'
+import { Button, Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll } from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
+import { usePhoneBind } from '@/features/auth/use-phone-bind'
 import type { NotifyKey } from '@/features/settings/preferences'
 import {
   COMMENT_POLICIES,
@@ -15,6 +16,7 @@ import {
   SETTINGS_STORAGE_KEY,
 } from '@/features/settings/preferences'
 import { NOTIFY_PREFS_EVENT } from '@/features/settings/unread-badge'
+import { requestAllSubscribeKinds } from '@/features/subscribe/request'
 import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
 import { settings } from '@/lib/settings-defaults'
 import type { MockSettings } from '@/mock/types'
@@ -37,6 +39,14 @@ import './index.scss'
  *
  * **账号信息与退出登录是真实登录态**：账号行读 `features/auth/store` 的当前用户，
  * 退出走 `POST /auth/logout` 并清本地会话（原先两处都是占位）。
+ *
+ * **手机号绑定（#204）也在这张卡里**：Owner 定的入口是设置页的账号组。授权走原生
+ * `<Button open-type="getPhoneNumber">`（只把一次性 code 交给后端，明文号码不出端），
+ * 逻辑在 `features/auth/phone`，页面编排在 `features/auth/use-phone-bind`。
+ *
+ * **已绑定时不再提供授权按钮**：换绑 / 解绑规则归 #86 且尚未冻结，端上此时只展示掩码号码。
+ * 让同一个按钮「再授权一次」看起来像换绑，等于替 #86 先把规则定了（后端 `bindPhone` 是覆盖
+ * 语义，点一下就会真的换掉），所以入口先收起来，等 #86 冻结后再按规则做。
  */
 
 /** `getStorageSync` 只能在端上跑；读取失败（低版本禁用存储等）视为「没存过」 */
@@ -107,6 +117,16 @@ export default function Settings() {
 
   const toast = (title: string) => void Taro.showToast({ title, icon: 'none' })
 
+  /**
+   * 手机号绑定（#204）：防连点、页面存活 / 可见性、会话票据与提示都收在 `usePhoneBind`
+   * （#514 出物页 / 许愿页成为第二、三个调用方后抽出，行为与原内联实现一致）。
+   */
+  const { binding, onGetPhoneNumber } = usePhoneBind()
+  const phoneBound = user?.phoneBound === true
+  const maskedPhone = user?.maskedPhone ?? null
+  const phoneValue = phoneBound ? (maskedPhone ?? '已绑定') : '未绑定'
+  const bindLabel = binding ? '绑定中…' : '绑定'
+
   const onLogout = () => {
     if (loggingOut) return
     setLoggingOut(true)
@@ -137,14 +157,14 @@ export default function Settings() {
       label: '新消息',
       value: notifyChat,
       set: setNotifyChat,
-      icon: ICONS.chatInk,
+      icon: ICONS.chatFg,
     },
     {
       key: 'notifyWish',
       label: '许愿命中',
       value: notifyWish,
       set: setNotifyWish,
-      icon: ICONS.heartOn,
+      icon: ICONS.heartFillBrand,
     },
     {
       key: 'notifyDeal',
@@ -158,7 +178,7 @@ export default function Settings() {
       label: '活动与公告',
       value: notifyNews,
       set: setNotifyNews,
-      icon: ICONS.feedback,
+      icon: ICONS.feedbackFg,
     },
   ]
 
@@ -182,9 +202,14 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })}
           >
             <View className="st__av">
-              <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
+              {/* 有真头像画真图，无图（含 /me 未回来）才退首字，同「我的」页口径 */}
+              {user?.avatarUrl ? (
+                <Image className="st__av-img" src={user.avatarUrl} mode="aspectFill" />
+              ) : (
+                <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
+              )}
               {verified ? (
-                <Image className="st__av-bdg" src={ICONS.verifiedAccent} mode="aspectFit" />
+                <Image className="st__av-bdg" src={ICONS.verifiedBrand} mode="aspectFit" />
               ) : null}
             </View>
             <View className="st__acct-main">
@@ -200,11 +225,33 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/verify/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.safeAccent} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.shieldCheckBrand} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">教育邮箱</Text>
             <Text className="st__rvalue">{verified ? '已验证' : '去验证'}</Text>
             <View className="st__arrow" />
+          </View>
+
+          {/* 手机号（#204）：这里必须是原生 <Button> —— `open-type="getPhoneNumber"`
+              只能挂在 button 上，普通 View + onClick 拿不到微信的一次性 code。
+              只给**未绑定**用户渲染它：已绑定时只展示掩码号码，换绑 / 解绑规则归 #86 且尚未
+              冻结（让这个按钮在已绑定时可点，等于替 #86 先把「再授权 = 换绑」定下来）。 */}
+          <View className="st__row">
+            <View className="st__ric">
+              <Image className="st__ric-ic" src={ICONS.headsetMuted} mode="aspectFit" />
+            </View>
+            <Text className="st__rlabel">手机号</Text>
+            <Text className="st__rvalue">{phoneValue}</Text>
+            {phoneBound ? null : (
+              <Button
+                className={`st__bind${binding ? ' is-off' : ''}`}
+                openType="getPhoneNumber"
+                disabled={binding}
+                onGetPhoneNumber={onGetPhoneNumber}
+              >
+                {bindLabel}
+              </Button>
+            )}
           </View>
         </View>
 
@@ -213,7 +260,7 @@ export default function Settings() {
         <View className="st__group">
           <View className="st__row">
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.bellInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.bellFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">通知设置</Text>
             <View
@@ -228,6 +275,37 @@ export default function Settings() {
             >
               <View className="st__sw-knob" />
             </View>
+          </View>
+
+          {/*
+            #462 微信订阅消息：**一次请求首批三个模板**（Owner 冻结的授权入口清单里
+            「设置页增加『微信消息提醒』入口，一次请求这三个模板」）。
+
+            与上面那些本地开关是两件事：上面管「站内通知要不要显示」，这里管「微信能不能
+            在站外提醒我」。微信的一次性订阅是"允许一次 = 一条额度"，所以这里是一个动作
+            而不是一个常驻开关 —— 没有"已开启"这个状态可存。
+          */}
+          <View
+            className="st__row"
+            onClick={() => {
+              // 必须在点击回调里同步发起（微信硬约束）：`requestAllSubscribeKinds`
+              // 内部不先 await 任何东西，这里也只在它返回后再处理结果。
+              void requestAllSubscribeKinds().then((result) => {
+                if (result === null) {
+                  toast('微信消息提醒暂未开通')
+                  return
+                }
+                const { CHAT, TX, REVIEW } = result.remaining
+                toast(`微信提醒剩余 ${CHAT + TX + REVIEW} 次`)
+              })
+            }}
+          >
+            <View className="st__ric">
+              <Image className="st__ric-ic" src={ICONS.bellFg} mode="aspectFit" />
+            </View>
+            <Text className="st__rlabel">微信消息提醒</Text>
+            <Text className="st__rvalue">去开启</Text>
+            <View className="st__arrow" />
           </View>
         </View>
 
@@ -274,7 +352,7 @@ export default function Settings() {
             }
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.chatInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.chatFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">谁可以给我留言</Text>
             <Text className="st__rvalue">{commentPolicy}</Text>
@@ -293,7 +371,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/feedback/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.feedback} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.feedbackFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">意见反馈</Text>
             <View className="st__arrow" />
@@ -304,7 +382,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/about/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.app} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.gridFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">关于鱼小应</Text>
             <Text className="st__rvalue num">{`v${APP_VERSION}`}</Text>
@@ -316,7 +394,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/terms/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.docInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.docFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">用户协议</Text>
             <View className="st__arrow" />
@@ -327,7 +405,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/privacy/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.docInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.docFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">隐私政策</Text>
             <View className="st__arrow" />
@@ -339,14 +417,14 @@ export default function Settings() {
             会下架商品），放在最后一行可以少一点误触。 */}
         <View className="st__danger-card">
           <View className="st__danger-row" onClick={() => setLogoutOpen(true)}>
-            <Image className="st__danger-ic" src={ICONS.power} mode="aspectFit" />
+            <Image className="st__danger-ic" src={ICONS.powerDanger} mode="aspectFit" />
             <Text>退出登录</Text>
           </View>
           <View
             className="st__danger-row"
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/account-deletion/index' })}
           >
-            <Image className="st__danger-ic" src={ICONS.delete} mode="aspectFit" />
+            <Image className="st__danger-ic" src={ICONS.trashFg} mode="aspectFit" />
             <Text>注销账号</Text>
           </View>
         </View>
@@ -363,7 +441,7 @@ export default function Settings() {
           <View className="st__scrim" onClick={() => setLogoutOpen(false)} />
           <View className="st__sheet">
             <View className="st__sheet-ic">
-              <Image className="st__sheet-ic-img" src={ICONS.power} mode="aspectFit" />
+              <Image className="st__sheet-ic-img" src={ICONS.powerDanger} mode="aspectFit" />
             </View>
             <Text className="st__sheet-title">确认退出登录？</Text>
             <Text className="st__sheet-text">

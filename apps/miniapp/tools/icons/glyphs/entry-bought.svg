@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <title>entry-bought</title>
+  <defs><clipPath id="body"><path d="M5.5 9a1.5 1.5 0 0 1 1.5-1.5h10A1.5 1.5 0 0 1 18.5 9l-.7 9.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z"/></clipPath></defs>
+  <g clip-path="url(#body)" fill="accentColor" stroke="none"><g transform="translate(3 3)"><path d="M5.5 9a1.5 1.5 0 0 1 1.5-1.5h10A1.5 1.5 0 0 1 18.5 9l-.7 9.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z"/></g></g>
+  <path d="M5.5 9a1.5 1.5 0 0 1 1.5-1.5h10A1.5 1.5 0 0 1 18.5 9l-.7 9.2a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z"/>
+  <path d="M9 7.5V7a3 3 0 0 1 6 0v.5M12 11.25v4.5M10 13.75l2 2 2-2"/>
+</svg>

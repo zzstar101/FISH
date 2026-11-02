@@ -36,14 +36,52 @@ export function buildMeetupQrPayload(transactionId: string, token: string): stri
 
 export type MeetupQrPayload = { transactionId: string; token: string }
 
-/** 不是本应用的 payload、或字段畸形时返回 null（调用方据此走「无效码」分支）。 */
+/**
+ * 手动解析 `a=1&b=2`，读取口径对齐 `URLSearchParams`：同名参数取**第一个**、
+ * `+` 视作空格、百分号转义解码。
+ *
+ * **不用 `new URL` / `URLSearchParams`**（#536）：小程序 weapp 构建里 Taro 用
+ * ProvidePlugin 把这两个全局换成 `@tarojs/runtime` 的实现，其 `parseUrlBase`
+ * 只接受 `http(s)://`，对 `fish://…` 构造即抛 `TypeError: Invalid URL`。
+ * 异常曾落在扫码回调里、任何状态更新之前，导致扫码静默中断（取景框停住、无核销请求）。
+ * 本解析器不依赖任何运行时 URL 全局。
+ *
+ * 与 WHATWG / `URLSearchParams` 的**刻意差异**（payload 只由本应用签发，机器路径不涉及）：
+ * 不剥除末尾空白，且百分号编码的键名按解码后匹配（`%74x` 等价 `tx`）。
+ */
+function parseQuery(query: string): Map<string, string> {
+  const params = new Map<string, string>()
+  for (const part of query.split('&')) {
+    if (!part) continue
+    const eq = part.indexOf('=')
+    const rawKey = eq === -1 ? part : part.slice(0, eq)
+    const rawValue = eq === -1 ? '' : part.slice(eq + 1)
+    const key = decodeURIComponent(rawKey.replace(/\+/g, ' '))
+    if (params.has(key)) continue
+    params.set(key, decodeURIComponent(rawValue.replace(/\+/g, ' ')))
+  }
+  return params
+}
+
+/**
+ * 不是本应用的 payload、或字段畸形时返回 null（调用方据此走「无效码」分支）。
+ *
+ * **全量函数**：任何输入都不抛（畸形百分号转义等交给 catch 收敛成 null）。
+ * 扫码回调没有外层 try/catch，抛异常会让用户看到"扫不动"且没有任何反馈（#536）。
+ */
 export function parseMeetupQrPayload(payload: string): MeetupQrPayload | null {
-  if (!payload.startsWith(`${PAYLOAD_PREFIX}?tx=`)) return null
-  // 非 https 的自定义 scheme 没有 origin（WHATWG 返回 "null" 字符串），用 host 判定。
-  const url = new URL(payload)
-  if (url.protocol !== 'fish:' || url.host !== 'meetup' || url.pathname !== '/redeem') return null
-  const transactionId = url.searchParams.get('tx') ?? ''
-  const token = url.searchParams.get('t') ?? ''
-  if (!validTransactionId(transactionId) || !TOKEN_RE.test(token)) return null
-  return { transactionId, token }
+  try {
+    const prefix = `${PAYLOAD_PREFIX}?`
+    if (!payload.startsWith(prefix)) return null
+    // 与 WHATWG URL 对齐：fragment 不参与查询（本应用签发的 payload 也不带 fragment）。
+    const hashAt = payload.indexOf('#')
+    const query = (hashAt === -1 ? payload : payload.slice(0, hashAt)).slice(prefix.length)
+    const params = parseQuery(query)
+    const transactionId = params.get('tx') ?? ''
+    const token = params.get('t') ?? ''
+    if (!validTransactionId(transactionId) || !TOKEN_RE.test(token)) return null
+    return { transactionId, token }
+  } catch {
+    return null
+  }
 }

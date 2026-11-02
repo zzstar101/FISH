@@ -39,6 +39,10 @@ import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
 import { sessions } from '@fish/db/schema/sessions'
+import {
+  subscribeMessageDeliveries,
+  subscribeMessageGrants,
+} from '@fish/db/schema/subscribe-messages'
 import { transactions } from '@fish/db/schema/transactions'
 import { userInterestProfiles } from '@fish/db/schema/user-interest-profiles'
 import { users, wechatIdentities } from '@fish/db/schema/users'
@@ -61,6 +65,9 @@ export interface AccountDeletionPurgeCounts {
   follows: number
   viewHistory: number
   notifications: number
+  /** #462：订阅消息的授权记账（按 user_id）与投递行（按 recipient_id）都随账号消失。 */
+  subscribeMessageGrants: number
+  subscribeMessageDeliveries: number
   interestProfiles: number
   aiPolishRequests: number
   /** 未完成的许愿置 `CLOSED`（不硬删：`matches` 对 wishes 是级联，硬删会带走撮合记录）。 */
@@ -180,6 +187,22 @@ async function purgeOne(db: Db, userId: string, now: Date): Promise<AccountDelet
           .delete(notifications)
           .where(eq(notifications.userId, userId))
           .returning({ id: notifications.id })
+      ).length,
+      // #462：授权记账按 `user_id`；投递行按**收件人** —— 投递行是「发给谁」的记录，
+      // 别人收件箱里关于注销人的那几条（昵称在 `data` 里冻结）不归注销人所有，
+      // 与「历史记录保留」同一口径。外键虽然是 CASCADE，这里显式删是为了让审计能回答
+      // 「清掉了什么」（同上面每一张表）。
+      subscribeMessageGrants: (
+        await tx
+          .delete(subscribeMessageGrants)
+          .where(eq(subscribeMessageGrants.userId, userId))
+          .returning({ userId: subscribeMessageGrants.userId })
+      ).length,
+      subscribeMessageDeliveries: (
+        await tx
+          .delete(subscribeMessageDeliveries)
+          .where(eq(subscribeMessageDeliveries.recipientId, userId))
+          .returning({ id: subscribeMessageDeliveries.id })
       ).length,
       interestProfiles: (
         await tx

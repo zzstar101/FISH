@@ -114,6 +114,9 @@
 }
 
 .conv__title-nm {
+  /* 父级 `.conv__title` 是盖在返回钮上的纯定位层（pointer-events: none），
+     昵称要接 #517 的主页点击，必须在这里单独恢复事件。 */
+  pointer-events: auto;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -197,8 +200,8 @@
 }
 
 .conv__pcard-ph {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
 }
 
 .conv__pcard-main {
@@ -243,8 +246,8 @@
 }
 
 .conv__pcard-caret {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
 }
 
 /**
@@ -287,8 +290,8 @@
 }
 
 .conv__lcard-ph {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
 }
 
 .conv__lcard-main {
@@ -321,8 +324,8 @@
 }
 
 .conv__lcard-caret {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 
@@ -413,15 +416,6 @@
   line-height: 1.5;
   color: var(--muted);
   text-align: center;
-}
-
-/* 胶囊 + 卡片的组合（tx.accepted / tx.completed）：竖排居中，间距即稿子的 8pt */
-.conv__syswrap {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
 }
 
 /* 消息行：头像 + 气泡列（稿子 .msg / .col） */
@@ -560,6 +554,18 @@
   }
 }
 
+/*
+ * 媒体气泡上方的引用条在气泡**外面**，底下是页面 --bg，不是我方气泡的渐变底。
+ * 复用 `.is-mine` 的白字会变成近白底上的白字（对比度约 1.1:1），发送方看不见。
+ */
+.conv__quote--floating {
+  border-left-color: var(--accent-mid);
+
+  .conv__quote-tx {
+    color: var(--muted-2);
+  }
+}
+
 /* 撤回碑（稿子 .recalled）：灰底小胶囊，体积与 SYSTEM 胶囊一致但不占整行 */
 .conv__recalled {
   display: inline-flex;
@@ -612,14 +618,20 @@
 }
 
 .conv__replybar-ic {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   opacity: 0.6;
 }
 
-/* 撤回路上的那条气泡：整块压暗，视觉上告知「正在撤回」 */
-.conv__bubble.is-busy {
+/* 撤回路上的那条气泡/商品卡：整块压暗，视觉上告知「正在撤回」 */
+.conv__bubble.is-busy,
+.conv__lcard.is-busy {
   opacity: 0.55;
+}
+
+/* 商品卡没有气泡的 padding/背景，压暗之外再挡住重复点击 */
+.conv__lcard.is-busy {
+  pointer-events: none;
 }
 
 .conv__rd {
@@ -858,8 +870,9 @@
 
 .conv__txcard-ic {
   flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: 48px;
+  height: 48px;
+  margin: 10px; /* 图标收敛到 48（#513），外边距保住原 68 的占位，卡片高度与文字位置不变 */
 }
 
 .conv__txcard-main {
@@ -894,6 +907,26 @@
   color: var(--surface);
   font-size: var(--fs-xs);
   font-weight: 600;
+}
+
+/* 模式①：吸附在输入栏上方（#521 / #522）。与消息流里那张卡同一套底座，
+   只多一条与输入行的间距；状态差异只体现在图标 / 文案 / CTA 颜色上。 */
+.conv__txcard--dock {
+  margin-bottom: 16px;
+}
+
+/* CTA 随状态换色：待面交=品牌蓝（默认）、待对方确认=信息蓝、已完成=绿、已取消=灰。
+   色值与消息列表胶囊（pages/chat/index.scss 的 .chat__pill）同一族。 */
+.conv__txcard.is-ok .conv__txcard-act {
+  background: var(--ok-ink);
+}
+
+.conv__txcard.is-pending .conv__txcard-act {
+  background: #3b74dd;
+}
+
+.conv__txcard.is-plain .conv__txcard-act {
+  background: #5f6e8a;
 }
 
 /* 「已完成」评价卡（稿子 .ratecard / tx.completed）已整块删除：
@@ -1056,6 +1089,20 @@
   border-top: 2px solid var(--accent-faint);
 }
 
+/* 「+」面板的点外部收起遮罩（#541）：透明，吃掉「面板与输入栏之外」的触摸 —— 面板
+   展开期间这片区域不再响应手势（消息流暂时滑不动，收起后恢复），这是「点空白即收起」
+   的必然代价。
+   层级夹在消息流（1）与输入栏（20）之间，所以输入栏和面板自己照常可点，消息流里的
+   长按菜单 / 点图看大图 / 商品条进详情也拿不到这些触摸；
+   顶边由 JSX 内联给（导航行底边 = `metrics.totalHeight`），返回钮不在遮罩下。 */
+.conv__panel-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+}
+
 .conv__ptile {
   flex: 1;
   display: flex;
@@ -1076,8 +1123,8 @@
 }
 
 .conv__ptile-ic {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
 }
 
 .conv__ptile-label {

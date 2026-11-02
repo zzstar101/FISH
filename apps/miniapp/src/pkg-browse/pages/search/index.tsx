@@ -292,7 +292,7 @@ export default function Search() {
             />
             {keyword.length > 0 ? (
               <View className="search__clear" onClick={clearInput}>
-                <Image className="search__clear-img" src={ICONS.closeInk} mode="aspectFit" />
+                <Image className="search__clear-img" src={ICONS.closeFg} mode="aspectFit" />
               </View>
             ) : null}
             {/*
@@ -305,7 +305,7 @@ export default function Search() {
               className={`search__vision${visionBusy ? ' is-busy' : ''}`}
               onClick={visionSearch}
             >
-              <Image className="search__vision-ic" src={ICONS.camera} mode="aspectFit" />
+              <Image className="search__vision-ic" src={ICONS.cameraMuted} mode="aspectFit" />
             </View>
             <View className="search__submit" onClick={submit}>
               <Text>搜索</Text>
@@ -321,7 +321,7 @@ export default function Search() {
               <Text className="search__block-title">搜索历史</Text>
               {history.length > 0 ? (
                 <View className="search__ghost" onClick={() => setHistory([])}>
-                  <Image className="search__ghost-img" src={ICONS.delete} mode="aspectFit" />
+                  <Image className="search__ghost-img" src={ICONS.trashFg} mode="aspectFit" />
                 </View>
               ) : null}
             </View>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <title>share</title>
+  <circle cx="16.75" cy="6.25" r="2.25"/>
+  <circle cx="7.25" cy="12" r="2.25"/>
+  <circle cx="16.75" cy="17.75" r="2.25"/>
+  <path d="M9.2 10.85l5.6-3.45M9.2 13.15l5.6 3.45"/>
+</svg>

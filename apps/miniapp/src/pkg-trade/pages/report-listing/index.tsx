@@ -410,10 +410,10 @@ export default function ReportListing() {
               className="rpl__banner-ic"
               src={
                 viewRecord.status === 'HANDLED'
-                  ? ICONS.checkAccent
+                  ? ICONS.checkBrand
                   : viewRecord.status === 'REJECTED'
-                    ? ICONS.warnInk
-                    : ICONS.clockInk
+                    ? ICONS.warnFg
+                    : ICONS.clockFg
               }
               mode="aspectFit"
             />
@@ -461,7 +461,7 @@ export default function ReportListing() {
             <EmptyState
               title={unavailableCopy(DEMO_MODE).title}
               text={unavailableCopy(DEMO_MODE).text}
-              icon={ICONS.shieldLine}
+              icon={ICONS.shieldMuted}
             />
           </View>
           <View className="rpl__acts">
@@ -481,7 +481,7 @@ export default function ReportListing() {
         <View className="rpl__content">
           <View className="rpl__hero">
             <View className="rpl__hero-ic">
-              <Image className="rpl__hero-ic-img" src={ICONS.checkAccent} mode="aspectFit" />
+              <Image className="rpl__hero-ic-img" src={ICONS.checkBrand} mode="aspectFit" />
             </View>
             <Text className="rpl__hero-t">{done.created ? '举报已提交' : '这条举报已受理'}</Text>
             <Text className="rpl__hero-s">
@@ -541,7 +541,7 @@ export default function ReportListing() {
         <View className="rpl__content">
           <View className="rpl__head">
             <View className="rpl__kicker">
-              <Image className="rpl__kicker-ic" src={ICONS.shieldLine} mode="aspectFit" />
+              <Image className="rpl__kicker-ic" src={ICONS.shieldBrand} mode="aspectFit" />
               <Text>Report · 举报商品</Text>
             </View>
             <Text className="rpl__title">举报这个商品</Text>
@@ -631,7 +631,7 @@ export default function ReportListing() {
           </View>
 
           <View className="rpl__note">
-            <Image className="rpl__note-ic" src={ICONS.shieldLine} mode="aspectFit" />
+            <Image className="rpl__note-ic" src={ICONS.shieldMuted} mode="aspectFit" />
             <Text className="rpl__note-tx">
               提交后平台会核查被举报内容；恶意举报可能影响你的账号信用。
             </Text>

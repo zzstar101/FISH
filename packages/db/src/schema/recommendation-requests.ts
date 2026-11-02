@@ -32,6 +32,12 @@ export const recommendationRequests = pgTable(
     anonymousSessionId: uuid('anonymous_session_id'),
     strategyVersion: varchar('strategy_version', { length: 64 }).notNull(),
     requestedAt: timestamptz('requested_at').notNull().defaultNow(),
+    /**
+     * 个性化 Feed 退回 newest 的原因（#524）。只有降级行（`rec-v1-none`）才有值，排序成功的请求
+     * 恒为 null；取值集合与 `@fish/contracts` 的 `RECOMMENDATION_DEGRADE_REASONS` 一致（本包不
+     * import contracts，由 CHECK 在写入侧钉住）。历史降级行与匿名 newest 透传行同为 null。
+     */
+    degradeReason: varchar('degrade_reason', { length: 32 }),
   },
   (table) => [
     // 本表没有 `created_at`：不可变上下文行，`requested_at` 就是它的创建时刻。
@@ -45,6 +51,10 @@ export const recommendationRequests = pgTable(
     check(
       'recommendation_requests_has_identity',
       sql`${table.userId} IS NOT NULL OR ${table.anonymousSessionId} IS NOT NULL`,
+    ),
+    check(
+      'recommendation_requests_degrade_reason_valid',
+      sql`${table.degradeReason} IS NULL OR (${table.strategyVersion} = 'rec-v1-none' AND ${table.degradeReason} IN ('no_candidates', 'recall_error', 'rank_error', 'snapshot_write_failed'))`,
     ),
   ],
 )

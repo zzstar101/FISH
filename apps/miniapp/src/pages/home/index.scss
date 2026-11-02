@@ -60,7 +60,7 @@
 }
 
 /*
- * 相机图标的独立热区（#324）：图标本体只有 30×30，直接点容易点空或点到整条胶囊。
+ * 相机图标的独立热区（#324）：图标本体只有 32×32，直接点容易点空或点到整条胶囊。
  * 热区 56×64 设计 px = 28×32 CSS px（750rpx 屏下 1 设计 px = 0.5 CSS px），
  * 而**图标与占位文案的位置一个像素都不动**。
  *
@@ -71,23 +71,23 @@
  * 低于 44pt 的显式标注写法同 `apps/miniapp/src/components/legal-doc/index.scss`、
  * `apps/miniapp/src/pages/feedback/index.scss`。
  *
- * 为什么用负 margin 而不是给图标加 padding：胶囊是 flex 行，热区多占的 26px 宽会把
- * 后面的「搜『键盘』…」整条占位文案往右推。负 margin 把这 26px 还回 flex 行，
+ * 为什么用负 margin 而不是给图标加 padding：胶囊是 flex 行，热区多占的 24px 宽会把
+ * 后面的「搜『键盘』…」整条占位文案往右推。负 margin 把这 24px 还回 flex 行，
  * 下一个 flex 项的起点与加这层包裹之前完全一致 —— 热区变大、视觉零位移。
- * 高度方向由胶囊的 `align-items: center` 居中，上下各 17px 对称，图标纵坐标也不动。
+ * 高度方向由胶囊的 `align-items: center` 居中，上下各 16px 对称，图标纵坐标也不动。
  */
 .home__search-cam-hit {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 17px 13px; /* 30+34=64 高，30+26=56 宽 */
-  margin: 0 -13px; /* 把多占的 26px 宽度还回去，布局不位移 */
+  padding: 16px 12px; /* 32+32=64 高，32+24=56 宽（图标随 #513 收敛到 32） */
+  margin: 0 -12px; /* 把多占的 24px 宽度还回去，布局不位移 */
 }
 
 .home__search-cam {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 
@@ -155,8 +155,8 @@
 }
 
 .home__cat-img {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
 }
 
 .home__cat-label {

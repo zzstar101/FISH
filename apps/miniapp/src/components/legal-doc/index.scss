@@ -30,11 +30,11 @@
  * ## 已知的图标色偏（记录，不修）
  *
  * 稿的图标是内联 SVG 描边、走 `currentColor`，所以能被 `color` 染色；仓内 `ICONS` 是固定色
- * PNG，**不能染色**（`assets/lib-icons.ts` 是图标唯一出口，换图要走生成器）。因此这两处
- * 与稿有可见色差，属已知取舍：
- * - 文档头 kicker 图标：稿是 `.doc-kicker{color:--brand-deep}`，`docInk` 实测 #3E4B66、
- *   `safeAccent` 实测 #4285FF —— 都比 `--brand-deep`(#396FD4) 偏灰或偏亮；
- * - 若将来要严格对齐，需要往图标生成器里加一个 brand-deep 变体，而不是在本文件里调色。
+ * PNG，**不能染色**（`assets/lib-icons.ts` 是图标唯一出口，换图要走 `tools/icons` 生成器）。
+ * 因此这两处与稿有可见色差，属已知取舍：
+ * - 文档头 kicker 图标：稿是 `.doc-kicker{color:--brand-deep}`，`docFg` 是 #17233D、
+ *   `shieldBrand` / `shieldCheckBrand` 是 #4285FF —— 都比 `--brand-deep`(#396FD4) 偏深或偏亮；
+ * - 若将来要严格对齐，需要在 `tools/icons/manifest.ts` 加一个 brand-deep 语义色，而不是在本文件里调色。
  *
  * ## 为什么这么多 `display: block`
  *
@@ -88,8 +88,8 @@
 }
 
 .ld__kicker-ic {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 .ld__title {
@@ -222,8 +222,8 @@
 
 .ld__brief-li-ic {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   margin-top: 7px;
 }
 
@@ -348,8 +348,8 @@
 
 .ld__toc-chev {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 /* ---------------------------------------------------------------- 章 */
@@ -471,8 +471,8 @@
 }
 
 .ld__list-hd-ic {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
 }
 
 .ld__item {
@@ -561,8 +561,8 @@
 }
 
 .ld__notlist-hd-ic {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
 }
 
 .ld__notlist-tx {
@@ -616,8 +616,8 @@
 }
 
 .ld__foot-link-ic {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 /* ---------------------------------------------------------------- 吸底同意条 */
@@ -662,8 +662,8 @@
 
 .ld__agree-note-ic {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 /*
@@ -694,8 +694,8 @@
 }
 
 .ld__agree-ok-ic {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
 }
 
 .ld__agree-no {

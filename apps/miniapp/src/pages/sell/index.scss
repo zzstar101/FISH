@@ -77,8 +77,8 @@
 }
 
 .sell__alert-ic {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
   margin-top: 2px;
 }
@@ -208,11 +208,10 @@
   background: rgba(23, 35, 61, 0.62);
 }
 
-/* 图标资源本身是深墨色，压在深色圆底上看不见：用滤镜转白（小程序不能给 png 染色） */
+/* 深色圆底上的删除钮：用烘焙好的反白图标 `ICONS.trashWhite`，不靠滤镜转色 */
 .sell__photo-del-img {
-  width: 22px;
-  height: 22px;
-  filter: brightness(0) invert(1);
+  width: 24px;
+  height: 24px;
 }
 
 .sell__photo--add {
@@ -224,8 +223,8 @@
 }
 
 .sell__photo-add-img {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
 }
 
 /* ---- 字段 ---- */
@@ -329,8 +328,8 @@
 }
 
 .sell__polish-ic {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 /* ---- 审核错误块 ---- */
@@ -347,8 +346,8 @@
 }
 
 .sell__err-ic {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   margin-top: 2px;
 }
@@ -548,8 +547,8 @@
 }
 
 .sell__badge-thumb-ph-ic {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
   opacity: 0.5;
 }
 
@@ -608,6 +607,13 @@
   color: var(--muted);
 }
 
+/* #514：未绑定手机号的提醒，另起一行 */
+.sell__hint-text--phone {
+  display: block;
+  margin-top: 8px;
+  color: var(--accent);
+}
+
 .sell__submit {
   @include btn-brand;
   margin: 8px 8px 0;
@@ -641,8 +647,8 @@
 }
 
 .sell__submit-icon {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
 }
 
 .sell__submit-text {
@@ -894,8 +900,8 @@
 }
 
 .sell__result-ic {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
 }
 
 .sell__result-title {
