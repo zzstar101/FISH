@@ -101,6 +101,21 @@ import {
   startMediaRetry,
   systemPillText,
 } from './view'
+import {
+  isVoiceCancelArmed,
+  voiceElapsedSeconds,
+  voiceRecordingClock,
+} from './voice-recording-view'
+
+/** 波形条数量（#535）：5 条，靠 animationDelay 错位形成流动感 */
+const REC_WAVE_BARS = [0, 1, 2, 3, 4] as const
+
+/** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
+function touchClientY(event: unknown): number {
+  const touch = (event as { touches?: Array<{ clientY?: number }> } | null)?.touches?.[0]
+  return typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN
+}
+
 import './index.scss'
 
 /**
@@ -303,6 +318,28 @@ export default function Conversation() {
   const pendingMediaRef = useRef<PendingMedia[]>([])
   /** 当前这次录音的句柄（`null` = 没在录） */
   const recordingRef = useRef<VoiceRecording | null>(null)
+  /* ---------------- 录音期反馈（#535）：计时 + 上滑取消 ---------------- */
+  /** 面板上的已录秒数（250ms 刷一次，值由起点算出，不累加） */
+  const [recordSeconds, setRecordSeconds] = useState(0)
+  /** 是否已滑到「松开取消」区（只驱动渲染，松手判定读 ref） */
+  const [cancelArmed, setCancelArmed] = useState(false)
+  const recordStartedAtRef = useRef(0)
+  const recordOriginYRef = useRef(Number.NaN)
+  const cancelArmedRef = useRef(false)
+  const recordTickerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  /** 收掉录音期的显示态（计时器 + 取消态）。所有「录音结束」路径都必须过这里 */
+  const resetRecordingUi = () => {
+    if (recordTickerRef.current !== null) {
+      clearInterval(recordTickerRef.current)
+      recordTickerRef.current = null
+    }
+    recordStartedAtRef.current = 0
+    recordOriginYRef.current = Number.NaN
+    cancelArmedRef.current = false
+    setCancelArmed(false)
+    setRecordSeconds(0)
+  }
   /** 语音播放器（切歌 / 离页 / 换账号都要先停掉） */
   const audioRef = useRef<ReturnType<typeof Taro.createInnerAudioContext> | null>(null)
   /** 正在下载的媒体 id：兜住「推送与 HTTP 同时把一条媒体放进流」造成的重复下载 */
@@ -361,6 +398,7 @@ export default function Conversation() {
      */
     recordingRef.current?.abort()
     recordingRef.current = null
+    resetRecordingUi()
     audioRef.current?.destroy()
     audioRef.current = null
     downloadingRef.current.clear()
@@ -629,6 +667,7 @@ export default function Conversation() {
      */
     recordingRef.current?.abort()
     recordingRef.current = null
+    resetRecordingUi()
     setRecording(false)
     /**
      * 语音播放也要停（#364 审查）：`navigateTo` 子页（商品详情 / 交易码页）只 hide
@@ -1337,6 +1376,7 @@ export default function Conversation() {
   const handleVoiceFailure = (error: unknown) => {
     recordingRef.current = null
     setRecording(false)
+    resetRecordingUi()
     const failure = voiceError(error)
     if (!(failure instanceof VoicePermissionError)) {
       void Taro.showToast({ title: failure.message, icon: 'none' })
@@ -1362,11 +1402,21 @@ export default function Conversation() {
   }
 
   /** 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态 */
-  const startVoice = () => {
+  const startVoice = (event?: unknown) => {
     if (!canSend || recordingRef.current) return
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
       recordingRef.current = startVoiceRecording(handleVoiceFailure)
+      recordStartedAtRef.current = Date.now()
+      recordOriginYRef.current = touchClientY(event)
+      cancelArmedRef.current = false
+      setCancelArmed(false)
+      setRecordSeconds(0)
+      if (recordTickerRef.current !== null) clearInterval(recordTickerRef.current)
+      // 250ms 一拍：秒数由起点算出（不累加，避免漂移），波形交给 CSS animation
+      recordTickerRef.current = setInterval(() => {
+        setRecordSeconds(voiceElapsedSeconds(recordStartedAtRef.current, Date.now()))
+      }, 250)
       setRecording(true)
     } catch (error) {
       recordingRef.current = null
@@ -1374,12 +1424,31 @@ export default function Conversation() {
     }
   }
 
+  /**
+   * 手指移动：上滑超过阈值进入「松开取消」（#535）。
+   * `onTouchMove` 高频触发，只在取消态翻转时 setState，避免每帧重渲染整页。
+   */
+  const moveVoice = (event: unknown) => {
+    if (!recordingRef.current) return
+    const originY = recordOriginYRef.current
+    const currentY = touchClientY(event)
+    if (!Number.isFinite(originY) || !Number.isFinite(currentY)) return
+    const armed = isVoiceCancelArmed(currentY - originY)
+    if (armed === cancelArmedRef.current) return
+    cancelArmedRef.current = armed
+    setCancelArmed(armed)
+  }
+
+  /** 松手：取消态已武装就丢弃这一段，否则发送（判定读 ref，不吃 setState 的延迟） */
+  const endVoice = () => finishVoice(cancelArmedRef.current)
+
   /** 松手：结束录音并发送（`cancelled` = 手指移开 / 取消，放弃这一段） */
   const finishVoice = (cancelled: boolean) => {
     const session = recordingRef.current
     if (!session) return
     recordingRef.current = null
     setRecording(false)
+    resetRecordingUi()
     if (cancelled) {
       session.abort()
       return
@@ -1616,6 +1685,7 @@ export default function Conversation() {
     if (!session) return
     recordingRef.current = null
     setRecording(false)
+    resetRecordingUi()
     session.abort()
   }
 
@@ -2338,6 +2408,24 @@ export default function Conversation() {
         空内容时「发送」置灰（稿子 .send.is-off）。
       */}
       <View className="conv__bar">
+        {/* 录音反馈面板（#535）：按住说话期间浮在输入栏上方。
+            计时 250ms 刷一次；波形是纯 CSS animation（不靠 setState 驱动）；
+            手指上滑越过阈值翻成「松开 取消」红色态，松手即丢弃这一段。 */}
+        {recording ? (
+          <View className={`conv__recpanel${cancelArmed ? ' is-cancel' : ''}`}>
+            <View className="conv__recwave">
+              {REC_WAVE_BARS.map((bar) => (
+                <View
+                  key={bar}
+                  className="conv__recbar"
+                  style={{ animationDelay: `${bar * 110}ms` }}
+                />
+              ))}
+            </View>
+            <Text className="conv__rectime num">{voiceRecordingClock(recordSeconds)}</Text>
+            <Text className="conv__rechint">{cancelArmed ? '松开 取消' : '上滑取消'}</Text>
+          </View>
+        ) : null}
         {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
         {replyTarget ? (
           <View className="conv__replybar">
@@ -2374,7 +2462,8 @@ export default function Conversation() {
             <View
               className={`conv__hold${recording ? ' is-on' : ''}`}
               onTouchStart={startVoice}
-              onTouchEnd={() => finishVoice(false)}
+              onTouchMove={moveVoice}
+              onTouchEnd={endVoice}
               onTouchCancel={() => finishVoice(true)}
             >
               <Text className="conv__hold-tx">{recording ? '松开 发送' : '按住 说话'}</Text>
