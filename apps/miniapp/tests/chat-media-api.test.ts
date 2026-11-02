@@ -290,7 +290,7 @@ describe('uploadChatVoice —— 容器不可识别时必须在 presign 前失�
     expect((error as VoiceContainerError).sizeBytes).toBe(ADTS.length)
     expect((error as VoiceContainerError).header).toContain('ff f1')
     expect((error as VoiceContainerError).message).toBe('当前录音格式暂不支持发送语音')
-    // 修复前错误发生在 putObject 之后，这两条会分别变成 1 / 1
+    // 锁住「容器判定必须在 presign 之前」：不是本 PR 新引入的回归，而是既有约束。
     expect(apiCalls).toHaveLength(0)
     expect(uploads).toHaveLength(0)
   })
