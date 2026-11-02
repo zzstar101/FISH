@@ -2,10 +2,11 @@ import type { SQL } from 'drizzle-orm'
 import { and, asc, desc, eq, gte, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm'
 import type { Db } from './client'
 import { topKSimilarListings } from './embedding-store'
+import { favorites } from './schema/favorites'
 import { type listingCategoryEnum, listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { recommendationEvents } from './schema/recommendation-events'
-import { users } from './schema/users'
+import { recommendationRequestItems } from './schema/recommendation-request-items'
 import { wishes } from './schema/wishes'
 import type { RecommendationEventType } from './user-interest-store'
 
@@ -88,23 +89,28 @@ export type RecallActionWeight = { eventType: RecommendationEventType; weight: n
 export type PopularRecallCandidate = { listingId: string; popularity: number }
 
 /**
- * Popular 通道：时间衰减后的**全局**行为热度。
+ * 热度（Popular 通道 + 排序的 `popularity` feature）：时间衰减后的**按身份去重**全局热度（#524）。
  *
  * ```
- * popularity(listing) = Σ_behaviors [ w(event) × 0.5^(age(occurred_at)/halflife_action) ]
+ * popularity(listing) = [ Σ_(identity, eventType) w(eventType) × 0.5^(age(该身份该类行为最近一次)/halflife_action)
+ *                       + Σ_favorites            w_fav       × 0.5^(age(收藏行 created_at)/halflife_action) ]
  *                       × 0.5^(age(listing.created_at)/halflife_listing)
  * ```
  *
- * 两层衰减都是必须的：只有行为衰减，历史爆款靠持续的老行为就能永久占前排（Issue #323 M2
- * 明说"不能把历史爆款永久固定前排"）；只有商品年龄衰减，一件刚发布就被大量浏览的商品会与
- * 一件三个月前被同样浏览的商品同分，丢掉"最近在热"的时间信号。
+ * v1 是"每条事件行都加一次"，同一个人对同一件商品刷一百次 DETAIL_VIEW 就是一百倍热度，
+ * 匿名会话又可以不带 `request_id` 直接上报 —— 热度可以被单个客户端任意刷高。v2 的三条口径：
  *
- * `now` 由调用方注入而不是用 SQL 的 `now()`：同一批召回里所有路的"现在"必须是同一个时刻，
- * 否则测试无法复现，跨路的 feature 也不可比。`greatest(..., 0)` 兜住客户端时钟略快导致
- * 未来时间的 `occurred_at`（R1 允许 10 分钟时钟偏差），否则负年龄会算出 > 1 的放大系数。
+ * 1. **按 (listing, 身份, 事件类型) 去重**：每个身份对一件商品每类行为最多贡献一次权重，
+ *    于是单身份对单商品的贡献有硬上限 Σw（即 per-identity cap），刷量只能靠堆身份。
+ *    身份 = `user_id`，匿名事件为 `anonymous_session_id`（两者分开命名空间，见 `identityKey`）。
+ * 2. **匿名事件必须归因到真实快照**：`request_id` 指向的服务端快照里确有这件商品
+ *    （`recommendation_request_items`）才计入。匿名会话 id 是客户端随手生成的，不加这一条，
+ *    "去重"只是让刷量者每次换一个 session id。登录用户的事件不受此限（身份本身是真值）。
+ * 3. **收藏取 `favorites` 表的当前状态**：唯一约束保证一人一件一行，取消收藏即不再计入；
+ *    事件流里的 FAVORITE 由调用方以 0 权重排除（`POPULARITY_ACTION_WEIGHTS`）。
  *
- * 聚合在 SQL 侧完成（而不是取回事件在 JS 里算）：14 天窗口的事件量远大于候选数，
- * 回库传输的是"每件商品一行"。
+ * 两层衰减、调用方注入 `now`、`greatest(..., 0)` 兜住未来时间的口径与 v1 相同。
+ * `listingIds` 给出时只算这批商品（排序层给全部候选补 feature），否则在全部可见商品里取 Top-K。
  */
 export async function findPopularRecallCandidates(
   db: Db,
@@ -115,48 +121,83 @@ export async function findPopularRecallCandidates(
     windowStart: Date
     now: Date
     weights: readonly RecallActionWeight[]
+    /** 一条当前有效收藏的权重（`POPULARITY_FAVORITE_WEIGHT`）；0 = 不计收藏。 */
+    favoriteWeight: number
     actionHalfLifeMs: number
     listingAgeHalfLifeMs: number
+    /** 只算这批商品；省略 = 全部可见商品。 */
+    listingIds?: readonly string[]
   },
 ): Promise<PopularRecallCandidate[]> {
-  if (input.limit <= 0 || input.weights.length === 0) return []
+  if (input.limit <= 0) return []
+  if (input.listingIds !== undefined && input.listingIds.length === 0) return []
+  const weights = input.weights.filter(({ weight }) => weight !== 0)
+  if (weights.length === 0 && input.favoriteWeight === 0) return []
 
-  const weightCase = sql.join(
-    input.weights.map(
-      ({ eventType, weight }) =>
-        sql`when ${recommendationEvents.eventType} = ${eventType} then ${weight}::double precision`,
-    ),
-    sql` `,
-  )
-
-  const ageMs = (column: SQL | ReturnType<typeof sql>) =>
+  const ageMs = (column: SQL) =>
     sql`greatest(extract(epoch from (${input.now}::timestamptz - ${column})) * 1000, 0)`
+  const actionDecay = (column: SQL) =>
+    sql`power(0.5, ${ageMs(column)} / ${input.actionHalfLifeMs}::double precision)`
 
-  const actionDecay = sql`power(0.5, ${ageMs(sql`${recommendationEvents.occurredAt}`)} / ${input.actionHalfLifeMs}::double precision)`
+  const signals: SQL[] = []
+
+  if (weights.length > 0) {
+    const weightCase = sql.join(
+      weights.map(
+        ({ eventType, weight }) =>
+          sql`when ${recommendationEvents.eventType} = ${eventType} then ${weight}::double precision`,
+      ),
+      sql` `,
+    )
+    const identityKey = sql`coalesce('u:' || ${recommendationEvents.userId}::text, 'a:' || ${recommendationEvents.anonymousSessionId}::text)`
+    const attributed = sql`(${recommendationEvents.userId} is not null or exists (
+      select 1 from ${recommendationRequestItems}
+      where ${recommendationRequestItems.requestId} = ${recommendationEvents.requestId}
+        and ${recommendationRequestItems.listingId} = ${recommendationEvents.listingId}
+    ))`
+    const scope =
+      input.listingIds === undefined
+        ? sql``
+        : sql` and ${inArray(recommendationEvents.listingId, [...input.listingIds])}`
+    signals.push(sql`
+      select ${recommendationEvents.listingId} as listing_id,
+             (case ${weightCase} else 0 end) * ${actionDecay(sql`max(${recommendationEvents.occurredAt})`)} as score
+      from ${recommendationEvents}
+      where ${recommendationEvents.occurredAt} >= ${input.windowStart}
+        and ${inArray(
+          recommendationEvents.eventType,
+          weights.map(({ eventType }) => eventType),
+        )}
+        and ${attributed}${scope}
+      group by ${recommendationEvents.listingId}, ${recommendationEvents.eventType}, ${identityKey}`)
+  }
+
+  if (input.favoriteWeight !== 0) {
+    const scope =
+      input.listingIds === undefined
+        ? sql``
+        : sql` and ${inArray(favorites.listingId, [...input.listingIds])}`
+    signals.push(sql`
+      select ${favorites.listingId} as listing_id,
+             ${input.favoriteWeight}::double precision * ${actionDecay(sql`${favorites.createdAt}`)} as score
+      from ${favorites}
+      where ${favorites.createdAt} >= ${input.windowStart}${scope}`)
+  }
+
+  const signalRows = sql`(${sql.join(signals, sql` union all `)}) as popularity_signals`
   const listingDecay = sql`power(0.5, ${ageMs(sql`${listings.createdAt}`)} / ${input.listingAgeHalfLifeMs}::double precision)`
-
-  const popularity = sql`sum(case ${weightCase} else 0 end * ${actionDecay}) * ${listingDecay}`
+  const popularity = sql<number>`sum(popularity_signals.score) * ${listingDecay}`
 
   const rows = await db
     .select({ listingId: listings.id, popularity })
-    .from(recommendationEvents)
-    .innerJoin(listings, eq(listings.id, recommendationEvents.listingId))
-    .where(
-      and(
-        gte(recommendationEvents.occurredAt, input.windowStart),
-        inArray(
-          recommendationEvents.eventType,
-          input.weights.map(({ eventType }) => eventType),
-        ),
-        ...visibleListingConditions(input.viewerUserId),
-      ),
-    )
+    .from(signalRows)
+    .innerJoin(listings, sql`${listings.id} = popularity_signals.listing_id`)
+    .where(and(...visibleListingConditions(input.viewerUserId)))
     .groupBy(listings.id, listings.createdAt)
     .orderBy(desc(popularity), asc(listings.id))
     .limit(input.limit)
 
-  // PG 的 `sum()` 是 numeric，驱动回读为字符串：这里显式转数字，别让 "12" 这类字符串
-  // 一路漂到排序器里（字符串比较会把 "9" 排到 "10" 前面）。
+  // PG 的 `sum()` 可能回读为字符串：显式转数字，别让 "12" 这类字符串一路漂到排序器里。
   return rows.map((row) => ({ listingId: row.listingId, popularity: Number(row.popularity) }))
 }
 
@@ -206,9 +247,15 @@ export type WishRecallCandidate = { listingId: string; wishScore: number }
  */
 export async function findWishRecallCandidates(
   db: Db,
-  input: { userId: string; limit: number },
+  input: {
+    userId: string
+    limit: number
+    /** 只取这批商品（排序层补 feature）；省略 = 我的全部匹配。 */
+    listingIds?: readonly string[]
+  },
 ): Promise<WishRecallCandidate[]> {
   if (input.limit <= 0) return []
+  if (input.listingIds !== undefined && input.listingIds.length === 0) return []
 
   const wishScore = sql<number>`max(${matches.score})`
 
@@ -222,6 +269,9 @@ export async function findWishRecallCandidates(
         eq(wishes.userId, input.userId),
         eq(wishes.status, 'ACTIVE'),
         ...visibleListingConditions(input.userId),
+        ...(input.listingIds === undefined
+          ? []
+          : [inArray(matches.listingId, [...input.listingIds])]),
       ),
     )
     .groupBy(matches.listingId)
@@ -272,101 +322,69 @@ export async function findCategoryRecallCandidates(
 
 /* ---------------------------------------------------------------- explore */
 
-/**
- * 探索子来源。**内部标记，不是契约枚举值**（Issue #323 M2 只要求"给小比例探索流量"，
- * 没有要求把探索动机写进 `source`）：新增枚举值要动契约 + 迁移，而子来源是 R3/R4 的调参维度，
- * 变动频率远高于对外归因标签。对外一律记 `explore`。
- */
-export type ExploreSubSource = 'new_listing' | 'new_seller' | 'cold_category'
-
-export type ExploreRecallCandidate = { listingId: string; subSource: ExploreSubSource }
+export type ExploreRecallCandidate = { listingId: string; exposedIdentities: number }
 
 /**
- * Exploration 通道：新商品 / 新卖家 / 用户没接触过的类目。
+ * Exploration 通道：**曝光不足**的可见商品（#524）。
  *
- * 三个子块各自的窗口与配额由调用方传入（`RECALL_EXPLORE_MIX`）。去重顺序即优先级
- * （新商品 > 新卖家 > 冷门类目），**去重后不足的名额让给新商品**（Issue #323 M2 的
- * "不足让位"）：一件商品同时是新商品和新卖家的商品只应出现一次，但"探索位没填满"
- * 不该白白空着——它正是新商品最需要的曝光。
+ * 曝光不足 = 窗口内（`windowStart` 起）看到过它的**去重身份数** < `maxExposedIdentities`；
+ * 取数按曝光身份数升序、发布时间降序（越少人见过、越新越先），上限 `limit`。
+ *
+ * v1 按"新商品 / 新卖家 / 冷门类目"拼，三块与 fresh / category 高度重叠，又只有首个来源是
+ * explore 的候选才算探索位，结果探索配额几乎从不兑现。v2 直接用"有没有被看见"定义探索池：
+ * 没有曝光的商品就没有行为，永远进不了 popular / semantic，这正是探索要破的循环。
+ *
+ * 身份口径与热度一致（`u:` / `a:` 两个命名空间）。曝光事件已有"每请求每商品一次"的唯一索引，
+ * 去重身份再把"一个人刷十次 Feed"压成一次。
  */
-export async function findExploreRecallCandidates(
+export async function findUnderexposedRecallCandidates(
   db: Db,
   input: {
     limit: number
-    newListingLimit: number
-    newSellerLimit: number
-    coldCategoryLimit: number
-    newListingWindowStart: Date
-    newSellerWindowStart: Date
-    /** 会话内未出现过的类目（由 api 侧算，db 不知道会话）。 */
-    coldCategories: readonly ListingCategory[]
     viewerUserId: string | null
+    /** 曝光统计窗口起点（`exploreExposureWindowStart(now)`）。 */
+    windowStart: Date
+    /** 去重曝光身份数严格小于它才算"曝光不足"。 */
+    maxExposedIdentities: number
   },
 ): Promise<ExploreRecallCandidate[]> {
-  if (input.limit <= 0) return []
+  if (input.limit <= 0 || input.maxExposedIdentities <= 0) return []
 
-  const visible = visibleListingConditions(input.viewerUserId)
+  // 从可见商品出发，逐个按 `listing_id` 索引数窗口内的去重曝光身份（`limit` 只截断计数结果，
+  // 判断"是否 < 阈值"不需要精确总数）。只碰可见商品自己的曝光行：已下架 / 已售商品的曝光不再
+  // 参与，也没有全窗口 group by；规模化后若仍成瓶颈，改为 worker 定时预计算曝光数。
+  // `LATERAL` 让每个可见商品只算一次（标量子查询塞进 select / where / order by 会被执行三遍）。
+  // 子查询里用显式别名 `ev` 与全限定的 `"listings"."id"`：drizzle 在单表 select 里渲染的列
+  // 不带表名，关联条件会被就近解析到事件表自己身上。
+  const exposure = db
+    .select({ identities: sql<number>`count(*)::int`.as('identities') })
+    .from(sql`(
+      select distinct coalesce('u:' || ev.user_id::text, 'a:' || ev.anonymous_session_id::text)
+      from ${recommendationEvents} as ev
+      where ev.listing_id = "listings"."id"
+        and ev.event_type = 'IMPRESSION'
+        and ev.occurred_at >= ${input.windowStart}
+      limit ${input.maxExposedIdentities}
+    ) as exposed_identities`)
+    .as('exposure')
 
-  // 新商品多取一些（上限 = 整个探索预算）：去重后若有空位，用它来补。
-  const [newListings, newSellers, coldCategories] = await Promise.all([
-    input.newListingLimit <= 0
-      ? Promise.resolve([])
-      : db
-          .select({ listingId: listings.id })
-          .from(listings)
-          .where(and(gte(listings.createdAt, input.newListingWindowStart), ...visible))
-          .orderBy(desc(listings.createdAt), desc(listings.id))
-          .limit(input.limit),
-    input.newSellerLimit <= 0
-      ? Promise.resolve([])
-      : db
-          .select({ listingId: listings.id })
-          .from(listings)
-          .innerJoin(users, eq(users.id, listings.sellerId))
-          .where(and(gte(users.createdAt, input.newSellerWindowStart), ...visible))
-          .orderBy(desc(listings.createdAt), desc(listings.id))
-          .limit(input.newSellerLimit),
-    input.coldCategoryLimit <= 0 || input.coldCategories.length === 0
-      ? Promise.resolve([])
-      : db
-          .select({ listingId: listings.id })
-          .from(listings)
-          .where(and(inArray(listings.category, [...input.coldCategories]), ...visible))
-          .orderBy(desc(listings.createdAt), desc(listings.id))
-          .limit(input.coldCategoryLimit),
-  ])
+  const rows = await db
+    .select({ listingId: listings.id, exposedIdentities: exposure.identities })
+    .from(listings)
+    .innerJoinLateral(exposure, sql`true`)
+    .where(
+      and(
+        ...visibleListingConditions(input.viewerUserId),
+        sql`${exposure.identities} < ${input.maxExposedIdentities}`,
+      ),
+    )
+    .orderBy(asc(exposure.identities), desc(listings.createdAt), desc(listings.id))
+    .limit(input.limit)
 
-  const taken = new Set<string>()
-  const picked: ExploreRecallCandidate[] = []
-
-  const take = (
-    rows: readonly { listingId: string }[],
-    subSource: ExploreSubSource,
-    quota: number,
-  ) => {
-    let used = 0
-    for (const row of rows) {
-      if (used >= quota) return
-      if (taken.has(row.listingId)) continue
-      taken.add(row.listingId)
-      picked.push({ listingId: row.listingId, subSource })
-      used += 1
-    }
-  }
-
-  take(newListings, 'new_listing', input.newListingLimit)
-  take(newSellers, 'new_seller', input.newSellerLimit)
-  take(coldCategories, 'cold_category', input.coldCategoryLimit)
-
-  // 空位补新商品：`newListings` 上一步只用了前 `newListingLimit` 条，后面还有。
-  for (const row of newListings) {
-    if (picked.length >= input.limit) break
-    if (taken.has(row.listingId)) continue
-    taken.add(row.listingId)
-    picked.push({ listingId: row.listingId, subSource: 'new_listing' })
-  }
-
-  return picked.slice(0, input.limit)
+  return rows.map((row) => ({
+    listingId: row.listingId,
+    exposedIdentities: Number(row.exposedIdentities),
+  }))
 }
 
 /* --------------------------------------------------------------- 合并前后 */
@@ -564,7 +582,7 @@ export type ExposureHistory = {
  *
  * 不加时间窗：与 `countListingImpressions` 同理，"反复曝光"没有自然下界，事件本身有 180 天保留
  * 期。`engagementEventTypes` 由调用方给出（本包**不依赖 contracts**，与
- * `findNegativeFeedbackEvents` 的 `eventTypes` 同法），**不得包含 `IMPRESSION`** —— 互动次数用
+ * `aggregateNegativeFeedback` 的 `weights` 同法），**不得包含 `IMPRESSION`** —— 互动次数用
  * `event_type <> 'IMPRESSION'` 统计。
  */
 export async function findExposureHistory(
@@ -616,43 +634,51 @@ export async function findExposureHistory(
 
 /* ------------------------------------------------------- negative feedback */
 
-export type NegativeFeedbackEvent = {
-  listingId: string
-  category: ListingCategory
-  sellerId: string
-  eventType: RecommendationEventType
-  occurredAt: Date
+export type NegativeFeedbackAggregate = {
+  /** 类目 → 衰减后的负反馈权重和（全部类目，类目枚举很小）。 */
+  categoryWeights: { category: ListingCategory; weight: number }[]
+  /** 卖家 → 衰减后的负反馈权重和（只含 `candidateSellerIds` 里的卖家）。 */
+  sellerWeights: { sellerId: string; weight: number }[]
+  /** 被硬排除（`hiddenEventTypes`）的商品（只含 `candidateListingIds` 里的商品）。 */
+  hiddenListingIds: string[]
 }
 
 /**
- * 某身份在时间窗内的**负反馈原始事件**（#323 R4 的 `negativeFeedbackPenalty` 输入）。
+ * 某身份在时间窗内的**负反馈聚合**（#323 R4 的 `negativeFeedbackPenalty` 输入；#524 改为 SQL 聚合）。
  *
- * 返回原始行而不是聚合值：负反馈有**两个作用面**——listing 级硬排除（"这件我不要了"）与
- * 类目/卖家级软惩罚（"这类/这家我不想看了"）——同一条事件同时贡献两者。聚合在这里做掉任一个，
- * 调用方就得再查一次才能拿到另一个。
+ * v1 把窗口内的原始事件全部取回 JS 再聚合，查询没有 LIMIT：一个隐藏/划过了几千件商品的老用户，
+ * 每次刷 Feed 都要回传几千行。v2 把聚合下推到 SQL，返回行数有固定上界：
  *
- * 与 `countListingImpressions` 的三点一致与一点不同：
+ * - 类目惩罚按类目分组（≤ 类目枚举数）；
+ * - 卖家惩罚只算本次候选里出现的卖家（≤ 候选数）；
+ * - 硬排除只看本次候选里的商品（≤ 候选数）。
  *
- * - **一致**：身份谓词（匿名分支必须 `user_id IS NULL`）、不加商品白名单（负反馈是"这个人讨厌
- *   什么"，不可能由候选集反推）、放在本文件（与召回/排序喂候选级统计的查询同族）。
- * - **不同**：**带时间窗**（`since`）。曝光次数关心"累计发生过多少次"，负反馈关心"现在还讨厌吗"，
- *   所以用 R2 长期画像的口径（180 天窗 + 14 天半衰期）。衰减**不在本层做**：它是纯计算，
- *   放契约层才能离线 fixture 回放（`RANK_NEGATIVE_FEEDBACK_WEIGHTS` + `INTEREST_HALF_LIFE_MS`）。
- *
- * `innerJoin listings` 取类目与卖家：`recommendation_events.listing_id` 是 `ON DELETE CASCADE`，
- * 商品被删时事件本身也没了，所以不会出现孤儿事件、不会丢行。
- * 索引 `recommendation_events_{user_id,session_id}_occurred_at_idx` 已覆盖该谓词，不另加索引。
+ * 衰减公式与 v1 相同（`weight × 0.5^(max(age,0)/halfLife)`，权重表与半衰期由调用方传入），
+ * 饱和映射仍在 api 侧做。身份谓词与 `countListingImpressions` 一致（匿名分支 `user_id IS NULL`）；
+ * 索引 `recommendation_events_{user_id,session_id}_occurred_at_idx` 覆盖该谓词。
  */
-export async function findNegativeFeedbackEvents(
+export async function aggregateNegativeFeedback(
   db: Db,
   input: {
     identity: { kind: 'user'; id: string } | { kind: 'anonymous'; id: string }
     since: Date
-    /** 触发负反馈的事件类型（权重与硬排除口径由调用方决定）。 */
-    eventTypes: readonly RecommendationEventType[]
+    now: Date
+    /** 负反馈事件类型 → 权重（取绝对值后的正数）。 */
+    weights: readonly RecallActionWeight[]
+    halfLifeMs: number
+    /** 触发 listing 级硬排除的事件类型。 */
+    hiddenEventTypes: readonly RecommendationEventType[]
+    candidateListingIds: readonly string[]
+    candidateSellerIds: readonly string[]
   },
-): Promise<NegativeFeedbackEvent[]> {
-  if (input.eventTypes.length === 0) return []
+): Promise<NegativeFeedbackAggregate> {
+  const empty: NegativeFeedbackAggregate = {
+    categoryWeights: [],
+    sellerWeights: [],
+    hiddenListingIds: [],
+  }
+  const weights = input.weights.filter(({ weight }) => weight !== 0)
+  if (weights.length === 0 && input.hiddenEventTypes.length === 0) return empty
 
   const identityFilter =
     input.identity.kind === 'user'
@@ -661,30 +687,68 @@ export async function findNegativeFeedbackEvents(
           eq(recommendationEvents.anonymousSessionId, input.identity.id),
           isNull(recommendationEvents.userId),
         )
+  const inWindow = gte(recommendationEvents.occurredAt, input.since)
 
-  const rows = await db
-    .select({
-      listingId: recommendationEvents.listingId,
-      eventType: recommendationEvents.eventType,
-      occurredAt: recommendationEvents.occurredAt,
-      category: listings.category,
-      sellerId: listings.sellerId,
-    })
-    .from(recommendationEvents)
-    .innerJoin(listings, eq(listings.id, recommendationEvents.listingId))
-    .where(
-      and(
-        identityFilter,
-        gte(recommendationEvents.occurredAt, input.since),
-        inArray(recommendationEvents.eventType, [...input.eventTypes]),
-      ),
-    )
+  const weightCase = sql.join(
+    weights.map(
+      ({ eventType, weight }) =>
+        sql`when ${recommendationEvents.eventType} = ${eventType} then ${weight}::double precision`,
+    ),
+    sql` `,
+  )
+  const decayedWeight = sql<number>`sum((case ${weightCase} else 0 end) * power(0.5, greatest(extract(epoch from (${input.now}::timestamptz - ${recommendationEvents.occurredAt})) * 1000, 0) / ${input.halfLifeMs}::double precision))`
+  const weightTypes = weights.map(({ eventType }) => eventType)
 
-  return rows.map((row) => ({
-    listingId: row.listingId,
-    category: row.category,
-    sellerId: row.sellerId,
-    eventType: row.eventType,
-    occurredAt: row.occurredAt,
-  }))
+  const [categoryRows, sellerRows, hiddenRows] = await Promise.all([
+    weightTypes.length === 0
+      ? Promise.resolve([])
+      : db
+          .select({ category: listings.category, weight: decayedWeight })
+          .from(recommendationEvents)
+          .innerJoin(listings, eq(listings.id, recommendationEvents.listingId))
+          .where(
+            and(identityFilter, inWindow, inArray(recommendationEvents.eventType, weightTypes)),
+          )
+          .groupBy(listings.category),
+    weightTypes.length === 0 || input.candidateSellerIds.length === 0
+      ? Promise.resolve([])
+      : db
+          .select({ sellerId: listings.sellerId, weight: decayedWeight })
+          .from(recommendationEvents)
+          .innerJoin(listings, eq(listings.id, recommendationEvents.listingId))
+          .where(
+            and(
+              identityFilter,
+              inWindow,
+              inArray(recommendationEvents.eventType, weightTypes),
+              inArray(listings.sellerId, [...new Set(input.candidateSellerIds)]),
+            ),
+          )
+          .groupBy(listings.sellerId),
+    input.hiddenEventTypes.length === 0 || input.candidateListingIds.length === 0
+      ? Promise.resolve([])
+      : db
+          .selectDistinct({ listingId: recommendationEvents.listingId })
+          .from(recommendationEvents)
+          .where(
+            and(
+              identityFilter,
+              inWindow,
+              inArray(recommendationEvents.eventType, [...input.hiddenEventTypes]),
+              inArray(recommendationEvents.listingId, [...input.candidateListingIds]),
+            ),
+          ),
+  ])
+
+  return {
+    categoryWeights: categoryRows.map((row) => ({
+      category: row.category,
+      weight: Number(row.weight),
+    })),
+    sellerWeights: sellerRows.map((row) => ({
+      sellerId: row.sellerId,
+      weight: Number(row.weight),
+    })),
+    hiddenListingIds: hiddenRows.map((row) => row.listingId),
+  }
 }

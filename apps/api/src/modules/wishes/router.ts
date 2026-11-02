@@ -6,7 +6,7 @@ import {
 } from '@fish/contracts/wishes/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import type { Context } from 'hono'
+import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
 import { createNoopWishMatchQueue, type WishMatchQueue } from './match-queue'
@@ -31,6 +31,11 @@ export type WishesRouterOptions = {
    * 成交愿望，是一处治理绕行；对抗审查 F1 修正，作用域由 wishes/router.test.ts 固定。
    */
   guard: RestrictionGuard
+  /**
+   * #514「必须已绑定手机号」门禁（`auth/require-phone.ts`，读 `requireAuth` 放进 context 的
+   * `me`）：只挂 `POST /`（发布求购），放在 `guard.publish` 之前；编辑 / 关闭 / 成交不挂。
+   */
+  requirePhone: MiddlewareHandler
 }
 
 function jsonError(message: string, code = 'BAD_REQUEST') {
@@ -110,7 +115,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.post('/', options.guard.publish, async (c) => {
+  app.post('/', options.requirePhone, options.guard.publish, async (c) => {
     try {
       const input = await parseJson(c, (body) => wishCreateInputSchema.parse(body))
       return c.json(await service.createWish(c.get('userId'), input), 201)

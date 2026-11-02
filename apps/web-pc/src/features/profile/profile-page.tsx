@@ -1,6 +1,7 @@
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
+import { Popover, PopoverContent, PopoverTrigger } from '@fish/ui/popover'
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
@@ -23,6 +24,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
+import { PhoneRequiredNotice } from '../auth/phone-required-notice'
 import { useLogout } from '../auth/queries'
 import { useFavoritesTotal } from '../favorites/queries'
 import { useViewHistoryTotal } from '../view-history/queries'
@@ -112,9 +114,24 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
                 {signatureFirstLine(user.signature)}
               </p>
             ) : null}
-            <p className="mt-2 text-ink-3 text-sm">
-              {user.phoneBound ? `手机号 ${user.maskedPhone ?? '已绑定'}` : '未绑定手机号'}
-            </p>
+            {user.phoneBound ? (
+              <p className="mt-2 text-ink-3 text-sm">{`手机号 ${user.maskedPhone ?? '已绑定'}`}</p>
+            ) : (
+              // PC 端没有绑定能力（#514），只能给出去小程序绑定的确切路径。
+              <p className="mt-2 flex items-center gap-2 text-ink-3 text-sm">
+                未绑定手机号
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button className="h-auto p-0 text-sm" type="button" variant="link">
+                      如何绑定
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-80 p-0">
+                    <PhoneRequiredNotice className="border-0" />
+                  </PopoverContent>
+                </Popover>
+              </p>
+            )}
           </div>
           <Button onClick={() => setEditOpen(true)} variant="outline">
             <Pencil className="size-4" />

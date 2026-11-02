@@ -109,6 +109,12 @@ describe('publish form model', () => {
     expect(view.message).toBe('标题中有违规内容')
   })
 
+  test('maps PHONE_REQUIRED to the phone binding notice instead of a plain error (#514)', () => {
+    const view = listingErrorView(new ApiError('PHONE_REQUIRED', 403, '发布前请先绑定手机号'))
+    expect(view).toEqual({ fieldErrors: {}, message: null, phoneRequired: true })
+    expect(listingErrorView(new ApiError('FORBIDDEN', 403, '无权操作')).phoneRequired).toBe(false)
+  })
+
   test('keeps AI failure semantics explicit', () => {
     expect(polishFailureView('AI_POLISH_QUOTA', 30)).toMatchObject({
       message: '操作太频繁，30 秒后可重试',

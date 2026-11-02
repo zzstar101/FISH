@@ -1,6 +1,7 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useMemo, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop from '@/components/back-top'
 import LoadError from '@/components/load-error'
@@ -384,7 +385,7 @@ export default function OrderList({
         {!loading && !failed && shown.length === 0 ? (
           <View className={`orders__empty${emptyRole ? '' : ' orders__empty--inline'}`}>
             <View className="orders__empty-disc">
-              <Image className="orders__empty-ic" src={ICONS.order} mode="aspectFit" />
+              <Image className="orders__empty-ic" src={ICONS.orderFg} mode="aspectFit" />
             </View>
             <Text className="orders__empty-title">
               {emptyRole
@@ -425,9 +426,13 @@ export default function OrderList({
                   <View className="orders__top">
                     <View className="orders__av">
                       <Text className="orders__av-tx">{item.counterpart.nickname.slice(0, 1)}</Text>
-                      {item.counterpart.verified ? <View className="orders__av-badge" /> : null}
                     </View>
                     <Text className="orders__oname">{item.counterpart.nickname}</Text>
+                    {/* 已认证徽章（#534）：与「我的」页同一张设计稿徽章。
+                        原来挂在头像右下角的小圆勾放不下这张横向徽章，改为昵称右侧内联。 */}
+                    {item.counterpart.verified ? (
+                      <Image className="orders__vbadge" src={BADGE.verified} mode="aspectFit" />
+                    ) : null}
                     {/*
                       演示来源角标（#304）：这张卡的 id 是 `t-*` 假 id，不会被后端承认。
                       角标是**唯一**的全局提示 —— 点上面四个入口也会再说明一次，但用户
@@ -466,7 +471,7 @@ export default function OrderList({
                           className="orders__btn orders__btn--ghost"
                           onClick={() => openConversation(item)}
                         >
-                          <Image className="orders__btn-ic" src={ICONS.chatInk} mode="aspectFit" />
+                          <Image className="orders__btn-ic" src={ICONS.chatFg} mode="aspectFit" />
                           <Text>查看会话</Text>
                         </View>
                         {/* 取消是双方的动作，放次级危险位：真发 DELETE 语义的写端点前有二级确认 */}
@@ -483,7 +488,7 @@ export default function OrderList({
                           className="orders__btn orders__btn--pri"
                           onClick={() => openMeetup(item)}
                         >
-                          <Image className="orders__btn-ic" src={ICONS.qr} mode="aspectFit" />
+                          <Image className="orders__btn-ic" src={ICONS.qrFg} mode="aspectFit" />
                           <Text>{item.role === 'buyer' ? '打开二维码' : '打开交易码'}</Text>
                         </View>
                       </>
@@ -508,7 +513,7 @@ export default function OrderList({
                           >
                             <Image
                               className="orders__btn-ic"
-                              src={ICONS.starAccent}
+                              src={ICONS.starBrand}
                               mode="aspectFit"
                             />
                             <Text>{reviewedIds.includes(item.id) ? '已评价' : '评价'}</Text>
@@ -518,7 +523,7 @@ export default function OrderList({
                           className="orders__btn orders__btn--sec"
                           onClick={() => openConversation(item)}
                         >
-                          <Image className="orders__btn-ic" src={ICONS.chatInk} mode="aspectFit" />
+                          <Image className="orders__btn-ic" src={ICONS.chatFg} mode="aspectFit" />
                           <Text>查看会话</Text>
                         </View>
                       </>

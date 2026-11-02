@@ -92,6 +92,9 @@
   right: 0;
   z-index: 5;
   transform: translateY(-50%);
+  /* 命中区必须穿透（#533）：本层与返回钮同 z-index 且后渲染，全宽盒子会盖住返回钮的
+     点击区。与 `components/nav-bar`「只有按钮是实体，其余区域 pointer-events: none」同一约定。 */
+  pointer-events: none;
   text-align: center;
   font-size: 40px;
   font-weight: 600;
@@ -270,8 +273,8 @@
 }
 
 .vres__retake-ic {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 
@@ -376,8 +379,8 @@
 }
 
 .vres__fsort-img {
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
 }
 
 /* ---- 结果区：面板内滚动 ---- */
@@ -461,8 +464,8 @@
 }
 
 .vres__err-ic {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
 }
 
 .vres__err-title {

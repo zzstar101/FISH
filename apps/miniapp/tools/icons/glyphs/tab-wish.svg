@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <title>tab-wish</title>
+  <defs><clipPath id="body"><path d="M14.6 4 16.3 7.25 19.93 7.87 17.36 10.5 17.89 14.13 14.6 12.5 11.31 14.13 11.84 10.5 9.27 7.87 12.9 7.25Z"/></clipPath></defs>
+  <g clip-path="url(#body)" fill="accentColor" stroke="none"><g transform="translate(1.5 1.5)"><path d="M14.6 4 16.3 7.25 19.93 7.87 17.36 10.5 17.89 14.13 14.6 12.5 11.31 14.13 11.84 10.5 9.27 7.87 12.9 7.25Z"/></g></g>
+  <path d="M14.6 4 16.3 7.25 19.93 7.87 17.36 10.5 17.89 14.13 14.6 12.5 11.31 14.13 11.84 10.5 9.27 7.87 12.9 7.25Z"/>
+  <path d="M4 20l4.5-4.5M4.5 15.5l2-2M8.5 19.5l2-2M6 4.5v3M4.5 6h3"/>
+</svg>

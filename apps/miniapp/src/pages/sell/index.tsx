@@ -10,10 +10,13 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
+import PhoneBindSheet from '@/components/phone-bind-sheet'
 import TopBar from '@/components/top-bar'
 import { fetchPolishCandidates } from '@/features/ai/api'
 import { useAuthGuard } from '@/features/auth/guard'
+import { isPhoneRequiredError, needsPhoneBeforePublish } from '@/features/auth/phone'
 import { useAuth } from '@/features/auth/store'
+import { usePhoneBind } from '@/features/auth/use-phone-bind'
 import { createListing, fetchListingDetail, updateListing } from '@/features/listing/api'
 import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
 import { requestSubscribe } from '@/features/subscribe/request'
@@ -188,6 +191,8 @@ export default function Sell() {
   const [submitting, setSubmitting] = useState(false)
   /** 审核中的商品 id：非 null 时整页换成结果视图 */
   const [pendingReviewId, setPendingReviewId] = useState<string | null>(null)
+  /** 发布前绑定手机号的 sheet（#514）；声明在换号清场之前，换号时一并关掉。 */
+  const [phoneSheetOpen, setPhoneSheetOpen] = useState(false)
 
   /**
    * 换账号（含退出到匿名）时**在渲染期**同步清场（#170 判据 C）。
@@ -201,6 +206,7 @@ export default function Sell() {
    */
   if (ownerChanged(prevUserId, userId)) {
     setPrevUserId(userId)
+    setPhoneSheetOpen(false)
     epochRef.current += 1
     // 冷启动把身份从 unknown 解析出来不算换号：那之前记下的编辑目标要留给新身份交接
     if (shouldDropPendingTarget(prevUserId)) pendingEditRef.current = null
@@ -251,6 +257,15 @@ export default function Sell() {
   const toast = (text: string) => {
     void Taro.showToast({ title: text, icon: 'none' })
   }
+
+  /**
+   * 发布前绑定手机号（#514）。绑好只关 sheet + 提示再点一次，**不**自动重发：表单 / 图片原样
+   * 保留（`applyPhoneBinding` 不换 `user.id`，上面的换号清场不会触发），由用户自己确认发布。
+   */
+  const phoneBind = usePhoneBind({
+    onBound: () => setPhoneSheetOpen(false),
+    boundToast: '手机号已绑定，请再次点击发布',
+  })
 
   /** 0 元送时价格与议价都锁定（稿子第 04 帧的 is-locked 行） */
   const toggleFree = () => {
@@ -552,6 +567,11 @@ export default function Sell() {
 
   /** 服务端拒绝 → 字段级错误落位；认不出的字段不猜，退到整块提示条 */
   const handleSubmitError = (error: unknown) => {
+    // 端上 `phoneBound` 可能过期（别的设备上解绑 / 会话里的 me 是旧的）：以服务端 403 为准
+    if (isPhoneRequiredError(error)) {
+      setPhoneSheetOpen(true)
+      return
+    }
     if (isApiError(error) && error.details && error.details.length > 0) {
       const errors = sellFieldErrorsFromDetails(error.details)
       setFieldErrors(errors)
@@ -600,6 +620,11 @@ export default function Sell() {
     }
     // 类型收窄：validateSellForm 已经挡下这两个分支
     if (priceCents === null || category === null) return
+    // #514：新建前没绑手机号就先弹绑定 sheet，不发 create（编辑已有商品服务端不挡，这里也不挡）
+    if (needsPhoneBeforePublish({ phoneBound: user?.phoneBound, editing })) {
+      setPhoneSheetOpen(true)
+      return
+    }
 
     const ownerId = ownerRef.current
     if (!ownerId) return
@@ -866,7 +891,7 @@ export default function Sell() {
         <View className="sell__body">
           <View className="sell__result">
             <View className="sell__result-badge">
-              <Image className="sell__result-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="sell__result-ic" src={ICONS.warnFg} mode="aspectFit" />
             </View>
             <Text className="sell__result-title">已提交，正在审核</Text>
             <Text className="sell__result-text">
@@ -944,7 +969,7 @@ export default function Sell() {
         {/* 服务端拒绝的整块提示：字段细节贴在各输入框下方，这里只说有几处要改 */}
         {blockMessage ? (
           <View className="sell__alert">
-            <Image className="sell__alert-ic" src={ICONS.warnInk} mode="aspectFit" />
+            <Image className="sell__alert-ic" src={ICONS.warnFg} mode="aspectFit" />
             <View className="sell__alert-main">
               <Text className="sell__alert-title">{blockMessage}</Text>
               <Text className="sell__alert-desc">
@@ -987,7 +1012,11 @@ export default function Sell() {
                       setExistingPhotos((prev) => prev.filter((item) => item.url !== photo.url))
                     }
                   >
-                    <Image className="sell__photo-del-img" src={ICONS.delete} mode="aspectFit" />
+                    <Image
+                      className="sell__photo-del-img"
+                      src={ICONS.trashWhite}
+                      mode="aspectFit"
+                    />
                   </View>
                 </View>
               ))}
@@ -1009,29 +1038,33 @@ export default function Sell() {
                     className="sell__photo-del"
                     onClick={() => setPhotos((prev) => prev.filter((item) => item.id !== photo.id))}
                   >
-                    <Image className="sell__photo-del-img" src={ICONS.delete} mode="aspectFit" />
+                    <Image
+                      className="sell__photo-del-img"
+                      src={ICONS.trashWhite}
+                      mode="aspectFit"
+                    />
                   </View>
                 </View>
               ))}
               {totalImages < MAX_LISTING_IMAGES ? (
                 <View className="sell__photo sell__photo--add" onClick={pickImage}>
-                  <Image className="sell__photo-add-img" src={ICONS.plusLine} mode="aspectFit" />
+                  <Image className="sell__photo-add-img" src={ICONS.plusBrand} mode="aspectFit" />
                 </View>
               ) : null}
             </View>
             {imagesError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{imagesError}</Text>
               </View>
             ) : hasUploadFailure ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">有图片上传失败，点缩略图上的「重传」再提交。</Text>
               </View>
             ) : hasStaleImage ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">
                   标着「需重选」的图片不能再使用，请删掉后重新选一张。
                 </Text>
@@ -1062,7 +1095,7 @@ export default function Sell() {
             />
             {titleError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{`${titleError}，请修改后再发布。`}</Text>
               </View>
             ) : null}
@@ -1090,13 +1123,13 @@ export default function Sell() {
                 }`}
                 onClick={openPolish}
               >
-                <Image className="sell__polish-ic" src={ICONS.ai} mode="aspectFit" />
+                <Image className="sell__polish-ic" src={ICONS.sparkleBrand} mode="aspectFit" />
                 <Text>{polishButtonText({ loading: polish.phase === 'loading', cooldown })}</Text>
               </View>
             </View>
             {descriptionError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{`${descriptionError}，请修改后再发布。`}</Text>
               </View>
             ) : null}
@@ -1121,7 +1154,7 @@ export default function Sell() {
             </View>
             {priceError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{priceError}</Text>
               </View>
             ) : null}
@@ -1171,7 +1204,7 @@ export default function Sell() {
             </View>
             {categoryError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{categoryError}</Text>
               </View>
             ) : null}
@@ -1234,7 +1267,7 @@ export default function Sell() {
                   <View className="sell__badge-thumb-ph">
                     <Image
                       className="sell__badge-thumb-ph-ic"
-                      src={ICONS.camera}
+                      src={ICONS.cameraMuted}
                       mode="aspectFit"
                     />
                   </View>
@@ -1259,11 +1292,16 @@ export default function Sell() {
           <Text className="sell__hint-text">
             发布即表示你已阅读校内交易规范；违规商品会被下架，审核结果会在「我的发布」里显示。
           </Text>
+          {needsPhoneBeforePublish({ phoneBound: user?.phoneBound, editing }) ? (
+            <Text className="sell__hint-text sell__hint-text--phone">
+              未绑定手机号，发布前需先绑定
+            </Text>
+          ) : null}
         </View>
 
         <View className="sell__submit" onClick={submit}>
           {submitting ? null : (
-            <Image className="sell__submit-icon" src={ICONS.plus} mode="aspectFit" />
+            <Image className="sell__submit-icon" src={ICONS.plusWhite} mode="aspectFit" />
           )}
           <Text className="sell__submit-text">
             {submitting
@@ -1299,7 +1337,7 @@ export default function Sell() {
           <View className="sell__scrim" onClick={closeSheet} />
           <View className="sell__sheet">
             <View className="sell__sheet-h">
-              <Image className="sell__sheet-h-ic" src={ICONS.ai} mode="aspectFit" />
+              <Image className="sell__sheet-h-ic" src={ICONS.sparkleBrand} mode="aspectFit" />
               <Text className="sell__sheet-h-tx">AI 润色建议</Text>
             </View>
 
@@ -1367,6 +1405,13 @@ export default function Sell() {
           </View>
         </>
       ) : null}
+
+      <PhoneBindSheet
+        open={phoneSheetOpen}
+        binding={phoneBind.binding}
+        onGetPhoneNumber={phoneBind.onGetPhoneNumber}
+        onClose={() => setPhoneSheetOpen(false)}
+      />
     </View>
   )
 }

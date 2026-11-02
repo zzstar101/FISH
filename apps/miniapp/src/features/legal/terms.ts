@@ -1,5 +1,5 @@
 /**
- * 《鱼小应用户协议》 v2.0（唯一真源）。
+ * 《鱼小应用户协议》 v2.1（唯一真源）。
  *
  * 按 `origin/main` 代码现状与实际生产部署事实定稿：
  * - 运营者：肇庆市应屿科技有限公司，联系邮箱：`contact@yuxiaoyingai.com`（不含地址，零 `ph` 占位）；
@@ -13,11 +13,11 @@ import type { LegalDoc } from './types'
 export const TERMS_DOC: LegalDoc = {
   navTitle: '用户协议',
   kicker: {
-    icon: 'docInk',
+    icon: 'docFg',
     text: 'Legal · 用户协议',
   },
   title: '鱼小应用户协议',
-  meta: [[{ t: '版本 v2.0' }], [{ t: '更新日期 2026-11-01' }], [{ t: '生效日期 2026-11-01' }]],
+  meta: [[{ t: '版本 v2.1' }], [{ t: '更新日期 2026-11-02' }], [{ t: '生效日期 2026-11-02' }]],
   callout: {
     head: '请先阅读这一段',
     runs: [
@@ -104,7 +104,7 @@ export const TERMS_DOC: LegalDoc = {
           no: '2.1',
           runs: [
             {
-              t: '本服务以微信身份识别账号：你在小程序端授权微信登录时，系统为你创建或登录对应账号；你在 PC 网页端可通过本小程序扫描登录码并点击确认完成登录。除公开浏览外，发布商品或求购愿望、互动留言、聊天沟通、发起交易及评价等功能均需先登录账号。',
+              t: '本服务以微信身份识别账号：你在小程序端授权微信登录时，系统为你创建或登录对应账号；你在 PC 网页端可通过本小程序扫描登录码并点击确认完成登录。除公开浏览外，发布商品或求购愿望、互动留言、聊天沟通、发起交易及评价等功能均需先登录账号；发布商品（含重新上架）或求购愿望还须先绑定经微信验证的手机号。',
             },
           ],
         },
@@ -118,7 +118,7 @@ export const TERMS_DOC: LegalDoc = {
             },
             { t: '@gzasc.edu.cn', em: true },
             {
-              t: '）并验证一次性验证码以完成校园身份认证，也可在「我的 → 设置」授权绑定微信验证的手机号。一个教育邮箱或手机号在同一时间仅可绑定一个有效账号，不得冒用他人邮箱、手机号或身份信息。',
+              t: '）并验证一次性验证码以完成校园身份认证，并可在「我的 → 设置」授权绑定微信验证的手机号（发布商品或求购愿望前必须绑定，见 2.1）。一个教育邮箱或手机号在同一时间仅可绑定一个有效账号，不得冒用他人邮箱、手机号或身份信息。',
             },
           ],
         },
@@ -686,32 +686,32 @@ export const TERMS_DOC: LegalDoc = {
     },
   ],
   footNote: [
-    [{ t: '鱼小应用户协议 · 版本 v2.0' }],
-    [{ t: '更新日期 2026-11-01 · 生效日期 2026-11-01' }],
+    [{ t: '鱼小应用户协议 · 版本 v2.1' }],
+    [{ t: '更新日期 2026-11-02 · 生效日期 2026-11-02' }],
   ],
   links: [
     {
-      icon: 'safeAccent',
+      icon: 'shieldCheckBrand',
       label: '《隐私政策》',
       page: '/pkg-legal/pages/privacy/index',
     },
     {
-      icon: 'shieldLine',
+      icon: 'shieldBrand',
       label: '《社区规范与交易安全须知》',
       page: '/pkg-legal/pages/community-guidelines/index',
     },
     {
-      icon: 'category',
+      icon: 'tagMuted',
       label: '《个人信息收集清单》',
       page: '/pkg-legal/pages/info-collection/index',
     },
     {
-      icon: 'share',
+      icon: 'shareFg',
       label: '《第三方信息共享清单》',
       page: '/pkg-legal/pages/third-party-sharing/index',
     },
     {
-      icon: 'editAccent',
+      icon: 'editBrand',
       label: '意见反馈',
       page: '/pkg-legal/pages/feedback/index',
     },

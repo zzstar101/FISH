@@ -988,7 +988,7 @@ export default function MyList() {
             {!failed && shown.length === 0 ? (
               <View className="ml__empty">
                 <View className="ml__empty-disc">
-                  <Image className="ml__empty-ic" src={ICONS.box} mode="aspectFit" />
+                  <Image className="ml__empty-ic" src={ICONS.boxMuted} mode="aspectFit" />
                 </View>
                 {/*
                   列表不完整时不能说「这个状态下还没有东西」—— 那是拿一份已知不完整的数据
@@ -1087,7 +1087,7 @@ export default function MyList() {
                       */}
                       {item.rejection ? (
                         <View className="ml__reject">
-                          <Image className="ml__reject-ic" src={ICONS.warnInk} mode="aspectFit" />
+                          <Image className="ml__reject-ic" src={ICONS.warnFg} mode="aspectFit" />
                           <Text className="ml__reject-tx">{item.rejection}</Text>
                         </View>
                       ) : null}
@@ -1219,7 +1219,7 @@ export default function MyList() {
       </View>
 
       <View className="ml__fab" onClick={goPublish}>
-        <Image className="ml__fab-ic" src={ICONS.plusLine} mode="aspectFit" />
+        <Image className="ml__fab-ic" src={ICONS.plusBrand} mode="aspectFit" />
         <Text>发布</Text>
       </View>
 

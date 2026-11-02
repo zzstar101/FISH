@@ -229,7 +229,7 @@ export default function ProfileEdit() {
           {/* 位图箭头随胶囊等高的钮等比缩放（原 72px 钮配 40px 图标） */}
           <Image
             className="pe__back-ic"
-            src={ICONS.backInk}
+            src={ICONS.backFg}
             mode="aspectFit"
             style={{
               width: `${Math.round(backGeo.size * (40 / 72))}px`,
@@ -250,11 +250,11 @@ export default function ProfileEdit() {
             {previewSrc ? (
               <Image className="pe__avatar-img" src={previewSrc} mode="aspectFill" />
             ) : (
-              <Image className="pe__avatar-ph" src={ICONS.user} mode="aspectFit" />
+              <Image className="pe__avatar-ph" src={ICONS.userFg} mode="aspectFit" />
             )}
           </Button>
           <View className="pe__avatar-badge">
-            <Image className="pe__avatar-badge-ic" src={ICONS.camera} mode="aspectFit" />
+            <Image className="pe__avatar-badge-ic" src={ICONS.cameraMuted} mode="aspectFit" />
           </View>
         </View>
 

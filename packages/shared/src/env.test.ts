@@ -5,9 +5,11 @@ import {
   loadContentModerationEnv,
   loadEmbeddingEnv,
   loadMailTransportEnv,
+  loadRecommendationEmbeddingModel,
   loadServerEnv,
   loadSubscribeMessageTemplatesEnv,
   loadWechatEnv,
+  STUB_EMBEDDING_MODEL,
 } from './env'
 
 describe('loadAiPolishEnv', () => {
@@ -288,6 +290,30 @@ describe('loadEmbeddingEnv', () => {
     expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: '' })).toThrow(/必须显式设置/)
     expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub ' })).toThrow(/必须显式设置/)
     expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'local' })).toThrow(/必须显式设置/)
+  })
+})
+
+describe('loadRecommendationEmbeddingModel（#524：api 读侧模型）', () => {
+  test('live 必须显式给 EMBEDDING_MODEL，缺失即启动失败；不需要上游密钥', () => {
+    expect(() =>
+      loadRecommendationEmbeddingModel(
+        { EMBEDDING_TRANSPORT: 'live', VISUAL_EMBEDDING_MODEL: 'qwen-vl-embedding' },
+        'production',
+      ),
+    ).toThrow('EMBEDDING_TRANSPORT=live 缺少 EMBEDDING_MODEL')
+    expect(
+      loadRecommendationEmbeddingModel(
+        { EMBEDDING_TRANSPORT: 'live', EMBEDDING_MODEL: ' qwen3.7-text-embedding ' },
+        'production',
+      ),
+    ).toEqual({ model: 'qwen3.7-text-embedding' })
+  })
+
+  test('stub 与 worker 的 stub 写入同名；未设置 transport 不静默回退', () => {
+    expect(loadRecommendationEmbeddingModel({ EMBEDDING_TRANSPORT: 'stub' }, 'test')).toEqual({
+      model: STUB_EMBEDDING_MODEL,
+    })
+    expect(() => loadRecommendationEmbeddingModel({}, 'test')).toThrow('EMBEDDING_TRANSPORT')
   })
 })
 

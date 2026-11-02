@@ -74,6 +74,11 @@ export type RecallCandidate = {
    */
   alreadySeenCount: number | null
   sellerExposure: number
+  /**
+   * 是否在探索池里（#524：Exploration 通道召回 = 最近 7 天曝光不足）。重排只把这类候选放进
+   * 显式探索位；它与 `recallSources[0]` 无关 —— 同一件商品可以同时被 fresh 召回、又曝光不足。
+   */
+  exploreEligible: boolean
 }
 
 /** 本次召回的兴趣画像使用情况（布尔而非向量：向量不该出现在日志/调试输出里）。 */

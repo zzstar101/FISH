@@ -62,7 +62,8 @@ function txPreview(tx: TransactionDto): string {
   if (tx.status === 'COMPLETED') return '交易已完成'
   if (tx.status === 'CANCELLED') return '交易已取消'
   const myConfirmedAt = tx.role === 'buyer' ? tx.buyerConfirmedAt : tx.sellerConfirmedAt
-  return myConfirmedAt ? '你已确认交易，等待对方确认' : '交易已确认 · 约定面交中'
+  // 判据与 `features/chat/capsule.ts` / `conversation/view.ts` 同口径：`=== null` 才叫未确认
+  return myConfirmedAt !== null ? '你已确认交易，等待对方确认' : '交易已确认 · 约定面交中'
 }
 
 /**

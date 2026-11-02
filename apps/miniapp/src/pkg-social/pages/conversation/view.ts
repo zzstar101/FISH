@@ -2,6 +2,7 @@ import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contrac
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
 import type { AllowedImageMime } from '@/features/upload/mime'
+import { formatAmount } from '@/lib/money'
 
 /**
  * 会话页的展示逻辑（#89：从 fixture 改为真实历史 / 发送 / 已读）。
@@ -423,6 +424,11 @@ export type PendingMediaDraft =
       path: string
       /** 直传与 create 都要用的声明值（mime / 尺寸 / 字节数） */
       image: { mime: AllowedImageMime; width: number; height: number; sizeBytes: number }
+      /**
+       * 本次发送要引用的消息（#518）：快照自 `replyTarget`，重试时原样带回；
+       * 与服务端 `replyToId` 对应，媒体气泡也要能显示引用。
+       */
+      replyTo?: { id: MessageDto['id']; excerpt: string }
     }
   | {
       kind: 'VOICE'
@@ -431,6 +437,8 @@ export type PendingMediaDraft =
       path: string
       /** 录音时长（毫秒）：只用于气泡文案，服务端按字节重解析并覆盖 */
       durationMs: number
+      /** 同图片分支：媒体发送的引用快照（#518） */
+      replyTo?: { id: MessageDto['id']; excerpt: string }
     }
 
 /**
@@ -659,6 +667,25 @@ export function applyMediaRecalled(
   // 每次白建一个新数组会让依赖 `media` 的自动下载 effect 白跑一轮。
   if (!items.some((item) => item.id === messageId && item.recalledAt === null)) return items
   return items.map((item) => (item.id === messageId ? { ...item, url: '', recalledAt } : item))
+}
+
+/**
+ * 被引用的那条撤回后，把其它消息/媒体/待发条目上的引用摘引同步改成「已撤回」。
+ *
+ * 服务端在每次读 `replyTo` 时都会按目标当前状态重算（`reply.ts` 的 `toReply`），
+ * 但客户端不重新拉取就不会更新；撤回是本地立即落碑的，引用条也不能落后到下次刷新。
+ * 没有命中时返回原引用，避免白触发一轮渲染。
+ */
+export function applyReplyRecalled<T extends { replyTo?: { id: string; excerpt: string } | null }>(
+  items: T[],
+  messageId: string,
+): T[] {
+  if (!items.some((item) => item.replyTo?.id === messageId)) return items
+  return items.map((item) =>
+    item.replyTo?.id === messageId
+      ? { ...item, replyTo: { ...item.replyTo, excerpt: '[消息已撤回]' } }
+      : item,
+  )
 }
 
 /**
@@ -1045,6 +1072,12 @@ export function shouldFlushDeferredReload(input: {
 export type MessageAction = 'copy' | 'reply' | 'recall'
 
 /**
+ * 可被引用/撤回的两条服务端 DTO 流（#518）：文本消息与媒体消息。
+ * 两者都带 `id` / `senderId` / `recalledAt` / `createdAt`，菜单判据才能复用。
+ */
+export type ReplyTarget = MessageDto | MediaMessageDto
+
+/**
  * 这条消息此刻还能不能撤回。
  *
  * 三个条件缺一不可：**是我发的**、**还没撤回**、**在 2 分钟窗口内**。
@@ -1056,7 +1089,11 @@ export type MessageAction = 'copy' | 'reply' | 'recall'
  * 提示，后者只是少给了一个入口，都不影响数据正确性。
  */
 export function canRecallMessage(
-  message: MessageDto,
+  message: Readonly<{
+    senderId: string | null
+    recalledAt: string | null
+    createdAt: string
+  }>,
   meId: string | null,
   nowMs: number,
   windowMs: number,
@@ -1086,6 +1123,22 @@ export function messageActions(
   return actions
 }
 
+/**
+ * 媒体消息的长按菜单（#518）：图片/语音没有可复制的正文，未撤回时只给「引用」，
+ * 自己的且仍在窗口内再给「撤回」。判据复用 `canRecallMessage`，不另写一套。
+ */
+export function mediaActions(
+  media: MediaMessageDto,
+  meId: string | null,
+  nowMs: number,
+  windowMs: number,
+): MessageAction[] {
+  if (media.recalledAt !== null) return []
+  const actions: MessageAction[] = ['reply']
+  if (canRecallMessage(media, meId, nowMs, windowMs)) actions.push('recall')
+  return actions
+}
+
 /** 菜单项 → 中文文案（`Taro.showActionSheet` 的 itemList）。 */
 export const MESSAGE_ACTION_LABEL: Record<MessageAction, string> = {
   copy: '复制',
@@ -1100,11 +1153,15 @@ export const REPLY_EXCERPT_MAX = 120
  * 本地摘引文案：引用栏与「发送中」气泡在服务端投射回来之前先用它。
  *
  * 口径与服务端 `replyExcerpt`（`apps/api/src/modules/messages/reply.ts`）保持一致：
- * 已撤回 `[消息已撤回]`、空文本 `[消息]`、超长截断到 120 字含省略号。
- * 本地这份**只影响观感**：发送成功后气泡会换成服务端回的那条（含权威 `replyTo`）。
+ * 已撤回 `[消息已撤回]`、媒体 `[媒体]`、商品卡 `[商品]`、空文本 `[消息]`、
+ * 超长截断到 120 字含省略号。本地这份**只影响观感**：发送成功后气泡会换成
+ * 服务端回的那条（含权威 `replyTo`）。
  */
-export function localReplyExcerpt(message: MessageDto): string {
+export function localReplyExcerpt(message: ReplyTarget): string {
   if (message.recalledAt !== null) return '[消息已撤回]'
+  // 媒体 DTO 没有 content/type：按 kind 区分，避免读 undefined.trim()。
+  if ('kind' in message) return '[媒体]'
+  if (message.type === 'LISTING') return '[商品]'
   const text = message.content.trim()
   if (text.length === 0) return '[消息]'
   return text.length > REPLY_EXCERPT_MAX ? `${text.slice(0, REPLY_EXCERPT_MAX - 1)}…` : text

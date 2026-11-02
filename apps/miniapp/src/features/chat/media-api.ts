@@ -36,6 +36,7 @@ import {
   type ChatImageMime,
   imageRejectReason,
   mediaObjectUrl,
+  normalizeRecordedWav,
   type VoiceMime,
   voiceMimeFromBytes,
 } from './media'
@@ -209,7 +210,7 @@ export async function uploadChatImage(
 /**
  * 上传一段录音。
  *
- * 容器由**字节头**判定（不信任录音机声明的格式）：契约只接受可解析时长的 WebM / MP4，
+ * 容器由**字节头**判定（不信任录音机声明的格式）：契约只接受可解析时长的 WebM / MP4 / WAV，
  * 认不出来就明确报错，而不是发一个必然 422 的请求让用户看到「媒体实际属性与声明不一致」。
  * `isActive` 的语义同 `uploadChatImage`。
  */
@@ -219,10 +220,18 @@ export async function uploadChatVoice(
   isActive?: () => boolean,
 ): Promise<UploadedVoice> {
   assertMediaActive(isActive)
-  const buffer = await readLocalFile(voice.path, '语音读取失败，请重试')
+  const raw = await readLocalFile(voice.path, '语音读取失败，请重试')
   assertMediaActive(isActive)
+  const buffer = normalizeRecordedWav(raw)
   const contentType: VoiceMime | null = voiceMimeFromBytes(buffer)
-  if (!contentType) throw new Error('当前录音格式暂不支持发送语音')
+  if (!contentType) {
+    const bytes = new Uint8Array(buffer)
+    const header = Array.from(bytes.slice(0, 16), (byte) =>
+      byte.toString(16).padStart(2, '0'),
+    ).join(' ')
+    console.error('[chat-media] 不支持的录音容器', { sizeBytes: buffer.byteLength, header })
+    throw new VoiceContainerError(buffer.byteLength, header || 'empty')
+  }
   const objectKey = await putObject(conversationId, 'VOICE', contentType, buffer, isActive)
   return {
     kind: 'VOICE',
@@ -260,7 +269,12 @@ async function putObject(
     timeout: UPLOAD_TIMEOUT_MS,
   })
   if (uploaded.statusCode < 200 || uploaded.statusCode >= 300) {
-    throw new Error(kind === 'IMAGE' ? '图片发送失败，请重试' : '语音发送失败，请重试')
+    console.error('[chat-media] 对象存储上传失败', {
+      kind,
+      statusCode: uploaded.statusCode,
+      errMsg: uploaded.errMsg,
+    })
+    throw new MediaUploadError(kind, uploaded.statusCode)
   }
   return presign.objectKey
 }
@@ -374,6 +388,7 @@ function recorder(): VoiceRecorder {
     })
   })
   manager.onError((error) => {
+    console.error('[chat-media] 录音机错误', error)
     const handlers = voiceHandlers
     voiceHandlers = null
     handlers?.reject(voiceError(error))
@@ -474,6 +489,46 @@ export class VoicePermissionError extends Error {
   }
 }
 
+export class VoicePrivacyError extends Error {
+  constructor() {
+    super('请先同意《用户隐私保护指引》后重试')
+    this.name = 'VoicePrivacyError'
+  }
+}
+
+/**
+ * 录音容器不在契约白名单里（#516）。
+ *
+ * 页面只展示短文案；`sizeBytes` / `header` 留给日志与真机取证 —— 微信 toast 超过约 70
+ * 个字符会被截断，把 hex 拼进用户可见文案既看不清也占地方。
+ */
+export class VoiceContainerError extends Error {
+  readonly sizeBytes: number
+  readonly header: string
+
+  constructor(sizeBytes: number, header: string) {
+    super('当前录音格式暂不支持发送语音')
+    this.name = 'VoiceContainerError'
+    this.sizeBytes = sizeBytes
+    this.header = header
+  }
+}
+
+/**
+ * 对象存储 PUT 失败（#516）。
+ *
+ * 用户文案保持通用（不把 HTTP 状态码塞进 toast），`statusCode` 保留给日志与调用方排查。
+ */
+export class MediaUploadError extends Error {
+  readonly statusCode: number
+
+  constructor(kind: MediaKind, statusCode: number) {
+    super(`${kind === 'IMAGE' ? '图片' : '语音'}发送失败，请重试`)
+    this.name = 'MediaUploadError'
+    this.statusCode = statusCode
+  }
+}
+
 /** 录音失败文案：权限被拒要给「去设置」，其它给可重试的提示。 */
 export function voiceError(error: unknown): Error {
   /**
@@ -485,11 +540,12 @@ export function voiceError(error: unknown): Error {
    * 「录音失败，请重试」，页面的 `instanceof VoicePermissionError` 判据从此恒假，
    * 「去设置」入口（`getSetting` → `openSetting`）永远进不去，用户只能反复看到通用文案。
    */
-  if (error instanceof VoicePermissionError) return error
+  if (error instanceof VoicePermissionError || error instanceof VoicePrivacyError) return error
   const message =
     typeof error === 'object' && error !== null && 'errMsg' in error
       ? String((error as { errMsg?: unknown }).errMsg ?? '')
       : ''
+  if (/privacy/i.test(message)) return new VoicePrivacyError()
   if (/auth|permission|scope/i.test(message)) {
     return new VoicePermissionError()
   }

@@ -517,14 +517,14 @@ export default function UserHome() {
         }}
         onClick={goReport}
       >
-        {/* 位图图标随胶囊等高的钮等比缩放（原 72px 钮配 38px 图标） */}
+        {/* 位图图标随胶囊等高的钮等比缩放（72px 钮配 40px 图标；原 38，#513 收敛到 40 档） */}
         <Image
           className="uhome__navreport-ic"
-          src={ICONS.shieldLine}
+          src={ICONS.shieldFg}
           mode="aspectFit"
           style={{
-            width: `${Math.round(backGeo.size * (38 / 72))}px`,
-            height: `${Math.round(backGeo.size * (38 / 72))}px`,
+            width: `${Math.round(backGeo.size * (40 / 72))}px`,
+            height: `${Math.round(backGeo.size * (40 / 72))}px`,
           }}
         />
       </View>
@@ -536,7 +536,7 @@ export default function UserHome() {
       <Text className="uhome__navname">{profile.nickname}</Text>
       {verified ? (
         <View className="uhome__badge uhome__badge--nav">
-          <Image className="uhome__badge-ic" src={ICONS.verifiedAccent} mode="aspectFit" />
+          <Image className="uhome__badge-ic" src={ICONS.verifiedBrand} mode="aspectFit" />
           <Text>已认证</Text>
         </View>
       ) : null}
@@ -572,7 +572,7 @@ export default function UserHome() {
         <EmptyState
           title="用户不存在"
           text="这个主页的主人可能已注销，或链接已失效"
-          icon={ICONS.box}
+          icon={ICONS.boxMuted}
           actionText="返回"
           onAction={() => {
             goBackOrHome()
@@ -620,7 +620,7 @@ export default function UserHome() {
                         <View className="uhome__badge">
                           <Image
                             className="uhome__badge-ic"
-                            src={ICONS.verifiedAccent}
+                            src={ICONS.verifiedBrand}
                             mode="aspectFit"
                           />
                           <Text>已认证</Text>
@@ -653,7 +653,7 @@ export default function UserHome() {
                         <>
                           <Image
                             className="uhome__follow-ic"
-                            src={ICONS.checkAccent}
+                            src={ICONS.checkBrand}
                             mode="aspectFit"
                           />
                           <Text>已关注</Text>
@@ -666,9 +666,13 @@ export default function UserHome() {
                       ) : (
                         <>
                           {/* 稿 `.btn-follow` 的图标是 `currentColor` = `--surface`（白），
-                              压在品牌渐变底上。别用 `personAdd`：那颗是品牌蓝（`#4285ff`），
-                              蓝压蓝几乎看不见。`plus` 才是白色那颗（sell 页主按钮同款）。 */}
-                          <Image className="uhome__follow-ic" src={ICONS.plus} mode="aspectFit" />
+                              压在品牌渐变底上。别用 `userAddBrand`：那颗是品牌蓝（`#4285ff`），
+                              蓝压蓝几乎看不见。`plusWhite` 才是白色那颗（sell 页主按钮同款）。 */}
+                          <Image
+                            className="uhome__follow-ic"
+                            src={ICONS.plusWhite}
+                            mode="aspectFit"
+                          />
                           <Text>关注</Text>
                         </>
                       )}
@@ -784,7 +788,7 @@ export default function UserHome() {
             ) : items.length === 0 ? (
               <View className="uhome__empty">
                 <View className="uhome__empty-disc">
-                  <Image className="uhome__empty-ic" src={ICONS.box} mode="aspectFit" />
+                  <Image className="uhome__empty-ic" src={ICONS.boxMuted} mode="aspectFit" />
                 </View>
                 <Text className="uhome__empty-title">TA 暂无在售商品</Text>
                 <Text className="uhome__empty-text">TA 的东西都被抢光啦，有新上架会出现在这里</Text>

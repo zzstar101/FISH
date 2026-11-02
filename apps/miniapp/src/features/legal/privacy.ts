@@ -1,5 +1,5 @@
 /**
- * 《鱼小应隐私政策》 v2.0（唯一真源）。
+ * 《鱼小应隐私政策》 v2.1（唯一真源）。
  *
  * 按 `origin/main` 代码现状与实际生产部署事实定稿：
  * - 运营者：肇庆市应屿科技有限公司，联系邮箱：`contact@yuxiaoyingai.com`（不含地址，零 `ph` 占位）；
@@ -17,11 +17,11 @@ import type { LegalDoc } from './types'
 export const PRIVACY_DOC: LegalDoc = {
   navTitle: '隐私政策',
   kicker: {
-    icon: 'safeAccent',
+    icon: 'shieldCheckBrand',
     text: 'Privacy · 隐私政策',
   },
   title: '鱼小应隐私政策',
-  meta: [[{ t: '版本 v2.0' }], [{ t: '更新日期 2026-11-01' }], [{ t: '生效日期 2026-11-01' }]],
+  meta: [[{ t: '版本 v2.1' }], [{ t: '更新日期 2026-11-02' }], [{ t: '生效日期 2026-11-02' }]],
   brief: {
     head: '一句话说清',
     lead: [
@@ -102,7 +102,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b1',
           kind: 'list',
           head: {
-            icon: 'user',
+            icon: 'userFg',
             text: '（一）账号登录、资料、认证与手机号绑定',
           },
           items: [
@@ -141,10 +141,10 @@ export const PRIVACY_DOC: LegalDoc = {
             {
               key: 's2-b1-i3',
               name: [{ t: '中国大陆手机号码' }],
-              tag: { text: '可选 · 绑定手机号', tone: 'opt' },
+              tag: { text: '发布时必要 · 绑定手机号', tone: 'on' },
               use: [
                 {
-                  t: '你在「我的 → 设置」主动点击绑定手机号并经微信手机号快速验证组件授权后，服务端凭一次性动态令牌向微信换取手机号并保存，用于增强账号安全与实名核验；所有接口仅返回绑定状态与脱敏号码（如 138****8000），不向其他用户公开。',
+                  t: '发布商品（含重新上架）或求购愿望前须绑定手机号；不绑定不影响浏览、留言、聊天与交易等其他功能。你在「我的 → 设置」或发布页点击绑定手机号并经微信手机号快速验证组件授权后，服务端凭一次性动态令牌向微信换取手机号并保存，用于实名可追溯、交易纠纷处理与账号安全；所有接口仅返回绑定状态与脱敏号码（如 138****8000），仅本人可见，不向其他用户公开。',
                 },
               ],
             },
@@ -154,7 +154,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b2',
           kind: 'list',
           head: {
-            icon: 'category',
+            icon: 'tagMuted',
             text: '（二）商品发布、求购匹配、交易、评价与争议',
           },
           items: [
@@ -214,7 +214,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b3',
           kind: 'list',
           head: {
-            icon: 'chat',
+            icon: 'chatFg',
             text: '（三）站内聊天、互动、在线状态与通知提醒',
           },
           items: [
@@ -264,7 +264,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b4',
           kind: 'list',
           head: {
-            icon: 'ai',
+            icon: 'sparkleBrand',
             text: '（四）AI 辅助、拍照识图、浏览足迹与个性化推荐',
           },
           items: [
@@ -314,7 +314,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b5',
           kind: 'list',
           head: {
-            icon: 'shieldLine',
+            icon: 'shieldBrand',
             text: '（五）举报、意见反馈与安全风控日志',
           },
           items: [
@@ -354,7 +354,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b6',
           kind: 'notlist',
           head: {
-            icon: 'checkAccent',
+            icon: 'checkBrand',
             text: '我们严格不收集或绝不触碰的信息',
           },
           runs: [
@@ -384,7 +384,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's3-b1',
           kind: 'list',
           head: {
-            icon: 'serviceMuted',
+            icon: 'headsetMuted',
             text: '小程序权限与系统接口调用明细',
           },
           items: [
@@ -461,7 +461,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's4-b1',
           kind: 'list',
           head: {
-            icon: 'file',
+            icon: 'fileFg',
             text: '小程序本地 Storage 键名清单',
           },
           items: [
@@ -569,7 +569,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's5-b1',
           kind: 'list',
           head: {
-            icon: 'share',
+            icon: 'shareFg',
             text: '第三方合作与受托处理方概览',
           },
           items: [
@@ -668,7 +668,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's6-b1',
           kind: 'list',
           head: {
-            icon: 'clock',
+            icon: 'clockMuted',
             text: '核心信息保存期限规则',
           },
           items: [
@@ -893,32 +893,32 @@ export const PRIVACY_DOC: LegalDoc = {
     },
   ],
   footNote: [
-    [{ t: '鱼小应隐私政策 · 版本 v2.0' }],
-    [{ t: '更新日期 2026-11-01 · 生效日期 2026-11-01' }],
+    [{ t: '鱼小应隐私政策 · 版本 v2.1' }],
+    [{ t: '更新日期 2026-11-02 · 生效日期 2026-11-02' }],
   ],
   links: [
     {
-      icon: 'category',
+      icon: 'tagMuted',
       label: '《个人信息收集清单》',
       page: '/pkg-legal/pages/info-collection/index',
     },
     {
-      icon: 'share',
+      icon: 'shareFg',
       label: '《第三方信息共享清单》',
       page: '/pkg-legal/pages/third-party-sharing/index',
     },
     {
-      icon: 'docInk',
+      icon: 'docFg',
       label: '《用户协议》',
       page: '/pkg-legal/pages/terms/index',
     },
     {
-      icon: 'shieldLine',
+      icon: 'shieldBrand',
       label: '《社区规范与交易安全须知》',
       page: '/pkg-legal/pages/community-guidelines/index',
     },
     {
-      icon: 'editAccent',
+      icon: 'editBrand',
       label: '意见反馈',
       page: '/pkg-legal/pages/feedback/index',
     },

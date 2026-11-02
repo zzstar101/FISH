@@ -487,7 +487,7 @@ export default function VisionResult() {
                 // 命中区补偿挂在包裹层（88px = 44pt），胶囊保持 64px 的视觉高，见 `index.scss`
                 <View className="vres__retake-hit" onClick={retake}>
                   <View className={`vres__retake${retaking ? ' is-busy' : ''}`}>
-                    <Image className="vres__retake-ic" src={ICONS.camera} mode="aspectFit" />
+                    <Image className="vres__retake-ic" src={ICONS.cameraMuted} mode="aspectFit" />
                     <Text>{retaking ? '上传中' : '重拍'}</Text>
                   </View>
                 </View>
@@ -573,7 +573,7 @@ export default function VisionResult() {
                     actionText="回到首页"
                     onAction={() => void Taro.switchTab({ url: '/pages/home/index' })}
                     /* 参考图的图标映射：空态圆盘用「搜索」那枚（默认「分类」语义不对） */
-                    icon={ICONS.search}
+                    icon={ICONS.searchMuted}
                   />
                 ) : loading ? (
                   /* 骨架屏：两列四张，图片区高度取真实卡片的两档（4:5 / 1:1） */
@@ -591,7 +591,7 @@ export default function VisionResult() {
                   /* 失败态：文案取契约，动作是「重试 / 换一张图」 */
                   <View className="vres__err">
                     <View className="vres__err-disc">
-                      <Image className="vres__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                      <Image className="vres__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                     </View>
                     <Text className="vres__err-title">识别没成功</Text>
                     <Text className="vres__err-text">{failedText}</Text>
@@ -603,7 +603,7 @@ export default function VisionResult() {
                         className={`vres__btn-ghost${retaking ? ' is-busy' : ''}`}
                         onClick={retake}
                       >
-                        <Image className="vres__btn-ic" src={ICONS.camera} mode="aspectFit" />
+                        <Image className="vres__btn-ic" src={ICONS.cameraMuted} mode="aspectFit" />
                         <Text>{retaking ? '上传中…' : '换一张图'}</Text>
                       </View>
                     </View>
@@ -616,10 +616,10 @@ export default function VisionResult() {
                       text="换一张图或换个角度再拍一次；也可以把需求发到许愿墙，命中后会通知你。"
                       actionText={retaking ? '上传中…' : '重新拍一张'}
                       onAction={() => void retake()}
-                      icon={ICONS.search}
+                      icon={ICONS.searchMuted}
                     />
                     <View className="vres__btn-ghost vres__btn-ghost--narrow" onClick={goWish}>
-                      <Image className="vres__btn-ic" src={ICONS.tabWish} mode="aspectFit" />
+                      <Image className="vres__btn-ic" src={ICONS.wishMuted} mode="aspectFit" />
                       <Text>去许愿墙发心愿</Text>
                     </View>
                   </View>

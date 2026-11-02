@@ -177,8 +177,8 @@
 }
 
 .profile__avatar-ph {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
 }
 
 .profile__info {
@@ -197,7 +197,7 @@
   font-size: 40px;
   font-weight: 600;
   color: var(--fg);
-  /* 昵称可截断，认证胶囊完整显示（CJK 不给 nowrap 会被压成竖排） */
+  /* 昵称可截断：长昵称省略号收尾，不挤压同行的小箭头与右侧元素 */
   flex: 0 1 auto;
   white-space: nowrap;
   overflow: hidden;
@@ -207,13 +207,15 @@
 /* 昵称右侧的小箭头：提示「昵称可点，进编辑资料」（#86 B） */
 .profile__name-chev {
   flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
 }
 
-/* 认证胶囊：白玻璃底 + 品牌字，整颗是入口（进校园认证页） */
+/* 认证胶囊：白玻璃底 + 品牌字，整颗是入口（进校园认证页）；未认证时占昵称下方一行 */
 .profile__auth {
   flex: 0 0 auto;
+  /* 与 `.profile__auth-badge` 同档：两种认证态切换时昵称下方的节奏不该跳（#534） */
+  margin-top: 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -235,9 +237,19 @@
   white-space: nowrap;
 }
 
+/* 已认证徽章（#534）：设计稿「认证」3D 徽章整图，**昵称下方单独一行**。
+   入库资产 275×108（比例 2.546，设计稿原始 1568×616 已裁切提取）；
+   34px 高对应 86.6px 宽，这里取 87px，偏差 <0.5%，aspectFit 不变形、不留白 */
+.profile__auth-badge {
+  display: block;
+  width: 87px;
+  height: 34px;
+  margin-top: 10px;
+}
+
 .profile__auth-arrow {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
 }
 
@@ -296,8 +308,8 @@
 }
 
 .profile__scanbtn-ic {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
 }
 
 /* ---- 三张独立卡（Owner 修订）：圆角 8pt、无边框描边；只有帮助与设置卡带底部阴影 ---- */
@@ -368,8 +380,8 @@
 }
 
 .profile__cell-ic {
-  width: 60px;
-  height: 60px;
+  width: 48px;
+  height: 48px;
 }
 
 /*
@@ -445,8 +457,8 @@
 }
 
 .profile__row-ic {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
 }
 
 .profile__row-main {
@@ -472,14 +484,14 @@
 }
 
 .profile__row-chev {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   opacity: 0.8;
 }
 
 
-/* ---- 页脚：组合 logo（brand-lockup：鱼形标 + 鱼小应 YUXIAOYING）+ 版权行 ---- */
+/* ---- 页脚：组合 logo（BRAND.lockup：鱼形标 + 鱼小应 YUXIAOYING）+ 版权行 ---- */
 .profile__footer {
   display: flex;
   flex-direction: column;
@@ -487,7 +499,7 @@
   padding: 44px 40px 12px;
 }
 
-/* 源图 683×160（4.266:1），按高 48px 等比 → 205px */
+/* lockup 4.21:1（与首页顶栏同一张），定高 48px；盒子沿用 205px，aspectFit 居中 */
 .profile__footer-logo {
   width: 205px;
   height: 48px;
@@ -527,8 +539,8 @@
 }
 
 .profile__guest-ic {
-  width: 60px;
-  height: 60px;
+  width: 48px;
+  height: 48px;
 }
 
 .profile__guest-title {

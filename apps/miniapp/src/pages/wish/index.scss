@@ -225,8 +225,8 @@
 }
 
 .hot__more-ic {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 /* ──────────────────────── 区块标题行（+ 发布入口） ──────────────────────── */
@@ -279,11 +279,10 @@
   }
 }
 
-/* `ICONS.plusLine` 是品牌蓝线稿加号：压在深墨底上要转白（与出物页删图钮同一招） */
+/* 深墨底上的反白加号：直接用烘焙好的 `ICONS.plusWhite`，不靠滤镜转色 */
 .wish__new-ic {
-  width: 26px;
-  height: 26px;
-  filter: brightness(0) invert(1);
+  width: 24px;
+  height: 24px;
 }
 
 /* ────────────────────── 二级筛选：横滑胶囊（状态 / 分类） ────────────────────── */
@@ -335,8 +334,8 @@
 
 /* 分类图标（PNG）：压在深墨底上会看不见，用滤镜转白 —— 与出物页删图钮同一招 */
 .wish__sub-ic {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 .wish__sub.is-on .wish__sub-ic {
@@ -433,8 +432,8 @@
 
 .mw__cat-ic {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 /* 状态胶囊：复用仓库的 `status-pill` 三档色调 */
@@ -494,8 +493,8 @@
 
 .mw__truth-ic {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 /* 命中行（设计稿 `.truth .it`）：浅蓝底 + 淡描边，整行可点进商品详情 */
@@ -600,8 +599,8 @@
 
 .mw__act-ic {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 .mw__act-cnt {
@@ -670,8 +669,8 @@
 
 .pool__cat-ic {
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 /* 「求购」徽章：设计稿用一组独立紫（见 `_token-vars.scss` 的 --lav / --lav-weak） */
@@ -753,8 +752,8 @@
 }
 
 .wishempty__ic {
-  width: 52px;
-  height: 52px;
+  width: 48px;
+  height: 48px;
 }
 
 .wishempty__title {

@@ -16,7 +16,7 @@ import type { LegalDoc } from './types'
 export const THIRD_PARTY_SHARING_DOC: LegalDoc = {
   navTitle: '第三方信息共享清单',
   kicker: {
-    icon: 'share',
+    icon: 'shareFg',
     text: 'Privacy · 第三方清单',
   },
   title: '鱼小应第三方信息共享清单',
@@ -59,7 +59,7 @@ export const THIRD_PARTY_SHARING_DOC: LegalDoc = {
           key: 's1-b0',
           kind: 'list',
           head: {
-            icon: 'user',
+            icon: 'userFg',
             text: '微信（深圳市腾讯计算机系统有限公司）',
           },
           items: [
@@ -144,7 +144,7 @@ export const THIRD_PARTY_SHARING_DOC: LegalDoc = {
           key: 's2-b0',
           kind: 'list',
           head: {
-            icon: 'safeAccent',
+            icon: 'shieldCheckBrand',
             text: '腾讯云（腾讯云计算（北京）有限责任公司）',
           },
           items: [
@@ -224,7 +224,7 @@ export const THIRD_PARTY_SHARING_DOC: LegalDoc = {
           key: 's3-b0',
           kind: 'list',
           head: {
-            icon: 'mail',
+            icon: 'mailFg',
             text: '邮件发送服务商与人工智能模型服务商',
           },
           items: [
@@ -298,7 +298,7 @@ export const THIRD_PARTY_SHARING_DOC: LegalDoc = {
           key: 's3-b1',
           kind: 'notlist',
           head: {
-            icon: 'checkAccent',
+            icon: 'checkBrand',
             text: '零第三方客户端 SDK 声明',
           },
           runs: [
@@ -316,22 +316,22 @@ export const THIRD_PARTY_SHARING_DOC: LegalDoc = {
   ],
   links: [
     {
-      icon: 'safeAccent',
+      icon: 'shieldCheckBrand',
       label: '《隐私政策》',
       page: '/pkg-legal/pages/privacy/index',
     },
     {
-      icon: 'category',
+      icon: 'tagMuted',
       label: '《个人信息收集清单》',
       page: '/pkg-legal/pages/info-collection/index',
     },
     {
-      icon: 'docInk',
+      icon: 'docFg',
       label: '《用户协议》',
       page: '/pkg-legal/pages/terms/index',
     },
     {
-      icon: 'shieldLine',
+      icon: 'shieldBrand',
       label: '《社区规范与交易安全须知》',
       page: '/pkg-legal/pages/community-guidelines/index',
     },

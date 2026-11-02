@@ -99,13 +99,20 @@
   color: var(--muted-2);
 }
 
+/* 真头像：圆形裁切放在图片自身上；不给 .st__av 加 overflow:hidden，否则右下角徽章会被裁掉 */
+.st__av-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
 /* 认证徽章：与个人页 / 卖家卡同一个图标 */
 .st__av-bdg {
   position: absolute;
   right: -6px;
   bottom: -6px;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
 }
 
 .st__acct-main {
@@ -138,8 +145,8 @@
 }
 
 .st__ric-ic {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
 }
 
 .st__rlabel {
@@ -269,8 +276,8 @@
 }
 
 .st__danger-ic {
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
 }
 
 .st__danger-note {
@@ -316,8 +323,8 @@
 }
 
 .st__sheet-ic-img {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
 }
 
 .st__sheet-title {
