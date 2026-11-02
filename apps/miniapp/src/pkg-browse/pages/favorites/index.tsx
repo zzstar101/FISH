@@ -304,6 +304,25 @@ export default function Favorites() {
   }
 
   /**
+   * 卖家头像/昵称（#517）：与商品卡卖家行、关注列表同一跳转口径。
+   * 演示行的卖家不在库里；老契约行的 `seller` 也可能缺席 —— 两者都没有真实 id，
+   * 给一句提示，不猜人、不跳 404。
+   */
+  const openSeller = (item: FavoriteItem) => {
+    if (item.demo) {
+      toast('演示数据：卖家主页不可打开')
+      return
+    }
+    if (!item.sellerId) {
+      toast('这位卖家的主页暂不可打开')
+      return
+    }
+    void Taro.navigateTo({
+      url: `/pkg-browse/pages/user/index?id=${encodeURIComponent(item.sellerId)}`,
+    })
+  }
+
+  /**
    * 缩略图 / 标题 / 两个动作钮上的点击在管理态里都走勾选（稿里勾选与进详情是互斥的
    * 两个动作）。
    *
@@ -638,7 +657,15 @@ export default function Favorites() {
                     </View>
 
                     <View className="fav__foot">
-                      <View className="fav__seller">
+                      {/* 卖家头像是独立点击区（#517）：拦冒泡只是防御，卡底本身没有父级点击；
+                          管理态与其它动作钮一致走勾选，避免误触离开本页。 */}
+                      <View
+                        className="fav__seller"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          act(item, openSeller)
+                        }}
+                      >
                         <Image className="fav__av" src={item.avatarUrl} mode="aspectFill" />
                         <Text className="fav__nm">{item.seller}</Text>
                         {item.verified ? (
