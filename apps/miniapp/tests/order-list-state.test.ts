@@ -539,19 +539,19 @@ describe('会话页的交易码入口 —— 必须带交易 id（#521）', () =
   test('会话页不再硬编码无 id 地址：跳转统一走 meetupUrlById', async () => {
     const code = codeOnly(await conversationSource())
     expect(code).toContain('meetupUrlById(')
-    // 传进去的必须是选中的那笔交易，而不是空串 / 别的 id
-    expect(code).toContain('openMeetup(txCard.transactionId)')
+    // 传进去的必须是状态条给出的那笔交易，而不是空串 / 别的 id
+    expect(code).toContain('openMeetup(action.transactionId)')
     expect(code).toContain('url: meetupUrlById(transactionId)')
     // 无 id 直跳会让面交页 `router.params.id` 为空 → 直接落「找不到这笔交易」
     expect(code).not.toContain('/pkg-trade/pages/transaction-meetup/index')
   })
 
-  test('交易进度卡挂在输入栏、按交易行取数；消息流不再画交易码卡（#522）', async () => {
+  test('交易状态由页头一条承载、按交易行取数；消息流不再画交易码卡（#522 / #551）', async () => {
     const code = codeOnly(await conversationSource())
     expect(code).toContain('fetchConversationTransaction(conversationId')
-    expect(code).toContain('<TxCard')
-    expect(code).toContain('view={txCard}')
-    // 交易码卡只应存在于 `tx-card.tsx`；会话页再画一份就又回到「按事件快照说话」
+    expect(code).toContain('txBarView({')
+    // #551：吸底卡已删，状态只由页头那条说一次
+    expect(code).not.toContain('<TxCard')
     expect(code).not.toContain('conv__txcard')
   })
 })

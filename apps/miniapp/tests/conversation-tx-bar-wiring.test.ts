@@ -1,17 +1,18 @@
 /**
- * 会话页交易进度卡的接线（#521 / #522）。
+ * 会话页页头「商品交易状态条」的接线（#551）。
  *
  * 本仓 `apps/miniapp/tests/` 没有 Taro 组件渲染基建（页面用真 `@tarojs/taro` 加载会抛
  * `ENABLE_INNER_HTML is not defined`，见 `tests/conversation-unread-wiring.test.ts` 文件头），
  * 页面接线只能读源码文本钉住 —— 手法同 `tests/conversation-realtime-wiring.test.ts`。
  *
- * 判据层（卡片五态 / 降级 / 取消后新提案收起）由 `tests/conversation-view.test.ts` 覆盖；
- * 本文件钉的是页面有没有把这几条**接线**接对：
- * - 进页 / 返回 / 补刷时按会话查交易（不带 id 的旧入口已删）；
+ * 判据层（五档状态 / 角色差异 / 降级 / 取消后新提案）由 `tests/conversation-view.test.ts`
+ * 的 `txBarView` 覆盖；本文件钉的是页面有没有把这几条**接线**接对：
+ * - 进页 / 返回 / 补刷时按会话查交易，并带上消息里 `tx.accepted` 的 id 走精确查询；
  * - 停留在页面时，PENDING_MEETUP 的进度靠详情轮询顺带刷新（契约没有交易推送）；
- * - 实时 `tx.accepted` 补刷一次（交易行可能比消息晚落库）；
- * - 失败交给 `txCardView` 渲染成「状态待更新」，不复用旧 `tx`；
- * - 卡片的两种 CTA（打开 / 就地重试）都接到了。
+ * - 交易状态只由页头一条承载：吸底卡（#521 / #522 的 `tx-card.tsx`）已按 Owner 决策删除；
+ * - 五档动作各自接到正确的跳转 / 接口：确认→二次确认 + `acceptTransaction`，
+ *   扫码→扫码页，交易码与评价→面交页，失败→就地重查；
+ * - 「待评价」靠评价边另行判定（交易域没有评价字段）。
  */
 import { describe, expect, test } from 'bun:test'
 
@@ -28,7 +29,7 @@ function sliceFrom(code: string, start: string, end: string): string {
   return code.slice(from, to + end.length)
 }
 
-describe('#521 / #522 会话页交易进度卡 · 接线', () => {
+describe('#551 会话页页头交易状态条 · 接线', () => {
   test('每次 load 都按会话查交易，并把首屏 tx.accepted 的 id 作为精确查询的首选', async () => {
     const code = await source()
     expect(code).toContain('fetchConversationTransaction(')
@@ -41,7 +42,7 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     const poll = sliceFrom(code, 'timer = setInterval(', 'presenceSeq.current += 1')
     expect(poll).toContain('txLoadRef.current')
     expect(poll).toContain("txState.status === 'failed'")
-    // 重试也要带消息里的 id：列表被 500 条上限截断时，只有精确查询能把卡找回来
+    // 重试也要带消息里的 id：列表被 500 条上限截断时，只有精确查询能把状态找回来
     expect(poll).toContain('fetchConversationTransaction(')
     expect(poll).toContain('lastTxAcceptedId(messagesRef.current)')
     expect(poll).toContain("txState.tx?.status === 'PENDING_MEETUP'")
@@ -57,13 +58,12 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     expect(dispatch).toContain('realtimeOpenRef.current()')
   })
 
-  test('查询失败时不信旧终态：只有同一笔 PENDING 缓存能退回成交前文案，其余走 failed', async () => {
+  test('查询失败时不信旧终态：只有同一笔 PENDING 缓存能退回成交前文案', async () => {
     const code = await source()
     // 失败时缓存必须与消息里的交易 id 对得上（别的交易的缓存不能当现状）
     expect(code).toContain('fallbackTxId === txLoad.tx.id')
-    expect(code).toContain('txCardView(txFailed ? cachedTx : txLoad.tx, fallbackTxId')
+    expect(code).toContain('txBarView({')
     expect(code).toContain('failed: txFailed')
-    // 失败但缓存是 PENDING：文案退回「待面交」，CTA 仍是重试（在 view.ts 里由 failed 决定）
     expect(code).toContain("txLoad.status === 'failed' && txKnown")
   })
 
@@ -77,9 +77,62 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     expect(guards.length).toBeGreaterThanOrEqual(3)
   })
 
-  test('取消后新提案的判据来自消息流（详情里的 lastMessage 会滞后）', async () => {
+  test('状态条判据来自消息流最后一个交易事件（提案态与提案金额只能从消息读）', async () => {
     const code = await source()
-    expect(code).toContain('lastEventOfMessages(messages)?.type')
+    expect(code).toContain('lastEventOfMessages(messages)')
+    expect(code).toContain('lastEvent: lastTxEvent')
+    // 角色与商品状态都交给纯函数，页面上不另判一套
+    expect(code).toContain('role: conversation.role')
+    expect(code).toContain('listingStatus: listing.status')
+    expect(code).toContain("lastTxEvent?.type === 'tx.accepted'")
+  })
+
+  test('「待评价」靠评价边判定：只有 404 REVIEW_NOT_FOUND 才算我还没评', async () => {
+    const code = await source()
+    expect(code).toContain('fetchMyTransactionReview(')
+    expect(code).toContain('REVIEW_NOT_FOUND')
+    expect(code).toContain("txLoad.tx?.status === 'COMPLETED'")
+    // 判据要真的喂给状态条，否则查了也白查
+    expect(code).toContain('reviewed,')
+  })
+
+  test('五档动作都接到了：确认→二次确认 + acceptTransaction，扫码→扫码页，其余→面交页/重查', async () => {
+    const code = await source()
+    const bar = sliceFrom(code, 'const runTxBarAction =', "// 'wait'")
+    // 动作钮不得顺带触发整条的「进商品详情」
+    expect(bar).toContain('event.stopPropagation()')
+    expect(bar).toContain("action.kind === 'listing'")
+    expect(bar).toContain('openListing()')
+    expect(bar).toContain("action.kind === 'confirm'")
+    expect(bar).toContain('confirmProposal(action.amountCents)')
+    expect(bar).toContain("action.kind === 'code'")
+    expect(bar).toContain("action.kind === 'review'")
+    expect(bar).toContain('openMeetup(action.transactionId)')
+    expect(bar).toContain("action.kind === 'scan'")
+    expect(bar).toContain('SCAN_CODE_PAGE')
+    expect(bar).toContain("action.kind === 'retry'")
+    expect(bar).toContain('retryTx()')
+
+    // 接受提案：先二次确认，再把提案金额原样带回（提案不落库，服务端无处可读）
+    const accept = sliceFrom(code, 'const confirmProposal =', 'acceptBusyRef.current = false')
+    expect(accept).toContain('Taro.showModal(')
+    expect(accept).toContain('acceptTransaction(conversationId, amountCents)')
+    expect(code).toContain('formatAmount(amountCents)')
+    // 409 不代表失败：失败后重查一次交易，让状态条说服务端的现状
+    expect(accept).toContain('retryTx()')
+  })
+
+  test('吸底交易卡已删除：页面不再挂 TxCard，样式里也不再有 .conv__txcard', async () => {
+    const code = await source()
+    expect(code).not.toContain('<TxCard')
+    expect(code).not.toContain('tx-card')
+    expect(code).not.toContain('conv__txcard')
+    // 状态只由页头一条承载：动作区在 .conv__pbar-act 里，且整条仍是「点进商品详情」
+    expect(code).toContain('conv__pbar-act')
+    expect(code).toContain('onClick={runTxBarAction}')
+    const bar = sliceFrom(code, 'className={`conv__pbar ', 'conv__pbar-act')
+    expect(bar).toContain('onClick={openListing}')
+    expect(bar).toContain('conv__pbar-status')
   })
 
   test('历史 tx.accepted 仍能定位到本笔（同一会话多笔交易不串单）', async () => {
@@ -100,13 +153,5 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     // 这句话本身要能点进订单页，否则只是换个说法让用户自己找
     expect(code).toContain('noIdHint ? goOrders : undefined')
     expect(code).toContain("conversation.role === 'buyer'")
-  })
-
-  test('卡片按 CTA 语义分流：retry 就地重查，open 走带 id 的面交页', async () => {
-    const code = await source()
-    expect(code).toContain('<TxCard')
-    expect(code).toContain(
-      "txCard.action === 'retry' ? retryTx() : openMeetup(txCard.transactionId)",
-    )
   })
 })
