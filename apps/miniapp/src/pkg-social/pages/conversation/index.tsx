@@ -1738,6 +1738,10 @@ export default function Conversation() {
     setPanelOpen(!panelOpen)
   }
 
+  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541），只改 `panelOpen` —— 不碰
+   *  已输入文字、不 blur 输入框、不动滚动位置。 */
+  const dismissPanel = () => setPanelOpen(false)
+
   const openListing = () => {
     if (!conversation) return
     void Taro.navigateTo({
@@ -2027,8 +2031,15 @@ export default function Conversation() {
       {/*
         渐变圆角头（稿子 .chathead）：导航条 + 商品摘要条都在里面，不随消息滚动。
         状态栏高度用内联 px（设备相关，不走 rpx），导航行高 88rpx 与商品详情页一致。
+
+        导航行与状态栏带落在「+」面板遮罩**之上**（遮罩顶边 = 导航行底边，返回钮不能被
+        盖住），所以这两处点空白也要自己收面板（#541）。
       */}
-      <View className="conv__head" style={{ paddingTop: `${metrics.statusBarHeight}px` }}>
+      <View
+        className="conv__head"
+        style={{ paddingTop: `${metrics.statusBarHeight}px` }}
+        onClick={panelOpen ? dismissPanel : undefined}
+      >
         {/*
           导航行几何与 `components/top-bar` 同构（行内下发，见 index.scss）：
           返回钮在胶囊那一段里居中，与右侧原生胶囊同轴。
@@ -2091,6 +2102,20 @@ export default function Conversation() {
           </View>
         </View>
       </View>
+
+      {/*
+        「+」面板展开时的一层透明遮罩（#541）：点「面板与输入栏」以外的任何位置只收面板。
+        `top` 取导航行底边（`metrics.totalHeight`，与 navrow 的行高同源），所以返回钮不被
+        遮住；遮罩从商品条顶边铺到页面底部，盖住商品条、消息流与页面空白，层级见
+        index.scss —— 它在消息流之上、输入栏之下。
+      */}
+      {panelOpen ? (
+        <View
+          className="conv__panel-mask"
+          style={{ top: `${metrics.totalHeight}px` }}
+          onClick={dismissPanel}
+        />
+      ) : null}
 
       {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条 */}
       <ScrollView

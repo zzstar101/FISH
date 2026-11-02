@@ -1052,6 +1052,18 @@
   border-top: 2px solid var(--accent-faint);
 }
 
+/* 「+」面板的点外部收起遮罩（#541）：透明，只吃掉「面板与输入栏之外」的那一次点击。
+   层级夹在消息流（1）与输入栏（20）之间，所以输入栏和面板自己照常可点，消息流里的
+   长按菜单 / 点图看大图 / 商品条进详情也拿不到这次点击；
+   顶边由 JSX 内联给（导航行底边 = `metrics.totalHeight`），返回钮不在遮罩下。 */
+.conv__panel-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+}
+
 .conv__ptile {
   flex: 1;
   display: flex;
