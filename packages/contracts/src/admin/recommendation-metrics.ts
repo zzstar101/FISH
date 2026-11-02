@@ -234,7 +234,7 @@ export const RecommendationGuardrailsSchema = z.object({
   /**
    * 个性化 Feed 退回 newest 的次数，按原因分桶；进程内（#524）。
    *
-   * `noCandidates` 是业务上可接受的冷启动 / 全被隐藏；其余三项是故障，需要排查。库里同一口径的
+   * `noCandidates` 是业务上可接受的冷启动 / 空库（召回为空）；其余三项是故障，需要排查。库里同一口径的
    * 真值在 `recommendation_requests.degrade_reason`（只有 `rec-v1-none` 行有值）。
    */
   degradedFeedReasons: z.object({

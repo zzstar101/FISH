@@ -3,6 +3,7 @@ import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb, type Db } from './client'
 import {
+  countListingEmbeddingsByModel,
   findEmbedding,
   hasEmbeddingFromOtherModel,
   pruneStaleEmbeddings,
@@ -862,6 +863,30 @@ test('hasEmbeddingFromOtherModel：区分“从没生成过”与“只有旧 mo
     OTHER_MODEL,
   )
   expect(await hasEmbeddingFromOtherModel(db, { kind: 'wish', id: wishId }, MODEL)).toBe(true)
+})
+
+test('countListingEmbeddingsByModel（#524 启动自检）：总数只数商品向量，matching 只数当前模型', async () => {
+  const model = `count-model-${seq++}`
+  const before = await countListingEmbeddingsByModel(db, model)
+  expect(before.matching).toBe(0)
+
+  const sellerId = await createUser()
+  const listingId = await createListing(sellerId)
+  await saveEmbedding(db, {
+    entity: { kind: 'listing', id: listingId },
+    model,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${listingId}`,
+    embedding: unitVector(7),
+    sourceUpdatedAt: V1,
+  })
+  // 愿望向量不计入：自检问的是"商品向量是不是当前模型产出的"。
+  await createWishWithEmbedding(sellerId, `count-wish-${seq++}`, unitVector(7), model)
+
+  expect(await countListingEmbeddingsByModel(db, model)).toEqual({
+    total: before.total + 1,
+    matching: 1,
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,8 @@ import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
-import { createRecommendationRecall } from './service'
+import { createRecommendationRecall, enrichCandidateFeatures } from './service'
+import type { RecallCandidate } from './types'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -478,6 +479,53 @@ describe('createRecommendationRecall 编排', () => {
     }
 
     expect(degraded).toBe('provider_error')
+  })
+
+  test('#524：feature 补算失败 ⇒ 该列整列置 null（请求级不可用），不留通道值被均值放大', async () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {})
+    const fail = () => {
+      throw new Error('模拟补算查询失败')
+    }
+    const brokenDb = { select: fail, execute: fail } as unknown as Db
+    const candidate = (listingId: string, channelValue: number | null): RecallCandidate => ({
+      listingId,
+      sellerId: 'seller',
+      category: 'BOOKS',
+      recallSources: channelValue === null ? ['fresh'] : ['semantic', 'wish', 'popular'],
+      exploreEligible: false,
+      semanticScore: channelValue,
+      wishScore: channelValue === null ? null : 80,
+      popularity: channelValue === null ? null : 9,
+      userCategoryAffinity: null,
+      freshness: 1,
+      createdAt: new Date(),
+      alreadySeenCount: 0,
+      sellerExposure: 1,
+    })
+    // 通道 Top-K 的候选带着高值；如果失败时只保留它们，排序层会把其余候选按这些高值的均值补齐。
+    const candidates = [candidate('a', 0.9), candidate('b', null)]
+
+    try {
+      await enrichCandidateFeatures(
+        { db: brokenDb, embeddingModel: MODEL },
+        {
+          candidates,
+          now: new Date(),
+          viewerUserId: newId(),
+          interestVector: X,
+          model: MODEL,
+          wishAvailable: true,
+        },
+      )
+    } finally {
+      warn.mockRestore()
+    }
+
+    for (const row of candidates) {
+      expect(row.semanticScore).toBeNull()
+      expect(row.wishScore).toBeNull()
+      expect(row.popularity).toBeNull()
+    }
   })
 
   test('整层不抛错：数据库全挂时六路各自降级为空候选 + provider_error', async () => {

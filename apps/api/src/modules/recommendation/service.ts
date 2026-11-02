@@ -269,30 +269,32 @@ export function createRecommendationService(deps: {
    * `requestId` 去撞 `attribution_not_found`（N10）。
    *
    * #524：降级不再静默 —— 原因落 `degrade_reason` 列、打一行结构化日志、计入进程内指标。
-   * `no_candidates`（冷启动 / 全被过滤）是业务上可接受的，其余三种是故障，日志级别也分开。
+   * `no_candidates`（冷启动 / 空库：召回一个候选都没有）是业务上可接受的，其余三种是故障，日志级别也分开。
    */
   async function serveDegradedFeed(
     input: { viewerId: string | null; sessionId: string; limit: number },
     reason: RecommendationDegradeReason,
     error?: unknown,
   ): Promise<RecommendationFeedResponse> {
-    const request = await store.createRequest({
-      id: newId(),
-      userId: input.viewerId,
-      anonymousSessionId: input.sessionId,
-      strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
-      degradeReason: reason,
-    })
+    // 先记指标与日志、再写库：降级往往正是数据库出问题的时候，写库再抛也不能把原因吞掉。
+    const requestId = newId()
     metrics?.recordDegradedFeed(reason)
     const log = JSON.stringify({
       event: 'recommendation.feed_degraded',
       reason,
-      requestId: request.id,
+      requestId,
       identity: input.viewerId === null ? 'anonymous' : 'user',
       ...(error === undefined ? {} : { error: describeError(error) }),
     })
     if (reason === 'no_candidates') console.info(log)
     else console.error(log)
+    const request = await store.createRequest({
+      id: requestId,
+      userId: input.viewerId,
+      anonymousSessionId: input.sessionId,
+      strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
+      degradeReason: reason,
+    })
     return serveByNewest({
       viewerId: input.viewerId,
       requestId: request.id,

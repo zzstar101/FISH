@@ -52,13 +52,13 @@ recall（6 路建池，≤500）
 ### 3.1 召回与特征补算（`apps/api/src/modules/recommendation/recall/`）
 
 - **embedding 模型**：`createApp` 新增末位参数 `recommendationEmbedding`（默认 `STUB_EMBEDDING_MODEL`，与 worker stub 同名），`index.ts` 传 `loadRecommendationEmbeddingModel()`。`STUB_VISUAL_EMBEDDING_MODEL` 不再出现在推荐装配里。
-- **explore 通道**换成 `findUnderexposedRecallCandidates`：可见商品左连近 7 天 `IMPRESSION` 的去重身份数，`< RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES (20)` 才入池，按曝光少 → 发布新 → id 排序，取 `RECALL_CHANNEL_LIMITS.explore (50)`。v1 的 new_listing / new_seller / cold_category 三块与相关常量删除。
+- **explore 通道**换成 `findUnderexposedRecallCandidates`：从可见商品出发，按 `(listing_id, occurred_at)` 索引逐个数近 7 天 `IMPRESSION` 的去重身份（只数到阈值为止，单次成本 ≈ 可见商品数 × min(曝光, 20)，不随全站曝光总量增长），`< RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES (20)` 才入池，按曝光少 → 发布新 → id 排序，取 `RECALL_CHANNEL_LIMITS.explore (50)`。v1 的 new_listing / new_seller / cold_category 三块与相关常量删除。
 - **merge**：`exploreEligible = recallSources.includes('explore')`（不再看第一来源）；本请求有类目画像时未命中类目记 `0`（可比），完全没有画像才是 `null`（请求级缺失）。六路上限之和 480 < 500，探索候选不会被截断掉。
-- **enrichCandidateFeatures**（合并之后、排序之前，一次请求最多 3 条批量查询）：
+- **enrichCandidateFeatures**（合并之后、排序之前，最多 3 条批量查询**并行**）：
   - semantic：`similarListingsByIds`（只认当前模型的新鲜向量）在候选 id 内算 cosine；没有向量的候选保持 `null`（候选级缺失）。
   - wish：本次有 wish 通道结果才批量取；未命中的候选记 `0`。没有愿望 → 整列 `null`。
   - popularity：同一 SQL 加 `listingIds` 限定；没有信号的候选记 `0`。
-  - 任一批量失败只 `console.warn`，保留各通道原值，不让整次推荐失败。
+  - 任一批量失败：`console.warn`，并把该列**整列置 `null`**（请求级不可用 → 排序层去权归一），不让整次推荐失败。不保留通道原值：否则其余候选会被按"通道 Top-K 的均值"补齐，失败时反而整体抬高。
 
 ### 3.2 热度（`packages/db/src/recall-store.ts` `findPopularRecallCandidates`）
 
@@ -146,6 +146,9 @@ API 进程现在读取 `EMBEDDING_TRANSPORT`（无默认值）与 live 时的 `E
 - 第 7 条（对外暴露推荐原因 / `rank_breakdown`）：Owner 决定不在本 PR 做。
 - ANN 索引：当前线上商品量级（~22 条）exact scan 足够。**触发重估的阈值**：当前模型商品向量 > 5000 条，或 `pgvector` 延迟 P99 > 50ms（admin 指标 `latency`）。
 - 事件表去重索引：不加（Q6），去重在聚合时做。
+- 热度仍是每次请求现算（14 天窗口聚合，匿名事件多一次按 `request_id` 索引的快照归因 `EXISTS`）。流量上来后若 `findPopularRecallCandidates` 成为瓶颈，再改为 worker 定时预计算。
+- 探索位按"排序后的位置"决定；`listCardsByIds` 在召回到出卡之间丢掉商品（极少：刚下架）时位置会重排，个别探索位可能挪到相邻窗口，不影响整体约 20% 的占比。
+- 候选全部被负反馈隐藏时仍出一条空的 ranked 请求（沿用 v1），不算 `no_candidates` 降级：退回 newest 会把用户刚隐藏的商品又推回来。
 
 ## 9. 部署后只读核对 SQL
 

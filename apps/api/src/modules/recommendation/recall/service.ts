@@ -125,9 +125,10 @@ function popularityInput(now: Date, viewerUserId: string | null) {
  *   匿名 / 无匹配保持 null（请求级缺失）。
  * - popularity：全站量，对每个候选都有定义，没有信号即 0。
  *
- * 单项补算失败只保留通道给的值（其余候选 null，由排序层按均值补），不影响别的 feature。
+ * 三项互不依赖，并行查询。单项补算失败 ⇒ 该列**整列置 null**（请求级不可用，排序层去掉该权重
+ * 并归一）：只留通道值的话，其余候选会被排序层按"通道 Top-K 的均值"补齐，失败时反而整体抬高。
  */
-async function enrichCandidateFeatures(
+export async function enrichCandidateFeatures(
   deps: RecommendationRecallDeps,
   input: {
     candidates: RecallCandidate[]
@@ -141,29 +142,26 @@ async function enrichCandidateFeatures(
   const ids = input.candidates.map((candidate) => candidate.listingId)
   if (ids.length === 0) return
 
-  if (input.interestVector !== null && input.model !== null) {
+  const semantic = async (vector: number[], model: string): Promise<void> => {
     const startedAt = performance.now()
     try {
-      const rows = await similarListingsByIds(deps.db, {
-        model: input.model,
-        vector: input.interestVector,
-        ids,
-      })
+      const rows = await similarListingsByIds(deps.db, { model, vector, ids })
       const scores = new Map(rows.map((row) => [row.id, 1 - row.distance]))
       for (const candidate of input.candidates) {
         candidate.semanticScore = scores.get(candidate.listingId) ?? null
       }
     } catch (error) {
-      console.warn('[recommendation] 候选 semantic feature 补算失败，保留通道值：', error)
+      console.warn('[recommendation] 候选 semantic feature 补算失败，本次请求整列不可用：', error)
+      for (const candidate of input.candidates) candidate.semanticScore = null
     } finally {
       deps.latency?.observe('pgvector', performance.now() - startedAt)
     }
   }
 
-  if (input.viewerUserId !== null && input.wishAvailable) {
+  const wish = async (userId: string): Promise<void> => {
     try {
       const rows = await findWishRecallCandidates(deps.db, {
-        userId: input.viewerUserId,
+        userId,
         limit: ids.length,
         listingIds: ids,
       })
@@ -172,23 +170,34 @@ async function enrichCandidateFeatures(
         candidate.wishScore = scores.get(candidate.listingId) ?? 0
       }
     } catch (error) {
-      console.warn('[recommendation] 候选 wish feature 补算失败，保留通道值：', error)
+      console.warn('[recommendation] 候选 wish feature 补算失败，本次请求整列不可用：', error)
+      for (const candidate of input.candidates) candidate.wishScore = null
     }
   }
 
-  try {
-    const rows = await findPopularRecallCandidates(deps.db, {
-      ...popularityInput(input.now, input.viewerUserId),
-      limit: ids.length,
-      listingIds: ids,
-    })
-    const scores = new Map(rows.map((row) => [row.listingId, row.popularity]))
-    for (const candidate of input.candidates) {
-      candidate.popularity = scores.get(candidate.listingId) ?? 0
+  const popularity = async (): Promise<void> => {
+    try {
+      const rows = await findPopularRecallCandidates(deps.db, {
+        ...popularityInput(input.now, input.viewerUserId),
+        limit: ids.length,
+        listingIds: ids,
+      })
+      const scores = new Map(rows.map((row) => [row.listingId, row.popularity]))
+      for (const candidate of input.candidates) {
+        candidate.popularity = scores.get(candidate.listingId) ?? 0
+      }
+    } catch (error) {
+      console.warn('[recommendation] 候选 popularity feature 补算失败，本次请求整列不可用：', error)
+      for (const candidate of input.candidates) candidate.popularity = null
     }
-  } catch (error) {
-    console.warn('[recommendation] 候选 popularity feature 补算失败，保留通道值：', error)
   }
+
+  const tasks: Promise<void>[] = [popularity()]
+  if (input.interestVector !== null && input.model !== null) {
+    tasks.push(semantic(input.interestVector, input.model))
+  }
+  if (input.viewerUserId !== null && input.wishAvailable) tasks.push(wish(input.viewerUserId))
+  await Promise.all(tasks)
 }
 
 /** 跑一路，失败即降级（不抛）。 */

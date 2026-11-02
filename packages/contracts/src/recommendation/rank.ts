@@ -268,7 +268,10 @@ export const RERANK_CATEGORY_MAX_IN_WINDOW = 2
 /** 探索配额窗口长度（位）。 */
 export const RERANK_EXPLORE_WINDOW = 5
 
-/** 每个探索窗口内至少几条来自 `explore` 通道 ⇒ 探索占比 ≥20%。 */
+/**
+ * 每个探索窗口内的显式探索位个数（#524）：每 5 位恰好 1 位留给探索池（位置由 requestId 哈希
+ * 决定），探索池为空时才让出 ⇒ 池里有货时探索占比恰好 20%。
+ */
 export const RERANK_EXPLORE_MIN_PER_WINDOW = 1
 
 /** 可被松弛的约束。 */
@@ -277,11 +280,15 @@ export const RerankConstraintSchema = z.enum(['seller', 'category', 'explore'])
 export type RerankConstraint = z.infer<typeof RerankConstraintSchema>
 
 /**
- * 固定松弛顺序：先让探索配额，再让类目窗，最后才让卖家间隔。
+ * 固定松弛顺序：`explore` → `category` → `seller`。
  *
- * 顺序即优先级，理由是三类约束的**性质不同**：探索配额是平台目标（给新商品/新卖家曝光），
+ * 顺序即优先级，理由是三类约束的**性质不同**：探索是平台目标（给少有人见过的商品曝光），
  * 让掉只是这一页少一点探索，用户感知不到；类目窗是体验约束，让掉会让同类目连出；
  * 卖家间隔最接近"霸屏"（同一卖家的商品占满首页），是三者里最不能破的。
+ *
+ * #524（rank-v2）起探索是**显式槽位**，不再和打散约束在同一个候选上谈判：探索位只在探索池
+ * 为空时让出（计入 `relaxations.explore`）；版面冲突（含探索位上）只按本顺序里的
+ * `category` → `seller` 逐个放弃。`explore` 留在顺序最前，表达的仍是"三者里它最先让"。
  *
  * **不引入随机**：约束不满足时按这个顺序逐个让掉并计数，结果与"谁来跑"无关。
  */
