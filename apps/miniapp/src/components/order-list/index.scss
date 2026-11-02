@@ -211,6 +211,8 @@
   font-weight: 600;
   color: var(--fg);
   max-width: 300px;
+  /* 昵称右侧还挂着认证徽章：允许先压到更窄再省略，避免长昵称顶出行（#534 审查） */
+  min-width: 0;
   @include ellipsis;
 }
 

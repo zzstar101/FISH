@@ -211,9 +211,10 @@
   height: 22px;
 }
 
-/* 认证胶囊：白玻璃底 + 品牌字，整颗是入口（进校园认证页） */
+/* 认证胶囊：白玻璃底 + 品牌字，整颗是入口（进校园认证页）；未认证时占昵称下方一行 */
 .profile__auth {
   flex: 0 0 auto;
+  margin-top: 12px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -235,12 +236,14 @@
   white-space: nowrap;
 }
 
-/* 已认证徽章（#534）：设计稿「认证」3D 徽章整图，34px 高；宽度按原图比例
-   （1568×616 → 34px 高约 87px 宽），保证 aspectFit 不变形、不出现留白 */
+/* 已认证徽章（#534）：设计稿「认证」3D 徽章整图，**昵称下方单独一行**。
+   入库资产 275×108（比例 2.546，设计稿原始 1568×616 已裁切提取）；
+   34px 高对应 86.6px 宽，这里取 87px，偏差 <0.5%，aspectFit 不变形、不留白 */
 .profile__auth-badge {
+  display: block;
   width: 87px;
   height: 34px;
-  flex: 0 0 auto;
+  margin-top: 10px;
 }
 
 .profile__auth-arrow {
