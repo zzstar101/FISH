@@ -181,7 +181,15 @@ export default function Scan() {
     ) {
       return
     }
-    if (parseMeetupQrPayload(result.rawValue) === null) {
+    // 解析兜底（#536）：解析器本身已是全量函数，但扫码回调没有外层 try/catch，
+    // 这里仍按防御口径兜住——任何解析异常都必须落「无效」面板，不得静默中断回调。
+    let matched = false
+    try {
+      matched = parseMeetupQrPayload(result.rawValue) !== null
+    } catch {
+      matched = false
+    }
+    if (!matched) {
       processingRef.current = true
       failedScanRef.current = { value: result.rawValue, at: Date.now() }
       setFailureKey('invalid')

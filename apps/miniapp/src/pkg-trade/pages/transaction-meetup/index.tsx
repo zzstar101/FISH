@@ -207,7 +207,13 @@ export default function TransactionMeetup() {
 
   useLoad(() => {
     if (routeCode) {
-      const parsed = parseMeetupQrPayload(routeCode)
+      // 解析兜底（#536）：解析异常按无效码展示，不让页面在 useLoad 里直接崩掉。
+      let parsed: MeetupQrPayload | null = null
+      try {
+        parsed = parseMeetupQrPayload(routeCode)
+      } catch {
+        parsed = null
+      }
       if (parsed) {
         scanRef.current = parsed
       } else {
@@ -1032,7 +1038,7 @@ export default function TransactionMeetup() {
                     <View className="meetup__qr-box">
                       <Image className="meetup__qr-ic" src={qrImage} mode="aspectFit" />
                     </View>
-                    <Text className="meetup__qr-cap">请对方用微信扫码</Text>
+                    <Text className="meetup__qr-cap">请对方在鱼小应内扫码</Text>
                   </View>
                 </View>
 
