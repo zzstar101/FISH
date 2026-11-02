@@ -1699,6 +1699,9 @@ export default function Conversation() {
    * 取消（点遮罩 / 取消）会让 `showActionSheet` reject —— 那不是错误，静默收场。
    */
   const onLongPressMessage = async (message: ReplyTarget) => {
+    // 长按手势结束后平台还会补一次 tap：在这里统一置位，所有气泡（文本/图片/语音/商品卡）
+    // 都靠各自的 onClick 首行 `consumeBubbleTap()` 吞掉，避免语音被放、图片被预览、卡片跳走。
+    beginBubbleLongPress()
     const actions =
       'kind' in message
         ? mediaActions(message, userId, Date.now(), MESSAGE_RECALL_WINDOW_MS)
@@ -2042,10 +2045,7 @@ export default function Conversation() {
             <View
               className="conv__lcard"
               onTouchStart={resetBubbleTapGuard}
-              onLongPress={() => {
-                beginBubbleLongPress()
-                void onLongPressMessage(message)
-              }}
+              onLongPress={() => void onLongPressMessage(message)}
               onClick={
                 canOpen
                   ? () => {
@@ -2287,10 +2287,7 @@ export default function Conversation() {
                           <View
                             className="conv__bubble conv__bubble--media"
                             onTouchStart={resetBubbleTapGuard}
-                            onLongPress={() => {
-                              beginBubbleLongPress()
-                              void onLongPressMessage(item)
-                            }}
+                            onLongPress={() => void onLongPressMessage(item)}
                             onClick={() => {
                               if (consumeBubbleTap()) return
                               openImage(item)
