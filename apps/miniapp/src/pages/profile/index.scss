@@ -235,6 +235,13 @@
   white-space: nowrap;
 }
 
+/* 已认证徽章（#534）：与商品详情卖家位（`detail__stick`）同尺寸，胶囊内垂直居中 */
+.profile__auth-badge {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
 .profile__auth-arrow {
   width: 22px;
   height: 22px;

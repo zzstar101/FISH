@@ -673,6 +673,15 @@ export default function Profile() {
               />
               {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证 */}
               <View className="profile__auth" onClick={openVerify}>
+                {/* 已认证徽章（#534）：与设置页 / 他人主页 / 商品卡同一资产，
+                    此前这里只有纯文字，是端上唯一的「已认证无图标」形态 */}
+                {verified ? (
+                  <Image
+                    className="profile__auth-badge"
+                    src={ICONS.verifiedAccent}
+                    mode="aspectFit"
+                  />
+                ) : null}
                 <Text className="profile__auth-txt">
                   {verified ? '已认证' : '未认证，前往认证'}
                 </Text>

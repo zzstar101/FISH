@@ -425,7 +425,13 @@ export default function OrderList({
                   <View className="orders__top">
                     <View className="orders__av">
                       <Text className="orders__av-tx">{item.counterpart.nickname.slice(0, 1)}</Text>
-                      {item.counterpart.verified ? <View className="orders__av-badge" /> : null}
+                      {item.counterpart.verified ? (
+                        <Image
+                          className="orders__av-badge"
+                          src={ICONS.verifiedAccent}
+                          mode="aspectFit"
+                        />
+                      ) : null}
                     </View>
                     <Text className="orders__oname">{item.counterpart.nickname}</Text>
                     {/*
