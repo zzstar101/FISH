@@ -539,6 +539,9 @@ describe('会话页的交易码入口 —— 必须带交易 id（#521）', () =
   test('会话页不再硬编码无 id 地址：跳转统一走 meetupUrlById', async () => {
     const code = codeOnly(await conversationSource())
     expect(code).toContain('meetupUrlById(')
+    // 传进去的必须是选中的那笔交易，而不是空串 / 别的 id
+    expect(code).toContain('openMeetup(txCard.transactionId)')
+    expect(code).toContain('url: meetupUrlById(transactionId)')
     // 无 id 直跳会让面交页 `router.params.id` 为空 → 直接落「找不到这笔交易」
     expect(code).not.toContain('/pkg-trade/pages/transaction-meetup/index')
   })

@@ -403,4 +403,18 @@ describe('transactionsByConversation', () => {
     expect(map.get('c-1')?.id).toBe('t-new')
     expect(capsuleFor(dto(), map)).toEqual({ label: '待面交', cls: 'is-warn' })
   })
+
+  test('createdAt 相同毫秒时保留列表里更靠前的那笔（DESC = 更新）', () => {
+    const sameMs = '2026-09-21T00:00:00.000Z'
+    const newer = tx({ id: 't-new', conversationId: 'c-1', createdAt: sameMs })
+    const older = tx({
+      id: 't-old',
+      conversationId: 'c-1',
+      status: 'CANCELLED',
+      cancelledAt: '2026-09-20T00:00:00.000Z',
+      createdAt: sameMs,
+    })
+    const map = transactionsByConversation([newer, older], [])
+    expect(map.get('c-1')?.id).toBe('t-new')
+  })
 })

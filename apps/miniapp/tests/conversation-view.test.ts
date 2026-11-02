@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import { lastEventOfMessages } from '../src/features/chat/capsule'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
   applyMediaRecalled,
@@ -205,13 +206,16 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
       icon: 'check',
       title: '交易已完成',
       actionLabel: '查看交易',
+      action: 'open',
       desc: '¥150 · 订单已完成。',
     })
+    // 已取消不给交易码入口（#522 验收）：卡面只陈述终态
     expect(txCardView(tx({ status: 'CANCELLED' }))).toMatchObject({
       tone: 'is-plain',
       icon: 'close',
       title: '交易已取消',
-      actionLabel: '查看交易',
+      actionLabel: '',
+      action: 'none',
       desc: '¥150 · 这笔交易已取消。',
     })
   })
@@ -253,6 +257,48 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
     expect(txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: null })).toMatchObject({
       title: '交易已取消',
     })
+  })
+
+  test('取消后新提案的判据直接取消息流（最后一条是 TEXT 也找得到提案）', () => {
+    const messages = [
+      {
+        id: 'm-1',
+        conversationId: 'c-1',
+        senderId: null,
+        sender: null,
+        type: 'SYSTEM',
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: 'txn_1',
+          amountCents: 15000,
+        }),
+        createdAt: '2026-10-01T02:00:00.000Z',
+      },
+      {
+        id: 'm-2',
+        conversationId: 'c-1',
+        senderId: null,
+        sender: null,
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }),
+        createdAt: '2026-10-01T02:10:00.000Z',
+      },
+      {
+        id: 'm-3',
+        conversationId: 'c-1',
+        senderId: 'u-2',
+        sender: null,
+        type: 'TEXT',
+        content: '那我再挂一次，还能按这个价吗',
+        createdAt: '2026-10-01T02:20:00.000Z',
+      },
+    ] as MessageDto[]
+
+    const lastTxEventType = lastEventOfMessages(messages)?.type
+    expect(lastTxEventType).toBe('tx.proposal')
+    expect(
+      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: lastTxEventType }),
+    ).toBeNull()
   })
 })
 

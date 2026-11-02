@@ -80,8 +80,9 @@ export function systemPillText(content: string): string {
  * 吸底交易进度卡的视图模型（#521 / #522）。
  *
  * 四种状态与 `features/chat/capsule.ts` 的胶囊档位一一对应（同一个 `tone` 词表），
- * 会话行与会话页因此不会各说各话；终态也**有**入口 —— 面交页对 COMPLETED / CANCELLED
- * 渲染专门的结果卡，跳过去看到的是准确状态，而不是「找不到这笔交易」。
+ * 会话行与会话页因此不会各说各话。已完成仍留「查看交易」入口（面交页对 COMPLETED
+ * 渲染专门的结果卡）；已取消**不给**入口 —— 面交页标题仍是「交易码」，与 #522
+ * 「已取消且没有交易码入口」冲突，卡片只陈述终态。
  *
  * `tx === null` 但拿得到 `fallbackTxId`（消息里有 `tx.accepted`）时给一张降级卡：
  * 状态取不到就如实说取不到，入口照留。`tx` 与 `fallbackTxId` 都没有 → 不显示卡片
@@ -92,8 +93,8 @@ export function systemPillText(content: string): string {
  */
 export type TxCardTone = 'is-warn' | 'is-pending' | 'is-ok' | 'is-plain'
 
-/** CTA 的两种语义：打开交易页 / 就地重试（失败且没有可打开的 id 时） */
-export type TxCardAction = 'open' | 'retry'
+/** CTA 的语义：打开交易页 / 就地重试（失败且没有可打开的 id 时）/ 无入口（已取消） */
+export type TxCardAction = 'open' | 'retry' | 'none'
 
 export type TxCardView = {
   /** 与列表行胶囊同名同义：黄=待我面交，蓝=等对方，绿=完成，灰=取消 */
@@ -172,13 +173,17 @@ export function txCardView(
     }
   }
   if (tx.status === 'CANCELLED') {
+    /**
+     * 取消后**不给交易码入口**（#522 验收）：面交页标题仍是「交易码」，即便它渲染的
+     * 是取消结果卡，入口语义也与验收冲突。卡片只陈述终态，不提供跳转。
+     */
     return {
       tone: 'is-plain',
       icon: 'close',
       title: '交易已取消',
       desc: `${amount} · 这笔交易已取消。`,
-      actionLabel: '查看交易',
-      action: 'open',
+      actionLabel: '',
+      action: 'none',
       transactionId: tx.id,
     }
   }

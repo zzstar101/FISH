@@ -137,8 +137,9 @@ function lastEventOfLastMessage(conversation: ConversationDto): TransactionSyste
  * `conversation_id`（`transactions` 的部分唯一索引只约束 PENDING_MEETUP / COMPLETED，
  * CANCELLED 行可累积）。列表按 `created_at DESC` 返回 —— 数组**末尾是最旧的**，
  * 无脑 `map.set` 会让最旧那笔（例如早已取消的）永久盖住当前那笔。所以按
- * `createdAt` 取最新：越新的覆盖越旧的，`createdAt` 相同时后出现的胜（同毫秒属
- * 极端巧合，取哪笔都不影响「当前状态」的正确性）。
+ * `createdAt` 取最新：越新的覆盖越旧的；`createdAt` **完全相同**时保留先出现的
+ * 那笔 —— 列表是 `created_at DESC`，同一毫秒里排在前面的才是服务端认定的新交易。
+ * （用 `>=` 会让同毫秒的旧交易反过来盖住新的，等于把上面的结论又推翻。）
  */
 export function transactionsByConversation(
   buyer: TransactionDto[],
@@ -147,7 +148,7 @@ export function transactionsByConversation(
   const map = new Map<string, TransactionDto>()
   for (const tx of [...buyer, ...seller]) {
     const current = map.get(tx.conversationId)
-    if (!current || Date.parse(tx.createdAt) >= Date.parse(current.createdAt)) {
+    if (!current || Date.parse(tx.createdAt) > Date.parse(current.createdAt)) {
       map.set(tx.conversationId, tx)
     }
   }

@@ -34,9 +34,11 @@ export function TxCard({ view, onAction }: TxCardProps) {
         <Text className="conv__txcard-t">{view.title}</Text>
         <Text className="conv__txcard-d">{view.desc}</Text>
       </View>
-      <View className="conv__txcard-act" onClick={onAction}>
-        <Text>{view.actionLabel}</Text>
-      </View>
+      {view.action === 'none' ? null : (
+        <View className="conv__txcard-act" onClick={onAction}>
+          <Text>{view.actionLabel}</Text>
+        </View>
+      )}
     </View>
   )
 }
