@@ -44,6 +44,7 @@ import { ChatRealtime, type ChatRealtimeEvent } from '@/features/chat/realtime'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
 import { requestSubscribe } from '@/features/subscribe/request'
+import { fetchTransaction } from '@/features/transaction/api'
 import { fetchConversationTransaction } from '@/features/transaction/conversation'
 import { meetupUrlById } from '@/features/transaction/order-links'
 import { formatAmount } from '@/lib/money'
@@ -496,11 +497,18 @@ export default function Conversation() {
              * 取消都不再写 SYSTEM 消息，只看消息流会永远停在「待面交」。所以每次
              * load（进页、从子页返回、断线补刷）都顺带查一次交易域。
              *
-             * 失败**不降级成任何终态**：保留上一份 `tx`，只把 status 记为 failed，
-             * 让卡片退回「状态待更新」（有消息里的 id 就仍然给入口）。下一次 load
-             * 就是重试 —— 交易接口没有自己的重试钮，也不需要：它不是页面主数据。
+             * 首屏历史里如果有 `tx.accepted`，就带上它的 id 走精确查询 —— 列表接口
+             * 最多翻 `MAX_PAGES × PAGE_SIZE` 条，老用户的目标交易可能被截断。
+             *
+             * 失败**不降级成任何终态**：`failed` 交给 `txCardView` 渲染成「状态待更新」
+             * 卡（有消息里的 id 就给面交页入口，没有就给重试钮），绝不复用上一次的
+             * `tx` 冒充当前状态。下一次 load / 手动重试都会再查。
              */
-            void fetchConversationTransaction(conversationId, detail.conversation.role)
+            void fetchConversationTransaction(
+              conversationId,
+              detail.conversation.role,
+              lastTxAcceptedId(page.items),
+            )
               .then((tx) => {
                 if (current !== epoch.current) return
                 setTxLoad({ status: 'ok', tx })
@@ -628,6 +636,8 @@ export default function Conversation() {
   const pendingRef = useRef<PendingMessage[]>([])
   /** 实时补刷的门禁要读「当前详情态」：handler 每次渲染重建，读 ref 拿最新值 */
   const convStateRef = useRef(convState)
+  /** 详情轮询要读「当前交易态」：判断是否还在 PENDING_MEETUP（决定要不要刷进度） */
+  const txLoadRef = useRef(txLoad)
   authedRef.current = authStatus === 'authed'
   userIdRef.current = userId
   loadRef.current = load
@@ -636,6 +646,7 @@ export default function Conversation() {
   mediaRef.current = media
   pendingMediaRef.current = pendingMedia
   convStateRef.current = convState
+  txLoadRef.current = txLoad
   useDidShow(() => {
     visibleRef.current = true
     // 回到本页：把在线态的轮询表续上（隐藏时真的停掉了，见 useDidHide）
@@ -792,6 +803,20 @@ export default function Conversation() {
       timer = setInterval(() => {
         if (!visibleRef.current || !aliveRef.current) return
         const current = epoch.current
+        /**
+         * 进度卡实时性（#522）：契约没有交易推送，成交 / 取消也不写 SYSTEM 消息 ——
+         * 对方在我停留期间确认或取消时，本页只能靠自己轮询。只在 PENDING_MEETUP 时
+         * 多打一个按 id 的详情请求（进终态后这一跳自然停掉），不重拉交易列表。
+         */
+        const pendingTx = txLoadRef.current.tx
+        if (pendingTx?.status === 'PENDING_MEETUP') {
+          void fetchTransaction(pendingTx.id)
+            .then((tx) => {
+              if (current !== epoch.current || !visibleRef.current) return
+              setTxLoad({ status: 'ok', tx })
+            })
+            .catch((error) => console.warn('[miniapp] 会话交易进度轮询失败', error))
+        }
         presenceSeq.current += 1
         const seq = presenceSeq.current
         void loadConversation(conversationId).then((detail) => {
@@ -1866,6 +1891,25 @@ export default function Conversation() {
   const fallbackTxId = useMemo(() => lastTxAcceptedId(messages), [messages])
 
   /**
+   * 失败卡上的「重新加载」：只重查交易，不整页重拉 —— 不 bump `epoch`、不动消息流，
+   * 失败也保持 failed（卡片内容不变，用户还能再点）。
+   */
+  const retryTx = useCallback(() => {
+    if (!conversation) return
+    const current = epoch.current
+    void fetchConversationTransaction(conversationId, conversation.role, fallbackTxId)
+      .then((tx) => {
+        if (current !== epoch.current) return
+        setTxLoad({ status: 'ok', tx })
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 会话交易进度重试失败', error)
+        if (current !== epoch.current) return
+        setTxLoad((prev) => ({ status: 'failed', tx: prev.tx }))
+      })
+  }, [conversation, conversationId, fallbackTxId])
+
+  /**
    * 「打开即看最新」：会话流挂在 ScrollView 的 `scrollIntoView` 上，指向最后一条
    * 消息的 DOM id。内容追加时 id 必然变化 → 小程序必然重新滚动，不存在
    * `scroll-top` 先置 0 再置大值那套舞蹈在真机上的竞态（实测会停在顶部）。
@@ -2070,8 +2114,29 @@ export default function Conversation() {
    * 吸底交易进度卡（#521 / #522，模式①）：挂在输入栏上方、常驻显示，状态变化只改
    * 卡片内容。`idle`（还没查过交易）时不渲染，避免首帧闪一张「状态待更新」；
    * 查过之后即便 `tx` 为 null 也交给 `txCardView` 判断要不要退到消息里的 id。
+   *
+   * `lastEventType` 与聊天列表的胶囊同源（会话最后一条 SYSTEM 交易事件）：取消后
+   * 买家又发起新提案时，`txCardView` 会把旧交易的卡片收起，免得和胶囊的
+   * 「待同意 / 待接受」互相打脸。
    */
-  const txCard = txLoad.status === 'idle' ? null : txCardView(txLoad.tx, fallbackTxId)
+  const lastTxEventType =
+    conversation.lastMessage?.type === 'SYSTEM'
+      ? (parseTxEvent(conversation.lastMessage.content)?.type ?? null)
+      : null
+  /**
+   * 只有「这条会话确实有过交易」（消息里有 `tx.accepted`，或上一轮查到过交易行）时才
+   * 渲染失败卡 —— 否则一次网络抖动会让**没成交的普通聊天**也冒出一张「交易状态待更新」。
+   * 失败时不信任 `tx` 里的旧状态，只把「存在交易」这件事当判据。
+   */
+  const txKnown = fallbackTxId !== null || txLoad.tx !== null
+  const txFailed = txLoad.status === 'failed' && txKnown
+  const txCard =
+    txLoad.status === 'idle'
+      ? null
+      : txCardView(txFailed ? null : txLoad.tx, fallbackTxId, {
+          failed: txFailed,
+          lastEventType: lastTxEventType,
+        })
 
   const statusLabel = listingStatusText(listing.status)
 
@@ -2410,7 +2475,14 @@ export default function Conversation() {
       */}
       <View className="conv__bar">
         {/* 交易进度卡（模式①）：吸附在输入框上方，长期显示、只改内容 */}
-        {txCard ? <TxCard view={txCard} onAction={() => openMeetup(txCard.transactionId)} /> : null}
+        {txCard ? (
+          <TxCard
+            view={txCard}
+            onAction={() =>
+              txCard.action === 'retry' ? retryTx() : openMeetup(txCard.transactionId)
+            }
+          />
+        ) : null}
         {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
         {replyTarget ? (
           <View className="conv__replybar">

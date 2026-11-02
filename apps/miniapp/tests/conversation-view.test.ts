@@ -221,9 +221,38 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
       tone: 'is-warn',
       title: '交易状态待更新',
       actionLabel: '查看交易码',
+      action: 'open',
       transactionId: 'txn_msg',
     })
     expect(txCardView(null, null)).toBeNull()
+  })
+
+  test('查询失败：不信上一份状态，有 id 给入口、没 id 给就地重试', () => {
+    expect(txCardView(tx({ status: 'CANCELLED' }), 'txn_msg', { failed: true })).toMatchObject({
+      tone: 'is-warn',
+      icon: 'refresh',
+      title: '交易状态待更新',
+      actionLabel: '查看交易码',
+      action: 'open',
+      transactionId: 'txn_msg',
+    })
+    expect(txCardView(null, null, { failed: true })).toMatchObject({
+      tone: 'is-warn',
+      icon: 'refresh',
+      title: '交易状态待更新',
+      actionLabel: '重新加载',
+      action: 'retry',
+      transactionId: '',
+    })
+  })
+
+  test('取消后又有新提案：旧交易卡收起，不跟胶囊的「待同意 / 待接受」打架', () => {
+    expect(
+      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: 'tx.proposal' }),
+    ).toBeNull()
+    expect(txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: null })).toMatchObject({
+      title: '交易已取消',
+    })
   })
 })
 

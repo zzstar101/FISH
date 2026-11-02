@@ -546,7 +546,8 @@ describe('会话页的交易码入口 —— 必须带交易 id（#521）', () =
   test('交易进度卡挂在输入栏、按交易行取数；消息流不再画交易码卡（#522）', async () => {
     const code = codeOnly(await conversationSource())
     expect(code).toContain('fetchConversationTransaction(conversationId')
-    expect(code).toContain('<TxCard view={txCard}')
+    expect(code).toContain('<TxCard')
+    expect(code).toContain('view={txCard}')
     // 交易码卡只应存在于 `tx-card.tsx`；会话页再画一份就又回到「按事件快照说话」
     expect(code).not.toContain('conv__txcard')
   })

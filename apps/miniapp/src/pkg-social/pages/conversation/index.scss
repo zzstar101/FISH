@@ -415,15 +415,6 @@
   text-align: center;
 }
 
-/* 胶囊 + 卡片的组合（tx.accepted / tx.completed）：竖排居中，间距即稿子的 8pt */
-.conv__syswrap {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-}
-
 /* 消息行：头像 + 气泡列（稿子 .msg / .col） */
 .conv__row {
   display: flex;

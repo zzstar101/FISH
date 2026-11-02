@@ -86,24 +86,66 @@ export function systemPillText(content: string): string {
  * `tx === null` 但拿得到 `fallbackTxId`（消息里有 `tx.accepted`）时给一张降级卡：
  * 状态取不到就如实说取不到，入口照留。`tx` 与 `fallbackTxId` 都没有 → 不显示卡片
  * （这条会话还没成交，输入栏上不该凭空多一块东西）。
+ *
+ * `options.failed` 是**查询失败**（不是「没查到」）：此时不信任任何一份旧状态，
+ * 只给「状态待更新」卡 —— 有消息里的 id 就还能进面交页，没有就留一个重试钮。
  */
 export type TxCardTone = 'is-warn' | 'is-pending' | 'is-ok' | 'is-plain'
+
+/** CTA 的两种语义：打开交易页 / 就地重试（失败且没有可打开的 id 时） */
+export type TxCardAction = 'open' | 'retry'
 
 export type TxCardView = {
   /** 与列表行胶囊同名同义：黄=待我面交，蓝=等对方，绿=完成，灰=取消 */
   tone: TxCardTone
-  icon: 'qr' | 'clock' | 'check' | 'close'
+  icon: 'qr' | 'clock' | 'check' | 'close' | 'refresh'
   title: string
   desc: string
   actionLabel: string
-  /** 点 CTA 要打开的那笔交易（面交页的唯一入参） */
+  action: TxCardAction
+  /** 点 CTA 要打开的那笔交易（面交页的唯一入参）；`retry` 时为空串 */
   transactionId: string
 }
 
 export function txCardView(
   tx: TransactionDto | null,
   fallbackTxId?: string | null,
+  options?: { failed?: boolean; lastEventType?: string | null },
 ): TxCardView | null {
+  /**
+   * 交易查询失败：**绝不拿上一次的 `tx` 冒充当前状态**（#522 验收：失败不误报终态）。
+   * 有消息里的 id 就给入口（面交页按 id 自己查，看到的是准确状态）；连 id 都没有
+   * 就给一个就地重试的按钮 —— 否则整张卡消失，用户既不知道进度、也没有重试入口。
+   */
+  if (options?.failed) {
+    return fallbackTxId
+      ? {
+          tone: 'is-warn',
+          icon: 'refresh',
+          title: '交易状态待更新',
+          desc: '刚才没取到最新进度，点开交易码页可以看到准确状态。',
+          actionLabel: '查看交易码',
+          action: 'open',
+          transactionId: fallbackTxId,
+        }
+      : {
+          tone: 'is-warn',
+          icon: 'refresh',
+          title: '交易状态待更新',
+          desc: '刚才没取到最新进度，点一下重新加载。',
+          actionLabel: '重新加载',
+          action: 'retry',
+          transactionId: '',
+        }
+  }
+
+  /**
+   * 取消后买家又发起了新提案：`capsuleFor` 的 `proposalSupersedes` 会把这个会话
+   * 显示成「待同意 / 待接受」，卡片再挂一笔旧的「交易已取消」就自相矛盾了 ——
+   * 此刻还没有当前交易，整张卡收起，等新提案被接受、交易行建出来再出现。
+   */
+  if (tx?.status === 'CANCELLED' && options?.lastEventType === 'tx.proposal') return null
+
   if (!tx) {
     if (!fallbackTxId) return null
     return {
@@ -112,6 +154,7 @@ export function txCardView(
       title: '交易状态待更新',
       desc: '刚才没取到最新进度，点开交易码页可以看到准确状态。',
       actionLabel: '查看交易码',
+      action: 'open',
       transactionId: fallbackTxId,
     }
   }
@@ -124,6 +167,7 @@ export function txCardView(
       title: '交易已完成',
       desc: `${amount} · 订单已完成。`,
       actionLabel: '查看交易',
+      action: 'open',
       transactionId: tx.id,
     }
   }
@@ -134,6 +178,7 @@ export function txCardView(
       title: '交易已取消',
       desc: `${amount} · 这笔交易已取消。`,
       actionLabel: '查看交易',
+      action: 'open',
       transactionId: tx.id,
     }
   }
@@ -147,6 +192,7 @@ export function txCardView(
         title: '待面交',
         desc: `${amount} · 面交时与对方核对 6 位交易码，双方确认后订单完成。`,
         actionLabel: '查看交易码',
+        action: 'open',
         transactionId: tx.id,
       }
     : {
@@ -155,6 +201,7 @@ export function txCardView(
         title: '待对方确认',
         desc: `${amount} · 你已确认，等待对方确认后订单完成。`,
         actionLabel: '查看交易码',
+        action: 'open',
         transactionId: tx.id,
       }
 }

@@ -18,6 +18,7 @@ const TX_CARD_ICON = {
   clock: ICONS.clockInk,
   check: ICONS.checkCircle,
   close: ICONS.closeInk,
+  refresh: ICONS.refresh,
 } as const
 
 type TxCardProps = {
