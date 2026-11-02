@@ -334,7 +334,10 @@ export default function Scan() {
                     if (item.action === 'back') {
                       goBack()
                     } else {
-                      // retry 回取景：相机若已卸下会重挂（错误过的实例不会自愈）
+                      // retry 回取景：相机若已卸下会重挂（错误过的实例不会自愈）；
+                      // 同时解锁处理锁 —— invalid 分支为防重复弹面板会置 processingRef，
+                      // 不解锁的话回取景后所有扫码都会被入口守卫直接吞掉（#536 审查 high）。
+                      processingRef.current = false
                       setCameraOn(true)
                       setMode('viewfinder')
                     }

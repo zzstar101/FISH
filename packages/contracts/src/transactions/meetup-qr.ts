@@ -45,6 +45,9 @@ export type MeetupQrPayload = { transactionId: string; token: string }
  * 只接受 `http(s)://`，对 `fish://…` 构造即抛 `TypeError: Invalid URL`。
  * 异常曾落在扫码回调里、任何状态更新之前，导致扫码静默中断（取景框停住、无核销请求）。
  * 本解析器不依赖任何运行时 URL 全局。
+ *
+ * 与 WHATWG / `URLSearchParams` 的**刻意差异**（payload 只由本应用签发，机器路径不涉及）：
+ * 不剥除末尾空白，且百分号编码的键名按解码后匹配（`%74x` 等价 `tx`）。
  */
 function parseQuery(query: string): Map<string, string> {
   const params = new Map<string, string>()

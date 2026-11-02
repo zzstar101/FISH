@@ -19,6 +19,7 @@ import {
 } from '@/features/transaction/api'
 import { qrDataUrl } from '@/features/transaction/qr'
 import { isApiError } from '@/lib/request'
+import { routeParam } from '@/lib/route-param'
 import MeetupReviewBlock from './review-block'
 import {
   canAcquire,
@@ -129,7 +130,10 @@ export default function TransactionMeetup() {
   const userId = user?.id ?? null
   const router = useRouter<{ id?: string; code?: string }>()
   const routeTxId = router.params.id ?? ''
-  const routeCode = router.params.code ?? ''
+  // 扫码页用 `encodeURIComponent` 拼 code，而微信 navigateTo 不会替调用方解码
+  // （`lib/route-param.ts` 的仓库约定，#252 端上实测）——这里必须解一次再交给解析器，
+  // 否则拿到的是 `fish%3A%2F%2F…`，会被判成「无效码」（#536 审查 high）。
+  const routeCode = routeParam(router.params.code)
 
   const [tx, setTx] = useState<TransactionDto | null>(null)
   /** 交易加载失败：notFound = 不存在或非参与者（404，不泄漏）；failed = 网络/服务器 */
