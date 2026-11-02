@@ -44,21 +44,22 @@ let duringDownload: (() => void) | null = null
 const recorderHooks: {
   onError: ((error: { errMsg: string }) => void) | null
   onStop: ((result: { tempFilePath: string; duration: number }) => void) | null
-  /** 录音**真的开始了**才回（起录失败的那一段永远收不到）：错误归属的唯一凭据 */
-  onStart: (() => void) | null
   /** 录音被系统占用打断（来电 / 视频通话）：平台是 `onInterruptionBegin` */
   onInterruptionBegin: (() => void) | null
   onInterruptionEnd: (() => void) | null
 } = {
   onError: null,
   onStop: null,
-  onStart: null,
   onInterruptionBegin: null,
   onInterruptionEnd: null,
 }
 let recorderStartOptions: { duration?: number } | null = null
+/** `RecorderManager.start()` 被调用了几次：单例同一时刻只许交给一段录音 */
+let recorderStartCalls = 0
 /** `stop()` 抛错（平台异常）：验证放弃的账目不会毒化下一段录音 */
 let stopThrows = false
+/** `start()` 同步抛错（平台异常）：验证失败那一次不占账 */
+let startThrows = false
 
 mock.module('@tarojs/taro', () => ({
   default: {
@@ -75,9 +76,6 @@ mock.module('@tarojs/taro', () => ({
       onError: (handler: (error: { errMsg: string }) => void) => {
         recorderHooks.onError = handler
       },
-      onStart: (handler: () => void) => {
-        recorderHooks.onStart = handler
-      },
       onInterruptionBegin: (handler: () => void) => {
         recorderHooks.onInterruptionBegin = handler
       },
@@ -85,6 +83,8 @@ mock.module('@tarojs/taro', () => ({
         recorderHooks.onInterruptionEnd = handler
       },
       start: (options: { duration?: number }) => {
+        if (startThrows) throw new Error('operateRecorder:fail start')
+        recorderStartCalls += 1
         recorderStartOptions = options
       },
       stop: () => {
@@ -122,6 +122,7 @@ const {
   startVoiceRecording,
   uploadChatImage,
   VoicePermissionError,
+  VoiceRecordingBusyError,
   voiceError,
 } = await import('../src/features/chat/media-api')
 
@@ -150,13 +151,21 @@ beforeEach(() => {
   uploadStatus = 200
   downloadStatus = 200
   recorderStartOptions = null
+  recorderStartCalls = 0
   stopThrows = false
+  startThrows = false
   presignResponse = {
     uploadUrl: 'http://localhost:9000/fish/chat-media/up',
     objectKey: `chat-media/${CONVERSATION}/me/1.png`,
     headers: {},
     expiresAt: '2026-01-01T00:00:00.000Z',
   }
+  /*
+    账目跨用例存活（`RecorderManager` 是模块级单例，回调只注册一次）。上一段还在等收尾时
+    不许起录下一段（#549），所以每个用例开头先把残局的收尾事件送回去让账目归零；账上本来
+    没有东西时这个事件被直接忽略。
+  */
+  recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/leftover.wav', duration: 0 })
 })
 
 describe('downloadChatMedia —— 下载回来时身份已经变了（#67 复查 #222）', () => {
@@ -381,53 +390,90 @@ describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364
 })
 
 /*
-  #535 复审 high：`RecorderManager` 是**全局单例**，`onStop` / `onError` 只有一条通道。
-  修复前这条通道按「当前挂的是谁」派发，于是**上一段迟到的 onStop** 会被派给**新一段**
-  的回调：页面把上一段的音频当成新一段发出去，同时把新一段的句柄复位（正在录的那一段
-  从此收不了尾）。真实可复现路径有两条：
-  1. 松手（`finishVoice` 立刻把 `recordingRef` 置空）后，在 onStop 到达前又按了一次；
-  2. 滑到「松开 取消」松手（`abort`），随即再按一次 —— `abort` 把派发槽置空，新一段的
-     `start` 又把它填上，上一段的 onStop 正好落进新槽。
+  #549（#535 follow-up 的 F1/F2 收口）：`RecorderManager` 是**全局单例**，`onStop` / `onError`
+  都**不带 session id** —— 平台只在「这一次 `start()` 对应的那一段录音」上投事件。
+
+  修复前允许「上一段还在等收尾」时又起录下一段，单例上于是同时挂着两段，任何一条不带标识的
+  回调都只能靠猜：猜「谁起录过」（`onStart`）、猜「谁叫过 stop」，都会在某个到达顺序下把结果
+  交给错的那一段 —— 上一段的 `stop` 失败会打死正在录的那一段（面板消失、麦克风还在录），
+  上一段的音频会被当成新一段「录满」发出去。而 `onStart` 只是「录音开始事件」，官方没有承诺
+  「起录失败的那一段永远不投 onStart」；时间戳 / 账龄 / TTL 更与「这条回调属于谁」无关。
+  换一种猜法不解决问题。
+
+  正确的约束不是换猜法，而是让猜没有素材：**单例同一时刻只交给一段录音**。上一段还没把自己
+  的收尾事件（`onStop` / `onError`）交回来时，新的起录被**拒绝**（`VoiceRecordingBusyError`），
+  平台 `start()` 根本不会被第二次调用 —— 于是「这条回调属于谁」永远只有唯一答案。
 */
-describe('startVoiceRecording —— 上一段迟到的结果不许顶替新一段（#535 复审）', () => {
-  test('松手后 onStop 迟到、用户又按了一次：结果只销上一段，新一段继续在录', async () => {
-    const autoStops: Array<{ who: string; durationMs: number }> = []
-    const first = startVoiceRecording(undefined, (recorded) => {
-      autoStops.push({ who: 'first', durationMs: recorded.durationMs })
-    })
-    const firstStopped = first.stop()
-    startVoiceRecording(undefined, (recorded) => {
-      autoStops.push({ who: 'second', durationMs: recorded.durationMs })
-    })
+describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#549）', () => {
+  test('上一段还没终结（已 stop、onStop 未到）：新起录被拒绝，录音器不会被第二次占用', () => {
+    const first = startVoiceRecording()
+    first.stop()
+    const startsBefore = recorderStartCalls
 
-    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/first.wav', duration: 3_000 })
+    let refused: unknown = null
+    try {
+      startVoiceRecording()
+    } catch (error) {
+      refused = error
+    }
 
-    // 第二段还在录：既不该被「自停」通知，也不该拿到第一段的音频
-    expect(autoStops).toEqual([])
-    await expect(firstStopped).resolves.toEqual({
-      path: 'wxfile://tmp/first.wav',
-      durationMs: 3_000,
-    })
-
-    // 第二段自己的 onStop 才轮到它
-    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/second.wav', duration: 5_000 })
-    expect(autoStops).toEqual([{ who: 'second', durationMs: 5_000 }])
+    // 修复前这里不抛错，`start()` 被第二次调用 —— 单例上同时挂着两段，之后每条不带标识的
+    // 回调都只能靠猜（F1 就是猜错的那一半）。
+    expect(recorderStartCalls).toBe(startsBefore)
+    expect(refused).toBeInstanceOf(VoiceRecordingBusyError)
+    // 拒绝的理由要能直接说给用户听，不能退化成「录音失败，请重试」
+    expect(voiceError(refused).message).toContain('还在收尾')
   })
 
-  test('取消（abort）后立刻再按：上一段的 onStop 被吞掉，不许打断新一段', async () => {
+  test('上一段的 stop 失败只归上一段：它自己 reject，残局事件不冒充下一段，之后照常录', async () => {
+    const firstErrors: Error[] = []
+    const first = startVoiceRecording((error) => firstErrors.push(error))
+    const firstStopped = first.stop()
+
+    // 用户在上一段收尾前又按了一次：新的一段根本起不来（单例还被上一段占着）
+    expect(() => startVoiceRecording()).toThrow()
+
+    // 这条错误是上一段自己的 stop 失败 → 走 `stop()` 的 catch 上报一次
+    recorderHooks.onError?.({ errMsg: 'operateRecorder:fail system error' })
+    await expect(firstStopped).rejects.toThrow('录音失败，请重试')
+    expect(firstErrors).toHaveLength(0)
+
+    // 单例空出来了：这次按下真能录，并且**只**拿到自己的音频（不是上一段那笔）
     const autoStops: string[] = []
-    const cancelled = startVoiceRecording(undefined, () => autoStops.push('cancelled'))
-    cancelled.abort()
-    const live = startVoiceRecording(undefined, () => autoStops.push('live'))
-
-    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cancelled.wav', duration: 8_000 })
-    // 修复前这里是 ['live']：用户放弃的音频被当成新一段「录满」发出去
+    const second = startVoiceRecording(undefined, () => autoStops.push('second-auto'))
+    const secondStopped = second.stop()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/second.wav', duration: 2_000 })
+    await expect(secondStopped).resolves.toEqual({
+      path: 'wxfile://tmp/second.wav',
+      durationMs: 2_000,
+    })
+    // 第二段是被人叫停的，不该再收到一次「自停」通知（同一段会发两次）
     expect(autoStops).toEqual([])
+  })
 
+  test('取消（abort）后收尾未到：同样不许叠第二段；收尾到了才放行', () => {
+    const cancelled = startVoiceRecording()
+    cancelled.abort()
+
+    expect(() => startVoiceRecording()).toThrow()
+
+    // 放弃的那一段自己的收尾到了：不交付，但账要销、单例要放行
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cancelled.wav', duration: 8_000 })
+    const live = startVoiceRecording()
     const stopped = live.stop()
     recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/live.wav', duration: 2_000 })
-    await expect(stopped).resolves.toEqual({ path: 'wxfile://tmp/live.wav', durationMs: 2_000 })
-    expect(autoStops).toEqual([])
+    return expect(stopped).resolves.toEqual({ path: 'wxfile://tmp/live.wav', durationMs: 2_000 })
+  })
+
+  test('起录时 start() 同步抛错：当场销账，不把录音器锁死', () => {
+    startThrows = true
+    expect(() => startVoiceRecording()).toThrow('operateRecorder:fail start')
+    startThrows = false
+
+    const session = startVoiceRecording()
+    const stopped = session.stop()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/after.wav', duration: 1_000 })
+    return expect(stopped).resolves.toEqual({ path: 'wxfile://tmp/after.wav', durationMs: 1_000 })
   })
 
   test('放弃的那一段：自己的 onStop / onError 到了也不交付', () => {
@@ -464,73 +510,6 @@ describe('startVoiceRecording —— 上一段迟到的结果不许顶替新一�
     recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/next.wav', duration: 59_000 })
 
     expect(calls).toEqual(['next'])
-  })
-})
-
-/*
-  #535 follow-up（F1）：`onError` 的归属与 `onStop` 不是一回事。
-
-  上一段已经在等收尾（`stopRequested`）、用户又按下了下一段时，先到的那条错误可能是
-  **下一段的起录失败**（录音器还被上一段占着，`start()` 当场失败），也可能是**上一段的
-  stop 失败**（晚到的收尾错误）。平台不给 session id，能分辨的只有 `RecorderManager.onStart`：
-  真的开始录的那一段平台会回过 onStart，起录失败的那一段永远收不到。
-
-  两种到达顺序都必须对。只把归属方向反过来（「错误一律给正在录的那一段」）会让下面第二条
-  用例变红 —— 那是本修复最容易犯的错。
-*/
-describe('startVoiceRecording —— onError 归属按「谁真的起录了」分辨（#535 follow-up）', () => {
-  test('新一段的起录失败先到（它没有 onStart）：错误归新一段，上一段照常交付', async () => {
-    const firstErrors: Error[] = []
-    const first = startVoiceRecording((error) => firstErrors.push(error))
-    recorderHooks.onStart?.()
-    const firstStopped = first.stop()
-
-    const secondErrors: Error[] = []
-    const secondAutoStops: number[] = []
-    startVoiceRecording(
-      (error) => secondErrors.push(error),
-      (recorded) => secondAutoStops.push(recorded.durationMs),
-    )
-
-    // 第二段起录失败：平台只回 onError，不回 onStart
-    recorderHooks.onError?.({ errMsg: 'operateRecorder:fail busy' })
-
-    // 修复前：错误被派给「最早叫过 stop()」的第一段 → 第二段这次失败完全没人知道
-    expect(secondErrors).toHaveLength(1)
-    expect(firstErrors).toHaveLength(0)
-
-    // 第一段的收尾事件随后才到：它自己的音频照常交付，不许被吞
-    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/first.wav', duration: 3_000 })
-    await expect(firstStopped).resolves.toEqual({
-      path: 'wxfile://tmp/first.wav',
-      durationMs: 3_000,
-    })
-    // 第一段的 onStop 也不许被当成第二段「自停」发出去（修复前会凭空发一条语音）
-    expect(secondAutoStops).toEqual([])
-  })
-
-  test('上一段自己的 stop 失败晚到（新一段已起录）：只销上一段，正在录的不受牵连', async () => {
-    const first = startVoiceRecording()
-    recorderHooks.onStart?.()
-    const firstStopped = first.stop()
-
-    const secondErrors: Error[] = []
-    const second = startVoiceRecording((error) => secondErrors.push(error))
-    // 第二段真的起录了（平台回了 onStart）：这条错误只能是第一段的 stop 失败
-    recorderHooks.onStart?.()
-
-    recorderHooks.onError?.({ errMsg: 'operateRecorder:fail system error' })
-
-    await expect(firstStopped).rejects.toThrow('录音失败，请重试')
-    // 第二段还在录：别人的失败不许算到它头上（把归属简单反过来就会红在这里）
-    expect(secondErrors).toHaveLength(0)
-
-    const secondStopped = second.stop()
-    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/second.wav', duration: 2_000 })
-    await expect(secondStopped).resolves.toEqual({
-      path: 'wxfile://tmp/second.wav',
-      durationMs: 2_000,
-    })
   })
 
   test('松手时 stop() 抛错（等不到 onStop）：当场销账，并把失败交给调用方', async () => {
