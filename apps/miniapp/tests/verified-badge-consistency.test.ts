@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readdirSync } from 'node:fs'
 import { ICONS } from '@/assets/lib-icons'
+import { MANIFEST } from '../tools/icons/manifest'
 
 /**
  * 认证标识的**两档形态契约**（#534）。
@@ -28,13 +29,19 @@ async function source(relPath: string): Promise<string> {
   return await Bun.file(new URL(relPath, SRC)).text()
 }
 
-/** 取包含 `anchor` 的片段：从 `anchor` 起、到其后第一个 `end` 止（找不到返回空串） */
-function slice(sourceText: string, anchor: string, end: string, maxLength = 600): string {
+/**
+ * 取包含 `anchor` 的片段：从 `anchor` 起、到其后第一个 `end` 止。
+ *
+ * **找不到锚点或结束符一律返回空串**（调用方断言 `not.toBe('')` 即转红）。以前找不到 `end`
+ * 会退化成「从 anchor 起 600 字符窗口」，结果断言读到的是别处的代码却仍然绿 —— 实测两处
+ * 锚点原始距离已达 712 字符，那条「徽章在昵称行之外」的断言等于没生效。
+ */
+function slice(sourceText: string, anchor: string, end: string): string {
   const start = sourceText.indexOf(anchor)
   if (start === -1) return ''
   const endAt = sourceText.indexOf(end, start + anchor.length)
-  const stop = endAt === -1 ? start + maxLength : Math.min(endAt + end.length, start + maxLength)
-  return sourceText.slice(start, stop)
+  if (endAt === -1) return ''
+  return sourceText.slice(start, endAt + end.length)
 }
 
 /** 扫 `src/**\/*.{ts,tsx}`，返回源码里出现 `needle` 的文件（相对 `src/`，已排序） */
@@ -95,6 +102,21 @@ const BADGE_DISPLAY = [
     width: 61,
     height: 24,
   },
+  {
+    // 认证页「徽章展示位置」说明卡：它教用户徽章长什么样，必须与真实渲染同资产同尺寸
+    tsx: 'pkg-auth/pages/verify/index.tsx',
+    scss: 'pkg-auth/pages/verify/index.scss',
+    cls: 'verify__badge',
+    width: 87,
+    height: 34,
+  },
+  {
+    tsx: 'pkg-auth/pages/verify/index.tsx',
+    scss: 'pkg-auth/pages/verify/index.scss',
+    cls: 'verify__badge-inline',
+    width: 61,
+    height: 24,
+  },
 ] as const
 
 describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/assets/badge）', () => {
@@ -121,8 +143,17 @@ describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/
     )
   })
 
-  test('大徽章的消费点白名单：只有我的页 / 订单卡 / 详情卖家行，新增必须显式登记', async () => {
-    expect(await consumersOf('BADGE.verified')).toEqual(BADGE_DISPLAY.map((e) => e.tsx).sort())
+  test('大徽章的消费点白名单：只有已登记的三处 + 认证页说明卡，新增必须显式登记', async () => {
+    // 两种写法都算消费：`BADGE.verified` 与 `BADGE['verified']`
+    const viaDot = await consumersOf('BADGE.verified')
+    const viaIndex = await consumersOf("BADGE['verified']")
+    expect([...new Set([...viaDot, ...viaIndex])].sort()).toEqual(
+      [...new Set(BADGE_DISPLAY.map((e) => e.tsx))].sort(),
+    )
+    // scss 里直连 png 会绕过上面的 ts/tsx 扫描，也必须为零
+    expect((await consumersOf('.png')).filter((f) => f.includes('badge/verified-badge'))).toEqual(
+      [],
+    )
   })
 
   test('大徽章的显示尺寸按设计稿比例缩放（非正方形，不拉伸、不留白）', async () => {
@@ -155,19 +186,21 @@ describe('认证标识形态契约（#534：昵称行大徽章 + 小尺寸小图
     expect(verifiedBranch).toContain('BADGE.verified')
     expect(verifiedBranch).toContain('profile__auth-badge')
     expect(verifiedBranch).toContain('onClick={openVerify}')
-    // 未认证分支：引导文案 + 同样进认证页（用文案锚点取窗口，避免撞上前面的其它三元）
-    const labelAt = text.indexOf('未认证，前往认证')
-    expect(labelAt).toBeGreaterThan(-1)
-    const unverifiedWindow = text.slice(Math.max(0, labelAt - 400), labelAt + 200)
-    expect(unverifiedWindow).toContain('onClick={openVerify}')
+    // 未认证分支：锚在胶囊元素自身（以前用「文案前 400 字符」的窗口，会读到已认证徽章的
+    // onClick，于是删掉胶囊自己的 onClick 也全绿）
+    const unverified = slice(text, '<View className="profile__auth"', '</View>')
+    expect(unverified).not.toBe('')
+    expect(unverified).toContain('未认证，前往认证')
+    expect(unverified).toContain('onClick={openVerify}')
   })
 
   test('「我的」页：徽章在昵称行之外（昵称下方单独一行）', async () => {
     const text = await source('pages/profile/index.tsx')
-    const nameRow = slice(text, 'className="profile__name-row"', 'profile__auth-badge')
+    // 取 name-row 自身（到它自己的 `</View>` 为止，不含外层块）：徽章不在它里面
+    const nameRow = slice(text, 'className="profile__name-row"', '</View>')
     expect(nameRow).not.toBe('')
-    // name-row 在徽章之前就已闭合，徽章不属于它
     expect(nameRow).not.toContain('{verified ? (')
+    expect(nameRow).not.toContain('profile__auth-badge')
   })
 
   test('商品详情卖家位：已验证用设计稿徽章，不再用灰勾 checkMuted', async () => {
@@ -199,7 +232,11 @@ describe('认证标识形态契约（#534：昵称行大徽章 + 小尺寸小图
     const block = scss.slice(start, scss.indexOf('}', start))
     expect(block).not.toContain('border-radius')
     expect(block).not.toContain('background')
-    expect(scss).not.toContain('.orders__vbadge::after')
+    // 只盯 `.orders__vbadge::after` 会被「另挂一个类名 / 嵌在规则内」绕过：整个文件不许再出现
+    // 任何伪元素，也不许再出现旧的角标类名（历史上那套 CSS 手绘圆勾就是这两个特征）
+    expect(scss).not.toContain('::after')
+    expect(scss).not.toContain('::before')
+    expect(scss).not.toContain('orders__av-badge')
   })
 
   test('小图标档（verifiedBrand）消费点是白名单：新增必须显式登记', async () => {
@@ -207,7 +244,6 @@ describe('认证标识形态契约（#534：昵称行大徽章 + 小尺寸小图
     expect(await consumersOf('ICONS.verifiedBrand')).toEqual([
       'components/product-card/index.tsx',
       'pkg-auth/pages/settings/index.tsx',
-      'pkg-auth/pages/verify/index.tsx',
       'pkg-browse/pages/favorites/index.tsx',
       'pkg-browse/pages/following/index.tsx',
       'pkg-browse/pages/user/index.tsx',
@@ -219,5 +255,8 @@ describe('认证标识形态契约（#534：昵称行大徽章 + 小尺寸小图
     expect(await consumersOf('ICONS.checkMuted')).toEqual([])
     expect(Object.keys(ICONS)).not.toContain('checkMuted')
     expect(readdirSync(new URL('assets/lib-icons', SRC))).not.toContain('check-muted@3x.png')
+    // 生成器真源：manifest 里 `check` 不许再有 muted 色调（否则下次 `icons` 会把它产回来；
+    // 以前只靠 lib-icons.test.ts 跨文件代偿，本文件这条标题承诺其实没生效）
+    expect(MANIFEST.check).not.toContain('muted')
   })
 })

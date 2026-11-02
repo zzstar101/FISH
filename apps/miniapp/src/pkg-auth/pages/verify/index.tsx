@@ -2,6 +2,7 @@ import type { VerificationStatus } from '@fish/contracts/auth/verification'
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
@@ -377,8 +378,9 @@ export default function Verify() {
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
                   <Text className="verify__name">{nickname}</Text>
-                  <Image className="verify__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
                 </View>
+                {/* 个人页的实际渲染：徽章在昵称**下方单独一行**（#534 选型），不是行内小勾 */}
+                <Image className="verify__badge" src={BADGE.verified} mode="aspectFit" />
                 <Text className="verify__badge-sub">我的 · 个人页</Text>
               </View>
               <Text className="verify__badge-tag">已认证</Text>
@@ -395,7 +397,8 @@ export default function Verify() {
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
                   <Text className="verify__name">{nickname}</Text>
-                  <Image className="verify__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
+                  {/* 卖家页的实际渲染：徽章内联在昵称右侧（61×24） */}
+                  <Image className="verify__badge-inline" src={BADGE.verified} mode="aspectFit" />
                 </View>
                 <Text className="verify__badge-sub">商品详情 · 卖家页</Text>
               </View>

@@ -98,7 +98,9 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 src/
   styles/_tokens.scss        # 颜色/阴影/圆角令牌（唯一真源）
   styles/_mixins.scss        # 常用组合（卡片、胶囊、玻璃、截断）
-  assets/lib-icons.ts        # 图标唯一出口（ICONS.xxx）
+  assets/lib-icons.ts        # 图标唯一出口（ICONS.xxx），由 tools/icons 从 SVG 生成
+  assets/brand/              # 品牌成品图出口（BRAND.*），由 tools/brand 从母版生成
+  assets/badge/index.ts      # 认证徽章成品图出口（BADGE.*）：外供设计稿成品图，非生成物、无母版
   custom-tab-bar/            # 自定义 TabBar（固定目录名，见第 9 节）
   mock/types.ts              # 与 packages/contracts 对齐的 Mock 类型
   mock/*.ts                  # fixtures：listings / users / wishes / conversations / notifications

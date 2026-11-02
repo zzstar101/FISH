@@ -197,7 +197,7 @@
   font-size: 40px;
   font-weight: 600;
   color: var(--fg);
-  /* 昵称可截断，认证胶囊完整显示（CJK 不给 nowrap 会被压成竖排） */
+  /* 昵称可截断：长昵称省略号收尾，不挤压同行的小箭头与右侧元素 */
   flex: 0 1 auto;
   white-space: nowrap;
   overflow: hidden;
@@ -214,7 +214,8 @@
 /* 认证胶囊：白玻璃底 + 品牌字，整颗是入口（进校园认证页）；未认证时占昵称下方一行 */
 .profile__auth {
   flex: 0 0 auto;
-  margin-top: 12px;
+  /* 与 `.profile__auth-badge` 同档：两种认证态切换时昵称下方的节奏不该跳（#534） */
+  margin-top: 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
