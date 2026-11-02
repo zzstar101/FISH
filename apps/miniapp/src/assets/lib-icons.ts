@@ -136,6 +136,7 @@ import tabWish from '@/assets/lib-icons/tab-wish@3x.png'
 import tabWishOn from '@/assets/lib-icons/tab-wish-on@3x.png'
 import user from '@/assets/lib-icons/user@3x.png'
 import verifiedAccent from '@/assets/lib-icons/verified-accent@3x.png'
+import verifiedBadge from '@/assets/lib-icons/verified-badge@3x.png'
 import voiceWave from '@/assets/lib-icons/voice-wave@3x.png'
 import walletMuted from '@/assets/lib-icons/wallet-muted@3x.png'
 import warn from '@/assets/lib-icons/warn@3x.png'
@@ -185,6 +186,7 @@ export const ICONS = {
   safeAccent,
   safeMuted,
   verifiedAccent,
+  verifiedBadge,
   personAdd,
 
   /* 内容与状态 */

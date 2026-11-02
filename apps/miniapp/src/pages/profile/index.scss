@@ -235,10 +235,11 @@
   white-space: nowrap;
 }
 
-/* 已认证徽章（#534）：与商品详情卖家位（`detail__stick`）同尺寸，胶囊内垂直居中 */
+/* 已认证徽章（#534）：设计稿「认证」3D 徽章整图，34px 高；宽度按原图比例
+   （1568×616 → 34px 高约 87px 宽），保证 aspectFit 不变形、不出现留白 */
 .profile__auth-badge {
-  width: 24px;
-  height: 24px;
+  width: 87px;
+  height: 34px;
   flex: 0 0 auto;
 }
 

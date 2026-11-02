@@ -24,16 +24,14 @@ function slice(sourceText: string, anchor: string, end: string, maxLength = 600)
 }
 
 describe('认证徽章形态契约（#534：唯一形态 = verifiedAccent）', () => {
-  test('「我的」页认证胶囊：已认证渲染 verifiedAccent 徽章', async () => {
-    const block = slice(
-      await source('pages/profile/index.tsx'),
-      'className="profile__auth"',
-      '</View>',
-    )
-    expect(block).not.toBe('')
-    expect(block).toContain('{verified ?')
-    expect(block).toContain('ICONS.verifiedAccent')
-    expect(block).toContain('profile__auth-badge')
+  test('「我的」页：已认证渲染「认证」3D 徽章（verifiedBadge），未认证仍是文字胶囊', async () => {
+    const text = await source('pages/profile/index.tsx')
+    const verifiedBranch = slice(text, '{verified ? (', 'profile__auth-txt')
+    expect(verifiedBranch).not.toBe('')
+    expect(verifiedBranch).toContain('ICONS.verifiedBadge')
+    expect(verifiedBranch).toContain('profile__auth-badge')
+    // 未认证分支保持引导胶囊（同一个 ternary 的 else 侧）
+    expect(text).toContain('未认证，前往认证')
   })
 
   test('商品详情卖家位：已验证用 verifiedAccent，不再用灰勾 checkMuted', async () => {

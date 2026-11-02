@@ -671,26 +671,26 @@ export default function Profile() {
                 mode="aspectFit"
                 onClick={openEditProfile}
               />
-              {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证 */}
-              <View className="profile__auth" onClick={openVerify}>
-                {/* 已认证徽章（#534）：与设置页 / 他人主页 / 商品卡同一资产，
-                    此前这里只有纯文字，是端上唯一的「已认证无图标」形态 */}
-                {verified ? (
+              {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证（#534）。
+                  已认证用设计稿的「认证」3D 徽章整图替代文字胶囊（Owner 选型：D 方案，
+                  徽章放在昵称下方一行）；未认证仍是文字胶囊引导。 */}
+              {verified ? (
+                <Image
+                  className="profile__auth-badge"
+                  src={ICONS.verifiedBadge}
+                  mode="aspectFit"
+                  onClick={openVerify}
+                />
+              ) : (
+                <View className="profile__auth" onClick={openVerify}>
+                  <Text className="profile__auth-txt">未认证，前往认证</Text>
                   <Image
-                    className="profile__auth-badge"
-                    src={ICONS.verifiedAccent}
+                    className="profile__auth-arrow"
+                    src={ICONS.chevronRightMuted}
                     mode="aspectFit"
                   />
-                ) : null}
-                <Text className="profile__auth-txt">
-                  {verified ? '已认证' : '未认证，前往认证'}
-                </Text>
-                <Image
-                  className="profile__auth-arrow"
-                  src={ICONS.chevronRightMuted}
-                  mode="aspectFit"
-                />
-              </View>
+                </View>
+              )}
             </View>
             {/* 签名行（3版稿 .psig）：**点击可编辑**，真值在服务端（`PATCH /profile` 的
                 `signature` 字段），本页弹窗保存成功后即时回显。
