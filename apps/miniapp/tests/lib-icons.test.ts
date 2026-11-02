@@ -3,7 +3,7 @@
  * 产物 = `src/assets/lib-icons/*.png` + `src/assets/lib-icons.ts`（生成器写，不手改）。
  */
 import { describe, expect, test } from 'bun:test'
-import { readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ICONS } from '@/assets/lib-icons'
 import {
@@ -119,7 +119,7 @@ describe('图标契约', () => {
     }
   })
 
-  test('只有 TabBar 选中态（tab-*-brand）带半透明错位填充', () => {
+  test('只有带填充块的字形（TabBar / 「我的」交易入口）在 brand 下出半透明错位填充', () => {
     const fillAlpha = Math.round(ACCENT_OPACITY * 255)
     const withFill = icons
       .filter((icon) => {
@@ -132,7 +132,9 @@ describe('图标契约', () => {
       .map((icon) => icon.file)
     expect(withFill.sort()).toEqual(
       Object.keys(MANIFEST)
-        .filter((glyph) => glyph.startsWith('tab-'))
+        .filter((glyph) =>
+          readFileSync(join(GLYPH_DIR, `${glyph}.svg`), 'utf8').includes('accentColor'),
+        )
         .map((glyph) => `${glyph}-brand@3x.png`)
         .sort(),
     )

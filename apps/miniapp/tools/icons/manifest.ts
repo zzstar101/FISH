@@ -3,7 +3,8 @@
  *
  * - 字形真源：`tools/icons/glyphs/<glyph>.svg`（24×24 网格、1.75 描边、圆头圆角、单色，
  *   画在 4–20 的内容框里；`heart-fill` 是同一轮廓的实心版，只给「已收藏」用；
- *   `tab-*` 是 TabBar 专用字形，主体带 `fill="accentColor"` 的错位填充块，只在 `brand` 下显色）。
+ *   `tab-*`（TabBar）与 `entry-*`（「我的」交易入口格）是带填充的字形：主体带 `fill="accentColor"`
+ *   的错位填充块，只在 `brand` 下显色）。
  * - 颜色只认这里的 5 个语义名，值与 `src/styles/_token-vars.scss` 的令牌一一对应；
  *   页面不再挑具体色值，换色 = 改这里的 tone + 重出图。
  * - 产物：`src/assets/lib-icons/<glyph>-<tone>@3x.png` 与出口 `ICONS.<glyph><Tone>`
@@ -32,6 +33,12 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   'tab-wish': ['muted', 'brand'],
   'tab-message': ['muted', 'brand'],
   'tab-me': ['muted', 'brand'],
+  /* 「我的」交易入口格：在售 / 卖出 / 买入 / 评价 / 举报，与 TabBar 选中态同一画法 */
+  'entry-onsale': ['brand'],
+  'entry-sold': ['brand'],
+  'entry-bought': ['brand'],
+  'entry-review': ['brand'],
+  'entry-report': ['brand'],
 
   /* 导航与操作 */
   back: ['fg'],
@@ -64,7 +71,7 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   bell: ['fg'],
   camera: ['muted'],
   image: ['muted'],
-  tag: ['brand', 'muted'],
+  tag: ['muted'],
   star: ['brand'],
   heart: ['muted', 'white'],
   'heart-fill': ['brand'],
@@ -87,8 +94,6 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   mic: ['fg'],
   keyboard: ['fg'],
   cart: ['fg'],
-  download: ['brand'],
-  upload: ['brand'],
 
   /* 商品一级分类（首页横滑圆盘 / 许愿分类） */
   'cat-books': ['brand'],

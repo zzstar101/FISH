@@ -438,7 +438,7 @@ export default function Profile() {
     {
       key: 'onsale',
       label: '在售',
-      icon: ICONS.tagBrand,
+      icon: ICONS.entryOnsaleBrand,
       url: '/pkg-browse/pages/mylist/index',
       count: counts.activeListings ?? undefined,
     },
@@ -447,14 +447,14 @@ export default function Profile() {
     {
       key: 'sold',
       label: '卖出',
-      icon: ICONS.uploadBrand,
+      icon: ICONS.entrySoldBrand,
       url: '/pkg-trade/pages/orders-sell/index',
       count: counts.pendingMeetupSell ?? undefined,
     },
     {
       key: 'bought',
       label: '买入',
-      icon: ICONS.downloadBrand,
+      icon: ICONS.entryBoughtBrand,
       url: '/pkg-trade/pages/orders-buy/index',
       count: counts.pendingMeetupBuy ?? undefined,
     },
@@ -463,17 +463,16 @@ export default function Profile() {
     {
       key: 'review',
       label: '评价',
-      icon: ICONS.starBrand,
+      icon: ICONS.entryReviewBrand,
       url: '/pkg-browse/pages/comments/index',
     },
     // #252：举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标；
-    // 图标用 shieldCheckBrand 与格子家族同色 —— 旧 shieldLine 是浅灰蓝，混进品牌蓝的格子
-    // 里发灰）。提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态
+    // 图标与格子家族同一画法（entry-*：品牌蓝加粗描边 + 浅色错位填充））。提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态
     // （举报后端未上线），见 pages/my-reports 的文件头。
     {
       key: 'reports',
       label: '举报',
-      icon: ICONS.shieldCheckBrand,
+      icon: ICONS.entryReportBrand,
       url: '/pkg-trade/pages/my-reports/index',
     },
   ]

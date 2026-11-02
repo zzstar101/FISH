@@ -94,7 +94,7 @@ export function entrySource(icons: RenderedIcon[]): string {
  * 重出图：\`bun run --filter @fish/miniapp icons\`。
  *
  * 命名 = 字形 + 语义色：\`Brand\` 品牌蓝 / \`Fg\` 主文字 / \`Muted\` 次要灰 / \`White\` 反白 /
- * \`Danger\` 警示红；TabBar 专用的 \`tab*Brand\` 是选中态（加粗描边 + 半透明错位填充）。页面与组件**只从这里取图标**，不要直接 import 具体 png。
+ * \`Danger\` 警示红；\`tab*Brand\`（TabBar 选中态）与 \`entry*Brand\`（「我的」交易入口）是加粗描边 + 半透明错位填充。页面与组件**只从这里取图标**，不要直接 import 具体 png。
  * 显示尺寸只用 24 / 32 / 40 / 48（SCSS px = rpx）四档。
  */
 ${imports.join('\n')}

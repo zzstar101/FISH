@@ -5,7 +5,7 @@
  * 重出图：`bun run --filter @fish/miniapp icons`。
  *
  * 命名 = 字形 + 语义色：`Brand` 品牌蓝 / `Fg` 主文字 / `Muted` 次要灰 / `White` 反白 /
- * `Danger` 警示红；TabBar 专用的 `tab*Brand` 是选中态（加粗描边 + 半透明错位填充）。页面与组件**只从这里取图标**，不要直接 import 具体 png。
+ * `Danger` 警示红；`tab*Brand`（TabBar 选中态）与 `entry*Brand`（「我的」交易入口）是加粗描边 + 半透明错位填充。页面与组件**只从这里取图标**，不要直接 import 具体 png。
  * 显示尺寸只用 24 / 32 / 40 / 48（SCSS px = rpx）四档。
  */
 import backFg from '@/assets/lib-icons/back-fg@3x.png'
@@ -39,8 +39,12 @@ import commentMuted from '@/assets/lib-icons/comment-muted@3x.png'
 import crownBrand from '@/assets/lib-icons/crown-brand@3x.png'
 import docFg from '@/assets/lib-icons/doc-fg@3x.png'
 import docMuted from '@/assets/lib-icons/doc-muted@3x.png'
-import downloadBrand from '@/assets/lib-icons/download-brand@3x.png'
 import editBrand from '@/assets/lib-icons/edit-brand@3x.png'
+import entryBoughtBrand from '@/assets/lib-icons/entry-bought-brand@3x.png'
+import entryOnsaleBrand from '@/assets/lib-icons/entry-onsale-brand@3x.png'
+import entryReportBrand from '@/assets/lib-icons/entry-report-brand@3x.png'
+import entryReviewBrand from '@/assets/lib-icons/entry-review-brand@3x.png'
+import entrySoldBrand from '@/assets/lib-icons/entry-sold-brand@3x.png'
 import feedbackFg from '@/assets/lib-icons/feedback-fg@3x.png'
 import feedbackMuted from '@/assets/lib-icons/feedback-muted@3x.png'
 import fileFg from '@/assets/lib-icons/file-fg@3x.png'
@@ -83,11 +87,9 @@ import tabMessageBrand from '@/assets/lib-icons/tab-message-brand@3x.png'
 import tabMessageMuted from '@/assets/lib-icons/tab-message-muted@3x.png'
 import tabWishBrand from '@/assets/lib-icons/tab-wish-brand@3x.png'
 import tabWishMuted from '@/assets/lib-icons/tab-wish-muted@3x.png'
-import tagBrand from '@/assets/lib-icons/tag-brand@3x.png'
 import tagMuted from '@/assets/lib-icons/tag-muted@3x.png'
 import trashFg from '@/assets/lib-icons/trash-fg@3x.png'
 import trashWhite from '@/assets/lib-icons/trash-white@3x.png'
-import uploadBrand from '@/assets/lib-icons/upload-brand@3x.png'
 import userAddBrand from '@/assets/lib-icons/user-add-brand@3x.png'
 import userFg from '@/assets/lib-icons/user-fg@3x.png'
 import verifiedBrand from '@/assets/lib-icons/verified-brand@3x.png'
@@ -104,6 +106,11 @@ export const ICONS = {
   tabMessageBrand,
   tabMeMuted,
   tabMeBrand,
+  entryOnsaleBrand,
+  entrySoldBrand,
+  entryBoughtBrand,
+  entryReviewBrand,
+  entryReportBrand,
   backFg,
   closeFg,
   searchMuted,
@@ -137,7 +144,6 @@ export const ICONS = {
   bellFg,
   cameraMuted,
   imageMuted,
-  tagBrand,
   tagMuted,
   starBrand,
   heartMuted,
@@ -169,8 +175,6 @@ export const ICONS = {
   micFg,
   keyboardFg,
   cartFg,
-  downloadBrand,
-  uploadBrand,
   catBooksBrand,
   catDigitalBrand,
   catDailyBrand,
