@@ -178,8 +178,10 @@
   gap: 16px;
 }
 
+/* 头像：只放首字，**不再挂任何角标**（#534 把已认证徽章改成昵称右侧的行内成品图）——
+   原来的 `position: relative` + `overflow: visible` 是给绝对定位的 CSS 手绘圆勾留的，已随
+   那套样式一起删掉，避免下一个人以为头像上还挂着东西。 */
 .orders__av {
-  position: relative;
   flex: 0 0 auto;
   width: 64px;
   height: 64px;
@@ -189,7 +191,6 @@
   justify-content: center;
   background: var(--grad-icon);
   border: 2px solid var(--border);
-  overflow: visible;
 }
 
 .orders__av-tx {

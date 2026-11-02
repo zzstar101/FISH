@@ -62,9 +62,9 @@ async function scssBlock(relPath: string, cls: string): Promise<string> {
   return text.slice(start, text.indexOf('}', start))
 }
 
-/** 扫 `src/**\/*.scss`，返回源码里出现 `needle` 的文件（相对 `src/`，已排序） */
-async function scssConsumersOf(needle: string): Promise<string[]> {
-  const glob = new Bun.Glob('**/*.scss')
+/** 按**内容**扫 `src/**\/*.{ts,tsx,scss}`，返回出现 `needle` 的文件（相对 `src/`，已排序） */
+async function filesMentioning(needle: string): Promise<string[]> {
+  const glob = new Bun.Glob('**/*.{ts,tsx,scss}')
   const files: string[] = []
   for await (const file of glob.scan({ cwd: SRC_DIR })) {
     if ((await Bun.file(new URL(file, SRC)).text()).includes(needle)) files.push(file)
@@ -89,7 +89,7 @@ const BADGE_SHA256 = '7cb679e483804ecd7a53779b04ffee6d9310fed053c885771f92441bbe
 /** 设计稿徽章画布：275×108（比例 2.546），横向成品图，**不是**图标正方形四档 */
 const BADGE_DESIGN = { width: 275, height: 108 }
 
-/** 大徽章的三个消费点：容器 scss 类名 → 设计尺寸（高度压在昵称字号之下） */
+/** 大徽章的消费点：容器 scss 类名 → 设计尺寸（高度压在昵称字号之下）；新增必须登记 */
 const BADGE_DISPLAY = [
   {
     tsx: 'pages/profile/index.tsx',
@@ -160,10 +160,9 @@ describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/
     expect([...new Set([...viaDot, ...viaIndex])].sort()).toEqual(
       [...new Set(BADGE_DISPLAY.map((e) => e.tsx))].sort(),
     )
-    // scss 里直连 png 会绕过上面的 ts/tsx 扫描（background-image: url(...)），必须单独扫一遍：
-    // 用 consumersOf 扫 `.png` 是空转的 —— 它只遍历 `**/*.{ts,tsx}`，scss 根本不进扫描面
-    expect(await scssConsumersOf('.png')).toEqual([])
-    expect(await scssConsumersOf('assets/badge')).toEqual([])
+    // 绕过出口直连 png：扫**内容**且覆盖 ts/tsx/scss（`consumersOf` 只 glob ts/tsx，
+    // 拿它扫 `.png` 是空转的；过滤文件路径也拦不住，本意是过滤内容）。唯一合法引用点是出口自己。
+    expect(await filesMentioning('verified-badge@3x.png')).toEqual(['assets/badge/index.ts'])
   })
 
   test('大徽章的每个 <Image> 都是 aspectFit（比例正确但 mode 写错一样会拉伸）', async () => {
@@ -221,7 +220,8 @@ describe('认证标识形态契约（#534：昵称行大徽章 + 小尺寸小图
 
   test('「我的」页：徽章在昵称行之外（昵称下方单独一行）', async () => {
     const text = await source('pages/profile/index.tsx')
-    // 取 name-row 自身（到它自己的 `</View>` 为止，不含外层块）：徽章不在它里面
+    // 取 name-row（到其后**第一个** `</View>` 为止；当前 name-row 内只有自闭合的 <Image/>，
+    // 所以第一个 `</View>` 就是它自己的；若将来 name-row 里出现嵌套 View，这里会变窄，需改正向断言）
     const nameRow = slice(text, 'className="profile__name-row"', '</View>')
     expect(nameRow).not.toBe('')
     expect(nameRow).not.toContain('{verified ? (')
