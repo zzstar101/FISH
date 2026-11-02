@@ -41,7 +41,9 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     const poll = sliceFrom(code, 'timer = setInterval(', 'presenceSeq.current += 1')
     expect(poll).toContain('txLoadRef.current')
     expect(poll).toContain("txState.status === 'failed'")
-    expect(poll).toContain('fetchConversationTransaction(conversationId, txRoleRef.current)')
+    // 重试也要带消息里的 id：列表被 500 条上限截断时，只有精确查询能把卡找回来
+    expect(poll).toContain('fetchConversationTransaction(')
+    expect(poll).toContain('lastTxAcceptedId(messagesRef.current)')
     expect(poll).toContain("txState.tx?.status === 'PENDING_MEETUP'")
     expect(poll).toContain('fetchTransaction(txState.tx.id)')
     // 轮询失败也要记进状态，别把缓存里的 PENDING 当「刚读到的最新进度」

@@ -7,10 +7,10 @@ import {
 /**
  * 会话消息里的交易事件（`tx.*`）解析。
  *
- * 调用方共用这一份规则：`pages/mylist/pending.ts`（卖家「待确认」段）、
- * `features/chat/capsule.ts`（消息页会话行胶囊）与 `pages/chat/list-view.ts`（列表预览）。
- * 三处都在回答同一个问题 ——「这个会话里最后一个交易事件是什么」，口径分叉会让同一笔提案
- * 在一页显示、另一页消失。
+ * 读路径（`features/chat/capsule.ts` 的会话行胶囊、`pages/chat/list-view.ts` 的列表预览、
+ * 会话页）共用**宽松**解析；写 side 与 `pages/mylist/pending.ts` 的「待确认」段仍走严格
+ * `txEventOfContent` / `lastTxSignalOf`（卖家 pending 段的 legacy accepted 兼容是独立问题，
+ * 不在 #521 / #522 范围，见 PR 已知边界）。
  *
  * 关键取舍（`pending.ts` 文件头第 1 条）：取**最后一个事件**而不是最后一条消息。
  * 买家提案之后卖家可能先回了句话（TEXT），提案仍在等点头；只认最后一条消息会漏掉它。

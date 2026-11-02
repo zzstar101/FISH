@@ -841,7 +841,11 @@ export default function Conversation() {
            * 也不该被永久卡住；普通聊天不显示卡，恢复后交易会话的卡会自己回来。
            */
           const txSeq = ++txSeqRef.current
-          void fetchConversationTransaction(conversationId, txRoleRef.current)
+          void fetchConversationTransaction(
+            conversationId,
+            txRoleRef.current,
+            lastTxAcceptedId(messagesRef.current),
+          )
             .then((tx) => {
               if (current !== epoch.current || txSeq !== txSeqRef.current || !visibleRef.current)
                 return
