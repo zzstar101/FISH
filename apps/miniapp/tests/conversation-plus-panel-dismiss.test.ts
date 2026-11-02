@@ -22,9 +22,12 @@ async function styleSource(): Promise<string> {
   return await Bun.file(styleUrl).text()
 }
 
-/** 空白归一：只比对属性与数值，不钉缩进。 */
+/** 去掉注释再空白归一：注释里出现的标识符不算实现（先例 back-top-scroll-source.test.ts）。 */
 function squash(source: string): string {
-  return source.replace(/\s+/g, ' ')
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/\s+/g, ' ')
 }
 
 /** 切出一个标签：从 `needle` 起到它自己的 `>`（跳过 `=>` 里的 `>`）。 */
@@ -60,17 +63,24 @@ describe('会话页「+」面板点外部收起（#541）', () => {
     expect(head).toContain('onClick={panelOpen ? dismissPanel : undefined}')
   })
 
-  test('遮罩挂在 panelOpen 条件里，收起态不占位、不吃点击', async () => {
-    const source = await pageSource()
-    const maskAt = source.indexOf('conv__panel-mask')
-    expect(maskAt).toBeGreaterThan(0)
-    expect(squash(source.slice(0, maskAt))).toContain('{panelOpen ? (')
+  test('遮罩紧挂在 panelOpen 条件里，收起态不占位、不吃点击', async () => {
+    // 条件必须紧挨着遮罩本身：别处出现同名条件不该让这条通过
+    expect(squash(await pageSource())).toContain(
+      '{panelOpen ? ( <View className="conv__panel-mask"',
+    )
   })
 
-  test('层级夹在消息流与输入栏之间', async () => {
+  test('遮罩铺满整片空区，层级夹在消息流与输入栏之间', async () => {
     const css = await styleSource()
-    expect(styleBlock(css, '.conv__panel-mask')).toContain('z-index: 3')
-    expect(styleBlock(css, '.conv__panel-mask')).toContain('position: absolute')
+    const mask = styleBlock(css, '.conv__panel-mask')
+    expect(mask).toContain('position: absolute')
+    expect(mask).toContain('z-index: 3')
+    // 少任一边，遮罩就塌成一条线/半块，「点空白也能收」整条验收就落空
+    expect(mask).toContain('left: 0')
+    expect(mask).toContain('right: 0')
+    expect(mask).toContain('bottom: 0')
+    // 绝对定位相对 .conv；这个锚点丢了会改成相对页面定位、可能盖住返回钮
+    expect(styleBlock(css, '.conv')).toContain('position: relative')
     // 低于输入栏（20）才点得到「+」和面板本身，高于消息流（1）才盖得住长按与图片预览
     expect(styleBlock(css, '.conv__bar')).toContain('z-index: 20')
     expect(styleBlock(css, '.conv__scroll')).toContain('z-index: 1')
