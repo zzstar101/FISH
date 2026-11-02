@@ -2,7 +2,6 @@ import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contrac
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
 import type { AllowedImageMime } from '@/features/upload/mime'
-import { formatAmount } from '@/lib/money'
 
 /**
  * 会话页的展示逻辑（#89：从 fixture 改为真实历史 / 发送 / 已读）。
@@ -66,7 +65,7 @@ export function lastTxAcceptedId(messages: readonly MessageDto[]): string | null
  *
  * `tx.proposal` / `tx.rejected` / `tx.accepted` 翻成中文，其余（含普通文本系统消息）
  * 按原文。`tx.accepted` 说的是**这条消息发生过什么**（「已接受交易」），不是
- * 「这笔交易现在在哪一步」—— 后者由吸底进度卡按交易行渲染（#522 的教训：
+ * 「这笔交易现在在哪一步」—— 后者由页头交易状态条按交易行渲染（#522 的教训：
  * 把不可变消息当实时状态，成交后就会一直停在「待面交」）。
  */
 export function systemPillText(content: string): string {
@@ -79,139 +78,241 @@ export function systemPillText(content: string): string {
 }
 
 /**
- * 吸底交易进度卡的视图模型（#521 / #522）。
+ * 顶部「商品交易状态条」的视图模型（#551）。
  *
- * 四种状态与 `features/chat/capsule.ts` 的胶囊档位一一对应（同一个 `tone` 词表），
- * 会话行与会话页因此不会各说各话。已完成仍留「查看交易」入口（面交页对 COMPLETED
- * 渲染专门的结果卡）；已取消**不给**入口 —— 面交页标题仍是「交易码」，与 #522
- * 「已取消且没有交易码入口」冲突，卡片只陈述终态。
+ * 这一块原来是商品摘要条（白卡 + 固定「查看」）。现在它并入交易状态：图 / 名 / 价不动，
+ * 价格后面那段状态词跟着交易走，右侧动作区按「现在等我做什么」换按钮。#521 / #522
+ * 曾用一张吸附在输入栏上方的进度卡承载同一份进度，Owner 定版后那张卡撤掉
+ * （`tx-card.tsx` 已删除）—— 状态只在这里说一次，所以**失败降级与终态文案也必须由
+ * 这条状态条表达**，不能再指望某张卡兜底。
  *
- * `tx === null` 但拿得到 `fallbackTxId`（消息里有 `tx.accepted`）时给一张降级卡：
- * 状态取不到就如实说取不到，入口照留。`tx` 与 `fallbackTxId` 都没有 → 不显示卡片
- * （这条会话还没成交，输入栏上不该凭空多一块东西）。
+ * 状态机（与 `features/chat/capsule.ts` 的会话行胶囊同源，别分叉第三套判据）：
  *
- * `options.failed` 是**查询失败**（不是「没查到」）：此时不信任任何一份旧状态，
- * 只给「状态待更新」卡 —— 有消息里的 id 就还能进面交页，没有就留一个重试钮。
+ * | 场景 | 状态词 | 右侧动作 |
+ * | --- | --- | --- |
+ * | 没有交易、也没有提案 | 商品状态（在售 / 已售出…） | 「查看」→ 商品详情 |
+ * | 提案待卖家点头 | 卖家「买家已申请面交」／买家「待卖家确认」 | 卖家「待确认」（二次确认后接受）／买家无按钮 |
+ * | `PENDING_MEETUP` | 「待面交」；我已确认则「待对方确认」 | 卖家「打开交易码」→ 面交页；买家「开启扫码」→ 扫码页 |
+ * | `COMPLETED` 且我还没评价（`reviewed === false`） | 「已完成交易」 | 「评价」→ 面交页（端上唯一评价入口） |
+ * | `COMPLETED` 已评价（`reviewed === true`） | 「已完成交易」 | 「查看」→ 商品详情 |
+ * | `COMPLETED` 评价态**没查到**（`reviewed === null`） | 「已完成交易」 | 「查看交易」→ 面交页（中性措辞，不替用户断言他没评过，也不与「查看」撞名） |
+ * | `CANCELLED` | 「交易已取消」 | 「查看」→ 商品详情 |
+ * | 交易查询失败（有交易证据） | 「交易状态待更新」 | 「重新加载」 |
+ * | 交易查询失败、缓存仍 `PENDING_MEETUP` | 沿用成交前状态词（「待面交」／「待对方确认」） | 「重新加载」 |
+ *
+ * 几个被验收钉住的取舍：
+ * - **已取消不给交易码入口**（#522）：面交页标题仍是「交易码」，即便它渲的是取消结果卡，
+ *   入口语义也与验收冲突 —— 顶部只陈述终态。
+ * - **评价态是严格三态**（`reviewed: boolean | null`）：只有 404 `REVIEW_NOT_FOUND` 才落
+ *   `false`（= 待评价），成功落 `true`；`null` 是「还没查 / 查不到」，**不能**当成
+ *   「已确认未评价」写「评价」—— 那是在替用户断言一件没查清的事。但入口也不丢：按钮文案
+ *   退回中性的「查看交易」，去向仍是那一笔的面交页（端上唯一评价入口，且该页自己按服务端
+ *   现状渲染评价块），所以未知态既不说谎，也不会让用户无处可评。
+ * - **失败不信任旧终态**：只有仍在 `PENDING_MEETUP` 的缓存可以继续用（它不是终态，
+ *   文案本来就是成交前口径），其余一律「交易状态待更新 + 重新加载」；而 `PENDING_MEETUP`
+ *   那一档即便沿用成交前状态词，**主钮也必须切回「重新加载」**—— 否则查询失败会被静默
+ *   吞掉（main 的 `txCardView` 就是 `failed ? '重新加载' : '查看交易码'`）。
+ * - **入参 `role` 与 `tx.role` 必须一致**（同一笔交易 ⟷ 同一条会话的商品，真实数据里不会
+ *   不一致）。但两者在类型上各自可选、互不校验，所以这里**明确分工**，别当成冗余去合并：
+ *   「待对方确认」这一档读的是**交易行那一侧**的确认时间戳，因此 `myConfirmedAt` 取
+ *   `currentTx.role`（确认时间戳属于交易行，算错一侧就会把我方已确认读成对方已确认）；
+ *   主钮文案「打开交易码 / 开启扫码」读的是**会话侧**的入参 `role`。取 `tx.role` 不是
+ *   笔误，`tests/conversation-view.test.ts` 里有一条用例把这份约定（以及不一致时的实际
+ *   表现）钉死，改动这一行会让它变红。
  */
-export type TxCardTone = 'is-warn' | 'is-pending' | 'is-ok' | 'is-plain'
+export type TxBarTone = 'is-plain' | 'is-warn' | 'is-pending' | 'is-ok'
 
-/** CTA 的语义：打开交易页 / 就地重试（失败且没有可打开的 id 时）/ 无入口（已取消） */
-export type TxCardAction = 'open' | 'retry' | 'none'
+/** 动作区的语义：点它到底做什么。组件按 `kind` 分流，纯函数不碰 Taro。 */
+export type TxBarAction =
+  | { kind: 'listing' }
+  | { kind: 'confirm'; amountCents: number | null }
+  /** 卖家拒绝买家的面交申请（只写一条 `tx.rejected` 消息，商品仍在售） */
+  | { kind: 'reject' }
+  | { kind: 'wait' }
+  | { kind: 'code'; transactionId: string }
+  | { kind: 'scan' }
+  | { kind: 'review'; transactionId: string }
+  | { kind: 'retry' }
 
-export type TxCardView = {
-  /** 与列表行胶囊同名同义：黄=待我面交，蓝=等对方，绿=完成，灰=取消 */
-  tone: TxCardTone
-  icon: 'qr' | 'clock' | 'check' | 'close' | 'refresh'
-  title: string
-  desc: string
-  actionLabel: string
-  action: TxCardAction
-  /** 点 CTA 要打开的那笔交易（面交页的唯一入参）；`retry` 时为空串 */
-  transactionId: string
+export type TxBarView = {
+  /** 与列表行胶囊同名同义：黄=待我动手，蓝=等对方 / 提案，绿=完成，灰=终态 / 默认 */
+  tone: TxBarTone
+  /** 价格后面那一段状态词 */
+  status: string
+  /** 动作区文案；`wait` 时没有按钮（买家等卖家确认，状态词已经把话说完了） */
+  label: string
+  action: TxBarAction
+  /**
+   * 并列的次要动作（目前只有卖家提案态的「拒绝」）：与主按钮并排，靠描边弱化。
+   * 买家没有拒绝入口 —— 提案由买家发起，撤回不在本 Issue 范围。
+   */
+  secondary?: { label: string; action: TxBarAction }
 }
 
-export function txCardView(
-  tx: TransactionDto | null,
-  fallbackTxId?: string | null,
-  options?: { failed?: boolean; lastEventType?: string | null },
-): TxCardView | null {
-  const failed = options?.failed === true
+/** 提案态的输入：消息流里最后一个 `tx.*` 事件（宽松口径，见 `features/transaction/tx-signal.ts`） */
+export type TxBarEvent = { type: string; amountCents?: number }
+
+export function txBarView(input: {
+  /** 我在这条会话里的角色：决定「打开交易码」还是「开启扫码」，以及提案的措辞 */
+  role: 'buyer' | 'seller'
+  /** 商品状态：没有交易时它就是状态词（与「我的发布」同一口径） */
+  listingStatus: string | undefined
+  tx: TransactionDto | null
   /**
-   * 交易查询失败：**绝不拿上一次的 `tx` 冒充终态**（#522 验收：失败不误报终态）。
-   * 缓存里只有仍在 `PENDING_MEETUP` 的那一笔可以继续用 —— 它不是终态，文案本来就是
-   * 「成交前」口径（验收要求「退回成交前文案」）；其余情况（没有缓存 / 缓存已是终态）
-   * 一律「交易状态待更新」，不把旧结果当现状。
+   * 消息流里最后一个交易事件。提案态（交易行还没建出来）与**提案金额**都只能从这里读：
+   * 提案不落表（`packages/contracts/src/transactions/schema.ts` 的冻结取舍），而接受接口
+   * 要求把金额原样带回（`features/transaction/api.ts` 的 `acceptTransaction`）。
+   */
+  lastEvent: TxBarEvent | null
+  /** 消息里最后一条 `tx.accepted` 的交易 id：交易行查不到时的兜底入口 */
+  fallbackTxId: string | null
+  /** 交易查询是否失败（调用方只在「有交易证据」时置真，见页面 `txFailed`） */
+  failed: boolean
+  /** 我在这笔交易下有没有评价；`null` = 还没查 / 查不到 */
+  reviewed: boolean | null
+}): TxBarView {
+  const { role, tx, lastEvent, failed, reviewed } = input
+  const proposal = lastEvent?.type === 'tx.proposal' ? lastEvent : null
+  /**
+   * 取消后买家又提了新案：判据与 `features/chat/capsule.ts` 的 `proposalSupersedes` 同一份
+   * —— 此刻更该回答「现在等我做什么」的是提案，不是那笔已取消的行。否则顶部写着
+   * 「交易已取消」，同一会话的列表胶囊却写着「待接受」，两处自相矛盾。
    *
-   * 失败态的 CTA 统一换成「重新加载」：没有重试按钮的话，用户只能跳去交易码页或
-   * 干看着一张过期的卡；「看某一笔」的入口仍在消息胶囊的「查看本笔」上。
+   * **已确认的边界（Owner 定论 2026-11-03：保留现状）**：同一会话存在过一笔 `CANCELLED`
+   * 交易行、买家再提案、卖家拒绝之后，拒绝只写一条 `tx.rejected`（不落表），于是「消息里
+   * 最后一个 `tx.*` 事件」变成 `tx.rejected` ⇒ 这里 `proposal` 为 null ⇒ 取回那笔 `CANCELLED`
+   * 行 ⇒ 顶部按终态陈述「交易已取消 · 查看」，不再退回「在售」。商品事实上仍在售，与
+   * #551 验收第 2 条「拒绝后顶部退回『在售 · 查看』」的字面只在**首次提案（无历史交易行）**
+   * 时完全一致；多笔历史交易时按终态陈述。此处行为不要「顺手修」—— 改判据要连
+   * `capsule.ts` 一起改，且需 Owner 重新拍板。例外口径已写进 PR 正文。
    */
-  if (failed && tx?.status !== 'PENDING_MEETUP') {
-    if (tx?.status === 'CANCELLED' && options?.lastEventType === 'tx.proposal') return null
-    return {
-      tone: 'is-warn',
-      icon: 'refresh',
-      title: '交易状态待更新',
-      // 消息胶囊只有「这一笔不是当前交易」时才叫「查看本笔」；fallback 就是当前这笔时
-      // 胶囊仍是「已接受交易」，不能再让文案把用户指到一个不存在的入口上。
-      desc:
-        fallbackTxId && fallbackTxId !== tx?.id
-          ? '刚才没取到最新进度，点一下重新加载；也可以从消息里的「查看本笔」进入。'
-          : '刚才没取到最新进度，点一下重新加载。',
-      actionLabel: '重新加载',
-      action: 'retry',
-      transactionId: '',
-    }
-  }
+  const proposalSupersedes = tx?.status === 'CANCELLED' && proposal !== null
+  const currentTx = proposalSupersedes ? null : tx
 
   /**
-   * 取消后买家又发起了新提案：`capsuleFor` 的 `proposalSupersedes` 会把这个会话
-   * 显示成「待同意 / 待接受」，卡片再挂一笔旧的「交易已取消」就自相矛盾了 ——
-   * 此刻还没有当前交易，整张卡收起，等新提案被接受、交易行建出来再出现。
+   * 失败降级的第一档：终态 / 没有缓存 / 别的交易的缓存都不算数，一律「交易状态待更新」。
+   * 仍是 `PENDING_MEETUP` 的缓存例外 —— 它不是终态，按要求退回成交前状态词并给重试，
+   * 所以这里放它过去，由下面 PENDING 分支的 `failed` 判断换钮。
    */
-  if (tx?.status === 'CANCELLED' && options?.lastEventType === 'tx.proposal') return null
-
-  if (!tx) {
-    if (!fallbackTxId) return null
+  if (failed && currentTx?.status !== 'PENDING_MEETUP') {
     return {
       tone: 'is-warn',
-      icon: 'qr',
-      title: '交易状态待更新',
-      desc: '刚才没取到最新进度，点开交易码页可以看到准确状态。',
-      actionLabel: '查看交易码',
-      action: 'open',
-      transactionId: fallbackTxId,
+      status: '交易状态待更新',
+      label: '重新加载',
+      action: { kind: 'retry' },
     }
   }
 
-  const amount = `¥${formatAmount(tx.amountCents)}`
-  if (tx.status === 'COMPLETED') {
-    return {
-      tone: 'is-ok',
-      icon: 'check',
-      title: '交易已完成',
-      desc: `${amount} · 订单已完成。`,
-      actionLabel: '查看交易',
-      action: 'open',
-      transactionId: tx.id,
+  if (!currentTx) {
+    if (proposal) {
+      /**
+       * 提案只由买家发起（`capsule.ts` 第 20 行的冻结口径）：卖家看到的是「等我点头」，
+       * 买家看到的是「等人点头」。卖家那颗钮点了要二次确认再由页面调 `acceptTransaction`。
+       *
+       * 但商品已不是 ACTIVE 时，这条提案必然被服务端拒（409 `LISTING_NOT_ACTIVE`）：
+       * `tx.proposal` 是不可变历史，商品却可能已被别的买家成交 / 被卖家下架。这时候再摆
+       * 一颗「待确认」就是给用户一个必然失败的按钮 —— 如实说商品现状，动作退回查看。
+       */
+      if (input.listingStatus !== 'ACTIVE') {
+        return {
+          tone: 'is-warn',
+          status: listingStatusText(input.listingStatus),
+          label: '查看',
+          action: { kind: 'listing' },
+        }
+      }
+      const amountCents = typeof proposal.amountCents === 'number' ? proposal.amountCents : null
+      if (role === 'seller') {
+        return {
+          tone: 'is-pending',
+          status: '买家已申请面交',
+          label: '待确认',
+          action: { kind: 'confirm', amountCents },
+          /**
+           * 卖家必须能就地拒绝（#551 Owner 追加）：只有「待确认」一颗钮时，卖家不想卖这笔
+           * 只能装作没看见 —— 买家那边就一直停在「待卖家确认」。拒绝与接受共用同一个出口，
+           * 差别是拒绝**不落表**、商品仍在售（`features/transaction/api.ts` 的冻接口径）。
+           */
+          secondary: { label: '拒绝', action: { kind: 'reject' } },
+        }
+      }
+      return { tone: 'is-pending', status: '待卖家确认', label: '', action: { kind: 'wait' } }
     }
-  }
-  if (tx.status === 'CANCELLED') {
-    /**
-     * 取消后**不给交易码入口**（#522 验收）：面交页标题仍是「交易码」，即便它渲染的
-     * 是取消结果卡，入口语义也与验收冲突。卡片只陈述终态，不提供跳转。
-     */
+    if (input.fallbackTxId) {
+      /** 消息里有 `tx.accepted`、交易行却没取回来：状态如实说取不到，入口照留 */
+      return {
+        tone: 'is-warn',
+        status: '交易状态待更新',
+        label: '查看交易码',
+        action: { kind: 'code', transactionId: input.fallbackTxId },
+      }
+    }
     return {
       tone: 'is-plain',
-      icon: 'close',
-      title: '交易已取消',
-      desc: `${amount} · 这笔交易已取消。`,
-      actionLabel: '',
-      action: 'none',
-      transactionId: tx.id,
+      status: listingStatusText(input.listingStatus),
+      label: '查看',
+      action: { kind: 'listing' },
     }
   }
 
-  // PENDING_MEETUP：契约里「双方各点一次确认」，只看得到自己那一侧的时间戳。
-  const myConfirmedAt = tx.role === 'buyer' ? tx.buyerConfirmedAt : tx.sellerConfirmedAt
-  return myConfirmedAt === null
-    ? {
-        tone: 'is-warn',
-        icon: 'qr',
-        title: '待面交',
-        desc: `${amount} · 面交时与对方核对 6 位交易码，双方确认后订单完成。`,
-        actionLabel: failed ? '重新加载' : '查看交易码',
-        action: failed ? 'retry' : 'open',
-        transactionId: tx.id,
+  const transactionId = currentTx.id
+  if (currentTx.status === 'COMPLETED') {
+    /**
+     * 终态文案替换掉原来那句「我们正在聊这件」（Owner 定版）：成交之后还写着正在聊这件，
+     * 等于把已完成说成进行中。
+     *
+     * 「待评价」只认 `reviewed === false`（404 `REVIEW_NOT_FOUND` 才落到这个值）。`null`
+     * 是**没查到**（首帧还没查回来 / 网络失败），不是「未评价」—— 写成「评价」就是替用户
+     * 断言他没评过。未知态退回中性的「查看交易」，去向仍是那一笔的面交页：页面上只有那里
+     * 有评价入口，且面交页会按服务端现状渲染，所以既不说谎也不会让用户无处可评。
+     *
+     * 为什么不是「查看」：上面两档（无交易 / 已评价）的「查看」都去商品详情，这里去向是
+     * 面交页 —— 同一个字两种去向，用户没法预判。带宾语的「查看交易」把去向说清楚。
+     */
+    if (reviewed === true) {
+      return { tone: 'is-ok', status: '已完成交易', label: '查看', action: { kind: 'listing' } }
+    }
+    if (reviewed === false) {
+      return {
+        tone: 'is-ok',
+        status: '已完成交易',
+        label: '评价',
+        action: { kind: 'review', transactionId },
       }
-    : {
-        tone: 'is-pending',
-        icon: 'clock',
-        title: '待对方确认',
-        desc: `${amount} · 你已确认，等待对方确认后订单完成。`,
-        actionLabel: failed ? '重新加载' : '查看交易码',
-        action: failed ? 'retry' : 'open',
-        transactionId: tx.id,
-      }
+    }
+    return {
+      tone: 'is-ok',
+      status: '已完成交易',
+      label: '查看交易',
+      action: { kind: 'review', transactionId },
+    }
+  }
+  if (currentTx.status === 'CANCELLED') {
+    return { tone: 'is-plain', status: '交易已取消', label: '查看', action: { kind: 'listing' } }
+  }
+
+  // PENDING_MEETUP：契约里「双方各点一次确认」，只看得到自己那一侧的时间戳
+  const myConfirmedAt =
+    currentTx.role === 'buyer' ? currentTx.buyerConfirmedAt : currentTx.sellerConfirmedAt
+  const pendingStatus = myConfirmedAt === null ? '待面交' : '待对方确认'
+  /**
+   * 查询失败、但缓存仍停在 `PENDING_MEETUP`：状态词照旧用成交前口径（缓存不是终态，
+   * 没被判死），主钮则必须切回「重新加载」—— 与 main 的 `txCardView`
+   * （`actionLabel: failed ? '重新加载' : '查看交易码'`）对齐。删掉吸底卡之后这条状态条
+   * 是唯一的表达位，若这一档还把「开启扫码 / 打开交易码」摆着，查询失败就被静默吞掉
+   * （#551 改动三第 3 点）。只换钮、不给状态词加「· 待更新」后缀：状态词与价格、长标题
+   * 同排在一条渐变头上，加字会挤掉标题省略号的位置，而「重新加载」本身已经说明状态没取到
+   * —— 也就不必为此新增第三套状态词。
+   */
+  if (failed) {
+    return { tone: 'is-warn', status: pendingStatus, label: '重新加载', action: { kind: 'retry' } }
+  }
+  return {
+    tone: myConfirmedAt === null ? 'is-warn' : 'is-pending',
+    status: pendingStatus,
+    label: role === 'seller' ? '打开交易码' : '开启扫码',
+    action: role === 'seller' ? { kind: 'code', transactionId } : { kind: 'scan' },
+  }
 }
 
 /** 商品摘要条的状态文案（与「我的发布」同一口径） */

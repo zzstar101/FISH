@@ -12,6 +12,7 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
+import { SCAN_CODE_PAGE } from '@/components/scan-tabs/tabs'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -46,7 +47,12 @@ import { ChatRealtime, type ChatRealtimeEvent } from '@/features/chat/realtime'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
 import { requestSubscribe } from '@/features/subscribe/request'
-import { fetchTransaction } from '@/features/transaction/api'
+import {
+  acceptTransaction,
+  fetchMyTransactionReview,
+  fetchTransaction,
+  rejectProposal,
+} from '@/features/transaction/api'
 import { fetchConversationTransaction } from '@/features/transaction/conversation'
 import { meetupUrlById } from '@/features/transaction/order-links'
 import { formatAmount } from '@/lib/money'
@@ -57,10 +63,9 @@ import {
   requestPrivacyAuthorize,
 } from '@/lib/privacy'
 import { isApiError } from '@/lib/request'
-import { sessionCookieHeader } from '@/lib/session'
+import { sessionCookieHeader, sessionEpoch } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { randomUuidV4 } from '@/lib/uuid'
-import { TxCard } from './tx-card'
 import {
   applyMediaRecalled,
   applyPresenceEvent,
@@ -117,7 +122,8 @@ import {
   sortMessages,
   startMediaRetry,
   systemPillText,
-  txCardView,
+  type TxBarAction,
+  txBarView,
 } from './view'
 import './index.scss'
 
@@ -208,8 +214,8 @@ export default function Conversation() {
   const [msgState, setMsgState] = useState<'loading' | 'ok' | 'failed'>('loading')
   /**
    * 这条会话**当前**那笔交易（#522）。终态（COMPLETED / CANCELLED）按契约不产生
-   * SYSTEM 消息，所以卡片只能由交易域驱动；`failed` 时保留上一次的值，绝不拿
-   * 「没查到」当「已完成」，也不清空已有入口（`view.ts` 的 `txCardView` 会在
+   * SYSTEM 消息，所以顶部那一条只能由交易域驱动；`failed` 时保留上一次的值，绝不拿
+   * 「没查到」当「已完成」，也不清空已有入口（`view.ts` 的 `txBarView` 会在
    * 完全取不到时退回消息里的 `tx.accepted` id）。
    */
   const [txLoad, setTxLoad] = useState<{
@@ -228,7 +234,7 @@ export default function Conversation() {
    * 会让定时器反复重建。
    */
   const txRoleRef = useRef<TransactionDto['role']>('buyer')
-  /** 交易查询成功：卡片与页头商品摘要一起换（成交后 listing 会变 SOLD，不能只改卡） */
+  /** 交易查询成功：状态条与页头商品摘要一起换（成交后 listing 会变 SOLD，不能只换状态词） */
   const applyTx = useCallback((tx: TransactionDto | null) => {
     setTxLoad({ status: 'ok', tx })
     if (!tx) return
@@ -238,6 +244,23 @@ export default function Conversation() {
         : prev,
     )
   }, [])
+  /**
+   * 我在这笔交易下有没有评价（#551 的「评价」档）。交易域没有评价字段
+   * （`transactionDtoSchema` 不含），端上要判「待评价」只能另查一次评价边 ——
+   * 判据是 404 `REVIEW_NOT_FOUND` = 还没评；其余失败**不当成未评价**（不猜）。
+   */
+  const [txReview, setTxReview] = useState<{ txId: string; reviewed: boolean } | null>(null)
+  /**
+   * 评价边的重查信号：`completedTxId` 只在交易 id 变化时才变，而「去面交页写完评价再
+   * 返回本页」时 id 一个字都没变 —— 只靠 id 做依赖，顶栏会一直停在「评价」。所以每次
+   * 回到本页都 ++，把它并进 effect 依赖里重查一次。
+   */
+  const [txReviewTick, setTxReviewTick] = useState(0)
+  /**
+   * 提案动作的共用锁（`待确认` / `拒绝` 都走它）：两颗钮都会写服务端，连点两次没有意义。
+   */
+  const acceptBusyRef = useRef(false)
+
   /** 更早一页的游标；null = 已到最早 */
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
@@ -558,8 +581,8 @@ export default function Conversation() {
              * 首屏历史里如果有 `tx.accepted`，就带上它的 id 走精确查询 —— 列表接口
              * 最多翻 `MAX_PAGES × PAGE_SIZE` 条，老用户的目标交易可能被截断。
              *
-             * 失败**不降级成任何终态**：`failed` 交给 `txCardView` 渲染成「状态待更新」
-             * 卡（有消息里的 id 就给面交页入口，没有就给重试钮），绝不复用上一次的
+             * 失败**不降级成任何终态**：`failed` 交给 `txBarView` 渲染成「交易状态待更新」
+             * （有消息里的 id 就给面交页入口，没有就给重试钮），绝不复用上一次的
              * `tx` 冒充当前状态。下一次 load / 手动重试都会再查。
              */
             const txSeq = ++txSeqRef.current
@@ -711,6 +734,8 @@ export default function Conversation() {
     visibleRef.current = true
     // 回到本页：把在线态的轮询表续上（隐藏时真的停掉了，见 useDidHide）
     detailPollRef.current?.start()
+    // 从面交页写完评价回来时交易 id 不变，靠这个信号让「评价 / 查看」重新判一次
+    setTxReviewTick((tick) => tick + 1)
     /**
      * 「有在途发送」把媒体也算上：上传中的媒体与发送中的文本是同一个危害 ——
      * 此刻重拉会把 `epoch` +1，在途的直传 / create 响应被判过期，乐观气泡永远停在
@@ -871,8 +896,9 @@ export default function Conversation() {
         const txState = txLoadRef.current
         if (txState.status === 'failed') {
           /**
-           * 上一次查询失败：每一跳重试一次列表 —— 失败卡自带「重新加载」，但用户不点
-           * 也不该被永久卡住；普通聊天不显示卡，恢复后交易会话的卡会自己回来。
+           * 上一次查询失败：每一跳重试一次列表 —— 顶部状态条那一档会摆「重新加载」，
+           * 但用户不点也不该被永久卡住；普通聊天没有交易证据时顶部只显示商品状态，
+           * 恢复后交易会话的「待面交 / 待对方确认」会自己回来。
            */
           const txSeq = ++txSeqRef.current
           void fetchConversationTransaction(
@@ -1007,7 +1033,7 @@ export default function Conversation() {
         markIncomingRead(event.message.senderId)
         /**
          * 对方刚接受交易时补刷一次（#522）：交易行是那一刻才创建的，本页不重拉就
-         * 只剩一条「已接受交易」的胶囊，吸底卡要等到下次进页才出现。走 `silent`
+         * 只剩一条「已接受交易」的胶囊，顶部的交易状态要等到下次进页才更新。走 `silent`
          * 并复用「有在途发送就延后」的闸 —— 它的语义与 didShow 那次重拉完全相同。
          */
         if (
@@ -2129,7 +2155,7 @@ export default function Conversation() {
 
   /**
    * 打开交易码页。**必须带交易 id**（#521）：面交页的 `router.params.id` 为空时
-   * 直接落「找不到这笔交易」，连请求都不发。卡片只在拿得到 id 时渲染，这里再兜一道
+   * 直接落「找不到这笔交易」，连请求都不发。状态条只在拿得到 id 时给这颗钮，这里再兜一道
    * —— 拿不到 id 时给一句话，而不是跳过去撞错误页。
    */
   const openMeetup = (transactionId: string) => {
@@ -2194,8 +2220,48 @@ export default function Conversation() {
   const fallbackTxId = useMemo(() => lastTxAcceptedId(messages), [messages])
 
   /**
-   * 失败卡上的「重新加载」：只重查交易，不整页重拉 —— 不 bump `epoch`、不动消息流，
-   * 失败也保持 failed（卡片内容不变，用户还能再点）。
+   * 交易完成为「待评价」时查一次我的评价（#551）。评价态是**三态**：只有 404
+   * `REVIEW_NOT_FOUND` 才算「我还没评」（`reviewed: false`），成功是 `true`；其余失败
+   * （网络 / 500）**不写 `false`** —— 那等于替用户断言一件没查清的事 —— 而是回到未知态
+   * `null`，由 `view.ts` 的 `txBarView` 用中性文案 + 面交页入口收尾。`alive` 挡住
+   * 「换了交易之后旧响应才回来」的串档。
+   *
+   * 依赖里除了交易 id 还有 `txReviewTick`：**评价是在面交页写的**，写完返回本页时
+   * 交易 id 没变，只有每回到本页重查一次，顶栏才会从「评价」变成「查看」。
+   */
+  const completedTxId = txLoad.tx?.status === 'COMPLETED' ? txLoad.tx.id : null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: txReviewTick 是刻意的重查信号（回到本页就 ++），不是体内读到的值
+  useEffect(() => {
+    if (completedTxId === null) {
+      setTxReview(null)
+      return
+    }
+    let alive = true
+    void fetchMyTransactionReview(completedTxId)
+      .then(() => {
+        if (alive) setTxReview({ txId: completedTxId, reviewed: true })
+      })
+      .catch((error) => {
+        if (!alive) return
+        if (isApiError(error) && error.code === 'REVIEW_NOT_FOUND') {
+          setTxReview({ txId: completedTxId, reviewed: false })
+          return
+        }
+        console.warn('[miniapp] 会话交易评价状态加载失败', error)
+        // 查不到 ≠ 没评过：连上一轮的结论一起作废，退回未知态（文案中性、入口仍在）
+        setTxReview(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [completedTxId, txReviewTick])
+
+  /**
+   * 顶部状态条的「重新加载」：只重查交易，不整页重拉 —— 不 bump `epoch`、不动消息流，
+   * 失败也保持 failed（状态条内容不变，用户还能再点）。
+   *
+   * 与 `refreshConversationQuietly()` 的分工：这里只换交易状态、不动消息流，所以没有
+   * 「判死在途发送」的风险；整页重拉（接受 / 拒绝之后要看 `listing.status`）才走那条。
    */
   const retryTx = useCallback(() => {
     if (!conversation) return
@@ -2212,6 +2278,175 @@ export default function Conversation() {
         setTxLoad((prev) => ({ status: 'failed', tx: prev.tx }))
       })
   }, [applyTx, conversation, conversationId, fallbackTxId])
+
+  /**
+   * 「静默重拉本页」的统一出口（#551 审查 F1）。
+   *
+   * `load()` 一进来就 `++epoch.current`（`:534`），在途的文本发送 / 媒体上传回来时会被
+   * 自己那句 `current !== epoch.current` 判过期丢弃 —— 乐观气泡永远停在「发送中」，而消息
+   * 可能已经落库：用户既看不到确认，也没有任何恢复路径。
+   *
+   * 所以接受 / 拒绝提案之后（409 分支、拒绝成功、拒绝失败）宁可**晚一点**看到顶部退回
+   * 「在售」，也不能拿新代次去判死那条正在飞的发送。与 `useDidShow`（`:746`）和
+   * `realtimeOpenRef`（`:1092`）同一条纪律：有在途发送就只记账（`deferReload`），
+   * 落定后由 `doSend` / `runMediaSend` 的 finally 补一次真正的重拉。
+   *
+   * 不在这里补 `convState === 'loading'` 那道闸：状态条要渲染出这两颗钮，前提就是已经拿到
+   * 会话（`convState === 'ok'`），那个窗口不存在。
+   */
+  const refreshConversationQuietly = useCallback(() => {
+    const sending =
+      pendingRef.current.some((item) => item.status === 'sending') ||
+      pendingMediaRef.current.some((item) => item.status === 'uploading')
+    if (sending) {
+      deferredRef.current = deferReload(deferredRef.current)
+      return
+    }
+    loadRef.current({ silent: true })
+  }, [])
+
+  /**
+   * 顶部状态条的「待确认」：卖家接受买家的面交申请（#551）。
+   *
+   * 两件事必须按顺序做对：
+   * 1. **二次确认**：接受会建交易行、把商品置 RESERVED，是不可回退的写操作，先弹确认，
+   *    文案里必须带提案金额（金额来自提案消息本身，提案不落库）。
+   * 2. **金额原样带回**：`acceptTransaction(conversationId, amountCents)` 的第二个参数只能
+   *    由调用方提供（`features/transaction/api.ts` 的注释冻结了这条）。
+   *
+   * 失败一律重查而不是原地留着「待确认」：409 `LISTING_NOT_ACTIVE` 按契约**不代表这次
+   * 失败**（可能是响应丢了重试，或另一个买家先成交），只有服务端现状能回答顶部该写什么。
+   * 重查走 `refreshConversationQuietly()`（整页静默重拉，`load()` 自己就会重查这笔交易），
+   * 其余失败走 `retryTx()`（只重查交易）。别在 409 分支把两者叠着调用：那是同一笔查询打两次。
+   */
+  const confirmProposal = (amountCents: number | null) => {
+    if (acceptBusyRef.current) return
+    if (amountCents === null) {
+      // 契约里 `tx.proposal.amountCents` 是必填，读到 null 只可能是脏数据 —— 不能把用户
+      // 指去「我的发布」：那边按严格解析同样列不出这条脏提案，等于指进另一条死路。
+      void Taro.showToast({ title: '没读到提案金额，请让对方重新发起面交申请', icon: 'none' })
+      return
+    }
+    /**
+     * #462 冻结的授权入口：**同意**提案时请求 TX 订阅（同仓 `pkg-browse/pages/mylist` 的
+     * `acceptProposal` 同一处）。放在最前面：微信要求 `wx.requestSubscribeMessage` 直接由
+     * 点击触发，这之前不能有任何 `await`；`requestSubscribe` 内部已吞掉错误，被拒或失败
+     * 都不影响这次接受（见 `features/subscribe/request.ts`）。
+     */
+    void requestSubscribe(['TX'])
+    /**
+     * 入口就上锁（不是等点完「确认」才上锁）：两次快速点击会各起一个确认框，两次都点
+     * 「确认」就是两次 accept 请求。锁到确认框与请求都落定才放开。
+     *
+     * `epoch` 记的是发出请求时的登录态代次：请求在途时换号/退出，回来的交易属于上一个
+     * 账号，**不许**写进当前页（`applyTx` 无条件写 `txLoad`）。
+     */
+    const epoch = sessionEpoch()
+    acceptBusyRef.current = true
+    void Taro.showModal({
+      title: '确认这笔面交申请？',
+      content: `接受后按 ¥${formatAmount(amountCents)} 当面交易，商品会被预订、其他买家不能再拍。`,
+      confirmText: '确认接受',
+    })
+      .then((result) => {
+        if (!result.confirm) return
+        return acceptTransaction(conversationId, amountCents)
+          .then((tx) => {
+            if (epoch !== sessionEpoch()) return
+            /**
+             * 先作废在途的交易查询（#551 审查 F2）：进页那次 `fetchConversationTransaction`
+             * 可能还在飞（没有 preferredTxId 时是多次串行请求），它回来时若照旧 `applyTx`，
+             * 会把刚建出来的交易行覆盖成 `null` —— 顶部掉回提案档，而 `listing.status` 已被
+             * 置 RESERVED，PENDING 轮询也不再覆盖这一档，只能离开再回页才恢复。
+             * `++txSeqRef` 让那些旧响应在各自的守卫里被判过期。
+             */
+            ++txSeqRef.current
+            applyTx(tx)
+            void Taro.showToast({ title: '已接受，去面交吧', icon: 'none' })
+          })
+          .catch((error) => {
+            console.warn('[miniapp] 接受面交申请失败', error)
+            if (epoch !== sessionEpoch()) return
+            /**
+             * 409 `LISTING_NOT_ACTIVE` 按契约**不代表「接受失败」**（并发买家先成交 / 商品
+             * 已非在售），所以不报「接受没成功」这种口吻 —— 但它也不是「什么都没发生」：
+             * 什么提示都不给，用户面对的还是一颗必然再 409 的「待确认」。于是：说一句商品
+             * 现状 + 重查本页（`listing.status` 要跟着变，否则顶部不会自己退到「已预订」）。
+             *
+             * 口径只到「已不在售」：这个码**不区分成因**（下架 / 已被别人订走或卖掉 /
+             * 上一次其实成功、这次是响应丢失后的重试），写成「已被其他买家预订」在另外两种
+             * 情况下就是假消息。
+             */
+            if (isApiError(error) && error.code === 'LISTING_NOT_ACTIVE') {
+              void Taro.showToast({ title: '这件商品已不在售，已为你刷新', icon: 'none' })
+              // `load()` 内部就会重查这笔交易（含按 id 的精确查询），不再叠一次 `retryTx()`
+              refreshConversationQuietly()
+              return
+            }
+            void Taro.showToast({
+              title: isApiError(error) ? error.message : '接受没成功，请重试',
+              icon: 'none',
+            })
+            retryTx()
+          })
+      })
+      .catch((error) => {
+        // 确认框本身没弹出来（基础库 / 平台差异）：不静默，也不当作已接受
+        console.warn('[miniapp] 面交确认框打开失败', error)
+        void Taro.showToast({ title: '确认框没打开，请重试', icon: 'none' })
+      })
+      .finally(() => {
+        acceptBusyRef.current = false
+      })
+  }
+
+  /**
+   * 顶部状态条的「拒绝」：卖家拒掉买家的面交申请（#551 Owner 追加）。
+   *
+   * 与接受**不同**：拒绝不建交易行、不改商品状态，`POST /transactions/proposals/reject`
+   * 只往会话里写一条 `tx.rejected` SYSTEM 消息（`features/transaction/api.ts` 冻结的口径：
+   * 提案阶段商品一直是 `ACTIVE`）。所以这里既不假改本地状态，也不重查交易行 —— 静默重拉
+   * 本页，让那条 `tx.rejected` 消息自己把顶部推回「在售 · 查看」。
+   *
+   * 也不请求 TX 订阅授权（与 `pkg-browse/pages/mylist/index.tsx` 的 `declineProposal` 同一
+   * 取舍，#511 审查）：拒绝之后没有交易，也就没有「订单状态更新」可推。
+   */
+  const declineProposal = () => {
+    if (acceptBusyRef.current) return
+    const epoch = sessionEpoch()
+    acceptBusyRef.current = true
+    void Taro.showModal({
+      title: '拒绝这次面交申请？',
+      content: '拒绝后这笔申请作废，商品仍在售，对方可以重新发起。',
+      confirmText: '拒绝',
+    })
+      .then((result) => {
+        if (!result.confirm) return
+        return rejectProposal(conversationId)
+          .then(() => {
+            if (epoch !== sessionEpoch()) return
+            void Taro.showToast({ title: '已拒绝 · 商品仍在售', icon: 'none' })
+            refreshConversationQuietly()
+          })
+          .catch((error) => {
+            console.warn('[miniapp] 拒绝面交申请失败', error)
+            if (epoch !== sessionEpoch()) return
+            void Taro.showToast({
+              title: isApiError(error) ? error.message : '拒绝没成功，请重试',
+              icon: 'none',
+            })
+            // 失败也要看服务端现状：可能对方已经撤回 / 被别处拒绝过，顶部不该停在旧提案
+            refreshConversationQuietly()
+          })
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 拒绝确认框打开失败', error)
+        void Taro.showToast({ title: '确认框没打开，请重试', icon: 'none' })
+      })
+      .finally(() => {
+        acceptBusyRef.current = false
+      })
+  }
 
   /**
    * 「打开即看最新」：会话流挂在 ScrollView 的 `scrollIntoView` 上，指向最后一条
@@ -2355,12 +2590,12 @@ export default function Conversation() {
    *
    * `tx.accepted` 不再在消息流里画交易码卡（#522）：那张卡拍的是**事件发生那一刻**
    * 的快照，成交 / 取消之后仍然写着「待面交」，而聊天记录不可变、也没法就地更正。
-   * 当前进度改由输入栏上方的吸底卡（`TxCard`）按交易行渲染。
+   * 当前进度改由页头那条商品交易状态条（`txBarView`）按交易行渲染。
    *
    * 但**历史交易**的入口不能一起丢（#521 验收②）：同一会话可以有多笔交易（取消后
    * 重新接受会再建一笔），每条老消息里的 `transactionId` 仍要能定位到它自己那一笔。
    * 判据：消息里的 id 与当前交易行不同 ⇒ 历史交易，胶囊文案带「查看本笔」，点击走
-   * `openMeetup(id)`；当前这一笔的入口在吸底卡上，胶囊只陈述事实、不重复引流。
+   * `openMeetup(id)`；当前这一笔的入口在页头状态条上，胶囊只陈述事实、不重复引流。
    */
   const renderSystem = (message: MessageDto) => {
     const event = parseTxEvent(message.content)
@@ -2499,16 +2734,15 @@ export default function Conversation() {
   }
 
   /**
-   * 吸底交易进度卡（#521 / #522，模式①）：挂在输入栏上方、常驻显示，状态变化只改
-   * 卡片内容。`idle`（还没查过交易）时不渲染，避免首帧闪一张「状态待更新」；
-   * 查过之后即便 `tx` 为 null 也交给 `txCardView` 判断要不要退到消息里的 id。
+   * 顶部交易状态条（#551）：这条现在是**唯一**的交易状态位（#521 / #522 的吸底卡已按
+   * Owner 决策删除，见 `view.ts` 的 `txBarView`），所以它必须一直能渲染 —— 没有交易时
+   * 它就是普通商品摘要条（图 / 名 / 价 / 商品状态 +「查看」）。
    *
-   * `lastEventType` 与聊天列表的胶囊同源（**从消息流取**最后一条 SYSTEM 交易事件）：
+   * `lastEvent` 与聊天列表的胶囊同源（**从消息流取**最后一条 SYSTEM 交易事件，宽松口径）：
    * 不能只看 `conversation.lastMessage` —— 实时 `message.new` 只更新 `messages`，且
-   * 取消后重新提案时中间常夹着文字消息。同判据才能保证「取消 → 又提案」时卡片和
-   * 胶囊一起收起。
+   * 取消后重新提案时中间常夹着文字消息。提案态与提案金额都只能从这里读。
    */
-  const lastTxEventType = lastEventOfMessages(messages)?.type ?? null
+  const lastTxEvent = lastEventOfMessages(messages)
 
   /**
    * 「有交易证据」：消息流里出现过 `tx.accepted`，或上一轮查到过交易行 —— 只有这时
@@ -2519,7 +2753,7 @@ export default function Conversation() {
    * 文案，可重试」）—— 面交页里有准确状态，入口本身不会说谎。消息里已经出现另一笔
    * 交易的 id 时，旧 PENDING 行不再可信，走「交易状态待更新」。
    */
-  const txKnown = fallbackTxId !== null || txLoad.tx !== null || lastTxEventType === 'tx.accepted'
+  const txKnown = fallbackTxId !== null || txLoad.tx !== null || lastTxEvent?.type === 'tx.accepted'
   const txFailed = txLoad.status === 'failed' && txKnown
   /** 失败时缓存只在「仍是同一笔待面交」时可继续展示 —— 终态和别的交易的缓存都不算数 */
   const cachedTx =
@@ -2528,15 +2762,54 @@ export default function Conversation() {
       : txLoad.tx !== null && (fallbackTxId === null || fallbackTxId === txLoad.tx.id)
         ? txLoad.tx
         : null
-  const txCard =
-    txLoad.status === 'idle' || (txLoad.status === 'failed' && !txKnown)
-      ? null
-      : txCardView(txFailed ? cachedTx : txLoad.tx, fallbackTxId, {
-          failed: txFailed,
-          lastEventType: lastTxEventType,
-        })
+  /**
+   * 「待评价」判据只在我这笔交易的评价查询回来之后才成立；没回来 / 查失败一律 `null`。
+   * `null` 不是「未评价」：`txBarView` 会用它换一句中性文案「查看交易」，去向仍是那一笔的
+   * 面交页（端上唯一评价入口），既不说谎也不会让用户无处可评。
+   */
+  const reviewed =
+    txReview !== null && txLoad.tx !== null && txReview.txId === txLoad.tx.id
+      ? txReview.reviewed
+      : null
 
-  const statusLabel = listingStatusText(listing.status)
+  const txBar = txBarView({
+    role: conversation.role,
+    listingStatus: listing.status,
+    tx: txFailed ? cachedTx : txLoad.tx,
+    lastEvent: lastTxEvent,
+    /**
+     * 首屏交易查询还没回来（`idle`）时不给「查看交易码」降级：那不是「查不到」，
+     * 只是还没查 —— 给了会闪一下再变回商品状态。
+     */
+    fallbackTxId: txLoad.status === 'idle' ? null : fallbackTxId,
+    failed: txFailed,
+    reviewed,
+  })
+
+  /** 卖家提案态的次要动作（`拒绝`）；没有次要动作时那颗钮整颗不渲染 */
+  const secondaryTxBar = txBar.secondary ?? null
+
+  /**
+   * 顶部状态条动作区的分发：主钮传 `txBar.action`（默认取它），次要钮（`拒绝`）显式传入
+   * 自己的动作。两颗钮都必须先 `stopPropagation` —— 外层整条是「点进商品详情」。
+   */
+  const runTxBarAction = (
+    event: { stopPropagation: () => void },
+    action: TxBarAction = txBar.action,
+  ) => {
+    event.stopPropagation()
+    if (action.kind === 'listing') return openListing()
+    if (action.kind === 'confirm') return confirmProposal(action.amountCents)
+    if (action.kind === 'reject') return declineProposal()
+    if (action.kind === 'code') return openMeetup(action.transactionId)
+    if (action.kind === 'review') return openMeetup(action.transactionId)
+    if (action.kind === 'scan') {
+      void Taro.navigateTo({ url: SCAN_CODE_PAGE })
+      return
+    }
+    if (action.kind === 'retry') return retryTx()
+    // 'wait'：买家等卖家确认，状态词已经说完了，没有可点的动作
+  }
 
   return (
     <View className="conv">
@@ -2594,27 +2867,46 @@ export default function Conversation() {
           </View>
         </View>
 
-        {/* 商品摘要条：本页唯一的吸顶锚点，点它进商品详情 */}
-        <View className="conv__pcard" onClick={openListing}>
-          <View className="conv__pcard-thumb">
+        {/* 商品交易状态条（#551）：不是白卡 —— 没有 surface 底、没有描边、没有卡片阴影，
+            直接坐在渐变头上；只留图 / 名 / 价 / 状态，右侧动作区随交易状态换。
+            点整条进商品详情，动作钮自己 stopPropagation。 */}
+        <View className={`conv__pbar ${txBar.tone}`} onClick={openListing}>
+          <View className="conv__pbar-thumb">
             {listing.coverUrl ? (
-              <Image className="conv__pcard-img" src={listing.coverUrl} mode="aspectFill" />
+              <Image className="conv__pbar-img" src={listing.coverUrl} mode="aspectFill" />
             ) : (
-              <Image className="conv__pcard-ph" src={ICONS.imageMuted} mode="aspectFit" />
+              <Image className="conv__pbar-ph" src={ICONS.imageMuted} mode="aspectFit" />
             )}
           </View>
-          <View className="conv__pcard-main">
-            <Text className="conv__pcard-title">{listing.title}</Text>
-            <Text className="conv__pcard-meta num">
+          <View className="conv__pbar-main">
+            <Text className="conv__pbar-title">{listing.title}</Text>
+            <Text className="conv__pbar-meta num">
               {'¥'}
-              <Text className="conv__pcard-price">{formatAmount(listing.priceCents)}</Text>
-              {` · ${statusLabel} · 我们正在聊这件`}
+              <Text className="conv__pbar-price">{formatAmount(listing.priceCents)}</Text>
+              <Text className="conv__pbar-status">{` · ${txBar.status}`}</Text>
             </Text>
           </View>
-          <View className="conv__pcard-go">
-            <Text className="conv__pcard-go-tx">查看</Text>
-            <Image className="conv__pcard-caret" src={ICONS.chevronRightMuted} mode="aspectFit" />
-          </View>
+          {txBar.action.kind === 'wait' ? null : (
+            <View className="conv__pbar-acts">
+              {/*
+                卖家提案态并排两颗：`拒绝` 在前（次要，描边药丸），`待确认` 在后（主操作）。
+                买家没有拒绝入口 —— 提案由买家发起，撤回不在本 Issue 范围。
+              */}
+              {secondaryTxBar ? (
+                <View
+                  className="conv__pbar-act conv__pbar-act--ghost"
+                  onClick={(event: { stopPropagation: () => void }) =>
+                    runTxBarAction(event, secondaryTxBar.action)
+                  }
+                >
+                  <Text>{secondaryTxBar.label}</Text>
+                </View>
+              ) : null}
+              <View className="conv__pbar-act" onClick={runTxBarAction}>
+                <Text>{txBar.label}</Text>
+              </View>
+            </View>
+          )}
         </View>
       </View>
 
@@ -2919,15 +3211,6 @@ export default function Conversation() {
         空内容时「发送」置灰（稿子 .send.is-off）。
       */}
       <View className="conv__bar">
-        {/* 交易进度卡（模式①）：吸附在输入框上方，长期显示、只改内容 */}
-        {txCard ? (
-          <TxCard
-            view={txCard}
-            onAction={() =>
-              txCard.action === 'retry' ? retryTx() : openMeetup(txCard.transactionId)
-            }
-          />
-        ) : null}
         {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
         {replyTarget ? (
           <View className="conv__replybar">
