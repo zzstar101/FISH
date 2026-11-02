@@ -28,6 +28,11 @@ function sliceFrom(code: string, start: string, end: string): string {
   return code.slice(from, to + end.length)
 }
 
+/** 剥掉注释再断言：注释里留一份同名语句不能冒充接线（仓库既有写法，见 back-top-scroll-source.test.ts） */
+function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
 describe('#521 / #522 会话页交易进度卡 · 接线', () => {
   test('每次 load 都按会话查交易，并把首屏 tx.accepted 的 id 作为精确查询的首选', async () => {
     const code = await source()
@@ -67,14 +72,35 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     expect(code).toContain("txLoad.status === 'failed' && txKnown")
   })
 
-  test('交易请求 latest-wins：迟到的旧响应不能覆盖新状态', async () => {
-    const code = await source()
+  test('交易请求 latest-wins：三条请求路径各自取号，每个回调各自守卫', async () => {
+    const code = stripComments(await source())
     expect(code).toContain('const txSeqRef = useRef(0)')
-    // 三条请求路径（进页 load / 20s 轮询 / 失败重试）各自取号
-    const takes = code.match(/const txSeq = \+\+txSeqRef\.current/g) ?? []
-    expect(takes.length).toBeGreaterThanOrEqual(3)
-    const guards = code.match(/txSeq !== txSeqRef\.current/g) ?? []
-    expect(guards.length).toBeGreaterThanOrEqual(3)
+    const takes = (slice: string) => slice.match(/const txSeq = \+\+txSeqRef\.current/g) ?? []
+    const guards = (slice: string) => slice.match(/txSeq !== txSeqRef\.current/g) ?? []
+
+    // 进页 / 返回 / 补刷：取号一次，.then 与 .catch 各守一次
+    const load = sliceFrom(
+      code,
+      'const txSeq = ++txSeqRef.current',
+      "setTxLoad((prev) => ({ status: 'failed', tx: prev.tx }))",
+    )
+    expect(load).toContain('lastTxAcceptedId(page.items)')
+    expect(takes(load)).toHaveLength(1)
+    expect(guards(load)).toHaveLength(2)
+
+    // 20s 轮询两条路径（失败重试列表 / PENDING 按 id 查详情）：各自取号，四个回调各自守
+    const poll = sliceFrom(code, 'timer = setInterval(', 'presenceSeq.current += 1')
+    expect(takes(poll)).toHaveLength(2)
+    expect(guards(poll)).toHaveLength(4)
+
+    // 失败卡「重新加载」：同样取号一次、两个回调各自守
+    const retry = sliceFrom(
+      code,
+      'const retryTx = useCallback(',
+      '}, [applyTx, conversation, conversationId, fallbackTxId])',
+    )
+    expect(takes(retry)).toHaveLength(1)
+    expect(guards(retry)).toHaveLength(2)
   })
 
   test('取消后新提案的判据来自消息流（详情里的 lastMessage 会滞后）', async () => {
@@ -83,15 +109,23 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
   })
 
   test('历史 tx.accepted 仍能定位到本笔（同一会话多笔交易不串单）', async () => {
-    const code = await source()
-    expect(code).toContain("event?.type === 'tx.accepted'")
-    expect(code).toContain('txId !== txLoad.tx.id')
-    // 查不到当前交易行（接口失败 / 数据缺失）时也要保留入口，不能整条变成死文案
-    expect(code).toContain('txLoad.tx === null || txId !== txLoad.tx.id')
-    expect(code).toContain('已接受交易 · 查看本笔')
-    // 光有文案不够：点击必须把这条消息自己的 id 交给 openMeetup
-    expect(code).toContain('() => openMeetup(historicalTxId)')
-    expect(code).toContain('onClick={')
+    const code = stripComments(await source())
+    // 只看 SYSTEM 胶囊那一段：在全文里搜字符串，会被别处的同名代码或注释顶替
+    const capsule = sliceFrom(
+      code,
+      'const renderSystem = (message: MessageDto) => {',
+      'const renderListing = (',
+    )
+    expect(capsule).toContain("event?.type === 'tx.accepted'")
+    // 判据：与当前交易行不同就算历史；查不到当前交易行（接口失败 / 数据缺失）时也要保留入口
+    expect(capsule).toContain('txLoad.tx === null || txId !== txLoad.tx.id')
+    expect(capsule).toContain('已接受交易 · 查看本笔')
+    // 交给 openMeetup 的必须是这条消息自己的 id（不能换成当前交易 / 最后一条 accepted 的 id）
+    expect(capsule).toContain('const historicalTxId = historical ? txId : null')
+    // 光有文案不够：onClick 必须真的就是这个三元表达式，否则胶囊点了没反应
+    expect(capsule).toContain(
+      'historicalTxId ? () => openMeetup(historicalTxId) : noIdHint ? goOrders : undefined',
+    )
   })
 
   test('老数据的 tx.accepted 没带 id 时不让用户白点，明确指到「我的订单」', async () => {
