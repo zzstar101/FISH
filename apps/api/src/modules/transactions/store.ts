@@ -268,6 +268,14 @@ function isUniqueViolation(error: unknown): boolean {
 }
 
 /**
+ * `accept` 里第二笔 live 交易撞部分唯一索引时的哨兵。23505 已让事务进入 aborted 状态，
+ * 不能在事务里吞掉错误再正常返回：那样 COMMIT 会被服务器以 ROLLBACK 应答，而 Bun ≥ 1.4.3
+ * 的 `sql.begin()` 对此 reject `ERR_POSTGRES_COMMIT_ROLLED_BACK`（oven-sh/bun#35119）。
+ * 所以抛出它让整笔事务回滚，再在事务外映射成 `listing-not-active`。
+ */
+class LiveTransactionConflict extends Error {}
+
+/**
  * 状态流转会推进 `listings.updated_at`，而语义召回的候选新鲜度谓词要求向量行的
  * `source_updated_at` 与实体 `updated_at` 毫秒级相等（`packages/db/src/embedding-store.ts` 的
  * `freshListingsEmbedding()`）。所以每次状态写入都必须补投 `EMBED_LISTING`：内容没变时 handler
@@ -367,55 +375,57 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
     },
 
     async accept(brief, amountCents, buildSystemContent) {
-      return db.transaction(async (tx) => {
-        // ⓪ #464：先锁**买家**行并确认账号可用。冷静期内买家不能再被卷进新交易 —— 否则
-        //    它会拿到一笔自己因写拦截而无法取消/确认的交易，注销被无限期推迟（去标识化
-        //    deferred）。锁在 listings 之前、与注销事务同一把 users 行锁，所以「接受」与
-        //    「申请注销」天然串行：注销先提交则这里读到 DELETION_REQUESTED，反之注销那边
-        //    的未完成交易复查会读到这笔新交易并 409 回滚。
-        //    卖家侧不需要检查：本端点挂 `requireAuth`，卖家自己在冷静期发不出这个请求。
-        //    锁强度刻意用 `FOR SHARE` 而不是 `FOR UPDATE`：注销事务拿的是 `FOR UPDATE`，
-        //    两者互斥（→ 串行），而外键检查拿的是 `FOR KEY SHARE`，与 `FOR SHARE` 相容。
-        //    若这里用 `FOR UPDATE`，任何引用该用户行的写入（如消息的 sender_id 外键）
-        //    都会被这把锁挡到 accept 提交为止 —— 锁的影响面溢出到别的域。
-        const buyer = await tx.execute(sql`
+      try {
+        return await db.transaction(async (tx) => {
+          // ⓪ #464：先锁**买家**行并确认账号可用。冷静期内买家不能再被卷进新交易 —— 否则
+          //    它会拿到一笔自己因写拦截而无法取消/确认的交易，注销被无限期推迟（去标识化
+          //    deferred）。锁在 listings 之前、与注销事务同一把 users 行锁，所以「接受」与
+          //    「申请注销」天然串行：注销先提交则这里读到 DELETION_REQUESTED，反之注销那边
+          //    的未完成交易复查会读到这笔新交易并 409 回滚。
+          //    卖家侧不需要检查：本端点挂 `requireAuth`，卖家自己在冷静期发不出这个请求。
+          //    锁强度刻意用 `FOR SHARE` 而不是 `FOR UPDATE`：注销事务拿的是 `FOR UPDATE`，
+          //    两者互斥（→ 串行），而外键检查拿的是 `FOR KEY SHARE`，与 `FOR SHARE` 相容。
+          //    若这里用 `FOR UPDATE`，任何引用该用户行的写入（如消息的 sender_id 外键）
+          //    都会被这把锁挡到 accept 提交为止 —— 锁的影响面溢出到别的域。
+          const buyer = await tx.execute(sql`
           SELECT account_status FROM users WHERE id = ${brief.buyerId} FOR SHARE
         `)
-        const buyerRow = rowsOf(buyer)[0]
-        if (buyerRow?.account_status !== 'ACTIVE') {
-          return { kind: 'buyer-account-inactive' }
-        }
+          const buyerRow = rowsOf(buyer)[0]
+          if (buyerRow?.account_status !== 'ACTIVE') {
+            return { kind: 'buyer-account-inactive' }
+          }
 
-        // ① 条件更新锁定 Listing：0 行 = 已被并发买家锁定 / 已售 / 已下架。
-        // ② 部分唯一索引 transactions_listing_id_live_uq 兜底同一 listing 的第二笔 live 交易。
-        const lock = await tx.execute(sql`
+          // ① 条件更新锁定 Listing：0 行 = 已被并发买家锁定 / 已售 / 已下架。
+          // ② 部分唯一索引 transactions_listing_id_live_uq 兜底同一 listing 的第二笔 live 交易。
+          const lock = await tx.execute(sql`
           UPDATE listings SET status = 'RESERVED', updated_at = clock_timestamp()
           WHERE id = ${brief.listingId} AND status = 'ACTIVE'
           RETURNING id
         `)
-        if (rowsOf(lock).length === 0) return { kind: 'listing-not-active' }
-        await enqueueListingEmbedding(tx, brief.listingId)
+          if (rowsOf(lock).length === 0) return { kind: 'listing-not-active' }
+          await enqueueListingEmbedding(tx, brief.listingId)
 
-        const insert = await tx
-          .execute(sql`
+          const insert = await tx
+            .execute(sql`
           INSERT INTO transactions (id, listing_id, buyer_id, seller_id, amount_cents)
           VALUES (${newId()}, ${brief.listingId}, ${brief.buyerId}, ${brief.sellerId}, ${amountCents})
           RETURNING ${TX_COLUMNS}
         `)
-          .catch((error: unknown) => {
-            // ② 部分唯一索引兜底（接口注释承诺的 listing-not-active 语义）：
-            // listing 状态漂移出不变量（如被第三方改回 ACTIVE）时，同一 listing 的
-            // 第二笔 live 交易在这里被 23505 拦下，映射成与条件更新相同的失败语义。
-            if (isUniqueViolation(error)) return { rows: [] as Record<string, unknown>[] }
-            throw error
-          })
-        const row = rowsOf(insert)[0]
-        if (!row) return { kind: 'listing-not-active' }
+            .catch((error: unknown) => {
+              // ② 部分唯一索引兜底（接口注释承诺的 listing-not-active 语义）：
+              // listing 状态漂移出不变量（如被第三方改回 ACTIVE）时，同一 listing 的
+              // 第二笔 live 交易在这里被 23505 拦下，映射成与条件更新相同的失败语义。
+              // 映射在事务外做（见 LiveTransactionConflict）。
+              if (isUniqueViolation(error)) throw new LiveTransactionConflict()
+              throw error
+            })
+          const row = rowsOf(insert)[0]
+          if (!row) return { kind: 'listing-not-active' }
 
-        // ③ `tx.accepted` 与交易行同一事务（#40-3）：消息写失败则整笔回滚，
-        //    不会留下「交易已创建、确认消息永久缺失」的部分成功。
-        const transactionId = row.id as string
-        const linked = await tx.execute(sql`
+          // ③ `tx.accepted` 与交易行同一事务（#40-3）：消息写失败则整笔回滚，
+          //    不会留下「交易已创建、确认消息永久缺失」的部分成功。
+          const transactionId = row.id as string
+          const linked = await tx.execute(sql`
           SELECT t.*, c.id AS conversation_id
           FROM transactions t
           JOIN conversations c
@@ -424,11 +434,15 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
            AND c.seller_id = t.seller_id
           WHERE t.id = ${transactionId}
         `)
-        const linkedRow = rowsOf(linked)[0]
-        if (!linkedRow) throw new Error(`交易缺少对应会话：transaction=${transactionId}`)
-        const message = await insertSystemWithin(tx, brief.id, buildSystemContent(transactionId))
-        return { kind: 'created', row: toRow(linkedRow), message }
-      })
+          const linkedRow = rowsOf(linked)[0]
+          if (!linkedRow) throw new Error(`交易缺少对应会话：transaction=${transactionId}`)
+          const message = await insertSystemWithin(tx, brief.id, buildSystemContent(transactionId))
+          return { kind: 'created', row: toRow(linkedRow), message }
+        })
+      } catch (error) {
+        if (error instanceof LiveTransactionConflict) return { kind: 'listing-not-active' }
+        throw error
+      }
     },
 
     async findById(id) {
