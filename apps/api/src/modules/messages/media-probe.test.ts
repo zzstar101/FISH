@@ -290,6 +290,18 @@ function clusterWithBlocks(timecode: number, relativeOffsets: number[]): number[
   return [...vint(0x1f43b675, 4), ...vint(payload.length), ...payload]
 }
 
+/** 未知长度的 Cluster（MediaRecorder 流式 WebM 的最后一个 Cluster）。 */
+function clusterWithBlocksUnknownSize(timecode: number, relativeOffsets: number[]): number[] {
+  const timecodeField = [
+    ...vint(0xe7, 1),
+    ...vint(uintBEmin(timecode).length),
+    ...uintBEmin(timecode),
+  ]
+  const blocks = relativeOffsets.flatMap(simpleBlock)
+  const payload = [...timecodeField, ...blocks]
+  return [...vint(0x1f43b675, 4), 0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, ...payload]
+}
+
 /** 组装 Segment；`unknownSize` 模拟 MediaRecorder 流式 WebM。
  *
  * 真实文件（ffmpeg/MediaRecorder `-live`）的未知长度标记是 **8 字节 VINT 全值位**：
@@ -487,6 +499,14 @@ describe('probeVoiceDuration', () => {
     ).toEqual({ durationMs: 4800 })
   })
 
+  test('parses the last Cluster when its size is the EBML unknown-length marker', () => {
+    // 微信开发者工具（MediaRecorder）录出的 WebM：未知长度 Segment + 未知长度 Cluster，
+    // 没有 Info.Duration。解析器必须把未知长度 Cluster 读到最后一块，而不是直接判无效。
+    expect(
+      probeVoiceDuration(webm([clusterWithBlocksUnknownSize(0, [1000, 3000])], true), 'audio/webm'),
+    ).toEqual({ durationMs: 3000 })
+  })
+
   test('takes the largest cluster end timecode, never under-reporting on out-of-order files', () => {
     // 时间码单调递增是 muxer 的保证，但这是一个**安全上限**：遇到坏文件宁可高估、不可低估，
     // 否则超长录音就能靠乱序 timecode 混过 60s 校验。所以取所有 Cluster 结束时刻的最大值。
@@ -626,7 +646,7 @@ describe('probeVoiceDuration', () => {
     })
   })
 
-  test('includes BlockDuration and rejects unknown-size Clusters', () => {
+  test('includes BlockDuration and reads unknown-size Clusters', () => {
     const block = [0x81, 0, 0, 0x80, 0]
     const group = [...vint(0xa1, 1), ...vint(block.length), ...block, 0x9b, 0x81, 100]
     const payload = [0xe7, 0x82, ...u16be(59_999), 0xa0, ...vint(group.length), ...group]
@@ -637,11 +657,8 @@ describe('probeVoiceDuration', () => {
       ),
     ).toEqual({ durationMs: 60_099 })
     expect(
-      probeVoiceDuration(
-        webm([[...vint(0x1f43b675, 4), 0xff, 0xe7, 0x81, 1], clusterWithBlocks(65_000, [0])], true),
-        'audio/webm',
-      ),
-    ).toBeNull()
+      probeVoiceDuration(webm([clusterWithBlocksUnknownSize(65_000, [0])], true), 'audio/webm'),
+    ).toEqual({ durationMs: 65_000 })
   })
 
   test('rejects MP4 without a supported ftyp and truncated version-1 mvhd', () => {

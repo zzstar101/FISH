@@ -240,7 +240,14 @@ function readFloatBE(bytes: Uint8Array, offset: number, length: number): number 
 }
 
 /** 解析出的 EBML 子元素：`dataStart`/`dataEnd` 指向 Element Data。 */
-type EbmlElement = { id: number; dataStart: number; dataEnd: number; complete: boolean }
+type EbmlElement = {
+  id: number
+  dataStart: number
+  dataEnd: number
+  complete: boolean
+  /** size 字段是 EBML 的「未知长度」全值位（流式 muxer 的 Segment/Cluster 常见）。 */
+  unknownSize: boolean
+}
 
 /**
  * 遍历 `[start, end)` 内的 EBML 子元素。
@@ -254,6 +261,7 @@ function walkEbmlElements(
   start: number,
   end: number,
   visit: (element: EbmlElement) => void,
+  allowUnknownSize = false,
 ): boolean {
   let cursor = start
   while (cursor < end) {
@@ -268,12 +276,14 @@ function walkEbmlElements(
     const size = ebmlSizeValue(bytes, cursor, sizeLength)
     cursor += sizeLength
 
-    // 只有顶层 Segment 支持未知长度。子元素须有完整边界，不能吞掉后续 Cluster。
+    // 只有顶层 Segment/Cluster 支持未知长度。子元素须有完整边界，不能吞掉后续 Cluster。
     const dataStart = cursor
-    const complete = size !== 2 ** (7 * sizeLength) - 1 && dataStart + size <= end
-    const dataEnd = Math.min(end, dataStart + size)
-    visit({ id, dataStart, dataEnd, complete })
-    if (!complete) return false
+    const unknownSize = size === 2 ** (7 * sizeLength) - 1
+    const complete = !unknownSize && dataStart + size <= end
+    const dataEnd = unknownSize ? end : Math.min(end, dataStart + size)
+    visit({ id, dataStart, dataEnd, complete, unknownSize })
+    if (!complete && !(allowUnknownSize && unknownSize)) return false
+    if (unknownSize) return true
     cursor = dataEnd
   }
   return true
@@ -300,69 +310,91 @@ function lastClusterEndTimecode(
   let lastEnd: number | null = null
   let invalidBlock = false
 
-  const clustersComplete = walkEbmlElements(bytes, start, end, (element) => {
-    if (!element.complete) {
-      invalidBlock = true
-      return
-    }
-    if (element.id !== EBML_ID_CLUSTER) return
-
-    let clusterTimecode: number | null = null
-    let maxBlockOffset = 0
-
-    const clusterComplete = walkEbmlElements(bytes, element.dataStart, element.dataEnd, (child) => {
-      if (!child.complete) {
+  const clustersComplete = walkEbmlElements(
+    bytes,
+    start,
+    end,
+    (element) => {
+      // 流式 muxer（微信开发者工具 / MediaRecorder）会写未知长度的最后一个 Cluster。
+      // 它必然延伸到文件边界；解析其中的子元素即可，其他未知长度元素仍按截断拒绝。
+      if (!element.complete && !(element.unknownSize && element.id === EBML_ID_CLUSTER)) {
         invalidBlock = true
         return
       }
-      const size = child.dataEnd - child.dataStart
-      if (size === 0) return
-      if (child.id === EBML_ID_TIMECODE) {
-        const value = readUnsignedIntBE(bytes, child.dataStart, size)
-        if (size > 8 || !Number.isSafeInteger(value)) invalidBlock = true
-        else clusterTimecode = value
-        return
-      }
-      if (child.id === EBML_ID_SIMPLE_BLOCK) {
-        // SimpleBlock：TrackNumber(vint) + int16 BE 相对时间戳 + flags + frame data
-        const offset = readBlockRelativeOffset(bytes, child.dataStart, child.dataEnd)
-        if (offset === null) invalidBlock = true
-        else if (offset > maxBlockOffset) maxBlockOffset = offset
-        return
-      }
-      if (child.id === EBML_ID_BLOCK_GROUP) {
-        let offset: number | null = null
-        let hasBlock = false
-        let duration = 0
-        const groupComplete = walkEbmlElements(bytes, child.dataStart, child.dataEnd, (grouped) => {
-          if (!grouped.complete) {
+      if (element.id !== EBML_ID_CLUSTER) return
+
+      let clusterTimecode: number | null = null
+      let maxBlockOffset = 0
+
+      const clusterComplete = walkEbmlElements(
+        bytes,
+        element.dataStart,
+        element.dataEnd,
+        (child) => {
+          if (!child.complete) {
             invalidBlock = true
             return
           }
-          if (grouped.id === EBML_ID_BLOCK) {
-            if (hasBlock) invalidBlock = true
-            hasBlock = true
-            const nextOffset = readBlockRelativeOffset(bytes, grouped.dataStart, grouped.dataEnd)
-            if (nextOffset === null) invalidBlock = true
-            else offset = nextOffset
-          } else if (grouped.id === 0x9b) {
-            const length = grouped.dataEnd - grouped.dataStart
-            duration = readUnsignedIntBE(bytes, grouped.dataStart, length)
-            if (!length || length > 8 || !Number.isSafeInteger(duration)) invalidBlock = true
+          const size = child.dataEnd - child.dataStart
+          if (size === 0) return
+          if (child.id === EBML_ID_TIMECODE) {
+            const value = readUnsignedIntBE(bytes, child.dataStart, size)
+            if (size > 8 || !Number.isSafeInteger(value)) invalidBlock = true
+            else clusterTimecode = value
+            return
           }
-        })
-        if (!groupComplete) invalidBlock = true
-        if (offset === null) invalidBlock = true
-        else maxBlockOffset = Math.max(maxBlockOffset, offset + duration)
-      }
-    })
+          if (child.id === EBML_ID_SIMPLE_BLOCK) {
+            // SimpleBlock：TrackNumber(vint) + int16 BE 相对时间戳 + flags + frame data
+            const offset = readBlockRelativeOffset(bytes, child.dataStart, child.dataEnd)
+            if (offset === null) invalidBlock = true
+            else if (offset > maxBlockOffset) maxBlockOffset = offset
+            return
+          }
+          if (child.id === EBML_ID_BLOCK_GROUP) {
+            let offset: number | null = null
+            let hasBlock = false
+            let duration = 0
+            const groupComplete = walkEbmlElements(
+              bytes,
+              child.dataStart,
+              child.dataEnd,
+              (grouped) => {
+                if (!grouped.complete) {
+                  invalidBlock = true
+                  return
+                }
+                if (grouped.id === EBML_ID_BLOCK) {
+                  if (hasBlock) invalidBlock = true
+                  hasBlock = true
+                  const nextOffset = readBlockRelativeOffset(
+                    bytes,
+                    grouped.dataStart,
+                    grouped.dataEnd,
+                  )
+                  if (nextOffset === null) invalidBlock = true
+                  else offset = nextOffset
+                } else if (grouped.id === 0x9b) {
+                  const length = grouped.dataEnd - grouped.dataStart
+                  duration = readUnsignedIntBE(bytes, grouped.dataStart, length)
+                  if (!length || length > 8 || !Number.isSafeInteger(duration)) invalidBlock = true
+                }
+              },
+            )
+            if (!groupComplete) invalidBlock = true
+            if (offset === null) invalidBlock = true
+            else maxBlockOffset = Math.max(maxBlockOffset, offset + duration)
+          }
+        },
+      )
 
-    if (!clusterComplete) invalidBlock = true
+      if (!clusterComplete) invalidBlock = true
 
-    if (clusterTimecode === null) return
-    const endTimecode = clusterTimecode + maxBlockOffset
-    if (lastEnd === null || endTimecode > lastEnd) lastEnd = endTimecode
-  })
+      if (clusterTimecode === null) return
+      const endTimecode = clusterTimecode + maxBlockOffset
+      if (lastEnd === null || endTimecode > lastEnd) lastEnd = endTimecode
+    },
+    true,
+  )
 
   if (!clustersComplete) invalidBlock = true
   return invalidBlock ? false : lastEnd
@@ -422,33 +454,39 @@ function webmDuration(bytes: Uint8Array): ProbedDuration | null {
   let durationMs: number | null = null
 
   let malformed = false
-  const segmentComplete = walkEbmlElements(bytes, cursor, segmentEnd, (element) => {
-    if (!element.complete) {
-      malformed = true
-      return
-    }
-    if (element.id !== EBML_ID_INFO) return
-    const infoComplete = walkEbmlElements(bytes, element.dataStart, element.dataEnd, (field) => {
-      if (!field.complete) {
+  const segmentComplete = walkEbmlElements(
+    bytes,
+    cursor,
+    segmentEnd,
+    (element) => {
+      if (!element.complete && !(element.unknownSize && element.id === EBML_ID_CLUSTER)) {
         malformed = true
         return
       }
-      const size = field.dataEnd - field.dataStart
-      if (size === 0) return
-      if (field.id === EBML_ID_TIMECODE_SCALE) {
-        const value = readUnsignedIntBE(bytes, field.dataStart, size)
-        if (size > 8 || !Number.isSafeInteger(value) || value <= 0) malformed = true
-        else timecodeScale = value
-      } else if (field.id === EBML_ID_DURATION) {
-        // Duration 是 EBML Float（4 或 8 字节），单位是 TimecodeScale 的 tick 数。
-        const value = readFloatBE(bytes, field.dataStart, size)
-        if (value !== null && Number.isFinite(value) && value > 0) {
-          durationMs = (value * timecodeScale) / 1_000_000
+      if (element.id !== EBML_ID_INFO) return
+      const infoComplete = walkEbmlElements(bytes, element.dataStart, element.dataEnd, (field) => {
+        if (!field.complete) {
+          malformed = true
+          return
         }
-      }
-    })
-    if (!infoComplete) malformed = true
-  })
+        const size = field.dataEnd - field.dataStart
+        if (size === 0) return
+        if (field.id === EBML_ID_TIMECODE_SCALE) {
+          const value = readUnsignedIntBE(bytes, field.dataStart, size)
+          if (size > 8 || !Number.isSafeInteger(value) || value <= 0) malformed = true
+          else timecodeScale = value
+        } else if (field.id === EBML_ID_DURATION) {
+          // Duration 是 EBML Float（4 或 8 字节），单位是 TimecodeScale 的 tick 数。
+          const value = readFloatBE(bytes, field.dataStart, size)
+          if (value !== null && Number.isFinite(value) && value > 0) {
+            durationMs = (value * timecodeScale) / 1_000_000
+          }
+        }
+      })
+      if (!infoComplete) malformed = true
+    },
+    true,
+  )
 
   if (!segmentComplete || malformed) return null
   const blockEnd = lastClusterEndTimecode(bytes, cursor, segmentEnd)
