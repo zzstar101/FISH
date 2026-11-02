@@ -190,8 +190,16 @@ describe('uploadChatVoice —— 不猜修其他字节形状', () => {
     const header = new DataView(localFile)
     if (width === 2) header.setUint16(offset, value, true)
     else header.setUint32(offset, value, true)
+    // 快照必须在上传**之前**取：只比引用（`toBe`）证明不了「原样上传」——原地改写字节的
+    // 实现会把 localFile 一起改掉，引用比较照样通过（#550 审查：此前的断言正是如此）。
+    const snapshot = new Uint8Array(localFile.slice(0))
     await uploadChatVoice(CONVERSATION, { path: 'wxfile://tmp/voice.wav', durationMs: 1000 })
-    expect(uploads[0]?.data).toBe(localFile)
+    const uploaded = uploads[0]?.data
+    expect(uploaded).toBeDefined()
+    if (!uploaded) throw new Error('missing PUT body')
+    // 输入逐字节不变 + 上传体逐字节等于快照：两条合起来才排除「顺手猜修」。
+    expect(new Uint8Array(localFile)).toEqual(snapshot)
+    expect(new Uint8Array(uploaded)).toEqual(snapshot)
   })
 
   test.each(['normal', 'empty', 'odd', 'short', 'mp4', 'webm'])('%s 文件不变', async (shape) => {
