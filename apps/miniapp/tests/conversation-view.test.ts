@@ -252,6 +252,12 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
       action: 'retry',
       transactionId: '',
     })
+    // 缓存里这一笔还没成交：文案可以退回「待面交」，但 CTA 仍要是重试
+    expect(txCardView(tx({ status: 'PENDING_MEETUP' }), 'txn_1', { failed: true })).toMatchObject({
+      title: '待面交',
+      actionLabel: '重新加载',
+      action: 'retry',
+    })
   })
 
   test('取消后又有新提案：旧交易卡收起，不跟胶囊的「待同意 / 待接受」打架', () => {

@@ -2205,17 +2205,18 @@ export default function Conversation() {
    * 交易的 id 时，旧 PENDING 行不再可信，走「交易状态待更新」。
    */
   const txKnown = fallbackTxId !== null || txLoad.tx !== null || lastTxEventType === 'tx.accepted'
-  const failedPendingTx =
-    txLoad.status === 'failed' &&
-    txLoad.tx?.status === 'PENDING_MEETUP' &&
-    (fallbackTxId === null || fallbackTxId === txLoad.tx.id)
+  const txFailed = txLoad.status === 'failed' && txKnown
+  /** 失败时缓存只在「仍是同一笔待面交」时可继续展示 —— 终态和别的交易的缓存都不算数 */
+  const cachedTx =
+    txLoad.status !== 'failed'
       ? txLoad.tx
-      : null
-  const txFailed = txLoad.status === 'failed' && txKnown && failedPendingTx === null
+      : txLoad.tx !== null && (fallbackTxId === null || fallbackTxId === txLoad.tx.id)
+        ? txLoad.tx
+        : null
   const txCard =
-    txLoad.status === 'idle'
+    txLoad.status === 'idle' || (txLoad.status === 'failed' && !txKnown)
       ? null
-      : txCardView(failedPendingTx ?? (txFailed ? null : txLoad.tx), fallbackTxId, {
+      : txCardView(txFailed ? cachedTx : txLoad.tx, fallbackTxId, {
           failed: txFailed,
           lastEventType: lastTxEventType,
         })

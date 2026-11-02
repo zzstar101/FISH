@@ -53,14 +53,14 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     expect(dispatch).toContain('realtimeOpenRef.current()')
   })
 
-  test('查询失败时不信旧终态：PENDING 退回成交前文案，其余标 failed 交给 txCardView', async () => {
+  test('查询失败时不信旧终态：只有同一笔 PENDING 缓存能退回成交前文案，其余走 failed', async () => {
     const code = await source()
-    expect(code).toContain("txLoad.tx?.status === 'PENDING_MEETUP'")
+    // 失败时缓存必须与消息里的交易 id 对得上（别的交易的缓存不能当现状）
     expect(code).toContain('fallbackTxId === txLoad.tx.id')
-    expect(code).toContain(
-      'txCardView(failedPendingTx ?? (txFailed ? null : txLoad.tx), fallbackTxId',
-    )
+    expect(code).toContain('txCardView(txFailed ? cachedTx : txLoad.tx, fallbackTxId')
     expect(code).toContain('failed: txFailed')
+    // 失败但缓存是 PENDING：文案退回「待面交」，CTA 仍是重试（在 view.ts 里由 failed 决定）
+    expect(code).toContain("txLoad.status === 'failed' && txKnown")
   })
 
   test('交易请求 latest-wins：迟到的旧响应不能覆盖新状态', async () => {

@@ -115,13 +115,18 @@ export function txCardView(
   fallbackTxId?: string | null,
   options?: { failed?: boolean; lastEventType?: string | null },
 ): TxCardView | null {
+  const failed = options?.failed === true
   /**
-   * 交易查询失败：**绝不拿上一次的 `tx` 冒充当前状态**（#522 验收：失败不误报终态）。
-   * 无论有没有消息里的 id，卡片都给「重新加载」—— 失败后最该先做的是重试，而「看
-   * 某一笔」的入口在消息胶囊的「查看本笔」上（历史 id 不随交易查询失败消失）。
-   * 没有重试按钮的话，整张卡要么变成一次性的跳转链接、要么直接消失。
+   * 交易查询失败：**绝不拿上一次的 `tx` 冒充终态**（#522 验收：失败不误报终态）。
+   * 缓存里只有仍在 `PENDING_MEETUP` 的那一笔可以继续用 —— 它不是终态，文案本来就是
+   * 「成交前」口径（验收要求「退回成交前文案」）；其余情况（没有缓存 / 缓存已是终态）
+   * 一律「交易状态待更新」，不把旧结果当现状。
+   *
+   * 失败态的 CTA 统一换成「重新加载」：没有重试按钮的话，用户只能跳去交易码页或
+   * 干看着一张过期的卡；「看某一笔」的入口仍在消息胶囊的「查看本笔」上。
    */
-  if (options?.failed) {
+  if (failed && tx?.status !== 'PENDING_MEETUP') {
+    if (tx?.status === 'CANCELLED' && options?.lastEventType === 'tx.proposal') return null
     return {
       tone: 'is-warn',
       icon: 'refresh',
@@ -191,8 +196,8 @@ export function txCardView(
         icon: 'qr',
         title: '待面交',
         desc: `${amount} · 面交时与对方核对 6 位交易码，双方确认后订单完成。`,
-        actionLabel: '查看交易码',
-        action: 'open',
+        actionLabel: failed ? '重新加载' : '查看交易码',
+        action: failed ? 'retry' : 'open',
         transactionId: tx.id,
       }
     : {
@@ -200,8 +205,8 @@ export function txCardView(
         icon: 'clock',
         title: '待对方确认',
         desc: `${amount} · 你已确认，等待对方确认后订单完成。`,
-        actionLabel: '查看交易码',
-        action: 'open',
+        actionLabel: failed ? '重新加载' : '查看交易码',
+        action: failed ? 'retry' : 'open',
         transactionId: tx.id,
       }
 }
