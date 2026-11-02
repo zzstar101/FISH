@@ -52,7 +52,7 @@ recall（6 路建池，≤500）
 ### 3.1 召回与特征补算（`apps/api/src/modules/recommendation/recall/`）
 
 - **embedding 模型**：`createApp` 新增末位参数 `recommendationEmbedding`（默认 `STUB_EMBEDDING_MODEL`，与 worker stub 同名），`index.ts` 传 `loadRecommendationEmbeddingModel()`。`STUB_VISUAL_EMBEDDING_MODEL` 不再出现在推荐装配里。
-- **explore 通道**换成 `findUnderexposedRecallCandidates`：从可见商品出发，按 `(listing_id, occurred_at)` 索引逐个数近 7 天 `IMPRESSION` 的去重身份（只数到阈值为止，单次成本 ≈ 可见商品数 × min(曝光, 20)，不随全站曝光总量增长），`< RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES (20)` 才入池，按曝光少 → 发布新 → id 排序，取 `RECALL_CHANNEL_LIMITS.explore (50)`。v1 的 new_listing / new_seller / cold_category 三块与相关常量删除。
+- **explore 通道**换成 `findUnderexposedRecallCandidates`：从可见商品出发，按 `listing_id` 索引逐个数近 7 天 `IMPRESSION` 的去重身份（关联子查询；只读可见商品自己的曝光行，不再对全窗口所有商品 group by；规模化后若仍成瓶颈，改为 worker 定时预计算），`< RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES (20)` 才入池，按曝光少 → 发布新 → id 排序，取 `RECALL_CHANNEL_LIMITS.explore (50)`。v1 的 new_listing / new_seller / cold_category 三块与相关常量删除。
 - **merge**：`exploreEligible = recallSources.includes('explore')`（不再看第一来源）；本请求有类目画像时未命中类目记 `0`（可比），完全没有画像才是 `null`（请求级缺失）。六路上限之和 480 < 500，探索候选不会被截断掉。
 - **enrichCandidateFeatures**（合并之后、排序之前，最多 3 条批量查询**并行**）：
   - semantic：`similarListingsByIds`（只认当前模型的新鲜向量）在候选 id 内算 cosine；没有向量的候选保持 `null`（候选级缺失）。

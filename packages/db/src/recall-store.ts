@@ -350,9 +350,9 @@ export async function findUnderexposedRecallCandidates(
 ): Promise<ExploreRecallCandidate[]> {
   if (input.limit <= 0 || input.maxExposedIdentities <= 0) return []
 
-  // 从可见商品出发，逐个按 `(listing_id, occurred_at)` 索引数窗口内的去重曝光身份，并且只数到
-  // 阈值为止（`limit maxExposedIdentities`）：判断"是否 < 阈值"不需要精确总数。这样单次成本是
-  // "可见商品数 × min(该商品窗口内曝光, 阈值)"，不随全站曝光总量（含已下架商品）线性增长。
+  // 从可见商品出发，逐个按 `listing_id` 索引数窗口内的去重曝光身份（`limit` 只截断计数结果，
+  // 判断"是否 < 阈值"不需要精确总数）。只碰可见商品自己的曝光行：已下架 / 已售商品的曝光不再
+  // 参与，也没有全窗口 group by；规模化后若仍成瓶颈，改为 worker 定时预计算曝光数。
   // 单表 select 里 drizzle 渲染的列不带表名，关联子查询里会被就近解析到事件表；
   // 因此这里用显式别名 `ev` 与全限定的 `"listings"."id"`。
   const exposed = sql<number>`(
