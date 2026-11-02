@@ -103,7 +103,7 @@ import {
   systemPillText,
 } from './view'
 import VoiceRecordPanel from './voice-record-panel'
-import { isVoiceCancelArmed } from './voice-recording-view'
+import { applyVoiceAutoStop, isVoiceCancelArmed } from './voice-recording-view'
 
 /** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
 function touchClientY(event: unknown): number {
@@ -1465,24 +1465,22 @@ export default function Conversation() {
    * 以前这条路径没人接：面板会继续计时、按钮还写着「松开 发送」，实际上已经不在录了 ——
    * 用户松手时才把这段当正常录音发出去（或更早被丢弃）。现在：复位 + 明确提示 + 直接发送
    * 这一段（与微信「到时自动发送」一致，也避免用户刚录满的一分钟凭空消失）。
+   *
+   * 「取消 / 被打断 / 录满」的取舍收在 `applyVoiceAutoStop` 里（#535 复审）：那是有行为
+   * 用例的纯逻辑，页面只负责把取消态与是否录满交过去、接上提示与发送。
    */
   const handleVoiceAutoStop = (recorded: RecordedVoice, capped: boolean) => {
     const cancelled = cancelArmedRef.current
     recordingRef.current = null
     setRecording(false)
     resetRecordingUi()
-    // 用户已经滑到「松开 取消」：他表达的是丢弃，停录一律不发
-    if (cancelled) {
-      void Taro.showToast({ title: '录音已取消', icon: 'none' })
-      return
-    }
-    // 被系统打断（来电 / 切后台）：不把没说完的半句发出去
-    if (!capped) {
-      void Taro.showToast({ title: '录音已中断，请重试', icon: 'none' })
-      return
-    }
-    void Taro.showToast({ title: '已达最长录音时长，已发送', icon: 'none' })
-    sendRecordedVoice(recorded)
+    applyVoiceAutoStop(
+      { cancelled, capped },
+      {
+        toast: (title) => void Taro.showToast({ title, icon: 'none' }),
+        send: () => sendRecordedVoice(recorded),
+      },
+    )
   }
 
   /** 松手：结束录音并发送（`cancelled` = 手指移开 / 取消，放弃这一段） */

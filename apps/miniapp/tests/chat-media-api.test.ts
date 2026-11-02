@@ -44,8 +44,13 @@ let duringDownload: (() => void) | null = null
 const recorderHooks: {
   onError: ((error: { errMsg: string }) => void) | null
   onStop: ((result: { tempFilePath: string; duration: number }) => void) | null
-} = { onError: null, onStop: null }
+  /** 录音被系统占用打断（来电 / 视频通话）：平台是 `onInterruptionBegin` */
+  onInterruptionBegin: (() => void) | null
+  onInterruptionEnd: (() => void) | null
+} = { onError: null, onStop: null, onInterruptionBegin: null, onInterruptionEnd: null }
 let recorderStartOptions: { duration?: number } | null = null
+/** `stop()` 抛错（平台异常）：验证放弃的账目不会毒化下一段录音 */
+let stopThrows = false
 
 mock.module('@tarojs/taro', () => ({
   default: {
@@ -62,10 +67,18 @@ mock.module('@tarojs/taro', () => ({
       onError: (handler: (error: { errMsg: string }) => void) => {
         recorderHooks.onError = handler
       },
+      onInterruptionBegin: (handler: () => void) => {
+        recorderHooks.onInterruptionBegin = handler
+      },
+      onInterruptionEnd: (handler: () => void) => {
+        recorderHooks.onInterruptionEnd = handler
+      },
       start: (options: { duration?: number }) => {
         recorderStartOptions = options
       },
-      stop: () => undefined,
+      stop: () => {
+        if (stopThrows) throw new Error('operateRecorder:fail stop')
+      },
     }),
     request: async (option: UploadCall) => {
       uploads.push({ url: option.url, method: option.method, header: option.header })
@@ -126,6 +139,7 @@ beforeEach(() => {
   uploadStatus = 200
   downloadStatus = 200
   recorderStartOptions = null
+  stopThrows = false
   presignResponse = {
     uploadUrl: 'http://localhost:9000/fish/chat-media/up',
     objectKey: `chat-media/${CONVERSATION}/me/1.png`,
@@ -322,6 +336,123 @@ describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364
 
     await expect(stopped).rejects.toThrow('录音失败，请重试')
     expect(reported).toHaveLength(0)
+  })
+
+  /*
+    #535 复审 medium：「录满」不该只看时长阈值 —— 时长判据分不出「录到上限」与
+    「被打断」。平台有真正的信号（`RecorderManager.onInterruptionBegin`：来电 /
+    视频通话占用麦克风），中断标记必须参与判定，否则 58.5s 之后被打断的半句会被
+    当成「录满」自动发给对方。
+  */
+  test('被系统打断后自停（59s 上限前的最后 500ms）：不算「录满」，不自动发送', () => {
+    const calls: Array<{ durationMs: number; capped: boolean }> = []
+    startVoiceRecording(undefined, (recorded, capped) => {
+      calls.push({ durationMs: recorded.durationMs, capped })
+    })
+
+    recorderHooks.onInterruptionBegin?.()
+    // 58.9s：只按时长判据（>= 58.5s）会判成「录满」→ 自动发送被截断的音频
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cut.wav', duration: 58_900 })
+
+    expect(calls).toEqual([{ durationMs: 58_900, capped: false }])
+  })
+
+  test('中断结束后继续录满：仍按「录满」处理（中断标记不外溢到正常收尾）', () => {
+    const calls: Array<{ capped: boolean }> = []
+    startVoiceRecording(undefined, (_recorded, capped) => calls.push({ capped }))
+
+    recorderHooks.onInterruptionBegin?.()
+    recorderHooks.onInterruptionEnd?.()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/voice.wav', duration: 59_000 })
+
+    expect(calls).toEqual([{ capped: true }])
+  })
+})
+
+/*
+  #535 复审 high：`RecorderManager` 是**全局单例**，`onStop` / `onError` 只有一条通道。
+  修复前这条通道按「当前挂的是谁」派发，于是**上一段迟到的 onStop** 会被派给**新一段**
+  的回调：页面把上一段的音频当成新一段发出去，同时把新一段的句柄复位（正在录的那一段
+  从此收不了尾）。真实可复现路径有两条：
+  1. 松手（`finishVoice` 立刻把 `recordingRef` 置空）后，在 onStop 到达前又按了一次；
+  2. 滑到「松开 取消」松手（`abort`），随即再按一次 —— `abort` 把派发槽置空，新一段的
+     `start` 又把它填上，上一段的 onStop 正好落进新槽。
+*/
+describe('startVoiceRecording —— 上一段迟到的结果不许顶替新一段（#535 复审）', () => {
+  test('松手后 onStop 迟到、用户又按了一次：结果只销上一段，新一段继续在录', async () => {
+    const autoStops: Array<{ who: string; durationMs: number }> = []
+    const first = startVoiceRecording(undefined, (recorded) => {
+      autoStops.push({ who: 'first', durationMs: recorded.durationMs })
+    })
+    const firstStopped = first.stop()
+    startVoiceRecording(undefined, (recorded) => {
+      autoStops.push({ who: 'second', durationMs: recorded.durationMs })
+    })
+
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/first.wav', duration: 3_000 })
+
+    // 第二段还在录：既不该被「自停」通知，也不该拿到第一段的音频
+    expect(autoStops).toEqual([])
+    await expect(firstStopped).resolves.toEqual({
+      path: 'wxfile://tmp/first.wav',
+      durationMs: 3_000,
+    })
+
+    // 第二段自己的 onStop 才轮到它
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/second.wav', duration: 5_000 })
+    expect(autoStops).toEqual([{ who: 'second', durationMs: 5_000 }])
+  })
+
+  test('取消（abort）后立刻再按：上一段的 onStop 被吞掉，不许打断新一段', async () => {
+    const autoStops: string[] = []
+    const cancelled = startVoiceRecording(undefined, () => autoStops.push('cancelled'))
+    cancelled.abort()
+    const live = startVoiceRecording(undefined, () => autoStops.push('live'))
+
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cancelled.wav', duration: 8_000 })
+    // 修复前这里是 ['live']：用户放弃的音频被当成新一段「录满」发出去
+    expect(autoStops).toEqual([])
+
+    const stopped = live.stop()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/live.wav', duration: 2_000 })
+    await expect(stopped).resolves.toEqual({ path: 'wxfile://tmp/live.wav', durationMs: 2_000 })
+    expect(autoStops).toEqual([])
+  })
+
+  test('放弃的那一段：自己的 onStop / onError 到了也不交付', () => {
+    const autoStops: string[] = []
+    const reported: Error[] = []
+
+    const cancelled = startVoiceRecording(
+      (error) => reported.push(error),
+      () => autoStops.push('auto'),
+    )
+    cancelled.abort()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cancelled.wav', duration: 8_000 })
+
+    const errored = startVoiceRecording(
+      (error) => reported.push(error),
+      () => autoStops.push('auto'),
+    )
+    errored.abort()
+    recorderHooks.onError?.({ errMsg: 'operateRecorder:fail system error' })
+
+    expect(autoStops).toEqual([])
+    expect(reported).toEqual([])
+  })
+
+  test('abort 的 stop() 抛错（等不到 onStop）：账目当场销掉，不顶替下一段', () => {
+    const calls: string[] = []
+
+    const ghost = startVoiceRecording(undefined, () => calls.push('ghost'))
+    stopThrows = true
+    ghost.abort()
+    stopThrows = false
+
+    startVoiceRecording(undefined, () => calls.push('next'))
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/next.wav', duration: 59_000 })
+
+    expect(calls).toEqual(['next'])
   })
 })
 

@@ -1,6 +1,6 @@
 import { Text, View } from '@tarojs/components'
-import { useEffect, useRef, useState } from 'react'
-import { voiceElapsedSeconds, voiceRecordingClock } from './voice-recording-view'
+import { useEffect, useState } from 'react'
+import { startRecordingTicker, voiceRecordingClock } from './voice-recording-view'
 import './voice-record-panel.scss'
 
 /** 波形条数量：5 条，靠 animationDelay 错位形成流动感 */
@@ -12,20 +12,13 @@ const WAVE_BARS = [0, 1, 2, 3, 4] as const
  * 独立组件的原因（审查 medium）：计时状态若放在会话页，每秒都会让整页（含全部消息气泡）
  * 重渲染一遍。计时器与秒数收在这里，页面只传「是否已滑到取消区」，消息流不再被牵连。
  *
- * 生命周期 = 录音生命周期：只在录音中被挂载，卸载时清计时器；起点时刻取挂载时间，
- * 秒数由 `Date.now()` 与起点算出（不累加，避免长时间录音漂移）。
+ * 生命周期 = 录音生命周期：只在录音中被挂载，卸载时停表；节拍本身在
+ * `startRecordingTicker` 里（纯逻辑，用假时钟行为验证「每次节拍都刷新秒数」）。
  */
 export default function VoiceRecordPanel({ cancelArmed }: { cancelArmed: boolean }) {
   const [seconds, setSeconds] = useState(0)
-  const startedAtRef = useRef(0)
 
-  useEffect(() => {
-    startedAtRef.current = Date.now()
-    const timer = setInterval(() => {
-      setSeconds(voiceElapsedSeconds(startedAtRef.current, Date.now()))
-    }, 250)
-    return () => clearInterval(timer)
-  }, [])
+  useEffect(() => startRecordingTicker(setSeconds), [])
 
   return (
     <View className={`vrec${cancelArmed ? ' is-cancel' : ''}`}>

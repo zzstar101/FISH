@@ -353,30 +353,95 @@ type VoiceRecorder = ReturnType<typeof Taro.getRecorderManager>
 
 /**
  * `RecorderManager` 是**全局单例**，`onStop/onError` 注册会一直累积，所以这里只注册一次，
- * 由模块级 `voiceHandlers` 指向「当前这一次录音」。不这么做的话第二次录音会同时触发
- * 上一次遗留的回调（表现为重复发送 / 状态错乱）。
+ * 由模块级 `voiceSessions` 记账。不这么做的话第二次录音会同时触发上一次遗留的回调
+ * （表现为重复发送 / 状态错乱）。
+ *
+ * 但「只注册一次」≠「只挂一个回调槽」（#535 复审 high）：`onStop` / `onError` 是**异步**
+ * 送达的，上一段的事件完全可能落在**下一段已经开始录音之后**。若按「槽里当前是谁」派发，
+ * 上一段的结果就会被派给下一段的回调 —— 页面把旧音频当新一段发出去，同时把还在录的那一段
+ * 的句柄复位（正在录的这段从此没人收尾）。所以这里按**起录顺序**记账，每个事件销自己那笔。
  */
 let voiceRecorder: VoiceRecorder | null = null
-let voiceHandlers: {
+
+type VoiceSession = {
   resolve: (voice: RecordedVoice) => void
   reject: (error: Error) => void
-} | null = null
+  /** 已经调过 `stop()` / `abort()`：这一笔在等**它自己的** onStop / onError */
+  stopRequested: boolean
+  /** `abort()` 放弃的这一段：事件到了也直接丢掉（不交付、不弹错） */
+  abandoned: boolean
+  /** 被系统占用打断过（`onInterruptionBegin`）：自停不能算「录满」 */
+  interrupted: boolean
+  /** 录音**进行中**失败（页面据此立刻复位 + 提示） */
+  onError?: (error: Error) => void
+  /** 录音器**自己停了**（没人调用 `stop()`）时的回调 */
+  onAutoStop?: (recorded: RecordedVoice, capped: boolean) => void
+}
+
+/** 还没把自己的 onStop / onError 交回来的录音，按起录顺序排队。 */
+const voiceSessions: VoiceSession[] = []
+
+/**
+ * 销账：`onStop` / `onError` 到达时挑出它属于哪一段。
+ *
+ * 1. 先找「自己叫过 `stop()` / `abort()`」的最早一段 —— 松手 / 取消那一段的收尾事件
+ *    一定先于任何后续录音的事件到达（同一台设备一次只录一段，事件按 stop 的先后送达）；
+ * 2. 都没有 → 没有人在等收尾，那就是**录音器自己停了**，只能是当前还在录的那一段
+ *    （跳过已经放弃的账）。
+ */
+function takeSettlingSession(): VoiceSession | null {
+  const requested = voiceSessions.findIndex((session) => session.stopRequested)
+  if (requested !== -1) return voiceSessions.splice(requested, 1)[0] ?? null
+  const live = voiceSessions.findIndex((session) => !session.abandoned)
+  if (live !== -1) return voiceSessions.splice(live, 1)[0] ?? null
+  return voiceSessions.shift() ?? null
+}
+
+/** 把一段录音从账上摘掉（它的事件永远不会来了，例如 `stop()` 就抛了错）。 */
+function dropSession(session: VoiceSession): void {
+  const index = voiceSessions.indexOf(session)
+  if (index !== -1) voiceSessions.splice(index, 1)
+}
+
+/** 当前还在录的那一段（没有叫过 stop、也没被放弃）：只有它会被系统打断。 */
+function liveSession(): VoiceSession | undefined {
+  return voiceSessions.find((session) => !session.stopRequested && !session.abandoned)
+}
 
 function recorder(): VoiceRecorder {
   if (voiceRecorder) return voiceRecorder
   const manager = Taro.getRecorderManager()
   manager.onStop((result) => {
-    const handlers = voiceHandlers
-    voiceHandlers = null
-    handlers?.resolve({
+    const session = takeSettlingSession()
+    if (!session) return
+    // 放弃的那一段：不交付、不通知（页面已经把它当没录过）
+    if (session.abandoned) return
+    const recorded = {
       path: result.tempFilePath,
       durationMs: Math.max(0, Math.round(result.duration)),
-    })
+    }
+    session.resolve(recorded)
+    // 没人叫过 `stop()` = 录音器自己停的（时长上限 / 系统打断）：这时页面还没松手，
+    // 也就没人消费 `stop()`，必须带外通知，否则面板会继续计时。
+    if (!session.stopRequested) session.onAutoStop?.(recorded, voiceCapped(session, recorded))
   })
   manager.onError((error) => {
-    const handlers = voiceHandlers
-    voiceHandlers = null
-    handlers?.reject(voiceError(error))
+    const session = takeSettlingSession()
+    if (!session) return
+    if (session.abandoned) return
+    const failure = voiceError(error)
+    session.reject(failure)
+    // `stop()` 之后才到的错误会从 `done` 的 reject 走到 `stop()` 的 catch，这里不再重复上报
+    if (!session.stopRequested) session.onError?.(failure)
+  })
+  // 来电 / 视频通话占用麦克风：这一段不是「录满收尾」
+  manager.onInterruptionBegin(() => {
+    const session = liveSession()
+    if (session) session.interrupted = true
+  })
+  manager.onInterruptionEnd(() => {
+    const session = liveSession()
+    if (session) session.interrupted = false
   })
   voiceRecorder = manager
   return manager
@@ -411,36 +476,38 @@ const VOICE_RECORD_MAX_MS = MEDIA_MAX_VOICE_DURATION_MS - 1000
  * （#364 审查）。`RecorderManager` 只有 `onError` 这一条失败通道，而它可能在用户**还没
  * 松手**时就到 —— 不在这里上报的话，页面要等到 `stop()` 的 catch 才知道失败，期间按钮
  * 还写着「松开 发送」，用户以为在录、其实什么都没录。
+ *
+ * `onAutoStop`：录音器**自己停了**（时长上限 / 被系统打断）时的带外通知。`capped` 由
+ * 「有没有被中断过」+「时长是否贴着上限」两件事共同判定，见 `voiceCapped`。
  */
 export function startVoiceRecording(
   onError?: (error: Error) => void,
-  /**
-   * 录音器**自己停了**（没有人调用 `stop()`）时的回调（#535 审查）。
-   * `capped` = 是否录到时长上限（否则就是被系统打断：来电 / 切后台等）。
-   */
   onAutoStop?: (recorded: RecordedVoice, capped: boolean) => void,
 ): VoiceRecording {
   const manager = recorder()
-  /**
-   * `stop()` 已经调过：此后同一个错误会从 `done` 的 reject 走到 `stop()` 的 catch，
-   * 这里不再重复上报（否则用户一松手会被提示两次）。
-   */
-  let stopping = false
+  /** 这一段的账：事件到达时按它自己身上记的状态销账（不再看「当前挂的是谁」）。 */
+  const session: VoiceSession = {
+    resolve: () => undefined,
+    reject: () => undefined,
+    stopRequested: false,
+    abandoned: false,
+    interrupted: false,
+    onError,
+    onAutoStop,
+  }
   const done = new Promise<RecordedVoice>((resolve, reject) => {
-    voiceHandlers = {
-      resolve: (recorded) => {
-        resolve(recorded)
-        // `stopping === false` = 录音器自己停的（时长上限 / 系统打断）：
-        // 这时页面还没松手，也就没人消费 `stop()`，必须带外通知，否则面板会继续计时。
-        // `capped` 让页面区分「录满了」与「被打断」——后者不该把半句话发出去。
-        if (!stopping) onAutoStop?.(recorded, recorded.durationMs >= VOICE_RECORD_MAX_MS - 500)
-      },
-      reject: (error) => {
-        reject(error)
-        if (!stopping) onError?.(error)
-      },
-    }
+    session.resolve = resolve
+    session.reject = reject
   })
+  /**
+   * 能走到这里说明上一段已经不在录了（页面在录音中按不下第二次），所以账上那些
+   * **还没叫过 `stop()`** 的旧账永远等不到自己的收尾事件（例如录音被系统暂停后就再没
+   * 回过神）。留着它们只会吞掉这一段的 onStop —— 起录时清掉。
+   */
+  for (const stale of voiceSessions.filter((pending) => !pending.stopRequested)) {
+    dropSession(stale)
+  }
+  voiceSessions.push(session)
   /**
    * 有 `onError` 时错误已经**带外**上报过了，而用户可能永远不松手（`stop()` 也就不会
    * 被调用）—— 那条 `done` 的 rejection 就没人接，运行时会报「未处理的 Promise 拒绝」。
@@ -449,29 +516,50 @@ export function startVoiceRecording(
    */
   if (onError) void done.catch(() => undefined)
 
-  manager.start({
-    duration: VOICE_RECORD_MAX_MS,
-    format: 'wav',
-    sampleRate: 16_000,
-    numberOfChannels: 1,
-    encodeBitRate: 48_000,
-  })
+  try {
+    manager.start({
+      duration: VOICE_RECORD_MAX_MS,
+      format: 'wav',
+      sampleRate: 16_000,
+      numberOfChannels: 1,
+      encodeBitRate: 48_000,
+    })
+  } catch (error) {
+    // `start()` 都没成功就不会有这一段的事件：立刻销账，否则这笔账会吞掉下一段的结果
+    dropSession(session)
+    throw error
+  }
 
   return {
     stop: () => {
-      stopping = true
+      session.stopRequested = true
       manager.stop()
       return done
     },
     abort: () => {
-      voiceHandlers = null
+      session.abandoned = true
+      session.stopRequested = true
       try {
         manager.stop()
       } catch (error) {
+        // `stop()` 都没发出去就永远等不到这一段的 onStop：当场销账，别留在账上
+        dropSession(session)
         console.error('[chat-media] 取消录音失败', error)
       }
     },
   }
+}
+
+/**
+ * 录音器自己停时，是不是**录到时长上限**（而不是被系统打断，#535 复审 medium）。
+ *
+ * 只按时长判据的话，59s 上限前最后 500ms 里被打断的半句会被当成「录满」自动发给对方。
+ * 平台有真正的信号（`onInterruptionBegin`：来电 / 视频通话占用麦克风），中断过的这一段
+ * 一律不算录满；`- 500ms` 的余量留给录音机按帧对齐收尾时回报的时长略小于配置值。
+ */
+function voiceCapped(session: VoiceSession, recorded: RecordedVoice): boolean {
+  if (session.interrupted) return false
+  return recorded.durationMs >= VOICE_RECORD_MAX_MS - 500
 }
 
 /**

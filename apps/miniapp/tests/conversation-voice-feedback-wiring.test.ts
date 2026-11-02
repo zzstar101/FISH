@@ -4,13 +4,14 @@ import { describe, expect, test } from 'bun:test'
  * 「按住说话」录音反馈的**接线契约**（#535）。
  *
  * 本仓 tests 没有 Taro 渲染基建，页面接线只能读源码钉住（先例
- * `conversation-realtime-wiring.test.ts`）。这里钉的是三条最容易漏、且单测抓不到的线：
- * 1. 触摸四件套都绑上，且松手判定读 `cancelArmedRef`（不是 state，避免 setState 延迟）；
- * 2. 录音器「自己停了」（时长上限）有回调，否则面板会继续计时；
+ * `conversation-realtime-wiring.test.ts`）。这里只钉**页面自己**那层接线，且每条都钉到
+ * 实参/调用形状上（否则把取消改成发送、把发送挪进取消分支都照样能过）：
+ * 1. 触摸四件套都绑上，`onTouchCancel` 必须落在取实参 `true` 的取消支上；
+ * 2. 录音器「自己停了」的取舍交给 `applyVoiceAutoStop`（行为在纯逻辑用例里）；
  * 3. 所有结束路径（松手/取消/失败/切态/卸载）都过 `resetRecordingUi`。
+ * 录音器本身的行为（迟到结果归属、录满 vs 被打断）在 `chat-media-api.test.ts` 里真跑。
  */
 const PAGE = new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url)
-const MEDIA_API = new URL('../src/features/chat/media-api.ts', import.meta.url)
 
 async function read(url: URL): Promise<string> {
   return await Bun.file(url).text()
@@ -31,7 +32,14 @@ describe('录音反馈接线契约（#535）', () => {
     expect(hold).toContain('onTouchStart={startVoice}')
     expect(hold).toContain('onTouchMove={moveVoice}')
     expect(hold).toContain('onTouchEnd={endVoice}')
-    expect(hold).toContain('onTouchCancel')
+    /*
+      触摸取消必须绑到**取消**分支上（#535 复审 medium）。
+      只断言 `onTouchCancel` 这个名字出现过是不够的：把处理函数改成走发送路径
+      （`finishVoice(false)`）照样能过，而平台一旦派发 touchcancel，用户想丢弃的
+      这一段就会被发出去。这里钉住实参，把取消/发送的语义分不开就不许过。
+    */
+    expect(hold).toMatch(/onTouchCancel=\{\(\) => finishVoice\(true\)\}/)
+    expect(hold).not.toMatch(/onTouchCancel=\{\(\) => finishVoice\(false\)\}/)
   })
 
   test('松手判定读 ref（不吃 setState 延迟），且 ref 与 state 同处更新', async () => {
@@ -42,17 +50,23 @@ describe('录音反馈接线契约（#535）', () => {
     expect(move).toContain('setCancelArmed(armed)')
   })
 
-  test('录音器自停：复位 + 按「取消态 / 被打断 / 录满」三种情形分别处理', async () => {
+  test('录音器自停：复位后把「取消 / 被打断 / 录满」的取舍交给被测过的判定（#535 复审）', async () => {
     const text = await read(PAGE)
     expect(text).toContain('startVoiceRecording(handleVoiceFailure, handleVoiceAutoStop)')
-    const auto = between(text, 'const handleVoiceAutoStop', 'sendRecordedVoice(recorded)')
+    const auto = between(text, 'const handleVoiceAutoStop', '\n  }')
     expect(auto).toContain('setRecording(false)')
     expect(auto).toContain('resetRecordingUi()')
-    // 取消态：丢弃；被打断（capped=false）：不发送；录满：发送
+    /*
+      「取消态 / 被打断 / 录满」三种取舍不得只靠源码里搜 `if (cancelled)` 这类字符串：
+      把发送挪进取消分支、或者调换这两个判据的顺序，字符串还在、发送却错了。
+      取舍收进 `applyVoiceAutoStop`（行为用例见 voice-recording-view.test.ts），
+      页面这里只允许把发送作为它的 `send` 回调出现一次。
+    */
+    expect(auto).toContain('applyVoiceAutoStop(')
     expect(auto).toContain('const cancelled = cancelArmedRef.current')
-    expect(auto).toContain('if (cancelled)')
-    expect(auto).toContain('if (!capped)')
-    expect(text).toContain('sendRecordedVoice(recorded)')
+    expect(auto.match(/sendRecordedVoice\(recorded\)/g) ?? []).toHaveLength(1)
+    expect(auto).not.toMatch(/if \(cancelled\)/)
+    expect(auto).not.toMatch(/if \(!capped\)/)
   })
 
   test('身份快照在起录时拍下（守住「松手 → 拿到音频」窗口换号，复审 medium）', async () => {
@@ -63,15 +77,6 @@ describe('录音反馈接线契约（#535）', () => {
     expect(send).toContain('const identity = voiceIdentityRef.current')
     // 发送路径不再自己取当前身份（否则判据恒假）
     expect(send).not.toContain('currentIdentity()')
-  })
-
-  test('media-api 暴露 onAutoStop，且只在「没人调 stop()」时触发', async () => {
-    const text = await read(MEDIA_API)
-    expect(text).toContain('onAutoStop?: (recorded: RecordedVoice, capped: boolean) => void')
-    const resolve = between(text, 'resolve: (recorded) =>', 'reject:')
-    expect(resolve).toContain('if (!stopping) onAutoStop?.(recorded, ')
-    // 「录满」的判定在 media-api 侧给出，页面不该自己猜时长
-    expect(resolve).toContain('VOICE_RECORD_MAX_MS - 500')
   })
 
   test('所有结束路径都过 resetRecordingUi（松手 / 放弃 / 失败 / 卸载）', async () => {
@@ -96,10 +101,16 @@ describe('录音反馈接线契约（#535）', () => {
     expect(text).toContain('<VoiceRecordPanel cancelArmed={cancelArmed} />')
     // 页面不再持有秒数计时器（审查 medium：整页每秒重渲染）
     expect(text).not.toContain('setRecordSeconds')
+    /*
+      面板只负责把节拍结果塞进 state（#535 复审 medium）。
+      只断言面板里有 `setInterval(` 抓不到「计时器在跑、秒数却不再更新」：
+      面板现在调用被测过的 `startRecordingTicker`，节拍逻辑（每次重算秒数 /
+      停表后不再上报）在 voice-recording-view.test.ts 里行为验证。
+    */
     const panel = await read(
       new URL('../src/pkg-social/pages/conversation/voice-record-panel.tsx', import.meta.url),
     )
-    expect(panel).toContain('setInterval(')
-    expect(panel).toContain('clearInterval(timer)')
+    expect(panel).toContain('startRecordingTicker(setSeconds)')
+    expect(panel).not.toContain('setInterval(')
   })
 })
