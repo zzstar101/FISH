@@ -45,12 +45,14 @@ const recorderHooks: {
   onError: ((error: { errMsg: string }) => void) | null
 } = { onError: null }
 let recorderStartOptions: { duration?: number } | null = null
+/** `readFile` 每次返回的字节；语音容器用例按需替换，图片用例保持 4 字节 */
+let readBytes = [1, 2, 3, 4]
 
 mock.module('@tarojs/taro', () => ({
   default: {
     getFileSystemManager: () => ({
       readFile: (option: { filePath: string; success: (res: { data: unknown }) => void }) => {
-        option.success({ data: new Uint8Array([1, 2, 3, 4]).buffer })
+        option.success({ data: new Uint8Array(readBytes).buffer })
         duringRead?.()
       },
     }),
@@ -94,6 +96,8 @@ const {
   downloadChatMedia,
   startVoiceRecording,
   uploadChatImage,
+  uploadChatVoice,
+  VoiceContainerError,
   VoicePermissionError,
   VoicePrivacyError,
   voiceError,
@@ -124,6 +128,7 @@ beforeEach(() => {
   uploadStatus = 200
   downloadStatus = 200
   recorderStartOptions = null
+  readBytes = [1, 2, 3, 4]
   presignResponse = {
     uploadUrl: 'http://localhost:9000/fish/chat-media/up',
     objectKey: `chat-media/${CONVERSATION}/me/1.png`,
@@ -251,6 +256,66 @@ describe('uploadChatImage —— 上传链每一步都问一次在途判据（#6
     await expect(uploadChatImage(CONVERSATION, IMAGE, () => true)).rejects.toThrow(
       '图片发送失败，请重试',
     )
+  })
+})
+
+describe('uploadChatVoice —— 容器不可识别时必须在 presign 前失败且可诊断（#516）', () => {
+  /** 裸 ADTS（AAC）头：微信 Android / 开发者工具下的常见回落，契约白名单不收 */
+  const ADTS = [0xff, 0xf1, 0x50, 0x80, 0x00, 0x1f, 0xfc]
+  /** 最小 RIFF/WAVE 头：只够 `voiceMimeFromBytes` 判定容器 */
+  const RIFF_WAV = [
+    0x52,
+    0x49,
+    0x46,
+    0x46, // RIFF
+    0x24,
+    0x00,
+    0x00,
+    0x00, // chunk size
+    0x57,
+    0x41,
+    0x56,
+    0x45, // WAVE
+  ]
+
+  test('ADTS：抛 VoiceContainerError，size/header 可取证，且一个请求都不发', async () => {
+    readBytes = ADTS
+    const error = await uploadChatVoice(CONVERSATION, {
+      path: 'wxfile://tmp/voice.aac',
+      durationMs: 1200,
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(VoiceContainerError)
+    expect((error as VoiceContainerError).sizeBytes).toBe(ADTS.length)
+    expect((error as VoiceContainerError).header).toContain('ff f1')
+    expect((error as VoiceContainerError).message).toBe('当前录音格式暂不支持发送语音')
+    // 修复前错误发生在 putObject 之后，这两条会分别变成 1 / 1
+    expect(apiCalls).toHaveLength(0)
+    expect(uploads).toHaveLength(0)
+  })
+
+  test('RIFF/WAVE：正常 presign → PUT，content-type 是 audio/wav', async () => {
+    readBytes = RIFF_WAV
+    const uploaded = await uploadChatVoice(
+      CONVERSATION,
+      { path: 'wxfile://tmp/voice.wav', durationMs: 1200 },
+      () => true,
+    )
+
+    expect(apiCalls[0]?.body).toEqual({
+      kind: 'VOICE',
+      contentType: 'audio/wav',
+      sizeBytes: RIFF_WAV.length,
+    })
+    expect(uploads).toHaveLength(1)
+    expect(uploads[0]?.header).toEqual({ 'content-type': 'audio/wav' })
+    expect(uploaded).toEqual({
+      kind: 'VOICE',
+      objectKey: `chat-media/${CONVERSATION}/me/1.png`,
+      contentType: 'audio/wav',
+      sizeBytes: RIFF_WAV.length,
+      durationMs: 1200,
+    })
   })
 })
 

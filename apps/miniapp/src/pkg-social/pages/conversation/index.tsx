@@ -311,6 +311,8 @@ export default function Conversation() {
   const pendingMediaRef = useRef<PendingMedia[]>([])
   /** 当前这次录音的句柄（`null` = 没在录） */
   const recordingRef = useRef<VoiceRecording | null>(null)
+  /** 隐私授权弹窗在途：连点麦克风按钮时只弹一次，避免重复弹窗 */
+  const privacyPendingRef = useRef(false)
   /** 语音播放器（切歌 / 离页 / 换账号都要先停掉） */
   const audioRef = useRef<ReturnType<typeof Taro.createInnerAudioContext> | null>(null)
   /** 正在下载的媒体 id：兜住「推送与 HTTP 同时把一条媒体放进流」造成的重复下载 */
@@ -1355,6 +1357,7 @@ export default function Conversation() {
    * 设置页。不是被拒（例如麦克风被别的应用占着）就别拉设置页，那会让用户白跑一趟。
    */
   const handleVoiceFailure = (error: unknown) => {
+    console.error('[miniapp] 录音失败', error)
     recordingRef.current = null
     setRecording(false)
     const failure = voiceError(error)
@@ -1385,13 +1388,15 @@ export default function Conversation() {
       .catch(() => undefined)
   }
 
-  /** 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态 */
-  const startVoice = async () => {
+  /**
+   * 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态。
+   *
+   * 这里必须是**同步**的：`onTouchStart → onTouchEnd` 是一段不可打断的触摸序列。隐私授权
+   * 若放在这里 await，弹窗期间用户松手会让 `finishVoice` 看不到 `recordingRef` 而直接
+   * return，授权完成后反而在没有手指按着时开始录音（#526 审查）。
+   */
+  const startVoice = () => {
     if (!canSend || recordingRef.current) return
-    if (!(await ensurePrivacyAuthorized())) {
-      void Taro.showToast({ title: '请先同意《用户隐私保护指引》后重试', icon: 'none' })
-      return
-    }
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
       recordingRef.current = startVoiceRecording(handleVoiceFailure)
@@ -1647,10 +1652,30 @@ export default function Conversation() {
     session.abort()
   }
 
-  /** 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致） */
-  const toggleVoiceMode = () => {
-    if (!voiceMode) setPanelOpen(false)
-    else abortRecording()
+  /**
+   * 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致）。
+   *
+   * 隐私授权放在这里而不是 `startVoice`：这是普通点击，可以安全 await；进入语音态时
+   * 就把授权走完，后面按住说话的触摸序列保持全同步。
+   */
+  const toggleVoiceMode = async () => {
+    if (!voiceMode) {
+      if (privacyPendingRef.current) return
+      privacyPendingRef.current = true
+      let authorized = false
+      try {
+        authorized = await ensurePrivacyAuthorized()
+      } finally {
+        privacyPendingRef.current = false
+      }
+      if (!authorized) {
+        void Taro.showToast({ title: '请先同意《用户隐私保护指引》后重试', icon: 'none' })
+        return
+      }
+      setPanelOpen(false)
+    } else {
+      abortRecording()
+    }
     setVoiceMode(!voiceMode)
   }
 

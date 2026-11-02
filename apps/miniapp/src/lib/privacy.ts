@@ -29,13 +29,20 @@ export function ensurePrivacyAuthorized(): Promise<boolean> {
           }
           Taro.requirePrivacyAuthorize({
             success: () => resolve(true),
-            fail: () => resolve(false),
+            fail: (error) => {
+              console.warn('[privacy] requirePrivacyAuthorize 未通过', error)
+              resolve(false)
+            },
           })
         },
         // 查询失败：不阻断，交给平台在真正调用隐私接口时处理
-        fail: () => resolve(true),
+        fail: (error) => {
+          console.warn('[privacy] getPrivacySetting 失败，按无需授权处理', error)
+          resolve(true)
+        },
       })
-    } catch {
+    } catch (error) {
+      console.warn('[privacy] getPrivacySetting 异常，按无需授权处理', error)
       resolve(true)
     }
   })

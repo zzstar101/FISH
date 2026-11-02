@@ -228,9 +228,7 @@ export async function uploadChatVoice(
       byte.toString(16).padStart(2, '0'),
     ).join(' ')
     console.error('[chat-media] 不支持的录音容器', { sizeBytes: buffer.byteLength, header })
-    throw new Error(
-      `当前录音格式暂不支持发送语音（${buffer.byteLength} bytes, ${header || 'empty'}）`,
-    )
+    throw new VoiceContainerError(buffer.byteLength, header || 'empty')
   }
   const objectKey = await putObject(conversationId, 'VOICE', contentType, buffer, isActive)
   return {
@@ -274,9 +272,7 @@ async function putObject(
       statusCode: uploaded.statusCode,
       errMsg: uploaded.errMsg,
     })
-    throw new Error(
-      `${kind === 'IMAGE' ? '图片' : '语音'}发送失败，请重试（HTTP ${uploaded.statusCode}）`,
-    )
+    throw new Error(`${kind === 'IMAGE' ? '图片' : '语音'}发送失败，请重试`)
   }
   return presign.objectKey
 }
@@ -495,6 +491,24 @@ export class VoicePrivacyError extends Error {
   constructor() {
     super('请先同意《用户隐私保护指引》后重试')
     this.name = 'VoicePrivacyError'
+  }
+}
+
+/**
+ * 录音容器不在契约白名单里（#516）。
+ *
+ * 页面只展示短文案；`sizeBytes` / `header` 留给日志与真机取证 —— 微信 toast 超过约 70
+ * 个字符会被截断，把 hex 拼进用户可见文案既看不清也占地方。
+ */
+export class VoiceContainerError extends Error {
+  readonly sizeBytes: number
+  readonly header: string
+
+  constructor(sizeBytes: number, header: string) {
+    super('当前录音格式暂不支持发送语音')
+    this.name = 'VoiceContainerError'
+    this.sizeBytes = sizeBytes
+    this.header = header
   }
 }
 
