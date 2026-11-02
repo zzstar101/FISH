@@ -232,7 +232,8 @@ describe('createRecommendationRecall 编排', () => {
     await addEvent({
       userId: viewer,
       listingId: trending.id,
-      eventType: 'FAVORITE',
+      // #524 起收藏热度改读 `favorites` 表（事件里的 FAVORITE 不再计入），这里用 CHAT_START。
+      eventType: 'CHAT_START',
       occurredAt: new Date(now.getTime() - HOUR),
     })
 
@@ -246,7 +247,7 @@ describe('createRecommendationRecall 编排', () => {
 
     const result = await recall().recall({ userId: viewer, anonymousSessionId: null })
 
-    expect(result.strategyVersion).toBe('recall-v1')
+    expect(result.strategyVersion).toBe('recall-v2')
     expect(result.channels.map((channel) => channel.channel)).toEqual([
       'fresh',
       'popular',
@@ -324,6 +325,31 @@ describe('createRecommendationRecall 编排', () => {
 
     const other = result.candidates.find((row) => row.listingId === second.id)
     expect(other?.sellerExposure).toBe(2)
+
+    // #524：feature 对**整个候选池**补算，不只填"自己那一路"。second 没有行为 ⇒ 热度是真 0
+    // （可比），而不是 v1 的 null（被当成缺失、按 0 计入却不进 missing）；没有向量 ⇒ semantic
+    // 才是候选级缺失（null，由排序层按请求均值补）。
+    expect(candidate?.popularity).toBeGreaterThan(0)
+    expect(other?.popularity).toBe(0)
+    expect(other?.semanticScore).toBeNull()
+  })
+
+  test('#524：有愿望的用户，没被愿望命中的候选 wishScore = 0（可比），没有愿望则整列 null（请求级缺失）', async () => {
+    const viewer = await createUser()
+    const seller = await createUser()
+    const wished = await createListing({ sellerId: seller, category: 'DAILY' })
+    const plain = await createListing({ sellerId: seller, category: 'DAILY' })
+    await addMatch({ listingId: wished.id, wishId: await createWish(viewer), score: 60 })
+
+    const result = await recall().recall({ userId: viewer, anonymousSessionId: null })
+    expect(findCandidate(result.candidates, wished.id)).toBeDefined()
+    const byId = new Map(result.candidates.map((row) => [row.listingId, row]))
+    expect(byId.get(wished.id)?.wishScore).toBe(60)
+    expect(byId.get(plain.id)?.wishScore).toBe(0)
+
+    const stranger = await createUser()
+    const cold = await recall().recall({ userId: stranger, anonymousSessionId: null })
+    expect(cold.candidates.every((row) => row.wishScore === null)).toBe(true)
   })
 
   test('模型不可用：只降级 semantic；category 是纯 SQL 兜底，仍按会话行为出候选', async () => {

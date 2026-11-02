@@ -3,6 +3,7 @@ import {
   loadContentModerationEnv,
   loadMailTransportEnv,
   loadMeetupTokenEnv,
+  loadRecommendationEmbeddingModel,
   loadServerEnv,
   loadSubscribeMessageTemplatesEnv,
   loadVisualEmbeddingEnv,
@@ -37,6 +38,10 @@ const visualParseEnv = loadVisualParseEnv()
 // 微信订阅消息模板（#462）：三个都可选，缺项即"该 kind 未开通"。填了但形状不对（手抄模板 ID
 // 最常见的错法）在启动时直接失败，而不是等投递时拿到 47003/40037 才分不清是模板错了还是平台故障。
 const subscribeTemplatesEnv = loadSubscribeMessageTemplatesEnv()
+// 推荐读侧的文本向量模型（#524）：与 worker 写向量共用 `EMBEDDING_TRANSPORT` / `EMBEDDING_MODEL`。
+// live 缺 `EMBEDDING_MODEL` 时启动即失败；生产禁 stub。v1 曾误用拍照搜图的视觉模型名，语义召回
+// 与兴趣画像因此在线上全部静默落空。
+const recommendationEmbedding = loadRecommendationEmbeddingModel()
 
 // 假数据可见性第三件（设计 §8.2）：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
 if (aiEnv.transport === 'stub') {
@@ -64,8 +69,12 @@ let server: ReturnType<typeof Bun.serve>
 // 用可变**容器**而不是裸 `let`：赋值发生在 `createApp` 的回调里，TS 的控制流分析看不到那次
 // 赋值，裸 `let` 会被窄化成 `null`（`.start()` 直接报 "Property 'start' does not exist on type
 // 'never'"）。属性读取不做这种窄化。
-const lifecycle: { subscribeScheduler: SubscribeMessageScheduler | null } = {
+const lifecycle: {
+  subscribeScheduler: SubscribeMessageScheduler | null
+  recommendationEmbeddingCheck: (() => Promise<unknown>) | null
+} = {
   subscribeScheduler: null,
+  recommendationEmbeddingCheck: null,
 }
 const app = createApp(
   env,
@@ -85,7 +94,11 @@ const app = createApp(
     onSubscribeScheduler: (scheduler) => {
       lifecycle.subscribeScheduler = scheduler
     },
+    onRecommendationEmbeddingCheck: (run) => {
+      lifecycle.recommendationEmbeddingCheck = run
+    },
   },
+  recommendationEmbedding,
 )
 
 server = Bun.serve({
@@ -99,6 +112,9 @@ server = Bun.serve({
 })
 
 console.log(`[api] listening on http://localhost:${server.port}`)
+
+// 推荐 embedding 模型自检（#524）：监听之后跑一次、不阻塞服务；配错只告警 + 记指标，不退出。
+void lifecycle.recommendationEmbeddingCheck?.()
 
 /*
  * 投递循环在监听之后启动（#462）：它每轮都会打数据库，起得比 `Bun.serve` 早只会让"启动日志"

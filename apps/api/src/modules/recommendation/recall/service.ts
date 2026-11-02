@@ -12,12 +12,12 @@
  * 3. **可见性真值来自最终复核**：合并层只认 `findVisibleListingRefs` 的结果；这次查询失败时
  *    宁可返回空候选也不返回未经复核的候选（M3："不依赖召回时快照作为最终可见性真值"）。
  *
- * **本服务在 R3 没有生产调用方**：R1 的 Feed 仍是 `newest` 透传，`startFeed` 接召回是 R4/R5 的事。
- * 因此 `apps/api/src/app.ts` 本轮不改——不为了"能被调用"而提前接线一个尚未消费的候选集。
+ * #524（recall-v2）起，召回只负责**建候选池**：六路各自取 Top-K → 合并去重 → 复核可见性，
+ * 然后对池里**每一个**候选批量补算 semantic / wish / popularity（`enrichCandidateFeatures`），
+ * 排序层拿到的是可比的特征，而不是"只有自己通道填了值"的稀疏行。
  */
 
 import type { ListingCategory } from '@fish/contracts/listings/schema'
-import { ListingCategorySchema } from '@fish/contracts/listings/schema'
 import {
   INTEREST_ACTION_WEIGHTS,
   INTEREST_HALF_LIFE_MS,
@@ -29,28 +29,29 @@ import {
 import type { RecallChannel } from '@fish/contracts/recommendation/recall'
 import {
   combineInterestVectors,
+  exploreExposureWindowStart,
   POPULARITY_ACTION_HALF_LIFE_MS,
   POPULARITY_ACTION_TYPES,
   POPULARITY_ACTION_WEIGHTS,
+  POPULARITY_FAVORITE_WEIGHT,
   POPULARITY_LISTING_AGE_HALF_LIFE_MS,
   popularityWindowStart,
   RECALL_CHANNEL_LIMITS,
-  RECALL_EXPLORE_MIX,
-  RECALL_EXPLORE_NEW_LISTING_WINDOW_MS,
-  RECALL_EXPLORE_NEW_SELLER_WINDOW_MS,
+  RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES,
   RECALL_SESSION_CATEGORY_TOP_N,
   RECALL_STRATEGY_VERSION,
 } from '@fish/contracts/recommendation/recall'
 import { RecommendationEventTypeSchema } from '@fish/contracts/recommendation/schema'
 import type { Db } from '@fish/db/client'
+import { similarListingsByIds } from '@fish/db/embedding-store'
 import {
   countListingImpressions,
   findCategoryRecallCandidates,
-  findExploreRecallCandidates,
   findFreshRecallCandidates,
   findPopularRecallCandidates,
   findSemanticRecallCandidates,
   findSessionCategoryWeights,
+  findUnderexposedRecallCandidates,
   findVisibleListingRefs,
   findWishRecallCandidates,
   type SessionCategoryWeight,
@@ -92,6 +93,102 @@ export type RecommendationRecallDeps = {
 
 export interface RecommendationRecall {
   recall(input: RecommendationRecallInput): Promise<RecallResult>
+}
+
+/** 热度口径的固定入参（通道 Top-K 与候选补 feature 共用，两处必须是同一个量）。 */
+function popularityInput(now: Date, viewerUserId: string | null) {
+  return {
+    viewerUserId,
+    windowStart: popularityWindowStart(now),
+    now,
+    weights: POPULARITY_ACTION_TYPES.map((eventType) => ({
+      eventType,
+      weight: POPULARITY_ACTION_WEIGHTS[eventType],
+    })),
+    favoriteWeight: POPULARITY_FAVORITE_WEIGHT,
+    actionHalfLifeMs: POPULARITY_ACTION_HALF_LIFE_MS,
+    listingAgeHalfLifeMs: POPULARITY_LISTING_AGE_HALF_LIFE_MS,
+  }
+}
+
+/**
+ * 给**全部**候选补齐 semantic / wish / popularity 三个按通道产出的 feature（#524）。
+ *
+ * v1 只给"自己通道召回的候选"填这三列，别的候选是 null，排序层又把 null 当 0 —— 于是 fresh
+ * 召回的一件商品即使与兴趣向量高度相关，semantic 也记 0，`rankScore` 在不同来源的候选之间
+ * 根本不可比。v2 召回只负责建候选池，feature 按候选 id 批量补算：
+ *
+ * - semantic：有合成兴趣向量时，对候选 id 做精确 cosine（`similarListingsByIds`）；没有该模型
+ *   新鲜向量的商品保持 null（排序层按请求均值补，属于候选级缺失）；没有兴趣向量则整列 null
+ *   （请求级缺失，排序层去掉该权重）。
+ * - wish：本人有愿望匹配（wish 通道非空）时批量取匹配分，没命中的候选是**真实的 0**；
+ *   匿名 / 无匹配保持 null（请求级缺失）。
+ * - popularity：全站量，对每个候选都有定义，没有信号即 0。
+ *
+ * 单项补算失败只保留通道给的值（其余候选 null，由排序层按均值补），不影响别的 feature。
+ */
+async function enrichCandidateFeatures(
+  deps: RecommendationRecallDeps,
+  input: {
+    candidates: RecallCandidate[]
+    now: Date
+    viewerUserId: string | null
+    interestVector: number[] | null
+    model: string | null
+    wishAvailable: boolean
+  },
+): Promise<void> {
+  const ids = input.candidates.map((candidate) => candidate.listingId)
+  if (ids.length === 0) return
+
+  if (input.interestVector !== null && input.model !== null) {
+    const startedAt = performance.now()
+    try {
+      const rows = await similarListingsByIds(deps.db, {
+        model: input.model,
+        vector: input.interestVector,
+        ids,
+      })
+      const scores = new Map(rows.map((row) => [row.id, 1 - row.distance]))
+      for (const candidate of input.candidates) {
+        candidate.semanticScore = scores.get(candidate.listingId) ?? null
+      }
+    } catch (error) {
+      console.warn('[recommendation] 候选 semantic feature 补算失败，保留通道值：', error)
+    } finally {
+      deps.latency?.observe('pgvector', performance.now() - startedAt)
+    }
+  }
+
+  if (input.viewerUserId !== null && input.wishAvailable) {
+    try {
+      const rows = await findWishRecallCandidates(deps.db, {
+        userId: input.viewerUserId,
+        limit: ids.length,
+        listingIds: ids,
+      })
+      const scores = new Map(rows.map((row) => [row.listingId, row.wishScore]))
+      for (const candidate of input.candidates) {
+        candidate.wishScore = scores.get(candidate.listingId) ?? 0
+      }
+    } catch (error) {
+      console.warn('[recommendation] 候选 wish feature 补算失败，保留通道值：', error)
+    }
+  }
+
+  try {
+    const rows = await findPopularRecallCandidates(deps.db, {
+      ...popularityInput(input.now, input.viewerUserId),
+      limit: ids.length,
+      listingIds: ids,
+    })
+    const scores = new Map(rows.map((row) => [row.listingId, row.popularity]))
+    for (const candidate of input.candidates) {
+      candidate.popularity = scores.get(candidate.listingId) ?? 0
+    }
+  } catch (error) {
+    console.warn('[recommendation] 候选 popularity feature 补算失败，保留通道值：', error)
+  }
 }
 
 /** 跑一路，失败即降级（不抛）。 */
@@ -235,16 +332,8 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
       channels.push(
         await runChannel('popular', async () => {
           const rows = await findPopularRecallCandidates(deps.db, {
+            ...popularityInput(now, viewerUserId),
             limit: RECALL_CHANNEL_LIMITS.popular,
-            viewerUserId,
-            windowStart: popularityWindowStart(now),
-            now,
-            weights: POPULARITY_ACTION_TYPES.map((eventType) => ({
-              eventType,
-              weight: POPULARITY_ACTION_WEIGHTS[eventType],
-            })),
-            actionHalfLifeMs: POPULARITY_ACTION_HALF_LIFE_MS,
-            listingAgeHalfLifeMs: POPULARITY_LISTING_AGE_HALF_LIFE_MS,
           })
           return rows.map((row) => ({ listingId: row.listingId, score: row.popularity }))
         }),
@@ -320,24 +409,14 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
         )
       }
 
-      // 冷门类目 = 会话行为窗里**没出现过**的类目（不区分权重正负：用户看过但明确不喜欢的类目
-      // 不算"没接触过"）。窗口聚合失败时退化为"全部类目都算冷门"——探索通道因此仍能出候选，
-      // 但探索的定向性下降，这一点由 `categoryReason` 在通道对账里体现。
-      const seenCategories = new Set(sessionCategoryRows.map((row) => row.category))
-      const coldCategories = ListingCategorySchema.options.filter(
-        (category) => !seenCategories.has(category),
-      )
+      // 探索池 = 最近 7 天曝光不足的可见商品（#524）。与身份无关：探索解决的是"商品没被看见"。
       channels.push(
         await runChannel('explore', async () => {
-          const rows = await findExploreRecallCandidates(deps.db, {
+          const rows = await findUnderexposedRecallCandidates(deps.db, {
             limit: RECALL_CHANNEL_LIMITS.explore,
-            newListingLimit: RECALL_EXPLORE_MIX.newListing,
-            newSellerLimit: RECALL_EXPLORE_MIX.newSeller,
-            coldCategoryLimit: RECALL_EXPLORE_MIX.coldCategory,
-            newListingWindowStart: new Date(now.getTime() - RECALL_EXPLORE_NEW_LISTING_WINDOW_MS),
-            newSellerWindowStart: new Date(now.getTime() - RECALL_EXPLORE_NEW_SELLER_WINDOW_MS),
-            coldCategories,
             viewerUserId,
+            windowStart: exploreExposureWindowStart(now),
+            maxExposedIdentities: RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES,
           })
           return rows.map((row) => ({ listingId: row.listingId, score: null }))
         }),
@@ -394,6 +473,17 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
           mergeDegradedReason = 'provider_error'
         }
       }
+
+      await enrichCandidateFeatures(deps, {
+        candidates,
+        now,
+        viewerUserId,
+        interestVector: combined,
+        model,
+        wishAvailable: channels.some(
+          (channel) => channel.channel === 'wish' && channel.candidates.length > 0,
+        ),
+      })
 
       const channelOutcomes: RecallChannelOutcome[] = channels.map((channel) => ({
         channel: channel.channel,

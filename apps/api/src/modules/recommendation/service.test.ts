@@ -336,6 +336,7 @@ function feedCandidate(listingId: string) {
     createdAt: NOW,
     alreadySeenCount: null,
     sellerExposure: 0,
+    exploreEligible: false,
   }
 }
 
@@ -371,7 +372,11 @@ function createFeedService(options: {
 } {
   let records: readonly RecommendationRequestItemRecord[] = []
   const store = {
-    findNegativeFeedbackEvents: async () => [],
+    aggregateNegativeFeedback: async () => ({
+      categoryWeights: [],
+      sellerWeights: [],
+      hiddenListingIds: [],
+    }),
     findExposureHistory: async () => {
       if (options.historyError !== undefined) throw options.historyError
       return options.history ?? []

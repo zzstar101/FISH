@@ -6,7 +6,8 @@
  * "可解释 + 可复现 + 后续可换成 ML"的前提：换模型只是换这个函数，管线其余部分不动。
  *
  * 归一化刻意**与候选集无关**（固定饱和变换，不是 min-max）：候选集一变分数就全变，会导致
- * 翻页时同一商品在两页里得分不同、跨请求不可比，也会让离线评估无法归因。
+ * 跨请求不可比，也会让离线评估无法归因。唯一依赖候选集的是缺失处理（#524，见 `planFeatures`）：
+ * 整列缺失的特征去权重并重归一化，个别缺失按请求均值填 —— 都只发生在"没有值"的格子上。
  */
 
 import {
@@ -14,6 +15,7 @@ import {
   RANK_FEATURE_KEYS,
   RANK_FEATURE_WEIGHTS,
   RANK_POPULARITY_HALF_SATURATION,
+  RANK_POSITIVE_WEIGHT_SUM,
   RANK_REPEATED_EXPOSURE_HALF_SATURATION,
   RANK_WISH_SCORE_MAX,
   type RankFeatureContribution,
@@ -82,21 +84,68 @@ function normalizeFeature(
   }
 }
 
-function buildBreakdown(
-  candidate: RecallCandidate,
-  feedback: NegativeFeedbackSignals | null,
-): RankScoreBreakdown {
+/**
+ * 请求级的特征口径（#524）：每个特征在**本次候选集**上是整列缺失、部分缺失还是齐全。
+ *
+ * - **整列缺失**（请求级不可用：匿名没有愿望、没有兴趣向量、没有类目行为、负反馈查询失败…）
+ *   ⇒ 该特征权重记 0，其余**正**权重按比例放大回 `RANK_POSITIVE_WEIGHT_SUM`。v1 把缺失当 0
+ *   参与求和，冷启动用户的分数上界只有 0.65，而且同一份候选里"有值的特征"与"缺的特征"混在
+ *   一起，分数没法比；重归一化后，任何请求的正向部分都在同一个 `[0, 1]` 尺度上。负权重（两个
+ *   惩罚项）不参与放大：惩罚的力度不应因为别的特征缺失而变大。
+ * - **部分缺失**（候选级：某件商品没有当前模型的向量）⇒ 用本次请求里该特征的**均值**填，
+ *   既不奖励也不惩罚"缺数据"的商品。
+ *
+ * 两种缺失都记进该候选 `breakdown.missing`，`weight` 写本次实际生效的权重。
+ */
+type FeaturePlan = {
+  weights: Record<RankFeatureKey, number>
+  /** 部分缺失特征的填充值（请求均值）；整列缺失的特征不在此表。 */
+  fill: Map<RankFeatureKey, number>
+}
+
+function planFeatures(rows: readonly (readonly (number | null)[])[]): FeaturePlan {
+  const weights = {} as Record<RankFeatureKey, number>
+  const fill = new Map<RankFeatureKey, number>()
+  let availablePositive = 0
+
+  RANK_FEATURE_KEYS.forEach((feature, column) => {
+    let sum = 0
+    let count = 0
+    for (const row of rows) {
+      const value = row[column]
+      if (value === null || value === undefined) continue
+      sum += value
+      count += 1
+    }
+    const base = RANK_FEATURE_WEIGHTS[feature]
+    if (count === 0) {
+      weights[feature] = 0
+      return
+    }
+    weights[feature] = base
+    if (base > 0) availablePositive += base
+    if (count < rows.length) fill.set(feature, sum / count)
+  })
+
+  const scale = availablePositive > 0 ? RANK_POSITIVE_WEIGHT_SUM / availablePositive : 1
+  for (const feature of RANK_FEATURE_KEYS) {
+    if (weights[feature] > 0) weights[feature] *= scale
+  }
+  return { weights, fill }
+}
+
+function buildBreakdown(values: readonly (number | null)[], plan: FeaturePlan): RankScoreBreakdown {
   const breakdown = {} as Record<RankFeatureKey, RankFeatureContribution>
   const missing: RankFeatureKey[] = []
 
-  for (const feature of RANK_FEATURE_KEYS) {
-    const weight = RANK_FEATURE_WEIGHTS[feature]
-    const normalized = normalizeFeature(candidate, feature, feedback)
-    if (normalized === null) missing.push(feature)
-    // 缺失特征按 0 参与求和（而不是跳过）：明细的形状固定，离线评估才能按 key 对齐比较。
-    const value = normalized ?? 0
+  RANK_FEATURE_KEYS.forEach((feature, column) => {
+    const weight = plan.weights[feature]
+    const raw = values[column] ?? null
+    if (raw === null) missing.push(feature)
+    // 明细形状固定（七个键全在）：离线评估按 key 对齐比较。整列缺失时 weight = 0、贡献为 0。
+    const value = raw ?? plan.fill.get(feature) ?? 0
     breakdown[feature] = { normalized: value, weight, contribution: value * weight }
-  }
+  })
 
   return { ...breakdown, missing }
 }
@@ -105,9 +154,14 @@ export function scoreCandidates(input: {
   candidates: readonly RecallCandidate[]
   feedback: NegativeFeedbackSignals | null
 }): ScoredCandidate[] {
+  const rows = input.candidates.map((candidate) =>
+    RANK_FEATURE_KEYS.map((feature) => normalizeFeature(candidate, feature, input.feedback)),
+  )
+  const plan = planFeatures(rows)
+
   return input.candidates
-    .map((candidate) => {
-      const breakdown = buildBreakdown(candidate, input.feedback)
+    .map((candidate, index) => {
+      const breakdown = buildBreakdown(rows[index] ?? [], plan)
       let rankScore = 0
       // 按 `RANK_FEATURE_KEYS` 的固定顺序累加：浮点加法不满足结合律，顺序一变末位就变。
       for (const feature of RANK_FEATURE_KEYS) rankScore += breakdown[feature].contribution

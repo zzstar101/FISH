@@ -599,6 +599,13 @@ export function createAdminService({
           ),
           rateLimitedRequests: processMetrics.rateLimitedRequests,
           eventRejectionReasons: { ...processMetrics.eventRejectionReasons },
+          degradedFeedReasons: {
+            noCandidates: processMetrics.degradedFeedReasons.no_candidates,
+            recallError: processMetrics.degradedFeedReasons.recall_error,
+            rankError: processMetrics.degradedFeedReasons.rank_error,
+            snapshotWriteFailed: processMetrics.degradedFeedReasons.snapshot_write_failed,
+          },
+          embeddingModelMismatch: processMetrics.embeddingModelMismatch,
         },
         latency: latencyRecorder.snapshot(),
       })
