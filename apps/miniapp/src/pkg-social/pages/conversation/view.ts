@@ -111,6 +111,8 @@ export type TxBarTone = 'is-plain' | 'is-warn' | 'is-pending' | 'is-ok'
 export type TxBarAction =
   | { kind: 'listing' }
   | { kind: 'confirm'; amountCents: number | null }
+  /** 卖家拒绝买家的面交申请（只写一条 `tx.rejected` 消息，商品仍在售） */
+  | { kind: 'reject' }
   | { kind: 'wait' }
   | { kind: 'code'; transactionId: string }
   | { kind: 'scan' }
@@ -125,6 +127,11 @@ export type TxBarView = {
   /** 动作区文案；`wait` 时没有按钮（买家等卖家确认，状态词已经把话说完了） */
   label: string
   action: TxBarAction
+  /**
+   * 并列的次要动作（目前只有卖家提案态的「拒绝」）：与主按钮并排，靠描边弱化。
+   * 买家没有拒绝入口 —— 提案由买家发起，撤回不在本 Issue 范围。
+   */
+  secondary?: { label: string; action: TxBarAction }
 }
 
 /** 提案态的输入：消息流里最后一个 `tx.*` 事件（宽松口径，见 `features/transaction/tx-signal.ts`） */
@@ -193,6 +200,12 @@ export function txBarView(input: {
           status: '买家已申请面交',
           label: '待确认',
           action: { kind: 'confirm', amountCents },
+          /**
+           * 卖家必须能就地拒绝（#551 Owner 追加）：只有「待确认」一颗钮时，卖家不想卖这笔
+           * 只能装作没看见 —— 买家那边就一直停在「待卖家确认」。拒绝与接受共用同一个出口，
+           * 差别是拒绝**不落表**、商品仍在售（`features/transaction/api.ts` 的冻接口径）。
+           */
+          secondary: { label: '拒绝', action: { kind: 'reject' } },
         }
       }
       return { tone: 'is-pending', status: '待卖家确认', label: '', action: { kind: 'wait' } }

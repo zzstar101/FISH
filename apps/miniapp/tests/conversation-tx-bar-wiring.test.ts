@@ -113,6 +113,10 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(bar).toContain('SCAN_CODE_PAGE')
     expect(bar).toContain("action.kind === 'retry'")
     expect(bar).toContain('retryTx()')
+    // 卖家提案态的「拒绝」也走同一个分发入口（次要钮显式传动作进来）
+    expect(bar).toContain("action.kind === 'reject'")
+    expect(bar).toContain('declineProposal()')
+    expect(bar).toContain('action: TxBarAction = txBar.action')
 
     // 接受提案：先二次确认，再把提案金额原样带回（提案不落库，服务端无处可读）
     const accept = sliceFrom(code, 'const confirmProposal =', 'acceptBusyRef.current = false')
@@ -125,6 +129,31 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(accept).toContain('已被其他买家预订')
     expect(accept).toContain('loadRef.current({ silent: true })')
     expect(accept).toContain('retryTx()')
+  })
+
+  test('卖家提案态的「拒绝」：二次确认 + 只写 tx.rejected 消息，重拉本页让顶部自己退回在售', async () => {
+    const code = await source()
+    expect(code).toContain('rejectProposal,')
+    const decline = sliceFrom(code, 'const declineProposal =', 'acceptBusyRef.current = false')
+    expect(decline).toContain('Taro.showModal(')
+    expect(decline).toContain('rejectProposal(conversationId)')
+    // 拒绝不建交易行、不改商品状态：本地不假改，重拉本页让那条 tx.rejected 消息说话
+    expect(decline).toContain('已拒绝 · 商品仍在售')
+    expect(decline).toContain('loadRef.current({ silent: true })')
+    // 与接受共用一把锁，且必须在弹确认框之前置真
+    expect(decline.indexOf('acceptBusyRef.current = true')).toBeLessThan(
+      decline.indexOf('Taro.showModal('),
+    )
+    expect(decline).toContain('.finally(() => {')
+    // 在途换号：迟到的 reject 响应不许把上一个账号的页面刷成「已拒绝」
+    expect(decline).toContain('const epoch = sessionEpoch()')
+    expect(decline).toContain('epoch !== sessionEpoch()')
+    // 拒绝之后没有交易可推（#511 审查的口径）：这里不该请求 TX 订阅授权
+    expect(decline).not.toContain('requestSubscribe')
+    // 次要钮必须真的渲出来，并且带自己的动作（不能复用主钮的 confirm）
+    expect(code).toContain('secondaryTxBar')
+    expect(code).toContain('conv__pbar-act--ghost')
+    expect(code).toContain('runTxBarAction(event, secondaryTxBar.action)')
   })
 
   test('吸底交易卡已删除：页面不再挂 TxCard，样式里也不再有 .conv__txcard', async () => {

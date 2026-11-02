@@ -264,6 +264,24 @@
 }
 
 /*
+ * 动作区并排两颗钮（卖家提案态：`拒绝` + `待确认`）。拒绝是**次要**动作，用描边药丸，
+ * 不与主操作抢视觉；两颗都是独立手势区，外层整条仍点进商品详情。
+ */
+.conv__pbar-acts {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.conv__pbar-act--ghost {
+  background: transparent;
+  color: var(--muted-2);
+  /* 用 inset 阴影画描边而不是 border：两颗钮高度一致，不吃盒模型差异 */
+  box-shadow: inset 0 0 0 2px rgba(23, 35, 61, 0.22);
+}
+
+/*
  * tone 四色都用能压在浅底上的「深字」档：`pages/chat/index.scss` 的 `.chat__pill` 用
  * #3b74dd / #5f6e8a 是因为它自带一块浅底（#e8f1ff / --bg）；本条没有胶囊底，直接坐
  * 在 #dcebff 渐变上，同样的颜色只剩 3.6:1 / 4.0:1（21rpx 小字不达 AA），所以换

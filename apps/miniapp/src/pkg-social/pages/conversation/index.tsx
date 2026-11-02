@@ -50,6 +50,7 @@ import {
   acceptTransaction,
   fetchMyTransactionReview,
   fetchTransaction,
+  rejectProposal,
 } from '@/features/transaction/api'
 import { fetchConversationTransaction } from '@/features/transaction/conversation'
 import { meetupUrlById } from '@/features/transaction/order-links'
@@ -112,6 +113,7 @@ import {
   sortMessages,
   startMediaRetry,
   systemPillText,
+  type TxBarAction,
   txBarView,
 } from './view'
 import './index.scss'
@@ -245,7 +247,9 @@ export default function Conversation() {
    * 回到本页都 ++，把它并进 effect 依赖里重查一次。
    */
   const [txReviewTick, setTxReviewTick] = useState(0)
-  /** 「待确认」在途锁：接受提案会建交易行，连点两次没有意义（服务端虽然 409，也不该打两次） */
+  /**
+   * 提案动作的共用锁（`待确认` / `拒绝` 都走它）：两颗钮都会写服务端，连点两次没有意义。
+   */
   const acceptBusyRef = useRef(false)
 
   /** 更早一页的游标；null = 已到最早 */
@@ -2096,6 +2100,54 @@ export default function Conversation() {
   }
 
   /**
+   * 顶部状态条的「拒绝」：卖家拒掉买家的面交申请（#551 Owner 追加）。
+   *
+   * 与接受**不同**：拒绝不建交易行、不改商品状态，`POST /transactions/proposals/reject`
+   * 只往会话里写一条 `tx.rejected` SYSTEM 消息（`features/transaction/api.ts` 冻结的口径：
+   * 提案阶段商品一直是 `ACTIVE`）。所以这里既不假改本地状态，也不重查交易行 —— 静默重拉
+   * 本页，让那条 `tx.rejected` 消息自己把顶部推回「在售 · 查看」。
+   *
+   * 也不请求 TX 订阅授权（与 `pkg-browse/pages/mylist/index.tsx` 的 `declineProposal` 同一
+   * 取舍，#511 审查）：拒绝之后没有交易，也就没有「订单状态更新」可推。
+   */
+  const declineProposal = () => {
+    if (acceptBusyRef.current) return
+    const epoch = sessionEpoch()
+    acceptBusyRef.current = true
+    void Taro.showModal({
+      title: '拒绝这次面交申请？',
+      content: '拒绝后这笔申请作废，商品仍在售，对方可以重新发起。',
+      confirmText: '拒绝',
+    })
+      .then((result) => {
+        if (!result.confirm) return
+        return rejectProposal(conversationId)
+          .then(() => {
+            if (epoch !== sessionEpoch()) return
+            void Taro.showToast({ title: '已拒绝 · 商品仍在售', icon: 'none' })
+            void loadRef.current({ silent: true })
+          })
+          .catch((error) => {
+            console.warn('[miniapp] 拒绝面交申请失败', error)
+            if (epoch !== sessionEpoch()) return
+            void Taro.showToast({
+              title: isApiError(error) ? error.message : '拒绝没成功，请重试',
+              icon: 'none',
+            })
+            // 失败也要看服务端现状：可能对方已经撤回 / 被别处拒绝过，顶部不该停在旧提案
+            void loadRef.current({ silent: true })
+          })
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 拒绝确认框打开失败', error)
+        void Taro.showToast({ title: '确认框没打开，请重试', icon: 'none' })
+      })
+      .finally(() => {
+        acceptBusyRef.current = false
+      })
+  }
+
+  /**
    * 「打开即看最新」：会话流挂在 ScrollView 的 `scrollIntoView` 上，指向最后一条
    * 消息的 DOM id。内容追加时 id 必然变化 → 小程序必然重新滚动，不存在
    * `scroll-top` 先置 0 再置大值那套舞蹈在真机上的竞态（实测会停在顶部）。
@@ -2393,15 +2445,21 @@ export default function Conversation() {
     reviewed,
   })
 
+  /** 卖家提案态的次要动作（`拒绝`）；没有次要动作时那颗钮整颗不渲染 */
+  const secondaryTxBar = txBar.secondary ?? null
+
   /**
-   * 动作区的点击分流：语义由 `txBarView` 给出，这里只决定「跳哪儿 / 调哪个接口」。
-   * 必须先 `stopPropagation`：整条是「点进商品详情」，按钮不该顺带把人带去详情页。
+   * 顶部状态条动作区的分发：主钮传 `txBar.action`（默认取它），次要钮（`拒绝`）显式传入
+   * 自己的动作。两颗钮都必须先 `stopPropagation` —— 外层整条是「点进商品详情」。
    */
-  const runTxBarAction = (event: { stopPropagation: () => void }) => {
+  const runTxBarAction = (
+    event: { stopPropagation: () => void },
+    action: TxBarAction = txBar.action,
+  ) => {
     event.stopPropagation()
-    const action = txBar.action
     if (action.kind === 'listing') return openListing()
     if (action.kind === 'confirm') return confirmProposal(action.amountCents)
+    if (action.kind === 'reject') return declineProposal()
     if (action.kind === 'code') return openMeetup(action.transactionId)
     if (action.kind === 'review') return openMeetup(action.transactionId)
     if (action.kind === 'scan') {
@@ -2478,8 +2536,24 @@ export default function Conversation() {
             </Text>
           </View>
           {txBar.action.kind === 'wait' ? null : (
-            <View className="conv__pbar-act" onClick={runTxBarAction}>
-              <Text>{txBar.label}</Text>
+            <View className="conv__pbar-acts">
+              {/*
+                卖家提案态并排两颗：`拒绝` 在前（次要，描边药丸），`待确认` 在后（主操作）。
+                买家没有拒绝入口 —— 提案由买家发起，撤回不在本 Issue 范围。
+              */}
+              {secondaryTxBar ? (
+                <View
+                  className="conv__pbar-act conv__pbar-act--ghost"
+                  onClick={(event: { stopPropagation: () => void }) =>
+                    runTxBarAction(event, secondaryTxBar.action)
+                  }
+                >
+                  <Text>{secondaryTxBar.label}</Text>
+                </View>
+              ) : null}
+              <View className="conv__pbar-act" onClick={runTxBarAction}>
+                <Text>{txBar.label}</Text>
+              </View>
             </View>
           )}
         </View>

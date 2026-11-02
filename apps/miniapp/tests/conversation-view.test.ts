@@ -216,18 +216,23 @@ describe('txBarView —— 页头商品交易状态条（#551）', () => {
       status: '买家已申请面交',
       label: '待确认',
       action: { kind: 'confirm', amountCents: 12000 },
+      // 卖家必须能就地拒绝（#551 Owner 追加）：只有「待确认」时，不想卖的卖家只能装没看见
+      secondary: { label: '拒绝', action: { kind: 'reject' } },
     })
   })
 
   test('提案待卖家点头：买家只有「待卖家确认」的字样，没有可点的动作', () => {
-    expect(
-      txBarView(input({ role: 'buyer', lastEvent: { type: 'tx.proposal', amountCents: 12000 } })),
-    ).toMatchObject({
+    const buyer = txBarView(
+      input({ role: 'buyer', lastEvent: { type: 'tx.proposal', amountCents: 12000 } }),
+    )
+    expect(buyer).toMatchObject({
       tone: 'is-pending',
       status: '待卖家确认',
       label: '',
       action: { kind: 'wait' },
     })
+    // 拒绝是卖家侧的动作：买家没有撤回入口（不在本 Issue 范围），不能凭空多一颗钮
+    expect(buyer.secondary).toBeUndefined()
   })
 
   test('提案还在、商品却已被别人买走 / 下架：不给必然 409 的「待确认」，如实说商品现状', () => {
@@ -246,6 +251,16 @@ describe('txBarView —— 页头商品交易状态条（#551）', () => {
           }),
         ),
       ).toMatchObject({ tone: 'is-warn', status, label: '查看', action: { kind: 'listing' } })
+      // 商品都已被别的买家订走 / 下架了，拒绝也无事可做：动作整体退回查看
+      expect(
+        txBarView(
+          input({
+            role: 'seller',
+            listingStatus,
+            lastEvent: { type: 'tx.proposal', amountCents: 12000 },
+          }),
+        ).secondary,
+      ).toBeUndefined()
       // 买家侧同样不能停在「待卖家确认」：那件事不会发生了
       expect(
         txBarView(input({ role: 'buyer', listingStatus, lastEvent: { type: 'tx.proposal' } }))
