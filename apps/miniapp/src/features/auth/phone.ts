@@ -193,3 +193,34 @@ export async function runPhoneBind(
     return { kind: 'failed', error }
   }
 }
+
+/**
+ * 发布前置门禁（#514）：这一次点「发布」之前要不要先弹绑定手机号的 sheet。
+ *
+ * 只挡**新建**（出物新建 / 许愿）：服务端的 `PHONE_REQUIRED` 挂在 `POST /listings`、
+ * `POST /listings/:id/online`、`POST /wishes` 上，`PATCH /listings/:id`（编辑已有商品）不挡，
+ * 端上也就不能在编辑态拦人 —— 否则历史未绑定卖家连改价都改不了。
+ *
+ * `phoneBound` 只认严格的 `true`：`GET /me` 还没回来 / 字段缺失都按「未绑定」处理，
+ * 宁可多弹一次 sheet，也不让一次注定 403 的创建请求发出去。客户端判据可能过期
+ * （换设备登录过），所以服务端的 403 仍要另走 `isPhoneRequiredError` 兜底。
+ */
+export function needsPhoneBeforePublish(input: {
+  phoneBound: boolean | undefined
+  editing: boolean
+}): boolean {
+  if (input.editing) return false
+  return input.phoneBound !== true
+}
+
+/**
+ * 403 `PHONE_REQUIRED`（已登录但未绑定手机号，#514）的形状判定。
+ *
+ * 与上面 `isUnauthenticatedError` 同理只看字段、不 `import` `lib/request`：本文件要保持
+ * Taro-free 才能在 bun 里直接测。
+ */
+export function isPhoneRequiredError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const shaped = error as { code?: unknown; status?: unknown }
+  return shaped.code === 'PHONE_REQUIRED' && shaped.status === 403
+}

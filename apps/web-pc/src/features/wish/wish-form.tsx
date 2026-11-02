@@ -1,3 +1,4 @@
+import type { Me } from '@fish/contracts/auth/user'
 import {
   type WishCategory,
   type WishDto,
@@ -19,9 +20,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@fish/ui/switch'
 import { Textarea } from '@fish/ui/textarea'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api-client'
 import { CATEGORY_LABEL } from '../../lib/labels'
+import { useAuth } from '../auth/auth-provider'
+import { PhoneRequiredNotice } from '../auth/phone-required-notice'
 import { parseBudgetCents } from './api'
 import { useCreateWish, useUpdateWish, wishKeys } from './queries'
 
@@ -62,11 +65,19 @@ export function WishFormDialog({
   wish?: WishDto
 }) {
   const queryClient = useQueryClient()
+  const { me, refetch: refetchMe } = useAuth()
   const createWish = useCreateWish(ownerId)
   const updateWish = useUpdateWish(ownerId)
   const [form, setForm] = useState<WishFormState>(INITIAL_FORM)
   const [fieldErrors, setFieldErrors] = useState<WishFieldErrors>({})
   const [message, setMessage] = useState<string | null>(null)
+  /**
+   * 服务端回 403 `PHONE_REQUIRED` 时手里的那份 `me`（#514，本地 `phoneBound` 过期）。同时重拉
+   * `/me`：拿到新对象后由 `me.phoneBound` 接管；绑完切回标签页再拉到新对象时拦截自然解除。
+   */
+  const [phoneRequiredFor, setPhoneRequiredFor] = useState<Me | null>(null)
+  const meRef = useRef(me)
+  meRef.current = me
 
   useEffect(() => {
     if (!open) return
@@ -138,7 +149,10 @@ export function WishFormDialog({
       onOpenChange(false)
     } catch (error) {
       if (error instanceof ApiError) {
-        if (error.status === 403) setMessage('只能编辑自己的愿望')
+        if (wish === undefined && error.status === 403 && error.code === 'PHONE_REQUIRED') {
+          setPhoneRequiredFor(meRef.current)
+          refetchMe()
+        } else if (error.status === 403) setMessage('只能编辑自己的愿望')
         else if (error.status === 409) {
           void queryClient.invalidateQueries({ queryKey: wishKeys.all() })
           setMessage(wish === undefined ? error.message : '愿望状态已变化，请刷新后重试')
@@ -151,6 +165,27 @@ export function WishFormDialog({
   }
 
   const pending = createWish.isPending || updateWish.isPending
+
+  // 发布门禁（#514）只管新建（`POST /wishes`）；编辑已有愿望走 PATCH，不在门禁内。
+  // 未绑定时字段位换成绑定引导，不渲染可提交的字段与「发布愿望」按钮。
+  if (wish === undefined && (me?.phoneBound !== true || phoneRequiredFor === me)) {
+    return (
+      <Dialog onOpenChange={onOpenChange} open={open}>
+        <DialogContent className="sm:max-w-[620px]">
+          <DialogHeader>
+            <DialogTitle className="text-xl">发布愿望</DialogTitle>
+            <DialogDescription>绑定手机号后即可发布求购愿望。</DialogDescription>
+          </DialogHeader>
+          <PhoneRequiredNotice />
+          <DialogFooter>
+            <Button onClick={() => onOpenChange(false)} type="button" variant="outline">
+              知道了
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>

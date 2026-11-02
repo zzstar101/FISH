@@ -40,11 +40,11 @@ describe('composeRecommendationStrategyVersion', () => {
     const composed = composeRecommendationStrategyVersion([
       RECOMMENDATION_STRATEGY_VERSION_RULE,
       'interest-v1',
-      'recall-v1',
+      'recall-v2',
       RANK_STRATEGY_VERSION,
     ])
 
-    expect(composed).toBe('rec-v1-rule+interest-v1+recall-v1+rank-v1')
+    expect(composed).toBe('rec-v1-rule+interest-v1+recall-v2+rank-v2')
     expect(composed.split(RECOMMENDATION_STRATEGY_VERSION_SEPARATOR)).toHaveLength(4)
     // `recommendation_requests.strategy_version` 是 varchar(64)：超长会在落库时静默截断/报错，
     // 而版本串被截断就再也无法判断"这批结果出自哪一版排序"。
@@ -59,7 +59,7 @@ describe('composeRecommendationStrategyVersion', () => {
     const composed = composeRecommendationStrategyVersion([
       RECOMMENDATION_STRATEGY_VERSION_RULE,
       'interest-v1',
-      'recall-v1',
+      'recall-v2',
       RANK_STRATEGY_VERSION,
     ])
     expect(composed).not.toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)

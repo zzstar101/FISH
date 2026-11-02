@@ -62,6 +62,7 @@ import {
   applyReadEvent,
   applyReadPoll,
   applyRecalled,
+  applyReplyRecalled,
   beginSend,
   type ChatEntry,
   canRetry,
@@ -85,6 +86,7 @@ import {
   type MediaTaskBinding,
   type MediaTaskIdentity,
   type MessageAction,
+  mediaActions,
   mergePushedMedia,
   mergePushedMessage,
   mergeRefreshedMedia,
@@ -98,6 +100,7 @@ import {
   parseTxEvent,
   planMediaLoad,
   REPLY_DROPPED_TIP,
+  type ReplyTarget,
   recallFailureText,
   resetDeferredReload,
   resolveConvState,
@@ -246,7 +249,7 @@ export default function Conversation() {
    * 存整条 DTO 而不是只存 id：引用栏要显示摘引文案，而服务端的 `replyTo` 投射只挂在
    * 「已发出的那条消息」上，被引用的原消息本身没有这个字段。
    */
-  const [replyTarget, setReplyTarget] = useState<MessageDto | null>(null)
+  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null)
   /** 撤回在途的消息 id：一条一把锁，防止连点重复 POST（服务端虽幂等，但没必要发两次） */
   const [recallingId, setRecallingId] = useState<string | null>(null)
   /**
@@ -355,12 +358,31 @@ export default function Conversation() {
   const downloadingRef = useRef<Set<string>>(new Set())
   /** 语音播放请求令牌：每次点击 +1，迟到的下载回来据此判「已经不是当前这次」 */
   const playSeqRef = useRef(0)
+  /** 正在下载、还没出声的语音消息 id：撤回时要让这次下载失效，别再播出来。 */
+  const loadingVoiceIdRef = useRef<string | null>(null)
   /**
    * 正在重试的媒体 id（#364 审查）：`canRetryMedia` 读的是**渲染态**，同一帧连点两次
    * 两次看到的都还是 `failed`，于是起两条链。必须有一把同步锁，在 `runMediaSend` 的
    * 落定处释放。
    */
   const retryingMediaRef = useRef<Set<string>>(new Set())
+  /**
+   * 长按气泡后同一次手势还会补一个 tap：不吞掉的话语音会播放、图片会预览、
+   * 商品卡会跳详情（#518）。用布尔标志而不是时间窗（与 product-card 同一手法）；
+   * onTouchStart 复位，避免 showActionSheet 被取消时把标志留到下一次正常点击。
+   */
+  const swallowBubbleTapRef = useRef(false)
+  const beginBubbleLongPress = () => {
+    swallowBubbleTapRef.current = true
+  }
+  const resetBubbleTapGuard = () => {
+    swallowBubbleTapRef.current = false
+  }
+  const consumeBubbleTap = () => {
+    if (!swallowBubbleTapRef.current) return false
+    swallowBubbleTapRef.current = false
+    return true
+  }
 
   /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
@@ -993,10 +1015,22 @@ export default function Conversation() {
         setConversation((prev) => (prev === null ? prev : applyReadEvent(prev, event.readAt)))
         break
       case 'message.recalled':
-        setMessages((prev) => applyRecalled(prev, event.messageId, event.recalledAt))
+        setMessages((prev) =>
+          applyReplyRecalled(
+            applyRecalled(prev, event.messageId, event.recalledAt),
+            event.messageId,
+          ),
+        )
         // 媒体走独立一条流：撤回端点对 TEXT / MEDIA 没有类型过滤，图片 / 语音的撤回碑
         // 必须同时落到 `media`（否则气泡纹丝不动，刷新也修不回来 —— 见 view 的说明）
-        setMedia((prev) => applyMediaRecalled(prev, event.messageId, event.recalledAt))
+        setMedia((prev) =>
+          applyReplyRecalled(
+            applyMediaRecalled(prev, event.messageId, event.recalledAt),
+            event.messageId,
+          ),
+        )
+        setPendingMedia((prev) => applyReplyRecalled(prev, event.messageId))
+        stopVoiceForRecall(event.messageId)
         setReplyTarget((prev) => (prev?.id === event.messageId ? null : prev))
         break
     }
@@ -1332,6 +1366,7 @@ export default function Conversation() {
             width: uploaded.width,
             height: uploaded.height,
             clientRequestId: draft.clientRequestId,
+            replyToId: draft.replyTo?.id,
           })
         : await createVoiceMessage(conversationId, {
             objectKey: uploaded.objectKey,
@@ -1339,6 +1374,7 @@ export default function Conversation() {
             sizeBytes: uploaded.sizeBytes,
             durationMs: uploaded.durationMs,
             clientRequestId: draft.clientRequestId,
+            replyToId: draft.replyTo?.id,
           })
     })()
       .then((created) => {
@@ -1358,12 +1394,24 @@ export default function Conversation() {
          */
         if (error instanceof MediaAbortedError || isStale()) return
         console.warn('[miniapp] 发送媒体失败', error)
+        // 引用失效（422 MESSAGE_REPLY_INVALID）与文本发送同口径：把这条的引用摘掉，
+        // 否则重试会把同一个失效的 replyTo 再发一遍，永远 422（#518）。
+        const code = isApiError(error) ? error.code : undefined
+        const dropReply = shouldDropReplyOnSendFailure(code)
         void Taro.showToast({
-          title: error instanceof Error ? error.message : '发送失败，请重试',
+          title: dropReply
+            ? REPLY_DROPPED_TIP
+            : error instanceof Error
+              ? error.message
+              : '发送失败，请重试',
           icon: 'none',
         })
         setPendingMedia((prev) =>
-          prev.map((item) => (item.id === draft.id ? { ...item, status: 'failed' } : item)),
+          prev.map((item) =>
+            item.id === draft.id
+              ? { ...item, status: 'failed', replyTo: dropReply ? undefined : item.replyTo }
+              : item,
+          ),
         )
       })
       .finally(() => {
@@ -1386,10 +1434,23 @@ export default function Conversation() {
   }
 
   /** 新建一条本地乐观媒体并开始上传（图片 / 语音共用） */
-  const sendMedia = (draft: PendingMediaDraft) => {
+  const sendMedia = (
+    draft: PendingMediaDraft,
+    /**
+     * 多选图片时由调用方显式下发：第一张拿引用，其余传 `null`。
+     * 不能在这里读 `replyTarget` —— `setReplyTarget(null)` 要等下一次渲染，同步循环里
+     * 每一张都会读到同一个旧值，导致整批图都带上同一条引用（#518 审查）。
+     */
+    replyOverride?: ReplyTarget | null,
+  ) => {
+    // 引用只跟着这一条发出：先快照，再收起引用栏（与文本 `send` 同一口径；#518）
+    const target = replyOverride === undefined ? replyTarget : replyOverride
+    const reply = target ? { id: target.id, excerpt: localReplyExcerpt(target) } : null
+    setReplyTarget(null)
     localSeq.current += 1
     const item: PendingMedia = {
       ...draft,
+      ...(reply ? { replyTo: reply } : {}),
       id: `local-${localSeq.current}`,
       uploaded: null,
       status: 'uploading',
@@ -1460,18 +1521,24 @@ export default function Conversation() {
     if (picked.rejected) {
       void Taro.showToast({ title: picked.rejected, icon: 'none' })
     }
-    for (const image of picked.images) {
-      sendMedia({
-        kind: 'IMAGE',
-        clientRequestId: randomUuidV4(),
-        path: image.path,
-        image: {
-          mime: image.mime,
-          width: image.width,
-          height: image.height,
-          sizeBytes: image.sizeBytes,
+    // 引用是「这一条」的，不是「这一批」的：同步循环里 setState 还没生效，
+    // 必须显式只给第一张（其余传 null），否则整批图都会复制同一个 replyToId（#518 审查）。
+    const replyForBatch = replyTarget
+    for (const [index, image] of picked.images.entries()) {
+      sendMedia(
+        {
+          kind: 'IMAGE',
+          clientRequestId: randomUuidV4(),
+          path: image.path,
+          image: {
+            mime: image.mime,
+            width: image.width,
+            height: image.height,
+            sizeBytes: image.sizeBytes,
+          },
         },
-      })
+        index === 0 ? replyForBatch : null,
+      )
     }
   }
 
@@ -1581,6 +1648,18 @@ export default function Conversation() {
     }
   }
 
+  /**
+   * 撤回一条语音时收口播放：正在放就停掉；还在下载就推进令牌，让回来的字节不再出声。
+   * 只处理这一条，别误伤用户同时点开的另一段语音。
+   */
+  const stopVoiceForRecall = (messageId: string) => {
+    if (playingId === messageId) stopAudio()
+    if (loadingVoiceIdRef.current === messageId) {
+      playSeqRef.current += 1
+      loadingVoiceIdRef.current = null
+    }
+  }
+
   /** 播放一段语音（`src` 必须是本地临时文件，见 `downloadChatMedia`） */
   const playVoice = (keyId: string, src: string) => {
     stopAudio()
@@ -1626,6 +1705,7 @@ export default function Conversation() {
       return
     }
     playSeqRef.current += 1
+    loadingVoiceIdRef.current = item.id
     const task: MediaTaskIdentity = {
       cookie: sessionCookieHeader() ?? '',
       userId: userIdRef.current,
@@ -1639,6 +1719,7 @@ export default function Conversation() {
       })
     void downloadChatMedia(conversationId, item.mediaId, isCurrent)
       .then((path) => {
+        if (loadingVoiceIdRef.current === item.id) loadingVoiceIdRef.current = null
         if (!isCurrent()) return
         rememberPath(item.mediaId, path)
         /**
@@ -1650,6 +1731,7 @@ export default function Conversation() {
         playVoice(item.id, path)
       })
       .catch((error) => {
+        if (loadingVoiceIdRef.current === item.id) loadingVoiceIdRef.current = null
         // 换号 / 离页导致的中止是预期路径：不出声、也不当失败打日志。换号要说一句（见上）
         if (error instanceof MediaAbortedError) {
           noticeIdentityLost(task, '账号已切换，请重新打开语音')
@@ -1721,6 +1803,9 @@ export default function Conversation() {
    *
    * `failed` 只有本地乐观气泡会传（#364 审查）：失败的语音乐观气泡此前没有 `!` 角标
    * （图片分支有），用户只看得出「有颗重试按钮」，看不出**这个气泡本身**是坏的。
+   *
+   * `onLongPress` 只有服务端那条会传（#518）：长按走引用/撤回菜单；本地乐观气泡还在
+   * 上传，没有服务端 id，给不出撤回入口。
    */
   const renderVoiceBubble = (
     keyId: string,
@@ -1728,12 +1813,21 @@ export default function Conversation() {
     mine: boolean,
     onPress: () => void,
     failed = false,
+    onLongPress?: () => void,
+    busy = false,
   ) => {
     const playing = playingId === keyId
     return (
       <View
-        className={`conv__bubble conv__bubble--voice${mine ? ' is-mine' : ''}`}
-        onClick={onPress}
+        className={`conv__bubble conv__bubble--voice${mine ? ' is-mine' : ''}${
+          busy ? ' is-busy' : ''
+        }`}
+        onTouchStart={resetBubbleTapGuard}
+        onLongPress={onLongPress ?? beginBubbleLongPress}
+        onClick={() => {
+          if (consumeBubbleTap()) return
+          onPress()
+        }}
       >
         <View className={`conv__play${mine ? ' is-mine' : ''}${playing ? ' is-pause' : ''}`}>
           <View className="conv__play-glyph" />
@@ -1785,8 +1879,14 @@ export default function Conversation() {
    *
    * 取消（点遮罩 / 取消）会让 `showActionSheet` reject —— 那不是错误，静默收场。
    */
-  const onLongPressMessage = async (message: MessageDto) => {
-    const actions = messageActions(message, userId, Date.now(), MESSAGE_RECALL_WINDOW_MS)
+  const onLongPressMessage = async (message: ReplyTarget) => {
+    // 长按手势结束后平台还会补一次 tap：在这里统一置位，所有气泡（文本/图片/语音/商品卡）
+    // 都靠各自的 onClick 首行 `consumeBubbleTap()` 吞掉，避免语音被放、图片被预览、卡片跳走。
+    beginBubbleLongPress()
+    const actions =
+      'kind' in message
+        ? mediaActions(message, userId, Date.now(), MESSAGE_RECALL_WINDOW_MS)
+        : messageActions(message, userId, Date.now(), MESSAGE_RECALL_WINDOW_MS)
     if (actions.length === 0) return
     let picked: MessageAction | null = null
     try {
@@ -1798,6 +1898,8 @@ export default function Conversation() {
       return
     }
     if (picked === 'copy') {
+      // 媒体 DTO 没有 content；mediaActions 也不会给 copy，这里只是收窄类型。
+      if ('kind' in message) return
       void Taro.setClipboardData({ data: message.content }).catch((error) => {
         // 复制失败此前完全没有处理（unhandled rejection + 界面无反馈）。
         console.warn('[miniapp] 复制消息失败', error)
@@ -1828,12 +1930,26 @@ export default function Conversation() {
    * 锁在 `finally` 里**无条件**释放 —— 单条在途由 `if (recallingId) return` 保证，
    * 不会有第二次撤回并发进来抢这个槽位。
    */
-  const doRecall = async (message: MessageDto) => {
-    if (recallingId) return
+  const doRecall = async (message: ReplyTarget) => {
+    if (recallingId) {
+      // 撤回按钮在途时没有 loading 文案的话，用户会以为没点上；再点另一条也会被静默吞掉。
+      void Taro.showToast({ title: '正在撤回，请稍候', icon: 'none' })
+      return
+    }
     setRecallingId(message.id)
     try {
       await recallMessage(conversationId, message.id)
-      setMessages((prev) => applyRecalled(prev, message.id, new Date().toISOString()))
+      const recalledAt = new Date().toISOString()
+      setMessages((prev) =>
+        applyReplyRecalled(applyRecalled(prev, message.id, recalledAt), message.id),
+      )
+      // 媒体消息还要落到 `media` 流（#518）：只改 `messages` 的话，图片/语音要等推送
+      // 或下一次 load 才翻碑，点了撤回的当下仍显示原图/原语音。
+      setMedia((prev) =>
+        applyReplyRecalled(applyMediaRecalled(prev, message.id, recalledAt), message.id),
+      )
+      setPendingMedia((prev) => applyReplyRecalled(prev, message.id))
+      stopVoiceForRecall(message.id)
       // 撤回的正是正在引用的那条：引用栏里的摘引已经失效，收起它
       setReplyTarget((prev) => (prev?.id === message.id ? null : prev))
     } catch (error) {
@@ -1857,11 +1973,44 @@ export default function Conversation() {
    * `scrollIntoView` 拿到一个不存在的 id 会静默什么都不做 —— 用户点了没反应、也没有提示。
    */
   const locateMessage = (messageId: string) => {
-    if (!messages.some((item) => item.id === messageId)) {
+    // 媒体消息不在 `messages` 里（两条流互斥），只查文本流会把「引用一张图/一段语音」
+    // 误判成未加载；媒体条目的 DOM id 同样是 `e-${keyId}`（keyId = media.id）。
+    const exists =
+      messages.some((item) => item.id === messageId) || media.some((item) => item.id === messageId)
+    if (!exists) {
       void Taro.showToast({ title: '引用的消息在更早的记录里', icon: 'none' })
       return
     }
     setJumpTo({ id: `e-${messageId}`, tail: tailId })
+  }
+
+  /**
+   * 媒体气泡上方的引用摘引（#518）。
+   *
+   * 图片/语音本体是固定尺寸的媒体块，摘引不塞进气泡内部（会挤压 400×300 的图），
+   * 单独放在气泡上方；本地待发条目只有本地临时 id，不能定位，因此不接 onClick。
+   */
+  const renderMediaQuote = (
+    replyTo: { id: string; excerpt: string } | null | undefined,
+    canLocate: boolean,
+  ) => {
+    if (!replyTo) return null
+    return (
+      <View
+        className="conv__quote conv__quote--floating"
+        onTouchStart={resetBubbleTapGuard}
+        onClick={
+          canLocate
+            ? () => {
+                if (consumeBubbleTap()) return
+                locateMessage(replyTo.id)
+              }
+            : undefined
+        }
+      >
+        <Text className="conv__quote-tx">{replyTo.excerpt}</Text>
+      </View>
+    )
   }
 
   /** 「+」开合面板：开面板时退回键盘态 */
@@ -1873,11 +2022,28 @@ export default function Conversation() {
     setPanelOpen(!panelOpen)
   }
 
+  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541），只改 `panelOpen` —— 不碰
+   *  已输入文字、不 blur 输入框、不动滚动位置。 */
+  const dismissPanel = () => setPanelOpen(false)
+
   const openListing = () => {
     if (!conversation) return
     void Taro.navigateTo({
       url: `/pkg-browse/pages/listing-detail/index?id=${conversation.listing.id}`,
     })
+  }
+
+  /** 对方主页：与商品卡卖家行/关注列表同一跳转口径（#517）。 */
+  const openCounterpart = () => {
+    if (!conversation) return
+    void Taro.navigateTo({
+      url: `/pkg-browse/pages/user/index?id=${encodeURIComponent(conversation.counterpart.id)}`,
+    })
+  }
+
+  /** 自己的头像：进编辑资料页（与「我的」页同一入口，#86 B）。 */
+  const openSelfProfile = () => {
+    void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })
   }
 
   /**
@@ -1988,6 +2154,22 @@ export default function Conversation() {
   const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailId
 
   /**
+   * 滚动动画只留给「点摘引跳过去」这一条路径（#540）。
+   *
+   * `scrollIntoView` 在首帧就会把滚动位置从 0 带到尾行，动画常开等于每次进页都把
+   * 「顶部 → 底部」完整演一遍 —— 这正是本票要修的现象。判据与 `scrollTarget` 同源：
+   * `jumpTo` 命中时目标是被引用的那条，需要动画交代「跳到哪儿去了」；其余时刻目标
+   * 恒为尾行，瞬时贴底即可。
+   *
+   * 代价（验收第 2 条要求写明）：新消息追加也从「滑过去」变成「瞬移贴底」。最容易被
+   * 看出来的是「用户正向上翻历史，对方发来一条」—— 改前有一次滑动交代去向，改后是硬跳。
+   * 两者的落点完全一致（都强制贴底），丢的只是过渡；不在这里加 `onScroll` 首帧 settled
+   * 判定还原跟随动画，是因为那依赖「程序化滚动也触发 bindscroll」这条静态无法证伪的端上
+   * 行为，一旦不触发就会静默退化成「永远瞬时」，比写明取舍更难排查。
+   */
+  const animateScroll = jumpTo !== null && jumpTo.tail === tailId
+
+  /**
    * DOM 那一次**只给预览（h5）用**：预览桩把 scrollIntoView 透传成普通属性、
    * 不会真的滚动，截图验收要在「已滚到底」的状态下看最后一屏。
    *
@@ -2064,12 +2246,19 @@ export default function Conversation() {
         : conversation.lastMessageAt
   const dayLabel = dayLabelOf(firstCreatedAt, now)
 
-  /** 30pt 圆头像：真实 avatarUrl 优先，无图回退首字（同消息列表行的降级） */
+  /**
+   * 30pt 圆头像：真实 avatarUrl 优先，无图回退首字（同消息列表行的降级）。
+   * 头像本身是独立点击区（#517）：对方 → 他人主页，自己 → 编辑资料。
+   * 消息行没有整行点击，头像与气泡是兄弟节点，所以不需要 stopPropagation。
+   */
   const renderAvatar = (mine: boolean) => {
     const url = mine ? (me?.avatarUrl ?? '') : (counterpart.avatarUrl ?? '')
     const initial = mine ? (me?.nickname[0] ?? '我') : (counterpart.nickname[0] ?? '同')
     return (
-      <View className={`conv__ava${mine ? ' is-mine' : ''}`}>
+      <View
+        className={`conv__ava${mine ? ' is-mine' : ''}`}
+        onClick={mine ? openSelfProfile : openCounterpart}
+      >
         {url ? (
           <Image className="conv__ava-img" src={url} mode="aspectFill" />
         ) : (
@@ -2165,15 +2354,27 @@ export default function Conversation() {
       >
         {renderAvatar(mine)}
         <View className="conv__col">
-          {card ? (
+          {message.recalledAt !== null ? (
+            // 已撤回的商品卡也必须翻碑（#518）：服务端撤回后仍保留 listing 投射，
+            // 不能按 card 是否为空来判断。
+            <View className="conv__recalled">
+              <Text className="conv__recalled-tx">
+                {mine ? '你撤回了一条消息' : '对方撤回了一条消息'}
+              </Text>
+            </View>
+          ) : card ? (
             <View
-              className="conv__lcard"
+              className={`conv__lcard${recallingId === message.id ? ' is-busy' : ''}`}
+              onTouchStart={resetBubbleTapGuard}
+              onLongPress={() => void onLongPressMessage(message)}
               onClick={
                 canOpen
-                  ? () =>
+                  ? () => {
+                      if (consumeBubbleTap()) return
                       void Taro.navigateTo({
                         url: `/pkg-browse/pages/listing-detail/index?id=${card.id}`,
                       })
+                    }
                   : undefined
               }
             >
@@ -2202,7 +2403,11 @@ export default function Conversation() {
               ) : null}
             </View>
           ) : (
-            <View className="conv__bubble">
+            <View
+              className="conv__bubble"
+              onTouchStart={resetBubbleTapGuard}
+              onLongPress={() => void onLongPressMessage(message)}
+            >
               <Text className="conv__bubble-tx">[商品]</Text>
             </View>
           )}
@@ -2257,8 +2462,15 @@ export default function Conversation() {
       {/*
         渐变圆角头（稿子 .chathead）：导航条 + 商品摘要条都在里面，不随消息滚动。
         状态栏高度用内联 px（设备相关，不走 rpx），导航行高 88rpx 与商品详情页一致。
+
+        导航行与状态栏带落在「+」面板遮罩**之上**（遮罩顶边 = 导航行底边，返回钮不能被
+        盖住），所以这两处点空白也要自己收面板（#541）。
       */}
-      <View className="conv__head" style={{ paddingTop: `${metrics.statusBarHeight}px` }}>
+      <View
+        className="conv__head"
+        style={{ paddingTop: `${metrics.statusBarHeight}px` }}
+        onClick={panelOpen ? dismissPanel : undefined}
+      >
         {/*
           导航行几何与 `components/top-bar` 同构（行内下发，见 index.scss）：
           返回钮在胶囊那一段里居中，与右侧原生胶囊同轴。
@@ -2285,7 +2497,10 @@ export default function Conversation() {
             }}
           >
             <View className="conv__title-in" style={{ maxWidth: `${titleMaxWidth}px` }}>
-              <Text className="conv__title-nm">{counterpart.nickname}</Text>
+              {/* 顶部昵称与对方头像同一入口（#517）；自己头像走上方的 openSelfProfile */}
+              <Text className="conv__title-nm" onClick={openCounterpart}>
+                {counterpart.nickname}
+              </Text>
               {/* 在线态（#359 第五点）：顶部栏用户名隔壁。绿点 + 文案；离线时说
                   「多久没上线」（`12 分钟前活跃`），拿不到在线态时整块不渲染。 */}
               {counterpartPresence ? (
@@ -2322,12 +2537,27 @@ export default function Conversation() {
         </View>
       </View>
 
+      {/*
+        「+」面板展开时的一层透明遮罩（#541）：点「面板与输入栏」以外的任何位置只收面板。
+        `top` 取导航行底边（`metrics.totalHeight`，与 navrow 的行高同源），所以返回钮不被
+        遮住；遮罩从导航行底边铺到页面底部，盖住商品条、消息流与页面空白，层级见
+        index.scss —— 它在消息流之上、输入栏之下。代价：面板展开期间这一片收不到手势，
+        消息流暂时不能滑动，收起后恢复。
+      */}
+      {panelOpen ? (
+        <View
+          className="conv__panel-mask"
+          style={{ top: `${metrics.totalHeight}px` }}
+          onClick={dismissPanel}
+        />
+      ) : null}
+
       {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条 */}
       <ScrollView
         className="conv__scroll"
         scrollY
         scrollIntoView={scrollTarget}
-        scrollWithAnimation
+        scrollWithAnimation={animateScroll}
       >
         <View className="conv__list">
           {/* 更早一页：文本与媒体两条流各有游标，任一还有更早就给入口（#67 N3） */}
@@ -2432,12 +2662,28 @@ export default function Conversation() {
                     >
                       {renderAvatar(mine)}
                       <View className="conv__col">
+                        {renderMediaQuote(item.replyTo, true)}
                         {item.kind === 'VOICE' ? (
-                          renderVoiceBubble(item.id, item.durationMs, mine, () => openVoice(item))
+                          renderVoiceBubble(
+                            item.id,
+                            item.durationMs,
+                            mine,
+                            () => openVoice(item),
+                            false,
+                            () => void onLongPressMessage(item),
+                            recallingId === item.id,
+                          )
                         ) : (
                           <View
-                            className="conv__bubble conv__bubble--media"
-                            onClick={() => openImage(item)}
+                            className={`conv__bubble conv__bubble--media${
+                              recallingId === item.id ? ' is-busy' : ''
+                            }`}
+                            onTouchStart={resetBubbleTapGuard}
+                            onLongPress={() => void onLongPressMessage(item)}
+                            onClick={() => {
+                              if (consumeBubbleTap()) return
+                              openImage(item)
+                            }}
                           >
                             {/* 还没下载完就先露 `.conv__photo` 的占位底色，不塞空 src */}
                             <View className="conv__photo">
@@ -2461,6 +2707,7 @@ export default function Conversation() {
                     <View key={entry.keyId} id={`e-${entry.keyId}`} className="conv__row is-mine">
                       {renderAvatar(true)}
                       <View className="conv__col">
+                        {renderMediaQuote(item.replyTo, false)}
                         {item.kind === 'VOICE' ? (
                           // 本地录音文件直接播，不下载：自己刚录的这段就在本地。
                           // 失败同样给 `!` 角标（#364 审查）：修复前只有 IMAGE 分支有，
@@ -2543,13 +2790,18 @@ export default function Conversation() {
                           className={`conv__bubble${mine ? ' is-mine' : ''}${
                             recallingId === message.id ? ' is-busy' : ''
                           }`}
+                          onTouchStart={resetBubbleTapGuard}
                           onLongPress={() => void onLongPressMessage(message)}
                         >
-                          {/* 摘引（#359 3c）：点它定位到被引用的原消息 */}
+                          {/* 摘引（#359 3c）：点它定位到被引用的原消息；长按菜单后的
+                              补发 tap 由守卫吞掉，避免撤回反馈被意外跳转盖掉（#518） */}
                           {message.replyTo ? (
                             <View
                               className={`conv__quote${mine ? ' is-mine' : ''}`}
-                              onClick={() => locateMessage(message.replyTo?.id ?? '')}
+                              onClick={() => {
+                                if (consumeBubbleTap()) return
+                                locateMessage(message.replyTo?.id ?? '')
+                              }}
                             >
                               <Text className="conv__quote-tx">{message.replyTo.excerpt}</Text>
                             </View>

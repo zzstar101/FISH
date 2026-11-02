@@ -5,16 +5,19 @@ import {
 } from '@fish/contracts/recommendation/schema'
 import {
   combineInterestVectors,
+  exploreExposureWindowStart,
   POPULARITY_ACTION_HALF_LIFE_MS,
   POPULARITY_ACTION_TYPES,
   POPULARITY_ACTION_WEIGHTS,
+  POPULARITY_FAVORITE_WEIGHT,
   POPULARITY_LISTING_AGE_HALF_LIFE_MS,
   POPULARITY_WINDOW_DAYS,
   popularityWindowStart,
   RECALL_CHANNEL_LIMITS,
   RECALL_CHANNEL_PRIORITY,
   RECALL_CHANNELS,
-  RECALL_EXPLORE_MIX,
+  RECALL_EXPLORE_EXPOSURE_WINDOW_MS,
+  RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES,
   RECALL_FRESHNESS_HALF_LIFE_MS,
   RECALL_INTEREST_MIX,
   RECALL_MAX_CANDIDATES,
@@ -93,7 +96,7 @@ describe('combineInterestVectors', () => {
 
 describe('召回常量自洽性', () => {
   test('策略版本号存在且可被 profile 消费方比较', () => {
-    expect(RECALL_STRATEGY_VERSION).toBe('recall-v1')
+    expect(RECALL_STRATEGY_VERSION).toBe('recall-v2')
   })
 
   test('每路配额都定义了，且六路配额之和不超过候选池上限', () => {
@@ -126,13 +129,11 @@ describe('召回常量自洽性', () => {
     }
   })
 
-  test('探索配额之和等于该路配额，且三个子块都非零', () => {
-    const exploreMixSum =
-      RECALL_EXPLORE_MIX.newListing + RECALL_EXPLORE_MIX.newSeller + RECALL_EXPLORE_MIX.coldCategory
-    expect(exploreMixSum).toBe(RECALL_CHANNEL_LIMITS.explore)
-    expect(RECALL_EXPLORE_MIX.newListing).toBeGreaterThan(0)
-    expect(RECALL_EXPLORE_MIX.newSeller).toBeGreaterThan(0)
-    expect(RECALL_EXPLORE_MIX.coldCategory).toBeGreaterThan(0)
+  test('探索池 = 7 天内曝光身份数低于阈值的商品（#524）', () => {
+    const now = new Date('2026-01-15T00:00:00.000Z')
+    expect(RECALL_EXPLORE_EXPOSURE_WINDOW_MS).toBe(7 * 24 * 60 * 60 * 1000)
+    expect(exploreExposureWindowStart(now).toISOString()).toBe('2026-01-08T00:00:00.000Z')
+    expect(RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES).toBe(20)
   })
 
   test('热度权重只覆盖有正向信号的行为，弱信号/负反馈为 0', () => {
@@ -149,10 +150,10 @@ describe('召回常量自洽性', () => {
     expect(POPULARITY_ACTION_WEIGHTS.TRANSACTION_START).toBeGreaterThan(
       POPULARITY_ACTION_WEIGHTS.CHAT_START,
     )
-    expect(POPULARITY_ACTION_WEIGHTS.CHAT_START).toBeGreaterThan(POPULARITY_ACTION_WEIGHTS.FAVORITE)
-    expect(POPULARITY_ACTION_WEIGHTS.FAVORITE).toBeGreaterThan(
-      POPULARITY_ACTION_WEIGHTS.DETAIL_VIEW,
-    )
+    // 收藏改从 `favorites` 表计（#524）：事件流里的 FAVORITE 不再计权，否则同一份收藏被算两次。
+    expect(POPULARITY_ACTION_WEIGHTS.FAVORITE).toBe(0)
+    expect(POPULARITY_ACTION_WEIGHTS.CHAT_START).toBeGreaterThan(POPULARITY_FAVORITE_WEIGHT)
+    expect(POPULARITY_FAVORITE_WEIGHT).toBeGreaterThan(POPULARITY_ACTION_WEIGHTS.DETAIL_VIEW)
   })
 
   test('热度窗口与两个半衰期的量级关系', () => {

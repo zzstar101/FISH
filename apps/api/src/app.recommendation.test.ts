@@ -16,13 +16,15 @@ import {
 } from '@fish/contracts/recommendation/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { EMBEDDING_DIMENSIONS, embeddings } from '@fish/db/schema/embeddings'
 import { listings } from '@fish/db/schema/listings'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { recommendationRequestItems } from '@fish/db/schema/recommendation-request-items'
 import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
+import { userInterestProfiles } from '@fish/db/schema/user-interest-profiles'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
-import { loadServerEnv } from '@fish/shared/env'
+import { loadServerEnv, STUB_EMBEDDING_MODEL } from '@fish/shared/env'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, eq, ne, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -581,6 +583,8 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
       .from(recommendationRequests)
       .where(eq(recommendationRequests.id, page.response.requestId))
     expect(row?.strategyVersion).toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)
+    // #524：降级原因落库，能与「真的没有候选」区分开。
+    expect(row?.degradeReason).toBe('recall_error')
 
     // 降级不写快照：写了的话第二页会按快照切片，而第一页其实是 newest 页 —— 顺序当场错位。
     expect(await snapshotOf(page.response.requestId)).toHaveLength(0)
@@ -620,6 +624,7 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
               createdAt: new Date(),
               alreadySeenCount: null,
               sellerExposure: 0,
+              exploreEligible: false,
             },
           ],
           channels: [],
@@ -647,6 +652,7 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
       .from(recommendationRequests)
       .where(eq(recommendationRequests.id, page.response.requestId))
     expect(row?.strategyVersion).toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)
+    expect(row?.degradeReason).toBe('snapshot_write_failed')
 
     // 库里也不能留下任何一条没有快照的 ranked 请求行：R6 的 `empty_ranked_feed_requests`
     // 会把它报成数据质量异常，而它其实是「写失败」而不是「确实没有可发的推荐」。
@@ -680,6 +686,7 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
       createdAt: new Date(),
       alreadySeenCount: null,
       sellerExposure: 0,
+      exploreEligible: recallSources.includes('explore'),
     })
     const service = createRecommendationService({
       store: createSqlRecommendationStore(db),
@@ -731,6 +738,7 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
       createdAt: new Date(),
       alreadySeenCount: null,
       sellerExposure: 0,
+      exploreEligible: false,
     })
     const service = createRecommendationService({
       store: createSqlRecommendationStore(db),
@@ -1096,6 +1104,150 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
         }),
       }),
     ).rejects.toThrow('cursor 无效')
+  })
+})
+
+describe('recommendation rec-v2 (#524)', () => {
+  const rawListingId = (publicId: string) => decodePublicId(PUBLIC_ID_PREFIX.listing, publicId)
+
+  async function snapshotRows(requestId: string) {
+    return db
+      .select({
+        listingId: recommendationRequestItems.listingId,
+        position: recommendationRequestItems.position,
+        primarySource: recommendationRequestItems.primarySource,
+        rankBreakdown: recommendationRequestItems.rankBreakdown,
+      })
+      .from(recommendationRequestItems)
+      .where(eq(recommendationRequestItems.requestId, requestId))
+      .orderBy(recommendationRequestItems.position)
+  }
+
+  function unitVector(axis: number): number[] {
+    const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0)
+    vector[axis] = 1
+    return vector
+  }
+
+  test('活跃登录用户：长期画像 × 商品向量真的进了排序 —— semantic 不在 missing，primary_source 出现 semantic', async () => {
+    // 装配走真 `createApp` 的默认值：读侧模型名 = `STUB_EMBEDDING_MODEL`，与 worker stub 写入同名。
+    // v1 用的是拍照搜图的视觉模型名，这里的向量与画像永远查不到 ⇒ 本用例在 v1 上失败。
+    const viewer = await registerUser('81')
+    const seller = await registerUser('82')
+    const matched = rawListingId(await createListing(seller.id, '画像命中的商品'))
+    const [listing] = await db
+      .select({ updatedAt: listings.updatedAt })
+      .from(listings)
+      .where(eq(listings.id, matched))
+    if (!listing) throw new Error('商品未落库')
+    const axis = unitVector(3)
+    await db.insert(embeddings).values({
+      id: newId(),
+      listingId: matched,
+      model: STUB_EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: `rec-v2-${matched}`,
+      embedding: axis,
+      sourceUpdatedAt: listing.updatedAt,
+    })
+    await db.insert(userInterestProfiles).values({
+      userId: viewer.id,
+      model: STUB_EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      strategyVersion: INTEREST_STRATEGY_VERSION,
+      embedding: axis,
+      actionCount: 5,
+      windowStartedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      computedAt: new Date(),
+    })
+
+    const { body, status } = await fetchFeed('', { cookie: viewer.cookie })
+    expect(status).toBe(200)
+    expect(body.strategyVersion).toBe(RANKED_STRATEGY_VERSION)
+
+    const rows = await snapshotRows(body.requestId)
+    const hit = rows.find((row) => row.listingId === matched)
+    expect(hit).toBeDefined()
+    const breakdown = hit?.rankBreakdown as {
+      missing: string[]
+      semantic: { normalized: number; weight: number }
+    }
+    expect(breakdown.missing).not.toContain('semantic')
+    expect(breakdown.semantic.normalized).toBeCloseTo(1, 6)
+    expect(breakdown.semantic.weight).toBeGreaterThan(0)
+    expect(rows.some((row) => row.primarySource === 'semantic')).toBe(true)
+  })
+
+  test('探索位可观测：每 5 个位置有 1 个 primary_source = explore（新商品、零曝光进探索池）', async () => {
+    const seller = await registerUser('83')
+    for (let index = 0; index < 12; index += 1) {
+      await createListing(seller.id, `探索池商品 ${index}`)
+    }
+
+    const { body, status } = await fetchFeed()
+    expect(status).toBe(200)
+    expect(body.strategyVersion).toBe(RANKED_STRATEGY_VERSION)
+
+    const rows = await snapshotRows(body.requestId)
+    expect(rows.length).toBeGreaterThanOrEqual(10)
+    // v1 的 explore 只认 `recallSources[0] === 'explore'`，而 explore 是最低优先级通道、又与 fresh
+    // 高度重叠 ⇒ 配额几乎从不兑现、primary_source 里也看不到 explore。
+    for (const window of [0, 1]) {
+      const inWindow = rows.filter(
+        (row) => row.position >= window * 5 && row.position < window * 5 + 5,
+      )
+      expect(inWindow.filter((row) => row.primarySource === 'explore')).toHaveLength(1)
+    }
+  })
+
+  test('没有任何候选 ⇒ 降级原因记 no_candidates（冷启动），与召回出错区分', async () => {
+    const infoSpy = spyOn(console, 'info').mockImplementation(() => {})
+    try {
+      const service = createRecommendationService({
+        store: createSqlRecommendationStore(db),
+        listings: {
+          listFeed: async () => ({ items: [], nextCursor: null }),
+          listCardsByIds: async () => new Map(),
+        },
+        recall: {
+          recall: async () => ({
+            strategyVersion: RECALL_STRATEGY_VERSION,
+            candidates: [],
+            channels: [],
+            interest: { session: false, longTerm: false, combined: false },
+            mergeDegradedReason: null,
+          }),
+        },
+        interest: { enqueue: async () => {} },
+      })
+
+      const page = await service.startFeed({
+        viewerId: null,
+        anonymousSessionId: newId(),
+        limit: 20,
+      })
+
+      const [row] = await db
+        .select()
+        .from(recommendationRequests)
+        .where(eq(recommendationRequests.id, page.response.requestId))
+      expect(row?.strategyVersion).toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)
+      expect(row?.degradeReason).toBe('no_candidates')
+
+      const logged = infoSpy.mock.calls.map((call) => String(call[0]))
+      const event = logged
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { event?: string; reason?: string; requestId?: string }
+          } catch {
+            return null
+          }
+        })
+        .find((parsed) => parsed?.event === 'recommendation.feed_degraded')
+      expect(event).toMatchObject({ reason: 'no_candidates', requestId: page.response.requestId })
+    } finally {
+      infoSpy.mockRestore()
+    }
   })
 })
 

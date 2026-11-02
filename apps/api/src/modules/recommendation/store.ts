@@ -1,15 +1,17 @@
 import { RANK_COOLDOWN_ENGAGEMENT_EVENT_TYPES } from '@fish/contracts/recommendation/rank'
 import type {
+  RecommendationDegradeReason,
   RecommendationEventType,
   RecommendationSource,
 } from '@fish/contracts/recommendation/schema'
 import type { Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
 import {
+  aggregateNegativeFeedback as aggregateNegativeFeedbackQuery,
   type ExposureHistory,
   findExposureHistory as findExposureHistoryQuery,
-  findNegativeFeedbackEvents as findNegativeFeedbackEventsQuery,
-  type NegativeFeedbackEvent,
+  type NegativeFeedbackAggregate,
+  type RecallActionWeight,
 } from '@fish/db/recall-store'
 import { listings } from '@fish/db/schema/listings'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
@@ -84,6 +86,8 @@ export interface RecommendationStore {
     userId: string | null
     anonymousSessionId: string
     strategyVersion: string
+    /** 降级原因（#524）；只有 `rec-v1-none` 行可以带，库上 CHECK 钉住。 */
+    degradeReason?: RecommendationDegradeReason | null
   }): Promise<RecommendationRequestRow>
 
   /** 批量取请求上下文（一次 `IN` 查询；归属校验只需要这几列）。 */
@@ -152,16 +156,21 @@ export interface RecommendationStore {
   }): Promise<RecommendationItemAttribution[]>
 
   /**
-   * 取负反馈事件（R4 的 `negativeFeedback` 特征输入）。
+   * 负反馈聚合（R4 的 `negativeFeedback` 特征输入；#524 起在 SQL 里聚合）。
    *
-   * 走 store 而不是让 service 直接拿 `db`：SQL 只住在这一层，service 只依赖端口 —— 与
-   * `recall-store.ts` 里已经存在的同名查询共用一条身份谓词实现（复用而非重写）。
+   * 返回行数有固定上界（类目枚举 + 本批候选的卖家 + 本批候选里被隐藏的商品），不再把一个老用户
+   * 窗口内的全部负反馈事件拉回进程。走 store 而不是让 service 直接拿 `db`：SQL 只住在这一层。
    */
-  findNegativeFeedbackEvents(input: {
+  aggregateNegativeFeedback(input: {
     identity: InterestIdentity
     since: Date
-    eventTypes: readonly RecommendationEventType[]
-  }): Promise<NegativeFeedbackEvent[]>
+    now: Date
+    weights: readonly RecallActionWeight[]
+    halfLifeMs: number
+    hiddenEventTypes: readonly RecommendationEventType[]
+    candidateListingIds: readonly string[]
+    candidateSellerIds: readonly string[]
+  }): Promise<NegativeFeedbackAggregate>
 
   /**
    * 取这批候选的曝光/互动历史聚合（M6 重复曝光冷却的输入）。
@@ -186,6 +195,7 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
           userId: input.userId,
           anonymousSessionId: input.anonymousSessionId,
           strategyVersion: input.strategyVersion,
+          degradeReason: input.degradeReason ?? null,
         })
         .returning({
           id: recommendationRequests.id,
@@ -342,8 +352,8 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
         )
     },
 
-    async findNegativeFeedbackEvents(input) {
-      return findNegativeFeedbackEventsQuery(db, input)
+    async aggregateNegativeFeedback(input) {
+      return aggregateNegativeFeedbackQuery(db, input)
     },
 
     async findExposureHistory(input) {

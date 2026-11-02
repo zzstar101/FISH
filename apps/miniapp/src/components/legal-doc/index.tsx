@@ -5,6 +5,7 @@ import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
 import { crossLinkUrl, markConsent } from '@/features/legal/entry'
+import { mergeEdgePunctuation } from '@/features/legal/runs'
 import type { Block, LegalDoc, LegalSection, ListItem, Run } from '@/features/legal/types'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
@@ -69,11 +70,14 @@ type Props = {
  *
  * key 优先用数据的 `k`（生成时只给「同一数组里有重复文本」的那几个数组补上），
  * 否则用文本本身：片段数组是静态数据，位置就是稳定标识。
+ *
+ * 渲染前先过 `mergeEdgePunctuation`：每个片段是独立的 `<text>` 盒，标点若独占片段边界，
+ * 断行时句读会落到行首、开括号留在行尾（#515）。
  */
 function Runs({ runs }: { runs: Run[] }) {
   return (
     <>
-      {runs.map((run) => (
+      {mergeEdgePunctuation(runs).map((run) => (
         <Text key={run.k ?? run.t} className={runClass(run)} userSelect>
           {run.t}
         </Text>

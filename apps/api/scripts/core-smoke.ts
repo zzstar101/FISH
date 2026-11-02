@@ -889,6 +889,22 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     await register(base, 1)
     const seller = await login(base, sellerStudentNo)
     const buyer = await register(base, 2)
+    // #514：发布商品 / 重新上架（seller）与发布求购（buyer）都要求已绑定手机号。
+    // stub 传输下 code 即 11 位号码；先断言门禁本身，再各绑一次。
+    const unboundPublish = await postJson(base, '/wishes', {}, buyer)
+    assertEqual(unboundPublish.status, 403, '未绑定手机号 POST /wishes → 403')
+    assertEqual(
+      ((await readJson(unboundPublish)).error as { code: string }).code,
+      'PHONE_REQUIRED',
+      '未绑定手机号的拒绝码为 PHONE_REQUIRED',
+    )
+    for (const [label, cookie, phone] of [
+      ['seller', seller, '19900000001'],
+      ['buyer', buyer, '19900000002'],
+    ] as const) {
+      const bind = await postJson(base, '/auth/phone/bind', { code: phone }, cookie)
+      assertEqual(bind.status, 200, `${label} POST /auth/phone/bind → 200`)
+    }
 
     const presignResponse = await postJson(
       base,

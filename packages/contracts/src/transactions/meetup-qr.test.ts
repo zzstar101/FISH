@@ -12,6 +12,38 @@ describe('meetup-qr payload', () => {
     expect(parseMeetupQrPayload(payload)).toEqual({ transactionId: txId, token })
   })
 
+  test('不依赖全局 URL：weapp 的 TaroURL 对 fish:// 构造即抛，解析仍须成功（#536）', () => {
+    const payload = buildMeetupQrPayload(txId, token)
+    const realUrl = globalThis.URL
+    // 复刻 TaroURL 在小程序里的行为：只认 http(s)://，其余构造直接抛 TypeError。
+    Object.defineProperty(globalThis, 'URL', {
+      configurable: true,
+      writable: true,
+      value: class {
+        constructor() {
+          throw new TypeError("Failed to construct 'URL': Invalid URL")
+        }
+      },
+    })
+    try {
+      expect(parseMeetupQrPayload(payload)).toEqual({ transactionId: txId, token })
+      // 同样的环境下，非本应用内容也必须安全返回 null，而不是把异常抛给扫码回调。
+      expect(parseMeetupQrPayload('https://example.com/pay?tx=1')).toBeNull()
+      expect(parseMeetupQrPayload('random text')).toBeNull()
+    } finally {
+      Object.defineProperty(globalThis, 'URL', {
+        configurable: true,
+        writable: true,
+        value: realUrl,
+      })
+    }
+  })
+
+  test('畸形百分号转义不抛（扫码结果是不可信输入）', () => {
+    expect(parseMeetupQrPayload(`fish://meetup/redeem?tx=%E0%A4%A&t=${token}`)).toBeNull()
+    expect(parseMeetupQrPayload('fish://meetup/redeem?tx=x&t=%')).toBeNull()
+  })
+
   test('非本应用内容 / 畸形字段一律拒绝（扫描结果不可信）', () => {
     // 外部二维码（URL、任意文本、6 位码）
     expect(parseMeetupQrPayload('https://example.com/pay?tx=1')).toBeNull()
