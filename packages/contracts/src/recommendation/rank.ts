@@ -27,7 +27,7 @@ import type { RecommendationEventType } from './schema'
  * 三者可以独立演进。它最终作为一段拼进 `recommendation_requests.strategy_version` 的复合串，
  * 所以"线上这批结果出自哪一版排序"永远可判（M4 要求②）。
  */
-export const RANK_STRATEGY_VERSION = 'rank-v1'
+export const RANK_STRATEGY_VERSION = 'rank-v2'
 
 /**
  * M4 建议的对外总版本名：v1 的排序是规则排序，不是模型排序。

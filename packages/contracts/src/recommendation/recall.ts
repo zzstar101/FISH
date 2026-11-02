@@ -22,7 +22,7 @@ import type { RecommendationEventType, RecommendationSource } from './schema'
  * 两者可以独立演进（换画像算法不必改召回口径，反之亦然）。R4 的 `strategyVersion` 会把两者
  * 都写进推荐请求行，这里先把召回侧的版本号定下来。
  */
-export const RECALL_STRATEGY_VERSION = 'recall-v1'
+export const RECALL_STRATEGY_VERSION = 'recall-v2'
 
 /**
  * 一期六路召回通道（Issue #323 M2）。
@@ -194,7 +194,9 @@ export const POPULARITY_ACTION_WEIGHTS: Record<RecommendationEventType, number> 
   LONG_VIEW: 2,
   IMAGE_VIEW: 0.5,
   QUICK_SKIP: 0,
-  FAVORITE: 3,
+  // 收藏改由 `favorites` 表的**当前状态**计入（见 `POPULARITY_FAVORITE_WEIGHT`，#524）：
+  // 事件流里的 FAVORITE 可以被"收藏 → 取消 → 再收藏"刷出任意多条，表里一人一件只有一行。
+  FAVORITE: 0,
   UNFAVORITE: 0,
   CHAT_START: 4,
   COMMENT: 2,
@@ -208,12 +210,21 @@ export const POPULARITY_ACTION_TYPES: readonly RecommendationEventType[] = [
   'DETAIL_VIEW',
   'LONG_VIEW',
   'IMAGE_VIEW',
-  'FAVORITE',
   'CHAT_START',
   'COMMENT',
   'TRANSACTION_START',
   'PURCHASE',
 ]
+
+/**
+ * 一条**当前有效**的收藏（`favorites` 表一行）对热度的贡献（#524）。
+ *
+ * 数值沿用 v1 事件口径的 3（介于 `CHAT_START 4` 与 `LONG_VIEW 2` 之间）；来源从事件流换成表，
+ * 是因为表上有 `(user_id, listing_id)` 唯一约束 —— 一个用户对一件商品最多贡献一次，
+ * 取消收藏后贡献随即消失，不需要在事件流里配对 FAVORITE / UNFAVORITE。
+ * 时间衰减按收藏行的 `created_at`，与行为事件同一半衰期。
+ */
+export const POPULARITY_FAVORITE_WEIGHT = 3
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -257,23 +268,29 @@ export const RECALL_FRESHNESS_HALF_LIFE_MS = POPULARITY_LISTING_AGE_HALF_LIFE_MS
 export const RECALL_SESSION_CATEGORY_TOP_N = 3
 
 /**
- * Exploration 通道内部三块的配比（Issue #323 M2 "新商品 / 新卖家 / 用户很少接触但可能相关的分类"）。
+ * Exploration 候选池的曝光窗口（#524）：只看最近 7 天的全站 `IMPRESSION`。
  *
- * 合计 50 = `RECALL_CHANNEL_LIMITS.explore`。冷门类目只给 10：它是"可能相关"的猜测，样本最少、
- * 最容易被噪声支配，比例不宜大；新商品 20 保证新发布能拿到首轮曝光，新卖家 20 让新卖家不至于
- * 一件都上不了首页。
+ * v1 的探索池按"新商品 / 新卖家 / 冷门类目"三块拼，三块都与 fresh / category 通道高度重叠，
+ * 而 rerank 又只认"首个来源是 explore"的候选 —— 结果是探索位几乎从不兑现。v2 把"探索"直接
+ * 定义成**曝光不足**：最近 7 天被少于 `RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES` 个身份看到过的
+ * 可见商品。这正是探索要解决的问题本身（没有曝光 → 没有行为 → 永远进不了热门 / 语义通道），
+ * 新商品与新卖家的商品天然落在其中，不再需要单独的子配额。
  */
-export const RECALL_EXPLORE_MIX = {
-  newListing: 20,
-  newSeller: 20,
-  coldCategory: 10,
-} as const
+export const RECALL_EXPLORE_EXPOSURE_WINDOW_MS = 7 * DAY_MS
 
-/** "新商品"窗口：发布 ≤ 3 天。 */
-export const RECALL_EXPLORE_NEW_LISTING_WINDOW_MS = 3 * DAY_MS
+/**
+ * "曝光不足"的阈值：7 天内**去重身份数** < 20（#524）。
+ *
+ * 按身份去重而不是按曝光行数：同一个人刷十次 Feed 只算一次，否则一个活跃用户就能把一件商品
+ * 推出探索池。20 对应线上量级（二十来件在架商品、以匿名流量为主）下"被小部分活跃用户看过"；
+ * 池子上限仍是 `RECALL_CHANNEL_LIMITS.explore`，按曝光身份数升序、发布时间降序取。
+ */
+export const RECALL_EXPLORE_MAX_EXPOSED_IDENTITIES = 20
 
-/** "新卖家"窗口：卖家注册 ≤ 30 天（`users.created_at`）。 */
-export const RECALL_EXPLORE_NEW_SELLER_WINDOW_MS = 30 * DAY_MS
+/** 探索池曝光统计起点：`now − RECALL_EXPLORE_EXPOSURE_WINDOW_MS`。 */
+export function exploreExposureWindowStart(now: Date): Date {
+  return new Date(now.getTime() - RECALL_EXPLORE_EXPOSURE_WINDOW_MS)
+}
 
 /**
  * 候选去重时保留的召回来源上限。

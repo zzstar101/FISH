@@ -303,6 +303,25 @@ export type RecommendationEventIngestResponse = z.infer<
 export const RECOMMENDATION_STRATEGY_VERSION_NONE = 'rec-v1-none'
 
 /**
+ * 个性化 Feed 退回 `newest` 的原因（#524），落 `recommendation_requests.degrade_reason`。
+ *
+ * - `no_candidates`：召回与排序都正常，但没有可推的商品（冷启动 / 全被隐藏）—— 业务上可接受；
+ * - `recall_error`：召回链路抛错，或某一路 provider 失败且最终候选为空 —— 需要排查；
+ * - `rank_error`：打分 / 重排抛错；
+ * - `snapshot_write_failed`：排好了但快照落库失败，只能退回无快照的 newest。
+ *
+ * 只有 `rec-v1-none` 行会带它（库上 CHECK 约束），排序成功的请求恒为 null。
+ */
+export const RECOMMENDATION_DEGRADE_REASONS = [
+  'no_candidates',
+  'recall_error',
+  'rank_error',
+  'snapshot_write_failed',
+] as const
+
+export type RecommendationDegradeReason = (typeof RECOMMENDATION_DEGRADE_REASONS)[number]
+
+/**
  * 埋点/Feed 被限流时的错误码（#323 R6，`errorBody` 的 `code` 是普通字符串，不为此新增枚举）。
  *
  * **不复用 auth 的 `RATE_LIMITED`**：`apps/api/src/modules/ai/service.ts:125` 已写下这条纪律——

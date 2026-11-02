@@ -351,6 +351,13 @@
       "when": 1793544951197,
       "tag": "20261101225551_modern_pride",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1793582180237,
+      "tag": "20261102091620_spotty_vision",
+      "breakpoints": true
     }
   ]
 }
