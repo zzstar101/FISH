@@ -49,9 +49,13 @@ mock.module('@tarojs/taro', () => ({
   },
 }))
 
-const { ensurePrivacyAuthorized, ensurePrivacyAuthorizedStrict } = await import(
-  '../src/lib/privacy'
-)
+const {
+  canEnterVoiceMode,
+  ensurePrivacyAuthorized,
+  ensurePrivacyAuthorizedStrict,
+  getPrivacyAuthorizationState,
+  requestPrivacyAuthorize,
+} = await import('../src/lib/privacy')
 
 beforeEach(() => {
   needAuthorization = false
@@ -125,5 +129,67 @@ describe('ensurePrivacyAuthorizedStrict —— 语音路径未知状态不放行
     needAuthorization = true
     authorizeMissing = true
     await expect(ensurePrivacyAuthorizedStrict()).resolves.toBe(false)
+  })
+})
+
+describe('getPrivacyAuthorizationState —— 拒绝与未知必须分开', () => {
+  test('平台说不需要授权：authorized', async () => {
+    await expect(getPrivacyAuthorizationState()).resolves.toBe('authorized')
+  })
+
+  test('用户拒绝：denied', async () => {
+    needAuthorization = true
+    authorizeFails = true
+    await expect(getPrivacyAuthorizationState()).resolves.toBe('denied')
+  })
+
+  test('查询失败：unknown（不是 denied）', async () => {
+    getFails = true
+    await expect(getPrivacyAuthorizationState()).resolves.toBe('unknown')
+  })
+
+  test('查询异常：unknown', async () => {
+    getThrows = true
+    await expect(getPrivacyAuthorizationState()).resolves.toBe('unknown')
+  })
+})
+
+describe('requestPrivacyAuthorize —— 录音阶段失败后的授权入口', () => {
+  test('用户同意：true', async () => {
+    await expect(requestPrivacyAuthorize()).resolves.toBe(true)
+  })
+
+  test('用户拒绝：false', async () => {
+    authorizeFails = true
+    await expect(requestPrivacyAuthorize()).resolves.toBe(false)
+  })
+
+  test('API 不存在：false，不能让按钮卡住', async () => {
+    authorizeMissing = true
+    await expect(requestPrivacyAuthorize()).resolves.toBe(false)
+  })
+
+  test('同步异常：false，必须收口', async () => {
+    authorizeThrows = true
+    await expect(requestPrivacyAuthorize()).resolves.toBe(false)
+  })
+})
+
+describe('canEnterVoiceMode —— 授权 gate 的纯判据', () => {
+  test('授权通过、代次最新、页面存活：才允许进入语音态', () => {
+    expect(canEnterVoiceMode('authorized', 3, 3, true)).toBe(true)
+  })
+
+  test('用户拒绝或状态未知：不允许', () => {
+    expect(canEnterVoiceMode('denied', 3, 3, true)).toBe(false)
+    expect(canEnterVoiceMode('unknown', 3, 3, true)).toBe(false)
+  })
+
+  test('授权期间用户点了「+」/切了面板：旧代次不允许', () => {
+    expect(canEnterVoiceMode('authorized', 3, 4, true)).toBe(false)
+  })
+
+  test('授权期间离开页面：不允许', () => {
+    expect(canEnterVoiceMode('authorized', 3, 3, false)).toBe(false)
   })
 })

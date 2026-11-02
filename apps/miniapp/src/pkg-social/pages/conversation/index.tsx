@@ -46,7 +46,11 @@ import { presenceView } from '@/features/presence/view'
 import { requestSubscribe } from '@/features/subscribe/request'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
-import { ensurePrivacyAuthorizedStrict, requestPrivacyAuthorize } from '@/lib/privacy'
+import {
+  canEnterVoiceMode,
+  getPrivacyAuthorizationState,
+  requestPrivacyAuthorize,
+} from '@/lib/privacy'
 import { isApiError } from '@/lib/request'
 import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
@@ -343,6 +347,8 @@ export default function Conversation() {
     // 身份清场 +1：作废 A 在途的所有响应。下面登录态 effect 紧接着会再 +1 占位
     // 本次 load —— 两者语义独立但共用计数器，判过期只看「是否相等」，不区分语义。
     epoch.current += 1
+    // 语音授权是异步的：在途结果回来时若 seq 没变，会把新账号重新拉进语音态。
+    voiceGateSeqRef.current += 1
     localSeq.current = 0
     // 待刷新标记与在途计数一起归到新 epoch：否则上个账号留下的陈旧标记会被
     // 新账号后续某次发送落定消费掉，闪一次无来由的整页加载。
@@ -1375,11 +1381,18 @@ export default function Conversation() {
       })
         .then((modal) => {
           if (!modal.confirm) return
+          // 这个分支前面已经 setVoiceMode(false)；授权成功后要把用户送回语音态，
+          // 否则「请按住说话」指向的是已被卸载的控件（#526 审查）。
+          const gateSeq = ++voiceGateSeqRef.current
           return requestPrivacyAuthorize().then((authorized) => {
-            void Taro.showToast({
-              title: authorized ? '已授权，请重新按住说话' : '隐私授权未完成，请检查微信隐私设置',
-              icon: 'none',
-            })
+            if (!authorized) {
+              void Taro.showToast({ title: '隐私授权未完成，请检查微信隐私设置', icon: 'none' })
+              return
+            }
+            if (gateSeq !== voiceGateSeqRef.current || !aliveRef.current) return
+            setPanelOpen(false)
+            setVoiceMode(true)
+            void Taro.showToast({ title: '已授权，请按住说话', icon: 'none' })
           })
         })
         .catch(() => undefined)
@@ -1679,27 +1692,35 @@ export default function Conversation() {
    * 就把授权走完，后面按住说话的触摸序列保持全同步。
    */
   const toggleVoiceMode = async () => {
-    if (!voiceMode) {
-      if (privacyPendingRef.current) return
-      privacyPendingRef.current = true
-      const seq = ++voiceGateSeqRef.current
-      let authorized = false
-      try {
-        authorized = await ensurePrivacyAuthorizedStrict()
-      } finally {
-        privacyPendingRef.current = false
-      }
-      // await 期间用户可能点了「+」、离开页面，或又切回了键盘态；旧结果不许覆盖新状态。
-      if (seq !== voiceGateSeqRef.current || !aliveRef.current) return
-      if (!authorized) {
-        void Taro.showToast({ title: '请先同意《用户隐私保护指引》后重试', icon: 'none' })
-        return
-      }
-      setPanelOpen(false)
-    } else {
+    if (voiceMode) {
       abortRecording()
+      setVoiceMode(false)
+      return
     }
-    setVoiceMode(!voiceMode)
+    if (privacyPendingRef.current) return
+    privacyPendingRef.current = true
+    const seq = ++voiceGateSeqRef.current
+    let state: Awaited<ReturnType<typeof getPrivacyAuthorizationState>>
+    try {
+      state = await getPrivacyAuthorizationState()
+    } finally {
+      privacyPendingRef.current = false
+    }
+    // await 期间用户可能点了「+」、离开页面，或又切回了键盘态；旧结果不许覆盖新状态。
+    if (!canEnterVoiceMode(state, seq, voiceGateSeqRef.current, aliveRef.current)) {
+      if (seq !== voiceGateSeqRef.current || !aliveRef.current) return
+      // 查询失败/超时与用户明确拒绝要分开提示：前者按「去同意」操作也不会恢复。
+      void Taro.showToast({
+        title:
+          state === 'denied'
+            ? '请先同意《用户隐私保护指引》后重试'
+            : '无法确认隐私授权状态，请稍后重试或检查微信设置',
+        icon: 'none',
+      })
+      return
+    }
+    setPanelOpen(false)
+    setVoiceMode(true)
   }
 
   /**

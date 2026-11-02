@@ -12,58 +12,92 @@
  */
 import Taro from '@tarojs/taro'
 
+/** 一次隐私查询的结果：授权、明确拒绝、或状态未知（失败/超时/API 缺失）。 */
+export type PrivacyAuthorizationState = 'authorized' | 'denied' | 'unknown'
+
+/** 查 `getPrivacySetting` 的兜底：桥接不回调时不能把语音按钮永久卡住。 */
+const PRIVACY_QUERY_TIMEOUT_MS = 5_000
+/** 官方授权弹窗由用户操作，给更长的兜底时间。 */
+const PRIVACY_AUTHORIZE_TIMEOUT_MS = 30_000
+
 /**
  * 查询一次隐私授权状态。
  *
- * - `true`：已授权，或平台/老基础库不做隐私检查；
- * - `false`：用户明确拒绝；
- * - `null`：查询过程失败，状态未知。
- *
- * 单独拆出来是因为调用方对「未知」的处理不同：头像页按历史行为 fail-open，
- * 语音录音必须 fail-closed（#516），不能共用同一个布尔投影。
+ * `unknown` 与 `denied` 必须分开：前者是查询失败/超时，用户按「去同意」也恢复不了；
+ * 后者才是用户明确拒绝。调用方据此给不同文案（#526 审查）。
  */
-function queryPrivacyAuthorization(): Promise<boolean | null> {
+function queryPrivacyAuthorization(): Promise<PrivacyAuthorizationState> {
   // 老基础库没有这个 API：平台不做隐私检查，不能把用户挡在门外。
-  if (typeof Taro.getPrivacySetting !== 'function') return Promise.resolve(true)
+  if (typeof Taro.getPrivacySetting !== 'function') return Promise.resolve('authorized')
 
   return new Promise((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const settle = (state: PrivacyAuthorizationState) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(state)
+    }
+
+    const armTimeout = (ms: number, message: string) => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (settled) return
+        console.warn(message)
+        settle('unknown')
+      }, ms)
+    }
+
+    armTimeout(PRIVACY_QUERY_TIMEOUT_MS, '[privacy] getPrivacySetting 超时，授权状态未知')
+
     try {
       Taro.getPrivacySetting({
         success: (setting) => {
           if (!setting.needAuthorization) {
-            resolve(true)
+            settle('authorized')
             return
           }
           if (typeof Taro.requirePrivacyAuthorize !== 'function') {
             console.warn('[privacy] requirePrivacyAuthorize 不可用，授权状态未知')
-            resolve(null)
+            settle('unknown')
             return
           }
+          armTimeout(
+            PRIVACY_AUTHORIZE_TIMEOUT_MS,
+            '[privacy] requirePrivacyAuthorize 超时，授权状态未知',
+          )
           try {
             Taro.requirePrivacyAuthorize({
-              success: () => resolve(true),
+              success: () => settle('authorized'),
               fail: (error) => {
                 console.warn('[privacy] requirePrivacyAuthorize 未通过', error)
-                resolve(false)
+                settle('denied')
               },
             })
           } catch (error) {
             // 回调式 API 在异常时可能既不 success 也不 fail；同步异常必须自己收口，
             // 否则 Promise 永远不 settle，调用方的 finally 不会执行（#526 审查）。
             console.warn('[privacy] requirePrivacyAuthorize 异常', error)
-            resolve(null)
+            settle('unknown')
           }
         },
         fail: (error) => {
           console.warn('[privacy] getPrivacySetting 失败，授权状态未知', error)
-          resolve(null)
+          settle('unknown')
         },
       })
     } catch (error) {
       console.warn('[privacy] getPrivacySetting 异常，授权状态未知', error)
-      resolve(null)
+      settle('unknown')
     }
   })
+}
+
+/** 查询隐私授权状态（三态）；同一个页面可据此区分「拒绝」与「查不到」。 */
+export function getPrivacyAuthorizationState(): Promise<PrivacyAuthorizationState> {
+  return queryPrivacyAuthorization()
 }
 
 /**
@@ -74,16 +108,31 @@ function queryPrivacyAuthorization(): Promise<boolean | null> {
  * 语音录音需要严格的 fail-closed，请用 {@link ensurePrivacyAuthorizedStrict}。
  */
 export async function ensurePrivacyAuthorized(): Promise<boolean> {
-  return (await queryPrivacyAuthorization()) !== false
+  return (await queryPrivacyAuthorization()) !== 'denied'
 }
 
 /**
- * 严格版：只有明确「已授权/平台不检查」才放行，查询失败按拒绝处理。
+ * 严格版：只有明确「已授权/平台不检查」才放行，查询失败/拒绝都返回 false。
  *
- * 语音录音使用此版本：授权状态未知时不能启动录音，否则用户会以为在录、实际被平台静默拦下。
+ * 需要区分两种失败原因时用 {@link getPrivacyAuthorizationState}。
  */
 export async function ensurePrivacyAuthorizedStrict(): Promise<boolean> {
-  return (await queryPrivacyAuthorization()) === true
+  return (await queryPrivacyAuthorization()) === 'authorized'
+}
+
+/**
+ * 语音 gate 的纯判据：授权明确通过、代次没被新操作覆盖、页面还活着，三者缺一不可。
+ *
+ * 抽成纯函数是为了让「未授权 / 旧代次 / 已离页都不得进入语音态」有行为级回归测试，
+ * 不再只靠源码字符串断言（#526 审查）。
+ */
+export function canEnterVoiceMode(
+  state: PrivacyAuthorizationState,
+  seq: number,
+  currentSeq: number,
+  alive: boolean,
+): boolean {
+  return state === 'authorized' && seq === currentSeq && alive
 }
 
 /**
@@ -95,17 +144,30 @@ export async function ensurePrivacyAuthorizedStrict(): Promise<boolean> {
 export function requestPrivacyAuthorize(): Promise<boolean> {
   if (typeof Taro.requirePrivacyAuthorize !== 'function') return Promise.resolve(false)
   return new Promise((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      console.warn('[privacy] requirePrivacyAuthorize 超时，授权未完成')
+      resolve(false)
+    }, PRIVACY_AUTHORIZE_TIMEOUT_MS)
+    const settle = (authorized: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(authorized)
+    }
     try {
       Taro.requirePrivacyAuthorize({
-        success: () => resolve(true),
+        success: () => settle(true),
         fail: (error) => {
           console.warn('[privacy] requirePrivacyAuthorize 未通过', error)
-          resolve(false)
+          settle(false)
         },
       })
     } catch (error) {
       console.warn('[privacy] requirePrivacyAuthorize 异常', error)
-      resolve(false)
+      settle(false)
     }
   })
 }
