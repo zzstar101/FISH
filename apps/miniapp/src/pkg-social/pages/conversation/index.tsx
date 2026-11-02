@@ -56,7 +56,7 @@ import { meetupUrlById } from '@/features/transaction/order-links'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
-import { sessionCookieHeader } from '@/lib/session'
+import { sessionCookieHeader, sessionEpoch } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { randomUuidV4 } from '@/lib/uuid'
 import {
@@ -2042,7 +2042,11 @@ export default function Conversation() {
     /**
      * 入口就上锁（不是等点完「确认」才上锁）：两次快速点击会各起一个确认框，两次都点
      * 「确认」就是两次 accept 请求。锁到确认框与请求都落定才放开。
+     *
+     * `epoch` 记的是发出请求时的登录态代次：请求在途时换号/退出，回来的交易属于上一个
+     * 账号，**不许**写进当前页（`applyTx` 无条件写 `txLoad`）。
      */
+    const epoch = sessionEpoch()
     acceptBusyRef.current = true
     void Taro.showModal({
       title: '确认这笔面交申请？',
@@ -2053,11 +2057,13 @@ export default function Conversation() {
         if (!result.confirm) return
         return acceptTransaction(conversationId, amountCents)
           .then((tx) => {
+            if (epoch !== sessionEpoch()) return
             applyTx(tx)
             void Taro.showToast({ title: '已接受，去面交吧', icon: 'none' })
           })
           .catch((error) => {
             console.warn('[miniapp] 接受面交申请失败', error)
+            if (epoch !== sessionEpoch()) return
             /**
              * 409 `LISTING_NOT_ACTIVE` 按契约**不代表这次失败**（并发买家先成交 / 响应丢了
              * 重试），用它的话术报错会与随后 `retryTx` 查出来的「待面交」自相矛盾 ——

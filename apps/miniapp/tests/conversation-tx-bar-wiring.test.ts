@@ -154,6 +154,9 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     )
     expect(accept).toContain('.finally(() => {')
     expect(accept).toContain('面交确认框打开失败')
+    // 在途换号：迟到的 accept 响应不许写进新账号的会话
+    expect(accept).toContain('const epoch = sessionEpoch()')
+    expect(accept).toContain('epoch !== sessionEpoch()')
   })
 
   test('历史 tx.accepted 仍能定位到本笔（同一会话多笔交易不串单）', async () => {
