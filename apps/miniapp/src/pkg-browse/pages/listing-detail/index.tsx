@@ -1558,14 +1558,10 @@ export default function ListingDetail() {
                   {/* 昵称行只有昵称 + 认证勾（稿子口径）：校区不在这里显示 */}
                   <View className="detail__sname">
                     <Text className="detail__snick">{data.seller.nickname}</Text>
-                    {/* 认证徽章（#534）：此前用中性灰勾 `checkMuted`，与其它页面的
-                        已认证徽章形态不一致；统一到 `verifiedAccent` */}
+                    {/* 认证徽章（#534）：与「我的」页同一张设计稿「认证」3D 徽章，
+                        此前这里是中性灰勾 `checkMuted` */}
                     {data.seller.authStatus === 'VERIFIED' ? (
-                      <Image
-                        className="detail__stick"
-                        src={ICONS.verifiedAccent}
-                        mode="aspectFit"
-                      />
+                      <Image className="detail__stick" src={ICONS.verifiedBadge} mode="aspectFit" />
                     ) : null}
                     {/* 在线态（#359 第五点）：昵称行里紧挨昵称（认证勾之后）、头像右侧的
                         同一条水平线上（与稿 `.seller .nm` 的排布一致，右侧那个独立槽位是

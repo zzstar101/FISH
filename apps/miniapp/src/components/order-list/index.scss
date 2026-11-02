@@ -198,14 +198,12 @@
   color: var(--brand-deep-2);
 }
 
-/* 已认证：头像角标统一用 `verified-accent` 徽章资产（#534，此前是纯 CSS 画的蓝圆勾，
-   与其它页面的徽章形态不一致；这里的圆底、描边与伪元素勾都交给图片本身） */
-.orders__av-badge {
-  position: absolute;
-  right: -4px;
-  bottom: -4px;
-  width: 26px;
-  height: 26px;
+/* 已认证徽章（#534）：与「我的」页同一张设计稿「认证」3D 徽章，昵称右侧内联。
+   横向徽章放不进头像角标，从绝对定位的头像角标改为行内元素；24px 高、按原图比例取宽 */
+.orders__vbadge {
+  width: 61px;
+  height: 24px;
+  flex: 0 0 auto;
 }
 
 .orders__oname {

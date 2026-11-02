@@ -425,15 +425,17 @@ export default function OrderList({
                   <View className="orders__top">
                     <View className="orders__av">
                       <Text className="orders__av-tx">{item.counterpart.nickname.slice(0, 1)}</Text>
-                      {item.counterpart.verified ? (
-                        <Image
-                          className="orders__av-badge"
-                          src={ICONS.verifiedAccent}
-                          mode="aspectFit"
-                        />
-                      ) : null}
                     </View>
                     <Text className="orders__oname">{item.counterpart.nickname}</Text>
+                    {/* 已认证徽章（#534）：与「我的」页同一张设计稿徽章。
+                        原来挂在头像右下角的小圆勾放不下这张横向徽章，改为昵称右侧内联。 */}
+                    {item.counterpart.verified ? (
+                      <Image
+                        className="orders__vbadge"
+                        src={ICONS.verifiedBadge}
+                        mode="aspectFit"
+                      />
+                    ) : null}
                     {/*
                       演示来源角标（#304）：这张卡的 id 是 `t-*` 假 id，不会被后端承认。
                       角标是**唯一**的全局提示 —— 点上面四个入口也会再说明一次，但用户

@@ -34,36 +34,36 @@ describe('认证徽章形态契约（#534：唯一形态 = verifiedAccent）', (
     expect(text).toContain('未认证，前往认证')
   })
 
-  test('商品详情卖家位：已验证用 verifiedAccent，不再用灰勾 checkMuted', async () => {
+  test('商品详情卖家位：已验证用设计稿「认证」徽章（verifiedBadge），不再用灰勾 checkMuted', async () => {
     const block = slice(
       await source('pkg-browse/pages/listing-detail/index.tsx'),
       "data.seller.authStatus === 'VERIFIED'",
       ') : null}',
     )
     expect(block).not.toBe('')
-    expect(block).toContain('ICONS.verifiedAccent')
+    expect(block).toContain('ICONS.verifiedBadge')
     expect(block).not.toContain('checkMuted')
   })
 
-  test('订单卡：已认证角标用 verifiedAccent 图片，不是 CSS 手绘勾', async () => {
+  test('订单卡：已认证徽章用设计稿「认证」图（verifiedBadge），不再是 CSS 手绘勾', async () => {
     const block = slice(
       await source('components/order-list/index.tsx'),
       'item.counterpart.verified',
       '/>',
     )
     expect(block).not.toBe('')
-    expect(block).toContain('ICONS.verifiedAccent')
-    expect(block).toContain('orders__av-badge')
+    expect(block).toContain('ICONS.verifiedBadge')
+    expect(block).toContain('orders__vbadge')
   })
 
   test('订单卡样式：不再自绘圆底与伪元素勾（交给徽章资产）', async () => {
     const scss = await source('components/order-list/index.scss')
-    const start = scss.indexOf('.orders__av-badge {')
+    const start = scss.indexOf('.orders__vbadge {')
     expect(start).toBeGreaterThan(-1)
     const block = scss.slice(start, scss.indexOf('}', start))
     expect(block).not.toContain('border-radius')
     expect(block).not.toContain('background')
-    expect(scss).not.toContain('.orders__av-badge::after')
+    expect(scss).not.toContain('.orders__vbadge::after')
   })
 
   test('checkMuted 在 miniapp 已无消费点（避免第二种形态回流）', async () => {

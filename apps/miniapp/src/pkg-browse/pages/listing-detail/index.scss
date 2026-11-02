@@ -385,8 +385,9 @@
 }
 
 .detail__stick {
-  width: 24px;
-  height: 24px;
+  /* 「认证」3D 徽章（#534）：26px 高、按原图比例 1568×616 取宽 */
+  width: 66px;
+  height: 26px;
   flex: 0 0 auto;
 }
 
