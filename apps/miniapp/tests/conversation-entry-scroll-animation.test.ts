@@ -18,9 +18,12 @@ async function pageSource(): Promise<string> {
   ).text()
 }
 
-/** 空白归一：只比对属性与判据本身，不钉缩进。 */
+/** 去掉注释再空白归一：注释里出现的标识符不算实现（先例 back-top-scroll-source.test.ts）。 */
 function squash(source: string): string {
-  return source.replace(/\s+/g, ' ')
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/\s+/g, ' ')
 }
 
 /** 切出一个标签：从 `needle` 起到它自己的 `>`（跳过 `=>` 里的 `>`）。 */
