@@ -51,6 +51,15 @@ function callbackBodies(slice: string, label: string): string[] {
     bodies.push(slice.slice(from, depth === 0 ? i - 1 : slice.length))
   }
   expect(bodies.length, `${label}：应该切出实际回调`).toBeGreaterThan(0)
+  /**
+   * 切出的回调数量必须等于 `.then(` / `.catch(` 的出现次数。只断言「至少切出一个」
+   * 时，把某个回调改写成 `function (e) {`（本正则不认）就能让**整块隐身**，连带删掉
+   * 里面的守卫也全绿 —— 那正是这条用例要防的回归。
+   */
+  const callbacks = slice.match(/\.(then|catch)\(/g) ?? []
+  expect(bodies.length, `${label}：每个 .then/.catch 都要切出回调（有回调换了写法？）`).toBe(
+    callbacks.length,
+  )
   return bodies
 }
 
@@ -63,7 +72,17 @@ const TX_SEQ_GUARD = 'txSeq !== txSeqRef.current'
  */
 function expectEachCallbackGuarded(slice: string, label: string): void {
   for (const body of callbackBodies(slice, label)) {
+    /**
+     * 守卫必须是这个回调里的**顶层语句、且在任何状态写入之前**。只要求「回调里有这串
+     * 字面量、且写在 `return` 之前」不够：把守卫塞进一个没人调用的嵌套闭包、后面照旧
+     * 无条件写状态，三条 `indexOf` 断言全满足，迟到的结果照样覆盖新状态。
+     * 守卫前面允许有 `console.warn(...)` 这类无副作用的取证日志，但不许有花括号
+     * （= 已经进入嵌套块）也不许有状态写入。
+     */
     const guard = body.indexOf(TX_SEQ_GUARD)
+    const beforeGuard = body.slice(0, guard === -1 ? body.length : guard)
+    expect(beforeGuard, `${label}：守卫不能藏在嵌套块里`).not.toMatch(/[{}]/)
+    expect(beforeGuard, `${label}：守卫之前不许先写状态`).not.toMatch(/applyTx\(|setTxLoad\(/)
     expect(guard, `${label}：每个回调里都要有 latest-wins 守卫`).toBeGreaterThanOrEqual(0)
     const bail = body.indexOf('return', guard)
     expect(bail, `${label}：守卫后面要 return 掉迟到的结果`).toBeGreaterThan(guard)
@@ -75,7 +94,8 @@ function expectEachCallbackGuarded(slice: string, label: string): void {
 
 describe('#521 / #522 会话页交易进度卡 · 接线', () => {
   test('每次 load 都按会话查交易，并把首屏 tx.accepted 的 id 作为精确查询的首选', async () => {
-    const code = await source()
+    // 剥注释：`not.toContain` 用原始源码时，注释里抄一遍旧地址就会假红
+    const code = stripComments(await source())
     expect(code).toContain('fetchConversationTransaction(')
     expect(code).toContain('lastTxAcceptedId(page.items)')
     expect(code).not.toContain('/pkg-trade/pages/transaction-meetup/index')
@@ -143,8 +163,12 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
   })
 
   test('取消后新提案的判据来自消息流（详情里的 lastMessage 会滞后）', async () => {
-    const code = await source()
+    // 必须剥注释：整文件存在性断言会让「注释里留一份旧表达式」把行为破坏顶掉
+    const code = stripComments(await source())
     expect(code).toContain('lastEventOfMessages(messages)?.type')
+    // 判据还得真的接到卡片上：只算出来不传进 txCardView，卡片照样不会收起
+    const card = sliceFrom(code, 'const txCard =', 'const statusLabel')
+    expect(card).toContain('lastEventType: lastTxEventType')
   })
 
   test('历史 tx.accepted 仍能定位到本笔（同一会话多笔交易不串单）', async () => {
