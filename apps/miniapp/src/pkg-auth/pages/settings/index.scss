@@ -99,6 +99,13 @@
   color: var(--muted-2);
 }
 
+/* 真头像：圆形裁切放在图片自身上；不给 .st__av 加 overflow:hidden，否则右下角徽章会被裁掉 */
+.st__av-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
 /* 认证徽章：与个人页 / 卖家卡同一个图标 */
 .st__av-bdg {
   position: absolute;
