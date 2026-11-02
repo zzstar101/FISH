@@ -91,7 +91,7 @@ async function errorCode(response: Response): Promise<string> {
 describe('发布前必须绑定手机号（#514）', () => {
   test('未绑定 403 PHONE_REQUIRED → 同一会话绑定后放行', async () => {
     const cookie = await registerUser()
-    const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, crypto.randomUUID())
+    const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, Bun.randomUUIDv7())
 
     const createListing = await app.request(
       '/listings',
