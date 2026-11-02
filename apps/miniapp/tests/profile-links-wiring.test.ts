@@ -77,9 +77,12 @@ describe('商品详情：卖家区一个入口，留言作者可进主页（#517
     // 本地乐观占位与演示 mock 都不编作者身份
     expect(code.match(/authorId: null/g) ?? []).toHaveLength(2)
 
-    // 顶层与回复两条模板都要有真实头像分支（`detail__cav-img` 至少两处）
-    expect(code.match(/className="detail__cav-img"/g) ?? []).toHaveLength(2)
-    expect(code.match(/className="detail__cav-text"/g) ?? []).toHaveLength(2)
+    // 顶层与回复共用 CommentAvatar：有图显示图片，加载失败回退首字
+    expect(code.match(/<CommentAvatar/g) ?? []).toHaveLength(2)
+    expect(code).toContain('node.authorAvatarUrl && !failed')
+    expect(code).toContain('onError={() => setFailed(true)}')
+    expect(code.match(/className="detail__cav-img"/g) ?? []).toHaveLength(1)
+    expect(code.match(/className="detail__cav-text"/g) ?? []).toHaveLength(1)
   })
 
   test('缺 authorId 给提示、不猜人；有 id 才跳主页', async () => {

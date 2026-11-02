@@ -221,6 +221,38 @@ function mockCommentToNode(comment: MockComment): CommentNode {
 }
 
 /**
+ * 留言头像（#517）。
+ *
+ * 有真实头像就显示图片；URL 失效时回退昵称首字 —— 只判 `authorAvatarUrl`
+ * 是否为空不够，断网/CDN 404 时 `<Image>` 会留下一个空白圆。
+ */
+function CommentAvatar({
+  node,
+  reply = false,
+  onOpen,
+}: {
+  node: CommentNode
+  reply?: boolean
+  onOpen: () => void
+}) {
+  const [failed, setFailed] = useState(false)
+  return (
+    <View className={`detail__cav${reply ? ' detail__cav--reply' : ''}`} onClick={onOpen}>
+      {node.authorAvatarUrl && !failed ? (
+        <Image
+          className="detail__cav-img"
+          src={node.authorAvatarUrl}
+          mode="aspectFill"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <Text className="detail__cav-text">{node.authorInitial}</Text>
+      )}
+    </View>
+  )
+}
+
+/**
  * 加载留言列表。
  *
  * 独立端点（#111）：失败不能拖垮整页 —— 拿不到就退到 fixture（演示构建）或空列表
@@ -1722,17 +1754,7 @@ export default function ListingDetail() {
                   <View className="detail__cmts">
                     {visibleComments.map((comment) => (
                       <View key={comment.id} className="detail__cmt">
-                        <View className="detail__cav" onClick={() => openCommentAuthor(comment)}>
-                          {comment.authorAvatarUrl ? (
-                            <Image
-                              className="detail__cav-img"
-                              src={comment.authorAvatarUrl}
-                              mode="aspectFill"
-                            />
-                          ) : (
-                            <Text className="detail__cav-text">{comment.authorInitial}</Text>
-                          )}
-                        </View>
+                        <CommentAvatar node={comment} onOpen={() => openCommentAuthor(comment)} />
                         <View className="detail__cbody">
                           <View className="detail__chd">
                             <Text className="detail__cn" onClick={() => openCommentAuthor(comment)}>
@@ -1774,22 +1796,11 @@ export default function ListingDetail() {
                             <View className="detail__replies">
                               {comment.replies.map((reply) => (
                                 <View key={reply.id} className="detail__cmt detail__cmt--reply">
-                                  <View
-                                    className="detail__cav detail__cav--reply"
-                                    onClick={() => openCommentAuthor(reply)}
-                                  >
-                                    {reply.authorAvatarUrl ? (
-                                      <Image
-                                        className="detail__cav-img"
-                                        src={reply.authorAvatarUrl}
-                                        mode="aspectFill"
-                                      />
-                                    ) : (
-                                      <Text className="detail__cav-text">
-                                        {reply.authorInitial}
-                                      </Text>
-                                    )}
-                                  </View>
+                                  <CommentAvatar
+                                    node={reply}
+                                    reply
+                                    onOpen={() => openCommentAuthor(reply)}
+                                  />
                                   <View className="detail__cbody">
                                     <View className="detail__chd">
                                       <Text
