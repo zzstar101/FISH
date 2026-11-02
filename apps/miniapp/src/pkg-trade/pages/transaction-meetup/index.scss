@@ -561,8 +561,7 @@
 }
 
 /*
- * 对勾自绘：`<View>` + 两条边框拼的勾（与 `pages/orders` 的 `.orders__av-badge::after`
- * 同一做法）。稿要求「必须内联 <path> 才能让 dash 动画落在路径本体上」——小程序里没有
+ * 对勾自绘：`<View>` + 两条边框拼的勾。稿要求「必须内联 <path> 才能让 dash 动画落在路径本体上」——小程序里没有
  * 内联 SVG，改用量出尺寸的 CSS 勾，用缩放弹出代替 dash 描线（WXSS 无法对边框做 dash）。
  */
 .meetup__suc-check {

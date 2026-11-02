@@ -6,7 +6,9 @@
  * 未认证：白卡（渐变圆盘 + 黄胶囊）+ 邮箱字段 → 发码后换成「只读邮箱 + 修改」
  * + 6 格验证码 + 重发倒计时 + 主按钮。
  * 已认证：整页替换成成功态（双层圆盘 + 徽章一致性卡 + 隐私白卡 + 返回我的主页）。
- * 徽章统一用 `ICONS.verifiedBrand`，与个人页 / 卖家卡是同一个图标（交付验收要求）。
+ * 徽章这张说明卡必须与真实渲染一致（它教用户"徽章长什么样"）：个人页 / 卖家页
+ * 现在用的是设计稿 3D 徽章 `BADGE.verified`（多色横向成品图，非 `ICONS` 里的单色图标），
+ * 所以示意图也用 `BADGE.verified` —— 按两处真实槽位的尺寸画（下面 87×34 / 61×24）。
  */
 
 .verify {
@@ -542,9 +544,18 @@
   color: var(--fg);
 }
 
-.verify__tick {
-  width: 32px;
-  height: 32px;
+/* 「我的 · 个人页」档：徽章在昵称下方单独一行（87×34，与 pages/profile 同尺寸） */
+.verify__badge {
+  display: block;
+  width: 87px;
+  height: 34px;
+  margin-top: 10px;
+}
+
+/* 「商品详情 · 卖家页」档：徽章内联在昵称右侧（61×24，与 listing-detail 同尺寸） */
+.verify__badge-inline {
+  width: 61px;
+  height: 24px;
   flex: 0 0 auto;
 }
 

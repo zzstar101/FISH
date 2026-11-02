@@ -98,7 +98,9 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 src/
   styles/_tokens.scss        # 颜色/阴影/圆角令牌（唯一真源）
   styles/_mixins.scss        # 常用组合（卡片、胶囊、玻璃、截断）
-  assets/lib-icons.ts        # 图标唯一出口（ICONS.xxx）
+  assets/lib-icons.ts        # 图标唯一出口（ICONS.xxx），由 tools/icons 从 SVG 生成
+  assets/brand/              # 品牌成品图出口（BRAND.*），由 tools/brand 从母版生成
+  assets/badge/index.ts      # 认证徽章成品图出口（BADGE.*）：外供设计稿成品图，非生成物、无母版
   custom-tab-bar/            # 自定义 TabBar（固定目录名，见第 9 节）
   mock/types.ts              # 与 packages/contracts 对齐的 Mock 类型
   mock/*.ts                  # fixtures：listings / users / wishes / conversations / notifications
@@ -121,6 +123,7 @@ src/
 - 页面级样式写在各自 `index.scss`，只允许用令牌色与 `_mixins` 里的组合。
 - 组件用目录 + `index.tsx` + `index.scss`。
 - 不新增运行时依赖（出图用的 `@resvg/resvg-wasm` 只是 devDependency）；图标统一从 `@/assets/lib-icons` 的 `ICONS` 取。真源与生成器在仓库内 `tools/icons/`
+- **非图标类成品图**不走 `ICONS`：品牌图走 `@/assets/brand` 的 `BRAND.*`（`tools/brand/` 从母版生成），认证徽章走 `@/assets/badge` 的 `BADGE.*`（外供设计稿成品图，无母版、不由生成器产出）
   （`glyphs/*.svg` × `manifest.ts`，`bun run --filter @fish/miniapp icons` 重出图）；命名 = 字形 + 语义色
   （`Brand` / `Fg` / `Muted` / `White` / `Danger`），显示尺寸只用 24 / 32 / 40 / 48 四档。
 - 页面数据**不许内联假数据**。取数只有两个合法入口：

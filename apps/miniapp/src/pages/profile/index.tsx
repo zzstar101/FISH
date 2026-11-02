@@ -1,6 +1,7 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
 import {
@@ -670,18 +671,28 @@ export default function Profile() {
                 mode="aspectFit"
                 onClick={openEditProfile}
               />
-              {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证 */}
+            </View>
+            {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证（#534）。
+                Owner 选型：已认证用设计稿的「认证」3D 徽章整图，**放在昵称下方单独一行**
+                （`profile__info` 是纵向块布局，所以这里不放进 `profile__name-row`）；
+                未认证仍是文字胶囊引导。 */}
+            {verified ? (
+              <Image
+                className="profile__auth-badge"
+                src={BADGE.verified}
+                mode="aspectFit"
+                onClick={openVerify}
+              />
+            ) : (
               <View className="profile__auth" onClick={openVerify}>
-                <Text className="profile__auth-txt">
-                  {verified ? '已认证' : '未认证，前往认证'}
-                </Text>
+                <Text className="profile__auth-txt">未认证，前往认证</Text>
                 <Image
                   className="profile__auth-arrow"
                   src={ICONS.chevronRightMuted}
                   mode="aspectFit"
                 />
               </View>
-            </View>
+            )}
             {/* 签名行（3版稿 .psig）：**点击可编辑**，真值在服务端（`PATCH /profile` 的
                 `signature` 字段），本页弹窗保存成功后即时回显。
                 只展示**首行** —— 多行输入的其余行不显示，过长由 CSS 省略号收尾；

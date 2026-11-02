@@ -27,7 +27,6 @@ import checkBrand from '@/assets/lib-icons/check-brand@3x.png'
 import checkCircleBrand from '@/assets/lib-icons/check-circle-brand@3x.png'
 import checkDoubleBrand from '@/assets/lib-icons/check-double-brand@3x.png'
 import checkDoubleMuted from '@/assets/lib-icons/check-double-muted@3x.png'
-import checkMuted from '@/assets/lib-icons/check-muted@3x.png'
 import checkWhite from '@/assets/lib-icons/check-white@3x.png'
 import chevronDownMuted from '@/assets/lib-icons/chevron-down-muted@3x.png'
 import chevronRightMuted from '@/assets/lib-icons/chevron-right-muted@3x.png'
@@ -120,7 +119,6 @@ export const ICONS = {
   chevronDownMuted,
   chevronUpMuted,
   checkBrand,
-  checkMuted,
   checkWhite,
   checkCircleBrand,
   checkDoubleBrand,

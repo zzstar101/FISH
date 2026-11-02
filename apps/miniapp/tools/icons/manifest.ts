@@ -48,7 +48,7 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   'chevron-right': ['muted'],
   'chevron-down': ['muted'],
   'chevron-up': ['muted'],
-  check: ['brand', 'muted', 'white'],
+  check: ['brand', 'white'],
   'check-circle': ['brand'],
   'check-double': ['brand', 'muted'],
   trash: ['fg', 'white'],
