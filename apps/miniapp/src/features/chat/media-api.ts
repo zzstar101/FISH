@@ -363,6 +363,64 @@ export function clearMediaCache(): void {
 // 录音
 // ---------------------------------------------------------------------------
 
+/*
+  平台假设与端上探针（#549 收口判据 (g)）
+  ========================================
+
+  这一节是**平台面**的唯一登记处。本文件里凡是拿不到代码证据、只能押平台语义的地方，
+  都必须在这里落一条假设（A 编号）和一条能在微信开发者工具 / 真机里跑的探针（D 编号）；
+  代码里的注释按编号指回来（不再指向 PR 正文 —— 那不是版本库的一部分，改一次就得追一次）。
+
+  **能拿到的证据只有 SDK 类型声明**（`apps/miniapp/node_modules/@tarojs/taro/types/api/media/recorder.d.ts`），
+  不是官方文档（本机解析不到 `developers.weixin.qq.com`）：
+  - `onStart`：只写「监听录音开始事件」，**没有**「起录失败不投 onStart」的承诺；
+  - `onInterruptionBegin`：微信语音 / 视频通话触发后「**录音会被暂停**」，`onPause` 在其后；
+  - `onInterruptionEnd`：「收到此事件之后才可再次录音成功」；
+  - `start` / `stop`：只有「开始录音」/「停止录音」，**没有**重复 `start`、未起录时 `stop`、
+    `stop` 必回 `onStop` 的任何约定；
+  - `onStop` 的结果只有 `tempFilePath` / `duration` / `fileSize` —— **没有「为什么停」**，
+    所以「录满 vs 被打断」只能靠时长 + 中断标记去猜（见 `voiceCapped`）。
+
+  假设（**未验证**，不得当事实陈述）
+  ----------------------------------
+  | 代号 | 假设 | 若不成立的影响 |
+  | --- | --- | --- |
+  | A1 | 一次**未同步抛错**的 `start()` 所开启的录音，最终恰好投一次 `onStop` 或 `onError` | 闸门一直关着 → 「录音器没有响应」+ 需重开小程序（探针 D3 / D8） |
+  | A2 | `start()` **同步抛错**表示平台拒绝了这次起录，不会再有这一段的收尾事件（`startVoiceRecording` 里当场销账的前提） | 迟到的收尾被算到下一段头上（探针 D7 直接测） |
+  | A3 | `onInterruptionBegin` **必达**，且代表「录音被暂停 / 音频被截断」 | 平台只暂停却不发 Begin：既无标志也无提示，松手时 `wasInterrupted()===false` → **截断音频被当正常语音发出**。本设计唯一无法从代码侧兜住的平台面空白（探针 D4） |
+  | A4 | 中断期间 / 中断之后调用 `stop()` 仍会投一次 `onStop`（否则闸门关到重启） | 「中断一次 = 本会话内语音不可用」（探针 D8） |
+  | A5 | 到达 `duration`（`VOICE_RECORD_MAX_MS` = 59s）后录音器自停并投 `onStop`，且回报的 `duration` ≥ 58500 | 「接近一分钟自动发送」这条需求不成立：完整录音会被判成「被打断」而丢弃。`voiceCapped` 的 `- 500ms` 余量就是为它留的（探针 D6） |
+  | A6 | 对**同一条已 `stop` / 已放弃的账**重复 `stop()` 幂等或至少无害（不伤到别的段），且能促成终态事件（`onInterruptionEnd` 里补发 `stop()` 的前提，见那里的注释） | 中断后仍可能一直关闸（探针 D8）。数据面不受影响：补发只发生在「账还挂着、闸门关着」时，此时**不可能**有别的段在录（单槽记账），闸门仍只由终态事件打开 |
+
+  端上最小探针（真机 / 微信开发者工具；每条**记录原始事件序列**，不要只记结论）
+  -----------------------------------------------------------------------------
+  | 代号 | 操作 | 记录什么 | 用途 |
+  | --- | --- | --- | --- |
+  | D1 | 松手后**立即**再按住（多次，含录满 59s 之后） | 是否出现「上一段录音还在收尾」；松手到可再录的**实测毫秒数** | 收尾窗口量级 |
+  | D2 | 上滑取消后**立即**再按住 | 同上；确认被放弃的音频没有被发出去 | 同上 |
+  | D3 | 录音中切后台 → 回前台 → 再按住 | 是否一直提示「还在收尾」/「录音器没有响应」 | A1 |
+  | D4 | 录音中来电 / 视频通话 → 结束 → 松手 | `onInterruptionBegin` / `onPause` / `onInterruptionEnd` / `onStop` 的**实际顺序**与 `duration`（是否含被打断的那一段） | A3、A5（`voiceCapped` 的 `-500ms` 余量是否安全） |
+  | D5 | 极短点按（按下即松） | 是否收到任何收尾事件 | A1 的最短路径 |
+  | D6 | 真机录满 59s 一次 | 回报 `durationMs` 是否 ≥ 58500；是否自动发送并落库 | A5、58.5–59.0s 窗口 |
+  | D7 | 制造 `start()` 同步抛错（设备被占用等） | 抛错后是否**仍**迟到一次 `onStop` / `onError` | A2 |
+  | D8 | 中断（来电 / 视频通话 / 切后台）→ 回前台 → 按住说话，并记录这一段的完整事件序列 | ① 平台是否为**被放弃的这一段**投递终态事件（`onStop` / `onError`）；② 不投时，`onInterruptionEnd` 里补发的 `stop()` 是否把它催了回来、补发 `stop()` 是否抛错；③ 是否仍提示「录音器没有响应」 | A4、A6 |
+
+  **D8 若不成立**（平台永不投终态事件，补发 `stop()` 也催不回来）：唯一合法的出路**不是**
+  TTL / 定时解闸（判据 (d) 明令禁止），而是**平台层的「录音器已空闲」信号**——例如一个可查询
+  的 `isRecording` 状态、或平台补发一条「录音已释放」事件 —— 由它充当**终态证据**再销账。
+  在拿到这类证据之前一律维持 fail-closed，用户可见的恢复动作是重开小程序。
+
+  已知限制（本轮**不改代码**，是判据 (a) 授权的既定代价）
+  --------------------------------------------------------
+  - **`stop()` 同步抛错也会关闸**（见 `startVoiceRecording` 里 `stop` 的 catch）：一次「点一下
+    就松手」若踩到平台异常，闸门保持关闭，下一次只能看到「上一段录音还在收尾」。这是拿不到
+    「抛错 ⇒ 已收尾」证据时选择的 fail-closed 方向；解闸只由终态事件决定，不加 TTL。
+  - **终态事件丢失 = 本会话内语音不可用**（A1 / A4 不成立的后果）：唯一恢复是重开小程序。
+    `onInterruptionEnd` 里补发的 `stop()` 只是尽力催收，**不是**解闸依据。
+  - 编号沿革：上一轮集成报告 §10 的 D3 / D8 / D9 三条（切后台、来电后能否继续录、中断后
+    `stop()` 与收尾）在本表合并为 **D3 / D8**；A1–A5 口径不变，**A6 为 #549 复审新增**。
+*/
+
 type VoiceRecorder = ReturnType<typeof Taro.getRecorderManager>
 
 /**
@@ -480,8 +538,32 @@ function recorder(): VoiceRecorder {
     session.onInterrupted?.()
   })
   manager.onInterruptionEnd(() => {
-    const session = liveSession()
-    if (session) session.interrupted = false
+    const session = voiceSession
+    if (!session) return
+    // 还在录的那一段：中断结束 = 录音恢复，历史标记不许多留一刻（#549 收口判据 2）。
+    if (!session.stopRequested && !session.abandoned) {
+      session.interrupted = false
+      return
+    }
+    /*
+      已经叫过 `stop()` / 被放弃的那一段（页面在 `onInterruptionBegin` 里当场 `abort()`，
+      见 `handleVoiceInterrupted`）：它等的只是自己的终态事件，而没有可恢复的页面状态。
+      若平台**不补发**终态事件，闸门就关到重开小程序（#549 独立 Spec 审查 M2 实测）——
+      中断恢复本身是平台证据，却不是**这一段的**终态事件。
+
+      能做的只有对**这一段自己的账**再补一次 `stop()`，把终态事件催回来：
+      - 只对这一段的账（`voiceSession` 仍是它），此时**不可能**有别的录音在走 —— 起录有闸
+        （见 `startVoiceRecording`），账没销就起不来新的一段，所以这次 `stop()` 不会误停别人；
+      - 过了 `VOICE_RECORD_SETTLE_GRACE_MS` 才发：正常收尾是毫秒级，没过窗口就重发只是噪音；
+      - 抛错吞掉（平台回调里没人接），**不解闸** —— 闸门只由终态事件打开；
+      - 它是一次**尽力**催收，不是判据：真催不回来就维持 fail-closed（探针 D8 / 假设 A6）。
+    */
+    if (!settleOverdue(session, Date.now())) return
+    try {
+      manager.stop()
+    } catch (error) {
+      console.error('[chat-media] 中断结束后补发停止录音失败', error)
+    }
   })
   voiceRecorder = manager
   return manager
@@ -615,13 +697,13 @@ export function startVoiceRecording(
     })
   } catch (error) {
     /*
-      `start()` 同步抛错时当场销账。这是**明确假设**，不是平台证据（探针 D7，
-      见 PR 描述「平台假设与端上探针」）：同步抛错表示平台拒绝了这次 start，
+      `start()` 同步抛错时当场销账。这是**明确假设**，不是平台证据（假设 A2，
+      见本文件顶部的「平台假设与端上探针」）：同步抛错表示平台拒绝了这次 start，
       因此不存在「这一段」可供收尾。
       反过来把账留着会让**最常见**的失败（设备忙 / 起录失败）永久关死闸门 —— 那一段本来就
       不会有任何事件来销账，等于把「一次起录失败」变成「进程内再也录不了音」。
-      端上探针见 PR 描述「平台假设与端上探针」的 **D7**（记录同步抛错后是否仍收到一次
-      onStop / onError）：若真会投，这条假设不成立，那段迟到的收尾会被算到下一段头上。
+      端上探针见本文件顶部「平台假设与端上探针」的 **D7**（记录同步抛错后是否仍收到一次
+      onStop / onError）：若真会投，A2 不成立，那段迟到的收尾会被算到下一段头上。
     */
     settleSession(session)
     throw error
@@ -676,8 +758,9 @@ export function startVoiceRecording(
  * 判据只读**当前**中断态（`onInterruptionEnd` 就清零），**不**改成「中断过一次就永久不算
  * 录满」（#549 收口判据 2）：一次中断已经恢复、之后正常录满 59s 的那一段，用户要的是发送，
  * 把它判成「被打断」不发等于拿历史标记吃掉一次完整录音。中断结束之后剩下的风险（暂停期间
- * 音频是否缺一段）属于平台语义，登记为端上探针 D4（记录 interruptionBegin / onPause /
- * onInterruptionEnd / onStop 的实际顺序与 duration），不由时间/历史标记去猜。
+ * 音频是否缺一段）属于平台语义，登记为本文件顶部「平台假设与端上探针」的 **D4**（记录
+ * interruptionBegin / onPause / onInterruptionEnd / onStop 的实际顺序与 duration），
+ * 不由时间 / 历史标记去猜。
  */
 function voiceCapped(session: VoiceSession, recorded: RecordedVoice): boolean {
   if (session.interrupted) return false

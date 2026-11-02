@@ -1600,7 +1600,8 @@ export default function Conversation() {
    * 通常 `recording` 必须先复位：不复位的话按钮还写着「松开 发送」，用户以为在录、其实
    * 什么都没录。但**上一段**的失败可能晚到——那时用户已经在录下一段了，复位就会把正在录的
    * 那一段打死（面板消失、按钮回到「按住 说话」，这一段从此没人收尾），所以由调用方用
-   * `resetUi` 说明「现在复位是否还安全」（#535 follow-up F1）。
+   * `resetUi` 说明「现在复位是否还安全」（#535 follow-up F1）。同一条判断也决定**提不提示**：
+   * 晚到的失败与用户当下的操作无关，弹出来只会让他以为刚说的话没录上（#549 审查 L3）。
    *
    * 权限被拒要给「去设置」入口，用的是与扫码页（`pages/scan` / `pages/scan-pr`）同一范式：
    * `Taro.getSetting` 先确认这个 scope 真的是被用户拒的，再 `Taro.openSetting` 把人送进
@@ -1608,11 +1609,18 @@ export default function Conversation() {
    */
   const handleVoiceFailure = (error: unknown, options: { resetUi?: boolean } = {}) => {
     console.error('[miniapp] 录音失败', error)
-    if (options.resetUi ?? true) {
+    const resetUi = options.resetUi ?? true
+    if (resetUi) {
       recordingRef.current = null
       setRecording(false)
       resetRecordingUi()
     }
+    /*
+      `resetUi === false` 说明这是**上一段**晚到的失败（用户已经在录下一段）：除了不许复位
+      正在录的那一段，也不许用打断式 toast / 弹窗抢注意力 —— 他既分不清这条提示说的是哪一段，
+      还会以为刚说的那句话没录上。降级成上面的 `console.error`（#549 独立审查 L3）。
+    */
+    if (!resetUi) return
     const failure = voiceError(error)
     if (failure instanceof VoicePrivacyError) {
       // 平台在录音阶段才报 privacy：先退回键盘态，下一次点话筒会重新走授权闸；

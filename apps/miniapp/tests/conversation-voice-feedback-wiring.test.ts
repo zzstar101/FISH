@@ -95,6 +95,15 @@ describe('录音反馈接线契约（#535）', () => {
     expect(interrupted).toContain('setRecording(false)')
     expect(interrupted).toContain('session.abort()')
     expect(interrupted).toContain('录音已被来电打断，请稍后再按住重录')
+    /*
+      处置的顺序也是判据（#549 独立审查 L1）：必须在**收尾事件到达之前**就放弃这一段，
+      而且是「先把界面收回去（复位面板）再撤麦克风」。顺序反了就是「面板还在计时、麦克风
+      已经被平台暂停」—— 用户以为还在录，实际这段音频后半句是空的。两者都在同一个同步块
+      里、都幂等，源码顺序只能靠这条 `indexOf` 断言守住（此前它被删掉过）。
+    */
+    expect(interrupted.indexOf('resetRecordingUi()')).toBeLessThan(
+      interrupted.indexOf('session.abort()'),
+    )
   })
 
   test('身份按「这一段」传下去（起录时拍下，发送不再读页面级 ref）', async () => {
@@ -132,6 +141,12 @@ describe('录音反馈接线契约（#535）', () => {
     )
     const failure = between(text, 'const handleVoiceFailure', 'const failure = voiceError')
     expect(failure).toContain('options.resetUi ?? true')
+    /*
+      晚到的失败除了不许复位，也不许用打断式提示抢注意力（#549 独立审查 L3）：用户此刻
+      正在录第二段，一句「录音失败，请重试」与这次操作没有关系，只会让他以为刚才那句话
+      没录上。`resetUi === false` 说明这正是上一段晚到的失败 → 只说日志。
+    */
+    expect(failure).toContain('if (!resetUi) return')
   })
 
   test('所有结束路径都过 resetRecordingUi（松手 / 放弃 / 失败 / 卸载）', async () => {

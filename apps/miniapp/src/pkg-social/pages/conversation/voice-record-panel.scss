@@ -22,6 +22,13 @@
   box-shadow: 0 12px 32px rgb(27 37 64 / 12%);
   /* 层叠上下文由 `.conv__bar`（z-index: 20）建立，这里只需压过 bar 自身内容 */
   z-index: 1;
+  /*
+    纯展示浮层，没有任何可点元素（只有波形 / 秒数 / 提示文案），所以整块让出触摸：
+    它会向上盖住消息流最后一条（`bottom: calc(100% + 12px)` 加自身高度，约 79rpx）——
+    那一块的滚动与长按都被面板吃掉，而面板本身对触摸毫无用处（#549 独立审查 L2）。
+    将来若在面板里加按钮，只对那个元素单独打开 `pointer-events: auto`，别整块打开。
+  */
+  pointer-events: none;
 
   &.is-cancel {
     border-color: var(--danger);

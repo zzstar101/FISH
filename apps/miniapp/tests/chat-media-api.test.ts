@@ -62,6 +62,11 @@ const recorderHooks: {
 let recorderStartOptions: { duration?: number } | null = null
 /** `RecorderManager.start()` 被调用了几次：单例同一时刻只许交给一段录音 */
 let recorderStartCalls = 0
+/**
+ * `RecorderManager.stop()` 被调用了几次：用来钉住「中断结束后只对这一段的账催一次」，
+ * 也就是「催终态事件」不许变成「换一种解闸方式」。
+ */
+let recorderStopCalls = 0
 /** `stop()` 抛错（平台异常）：验证放弃的账目不会毒化下一段录音 */
 let stopThrows = false
 /** `start()` 同步抛错（平台异常）：验证失败那一次不占账 */
@@ -94,6 +99,7 @@ mock.module('@tarojs/taro', () => ({
         recorderStartOptions = options
       },
       stop: () => {
+        recorderStopCalls += 1
         if (stopThrows) throw new Error('operateRecorder:fail stop')
       },
     }),
@@ -163,6 +169,7 @@ beforeEach(() => {
   downloadStatus = 200
   recorderStartOptions = null
   recorderStartCalls = 0
+  recorderStopCalls = 0
   stopThrows = false
   startThrows = false
   presignResponse = {
@@ -830,6 +837,90 @@ describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#
     expect(second.wasInterrupted()).toBe(false)
     second.abort()
     recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/second.wav', duration: 1_000 })
+  })
+
+  /*
+    #549 独立 Spec 审查 M2：中断（`onInterruptionBegin`）→ 页面当场 `abort()` 之后，
+    这一段的账只能靠**平台补发终态事件**销。而 `onInterruptionEnd` 虽然是「录音已恢复」的
+    平台证据，却**不是**这一段的终态事件 —— 修复前它对已放弃的段完全无效（`liveSession()`
+    对它返回 undefined），所以平台若一直不补 `onStop` / `onError`，闸门就关到重开小程序。
+
+    允许的补救只有一条：对**这一段自己的账**再补一次 `stop()`，把终态事件催回来；闸门
+    **仍然只由终态事件打开**。绝不许提前把 `voiceSession` 置空 —— 那样平台随后补发的
+    `onStop` 会去清**下一段**的槽（正是单槽记账要防的「上一段收尾打死新一段」）。
+  */
+  test('中断→abort 之后：中断结束（未过宽限期）不重发 stop()，闸门仍只由终态事件打开', () => {
+    let session: ReturnType<typeof startVoiceRecording> | null = null
+    session = startVoiceRecording(undefined, undefined, () => session?.abort())
+
+    recorderHooks.onInterruptionBegin?.()
+    const stopCallsBefore = recorderStopCalls
+
+    // 正常收尾窗口内（毫秒级）：不乱催，也不放行
+    recorderHooks.onInterruptionEnd?.()
+    expect(recorderStopCalls).toBe(stopCallsBefore)
+    expect(() => startVoiceRecording()).toThrow(VoiceRecordingBusyError)
+
+    // 真正的终态事件到了才销账（放弃的那一段不交付）
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/late.wav', duration: 20_000 })
+    const next = startVoiceRecording()
+    const stopped = next.stop()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/next.wav', duration: 1_000 })
+    return expect(stopped).resolves.toEqual({ path: 'wxfile://tmp/next.wav', durationMs: 1_000 })
+  })
+
+  test('中断→abort 之后过了宽限期：为这一段自己的账补发一次 stop()，闸门照旧 fail-closed', () => {
+    const events: string[] = []
+    let session: ReturnType<typeof startVoiceRecording> | null = null
+    session = startVoiceRecording(
+      () => events.push('error'),
+      () => events.push('auto'),
+      () => {
+        events.push('interrupted')
+        session?.abort()
+      },
+    )
+    recorderHooks.onInterruptionBegin?.()
+    expect(events).toEqual(['interrupted'])
+
+    // 已经远超「这一段本该交回收尾事件」的时刻，平台仍没有补发终态事件
+    setSystemTime(new Date(Date.now() + 5_001))
+    const stopCallsBefore = recorderStopCalls
+    recorderHooks.onInterruptionEnd?.()
+    setSystemTime()
+
+    // 只对这一段自己的账催一次；闸门一个字节都没松（终态事件还没到）
+    expect(recorderStopCalls).toBe(stopCallsBefore + 1)
+    expect(() => startVoiceRecording()).toThrow(VoiceRecordingBusyError)
+    expect(events).toEqual(['interrupted'])
+
+    // 催回来的终态事件：放弃的段不交付、不通知，但账要销、闸门要开
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cut.wav', duration: 20_000 })
+    expect(events).toEqual(['interrupted'])
+    const next = startVoiceRecording()
+    const stopped = next.stop()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/next.wav', duration: 1_000 })
+    return expect(stopped).resolves.toEqual({ path: 'wxfile://tmp/next.wav', durationMs: 1_000 })
+  })
+
+  test('中断结束后补发的 stop() 抛错：只记日志，闸门仍然 fail-closed（不冒充销账）', () => {
+    let session: ReturnType<typeof startVoiceRecording> | null = null
+    session = startVoiceRecording(undefined, undefined, () => session?.abort())
+    recorderHooks.onInterruptionBegin?.()
+
+    setSystemTime(new Date(Date.now() + 5_001))
+    stopThrows = true
+    // 抛错不许冒进平台的回调（那里没人接）
+    expect(() => {
+      recorderHooks.onInterruptionEnd?.()
+    }).not.toThrow()
+    stopThrows = false
+    setSystemTime()
+
+    expect(() => startVoiceRecording()).toThrow(VoiceRecordingBusyError)
+
+    // 残局仍要由终态事件收（下一个用例的 beforeEach 也会兜一次）
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cut.wav', duration: 1_000 })
   })
 })
 
