@@ -272,7 +272,7 @@ async function putObject(
       statusCode: uploaded.statusCode,
       errMsg: uploaded.errMsg,
     })
-    throw new Error(`${kind === 'IMAGE' ? '图片' : '语音'}发送失败，请重试`)
+    throw new MediaUploadError(kind, uploaded.statusCode)
   }
   return presign.objectKey
 }
@@ -509,6 +509,21 @@ export class VoiceContainerError extends Error {
     this.name = 'VoiceContainerError'
     this.sizeBytes = sizeBytes
     this.header = header
+  }
+}
+
+/**
+ * 对象存储 PUT 失败（#516）。
+ *
+ * 用户文案保持通用（不把 HTTP 状态码塞进 toast），`statusCode` 保留给日志与调用方排查。
+ */
+export class MediaUploadError extends Error {
+  readonly statusCode: number
+
+  constructor(kind: MediaKind, statusCode: number) {
+    super(`${kind === 'IMAGE' ? '图片' : '语音'}发送失败，请重试`)
+    this.name = 'MediaUploadError'
+    this.statusCode = statusCode
   }
 }
 

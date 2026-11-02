@@ -94,6 +94,7 @@ const {
   cachedMediaPath,
   clearMediaCache,
   downloadChatMedia,
+  MediaUploadError,
   startVoiceRecording,
   uploadChatImage,
   uploadChatVoice,
@@ -316,6 +317,19 @@ describe('uploadChatVoice —— 容器不可识别时必须在 presign 前失�
       sizeBytes: RIFF_WAV.length,
       durationMs: 1200,
     })
+  })
+
+  test('PUT 非 2xx：抛 MediaUploadError，保留 HTTP 状态且文案不暴露状态码', async () => {
+    readBytes = RIFF_WAV
+    uploadStatus = 503
+    const error = await uploadChatVoice(CONVERSATION, {
+      path: 'wxfile://tmp/voice.wav',
+      durationMs: 1200,
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(MediaUploadError)
+    expect((error as MediaUploadError).statusCode).toBe(503)
+    expect((error as MediaUploadError).message).toBe('语音发送失败，请重试')
   })
 })
 

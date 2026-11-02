@@ -16,9 +16,12 @@ import Taro from '@tarojs/taro'
  * 确保用户已同意隐私协议。
  *
  * @returns 用户是否已同意。接口不可用（老基础库）时返回 `true` —— 那种情况下平台不做隐私检查，
- *   不该把用户挡在门外；只有用户明确拒绝才返回 `false`。
+ *   不该把用户挡在门外；用户拒绝、或授权状态查询失败/异常时返回 `false`（不拿未知状态冒险）。
  */
 export function ensurePrivacyAuthorized(): Promise<boolean> {
+  // 老基础库没有这个 API：平台不做隐私检查，不能把用户挡在门外。
+  if (typeof Taro.getPrivacySetting !== 'function') return Promise.resolve(true)
+
   return new Promise((resolve) => {
     try {
       Taro.getPrivacySetting({
@@ -35,15 +38,15 @@ export function ensurePrivacyAuthorized(): Promise<boolean> {
             },
           })
         },
-        // 查询失败：不阻断，交给平台在真正调用隐私接口时处理
+        // 查询失败不等于用户拒绝，但也不能当作已授权：授权状态未知时宁可让用户重试。
         fail: (error) => {
-          console.warn('[privacy] getPrivacySetting 失败，按无需授权处理', error)
-          resolve(true)
+          console.warn('[privacy] getPrivacySetting 失败，拒绝继续', error)
+          resolve(false)
         },
       })
     } catch (error) {
-      console.warn('[privacy] getPrivacySetting 异常，按无需授权处理', error)
-      resolve(true)
+      console.warn('[privacy] getPrivacySetting 异常，拒绝继续', error)
+      resolve(false)
     }
   })
 }
