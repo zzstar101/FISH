@@ -519,6 +519,12 @@
   color: var(--muted-2);
 }
 
+.verify__av-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
 .verify__badgeinfo {
   flex: 1;
   min-width: 0;

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { WishDto } from '@fish/contracts/wishes/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import { createWishesRouter } from './router'
@@ -45,6 +46,10 @@ const creatingStore = Object.assign({} as WishStore, {
   }),
 })
 const matchQueue = { enqueue: async () => undefined }
+/** 手机号门禁替身：默认放行，只有专门测门禁挂载点的用例才换成拒绝版。 */
+const allowPhone: MiddlewareHandler = async (_c, next) => {
+  await next()
+}
 const root = new Hono<{ Variables: { userId: string } }>()
 root.use('/wishes/*', async (c, next) => {
   c.set('userId', USER_UUID)
@@ -54,6 +59,7 @@ root.route(
   '/wishes',
   createWishesRouter({
     guard: allowRestrictionGuard,
+    requirePhone: allowPhone,
     store: emptyStore,
     matchQueue,
     getUserId: (c) => c.get('userId'),
@@ -72,6 +78,7 @@ describe('wishes router', () => {
       '/wishes',
       createWishesRouter({
         guard: allowRestrictionGuard,
+        requirePhone: allowPhone,
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),
@@ -129,6 +136,7 @@ describe('wishes router', () => {
         store: creatingStore,
         getUserId: (c) => c.get('userId'),
         guard: allowRestrictionGuard,
+        requirePhone: allowPhone,
       }),
     )
 
@@ -144,6 +152,53 @@ describe('wishes router', () => {
     })
 
     expect(response.status).toBe(201)
+  })
+
+  // #514：手机号门禁只挂「发布求购」，且在治理守卫之前；编辑不挂。
+  test('mounts the phone gate on create only, ahead of the restriction guard', async () => {
+    const guarded: string[] = []
+    const recordingGuard: MiddlewareHandler = async (c, next) => {
+      guarded.push(`${c.req.method} ${c.req.path}`)
+      await next()
+    }
+    const app = new Hono<{ Variables: { userId: string } }>()
+    app.use('*', async (c, next) => {
+      c.set('userId', USER_UUID)
+      await next()
+    })
+    app.route(
+      '/wishes',
+      createWishesRouter({
+        guard: { publish: recordingGuard, write: recordingGuard },
+        requirePhone: async (c) =>
+          c.json({ error: { code: 'PHONE_REQUIRED', message: '发布前请先绑定手机号' } }, 403),
+        store: emptyStore,
+        matchQueue,
+        getUserId: (c) => c.get('userId'),
+        service,
+      }),
+    )
+
+    const created = await app.request('/wishes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        keyword: '机械键盘',
+        category: 'DIGITAL',
+        budgetMinCents: 10000,
+        budgetMaxCents: 20000,
+      }),
+    })
+    expect(created.status).toBe(403)
+    expect(await created.json()).toMatchObject({ error: { code: 'PHONE_REQUIRED' } })
+    expect(guarded).toEqual([])
+
+    const patched = await app.request(`/wishes/${WISH_ID}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ budgetMaxCents: 20000 }),
+    })
+    expect(patched.status).not.toBe(403)
   })
 
   test('returns 400 for invalid payloads', async () => {
@@ -168,6 +223,7 @@ describe('wishes router', () => {
       '/wishes',
       createWishesRouter({
         guard: allowRestrictionGuard,
+        requirePhone: allowPhone,
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),

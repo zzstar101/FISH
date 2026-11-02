@@ -105,6 +105,37 @@ describe('mergeRecallCandidates', () => {
     expect(candidate.alreadySeenCount).toBe(0)
   })
 
+  test('#524：本次请求有类目画像时，没命中的类目记 0 而不是 null（同一请求内可比）', () => {
+    const candidates = mergeRecallCandidates({
+      channels: [channel('fresh', [{ listingId: 'a' }, { listingId: 'b' }])],
+      visible: [listing('a', 'seller-1', 'BOOKS'), listing('b', 'seller-1', 'DIGITAL')],
+      impressions: new Map(),
+      categoryAffinity: new Map([['BOOKS', 1]]),
+      now: NOW,
+    })
+
+    const byId = new Map(candidates.map((row) => [row.listingId, row]))
+    expect(byId.get('a')?.userCategoryAffinity).toBe(1)
+    expect(byId.get('b')?.userCategoryAffinity).toBe(0)
+  })
+
+  test('#524：explore 资格看「是否被 explore 通道召回」，不看它是不是第一来源', () => {
+    const candidates = mergeRecallCandidates({
+      channels: [
+        channel('fresh', [{ listingId: 'a' }, { listingId: 'b' }]),
+        channel('explore', [{ listingId: 'a' }]),
+      ],
+      visible: [listing('a', 'seller-1'), listing('b', 'seller-2')],
+      ...EMPTY_MAPS,
+      now: NOW,
+    })
+
+    const byId = new Map(candidates.map((row) => [row.listingId, row]))
+    expect(byId.get('a')?.recallSources).toEqual(['fresh', 'explore'])
+    expect(byId.get('a')?.exploreEligible).toBe(true)
+    expect(byId.get('b')?.exploreEligible).toBe(false)
+  })
+
   test('曝光计数整体未知（null）时 alreadySeenCount 保持 null，不伪装成 0', () => {
     const candidates = mergeRecallCandidates({
       channels: [channel('fresh', [{ listingId: 'a' }])],

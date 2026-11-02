@@ -92,6 +92,9 @@ beforeAll(async () => {
   sellerCookie = await register(SELLER_NO, '卖家')
   buyerCookie = await register(BUYER_NO, '买家')
   outsiderCookie = await register(OUTSIDER_NO, '路人')
+  // 买家要发愿望：#514 起 POST /wishes 须已绑手机号。直接写 users.phone（与走
+  // POST /auth/phone/bind 落库的是同一列），免得本文件为此再接一套微信 stub 传输。
+  await db.execute(sql`UPDATE users SET phone = '19900008802' WHERE student_no = ${BUYER_NO}`)
 
   // 商品由「卖家」拥有：走 SQL fixture 而不是 #6 的发布接口（要图片直传），
   // 避免验收依赖另一个 Domain 的上传链路。

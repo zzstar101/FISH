@@ -28,6 +28,11 @@ export type ListingsRouterOptions = {
   resolveClientIp: (c: Context) => string | null
   numberLookup: ListingNumberLookup
   guard: RestrictionGuard
+  /**
+   * #514「必须已绑定手机号」门禁（`auth/require-phone.ts`）：只挂新建与重新上架两处，
+   * 顺序 `requireAuth → requirePhone → guard.publish`。编辑 / 下架 / 删除不挂。
+   */
+  requirePhone: MiddlewareHandler<{ Variables: AuthVariables }>
 }
 
 /** JSON 解析失败（空体 / 非 JSON）按参数不合法处理，而不是让 Hono 抛 500。 */
@@ -135,7 +140,7 @@ export function createListingsRouter(options: ListingsRouterOptions) {
 
   // —— 写接口：全部要求登录 ——
 
-  router.post('/', options.requireAuth, options.guard.publish, async (c) => {
+  router.post('/', options.requireAuth, options.requirePhone, options.guard.publish, async (c) => {
     const parsed = ListingCreateInputSchema.safeParse(await readJson(c))
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
@@ -169,14 +174,20 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.post('/:id/online', options.requireAuth, options.guard.publish, async (c) => {
-    try {
-      const id = requireListingId(c)
-      return c.json(await service.transition(c.get('userId'), id, 'ACTIVE'), 200)
-    } catch (error) {
-      return toErrorResponse(c, error)
-    }
-  })
+  router.post(
+    '/:id/online',
+    options.requireAuth,
+    options.requirePhone,
+    options.guard.publish,
+    async (c) => {
+      try {
+        const id = requireListingId(c)
+        return c.json(await service.transition(c.get('userId'), id, 'ACTIVE'), 200)
+      } catch (error) {
+        return toErrorResponse(c, error)
+      }
+    },
+  )
 
   // 物理删除（Owner 2026-09-28 拍板）：只对「不过审」且无交易记录的商品开放，口径见
   // `service.deleteListing` / `store.deleteListingAtomic`。204 无响应体 —— 客户端成功后

@@ -94,6 +94,8 @@
   right: 0;
   z-index: 5;
   transform: translateY(-50%);
+  /* 命中区穿透：#533，同 vision-result 的 `.vres__title`。 */
+  pointer-events: none;
   text-align: center;
   font-size: 40px;
   font-weight: 600;

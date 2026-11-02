@@ -607,6 +607,13 @@
   color: var(--muted);
 }
 
+/* #514：未绑定手机号的提醒，另起一行 */
+.sell__hint-text--phone {
+  display: block;
+  margin-top: 8px;
+  color: var(--accent);
+}
+
 .sell__submit {
   @include btn-brand;
   margin: 8px 8px 0;
