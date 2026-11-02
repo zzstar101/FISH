@@ -4,8 +4,8 @@ import { describe, expect, test } from 'bun:test'
  * #518 长按菜单的接线层回归。
  *
  * 仓库没有 Taro 组件渲染基建，长按/点击的真实事件顺序只能在微信开发者工具里验；
- * 这里钉住三条最容易回退的结构：长按统一置吞 tap 标志、三类气泡都接了长按、语音气泡的
- * 点击首行先消费标志。
+ * 这里钉住四条最容易回退的结构：长按统一置吞 tap 标志、三类气泡都接了长按、语音气泡的
+ * 点击首行先消费标志、`doRecall` 成功后本地同步落媒体流。
  */
 
 async function source(relative: string): Promise<string> {
@@ -18,6 +18,11 @@ function sliceFrom(code: string, start: string, end: string): string {
   const to = code.indexOf(end, from)
   expect(to, `${end} 应出现在 ${start} 之后`).toBeGreaterThanOrEqual(0)
   return code.slice(from, to + end.length)
+}
+
+/** 剥掉注释再断言：注释里写一遍同名语句不能冒充接线（仓库既有写法，见 back-top-scroll-source.test.ts）。 */
+function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 }
 
 describe('会话页长按气泡的接线（#518）', () => {
@@ -72,5 +77,26 @@ describe('会话页长按气泡的接线（#518）', () => {
     // 多选图片：同步循环里只有第一张拿引用，其余显式 null
     expect(picker).toContain('const replyForBatch = replyTarget')
     expect(picker).toContain('index === 0 ? replyForBatch : null')
+  })
+})
+
+/**
+ * #518 验收「媒体自撤回本地立即翻碑，不依赖实时推送」的接线回归。
+ *
+ * 同一个文件里 `applyMediaRecalled` 还有一处调用在 `message.recalled` 实时分支上，
+ * 但推送是「尽力而为」：撤回自己的图片/语音后能立刻翻碑，靠的是 `doRecall` 自己落流。
+ * 因此断言只认 `doRecall` 函数体、并且剥掉注释 —— 推送分支与注释都不能顶替这处接线。
+ */
+describe('doRecall 成功后本地落媒体流（#518 媒体自撤回）', () => {
+  test('撤回后由 doRecall 自己改 media 流，而不是等 message.recalled 推送', async () => {
+    const code = await source('pkg-social/pages/conversation/index.tsx')
+    const recall = stripComments(
+      sliceFrom(code, 'const doRecall = async', 'const locateMessage = ('),
+    )
+
+    // 删掉这一处 setMedia，撤回自己的图片/语音后气泡纹丝不动（要等推送或重进页面）
+    expect(recall).toContain('setMedia((prev) =>')
+    // 命中的必须是本次撤回的那条（实时分支用的是 event.messageId / event.recalledAt）
+    expect(recall).toContain('applyMediaRecalled(prev, message.id, recalledAt)')
   })
 })
