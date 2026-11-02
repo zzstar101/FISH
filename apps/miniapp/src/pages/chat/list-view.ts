@@ -1,4 +1,5 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { formatAmount } from '@/lib/money'
 import { localDayIndex, WEEKDAY } from '@/lib/time'
 
@@ -49,14 +50,33 @@ export function badgeText(count: number): string {
 }
 
 /**
+ * 交易类 SYSTEM 消息的预览文案**以交易行当前状态为准**（#522）。
+ *
+ * 只看 `lastMessage` 会停在事件发生那一刻：成交 / 取消之后聊天里没有新消息，
+ * 预览就永远写着「约定面交中」，而行首胶囊已经变成「已完成」—— 同一行自相矛盾。
+ * 所以只要这一会话有交易行，预览就按交易状态说；拿不到交易行（接口失败）时
+ * 退回消息原文，宁可旧一点也不编状态。
+ */
+function txPreview(tx: TransactionDto): string {
+  if (tx.status === 'COMPLETED') return '交易已完成'
+  if (tx.status === 'CANCELLED') return '交易已取消'
+  const myConfirmedAt = tx.role === 'buyer' ? tx.buyerConfirmedAt : tx.sellerConfirmedAt
+  return myConfirmedAt ? '你已确认交易，等待对方确认' : '交易已确认 · 约定面交中'
+}
+
+/**
  * 会话行的消息预览。
  *
  * 交易类 SYSTEM 消息的 `content` 是契约里的 JSON 原文
  * （`{"type":"tx.proposal","amountCents":15000}` / `tx.accepted` / `tx.rejected`），
  * 列表里必须翻成中文，不能把 JSON 直接显示出来；解析失败（普通文本的系统消息，
  * 例如「你的学号认证已通过…」）按原文降级。
+ *
+ * `tx` 是这一会话当前的交易行（`transactionsByConversation` 的最新一笔），只有
+ * `tx.accepted` 的预览会被它改写 —— 那是唯一一条「事件说进行中、状态可能已终结」
+ * 的消息；提案 / 拒绝本来就与终态不冲突。
  */
-export function previewOf(item: ConversationDto): string {
+export function previewOf(item: ConversationDto, tx?: TransactionDto | null): string {
   const last = item.lastMessage
   if (!last) return EMPTY_PREVIEW
   if (last.type !== 'SYSTEM') return last.content
@@ -71,7 +91,9 @@ export function previewOf(item: ConversationDto): string {
           ? `买家发起交易确认 · ¥${formatAmount(amount)}，待确认`
           : '买家发起交易确认，待确认'
       }
-      if (type === 'tx.accepted') return '交易已确认 · 约定面交中'
+      if (type === 'tx.accepted') {
+        return tx ? txPreview(tx) : '交易已确认 · 约定面交中'
+      }
       if (type === 'tx.rejected') return '卖家已拒绝本次议价'
     }
   } catch {

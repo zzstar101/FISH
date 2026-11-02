@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
   applyMediaRecalled,
@@ -22,6 +23,7 @@ import {
   isStaleMediaTask,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
+  lastTxAcceptedId,
   listingStatusText,
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
@@ -45,6 +47,7 @@ import {
   sortMessages,
   startMediaRetry,
   systemPillText,
+  txCardView,
 } from '../src/pkg-social/pages/conversation/view'
 
 /**
@@ -78,6 +81,149 @@ describe('systemPillText —— 灰胶囊文案', () => {
   test('认不出的内容按原文降级，不吞消息', () => {
     expect(systemPillText(JSON.stringify({ type: 'tx.unknown' }))).toBe('{"type":"tx.unknown"}')
     expect(systemPillText('买家发起了交易确认。')).toBe('买家发起了交易确认。')
+  })
+
+  test('tx.accepted 只留一句事实（#522：状态不再由消息快照承担）', () => {
+    expect(systemPillText(JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_1' }))).toBe(
+      '已接受交易',
+    )
+  })
+})
+
+describe('parseTxEvent —— 交易 id 透传（#521）', () => {
+  test('tx.accepted 的 transactionId 要留住，否则入口拼不出 id', () => {
+    expect(
+      parseTxEvent(
+        JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_1', amountCents: 15000 }),
+      ),
+    ).toEqual({ type: 'tx.accepted', transactionId: 'txn_1' })
+  })
+
+  test('缺 id / id 不是字符串时只留 type（脏值不拼进跳转 URL）', () => {
+    expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted' }))).toEqual({ type: 'tx.accepted' })
+    expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted', transactionId: 42 }))).toEqual({
+      type: 'tx.accepted',
+    })
+  })
+})
+
+describe('lastTxAcceptedId —— 交易接口失败时的兜底入口', () => {
+  const sys = (id: string, content: string, createdAt: string): MessageDto => ({
+    id,
+    conversationId: 'c-1',
+    senderId: null,
+    sender: null,
+    type: 'SYSTEM',
+    content,
+    createdAt,
+  })
+
+  test('取最后一条带 id 的 tx.accepted', () => {
+    const messages = [
+      sys(
+        'm1',
+        JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_old' }),
+        '2026-09-21T03:00:00.000Z',
+      ),
+      sys('m2', '你的学号认证已通过', '2026-09-21T03:10:00.000Z'),
+      sys(
+        'm3',
+        JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_new' }),
+        '2026-09-21T03:20:00.000Z',
+      ),
+    ]
+    expect(lastTxAcceptedId(messages)).toBe('txn_new')
+  })
+
+  test('没有 tx.accepted（或它没带 id）→ null', () => {
+    expect(lastTxAcceptedId([])).toBeNull()
+    expect(
+      lastTxAcceptedId([
+        sys(
+          'm1',
+          JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }),
+          '2026-09-21T03:00:00.000Z',
+        ),
+        sys('m2', JSON.stringify({ type: 'tx.accepted' }), '2026-09-21T03:10:00.000Z'),
+      ]),
+    ).toBeNull()
+  })
+})
+
+describe('txCardView —— 吸底交易进度卡（#522）', () => {
+  function tx(overrides: Partial<TransactionDto> = {}): TransactionDto {
+    return {
+      id: 'txn_1',
+      conversationId: 'c-1',
+      listingId: 'l-1',
+      buyerId: 'u-1',
+      sellerId: 'u-2',
+      role: 'buyer',
+      listing: {
+        id: 'l-1',
+        title: 'K380 键盘',
+        priceCents: 15000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+      counterpart: { id: 'u-2', nickname: '卖家', avatarUrl: null },
+      amountCents: 15000,
+      status: 'PENDING_MEETUP',
+      buyerConfirmedAt: null,
+      sellerConfirmedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      createdAt: '2026-09-21T03:30:00.000Z',
+      updatedAt: '2026-09-21T03:30:00.000Z',
+      ...overrides,
+    }
+  }
+
+  test('待面交：二维码入口 +「查看交易码」，点进去就是这一笔', () => {
+    expect(txCardView(tx())).toMatchObject({
+      tone: 'is-warn',
+      icon: 'qr',
+      title: '待面交',
+      actionLabel: '查看交易码',
+      transactionId: 'txn_1',
+    })
+  })
+
+  test('我方已确认（买卖两侧对称）→ 待对方确认', () => {
+    expect(txCardView(tx({ buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }))).toMatchObject({
+      tone: 'is-pending',
+      title: '待对方确认',
+    })
+    expect(
+      txCardView(tx({ role: 'seller', sellerConfirmedAt: '2026-09-21T05:00:00.000Z' })),
+    ).toMatchObject({ tone: 'is-pending', title: '待对方确认' })
+  })
+
+  test('终态：已完成 / 已取消 各自换图标与 CTA，金额进描述', () => {
+    expect(txCardView(tx({ status: 'COMPLETED' }))).toMatchObject({
+      tone: 'is-ok',
+      icon: 'check',
+      title: '交易已完成',
+      actionLabel: '查看交易',
+      desc: '¥150 · 订单已完成。',
+    })
+    expect(txCardView(tx({ status: 'CANCELLED' }))).toMatchObject({
+      tone: 'is-plain',
+      icon: 'close',
+      title: '交易已取消',
+      actionLabel: '查看交易',
+      desc: '¥150 · 这笔交易已取消。',
+    })
+  })
+
+  test('交易接口失败但有消息里的 id → 降级卡保留入口；两者都没有 → 不显示', () => {
+    expect(txCardView(null, 'txn_msg')).toMatchObject({
+      tone: 'is-warn',
+      title: '交易状态待更新',
+      actionLabel: '查看交易码',
+      transactionId: 'txn_msg',
+    })
+    expect(txCardView(null, null)).toBeNull()
   })
 })
 

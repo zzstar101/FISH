@@ -756,7 +756,7 @@ export default function Chat() {
                         <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
                       ) : null}
                     </View>
-                    <Text className="chat__msg">{previewOf(item)}</Text>
+                    <Text className="chat__msg">{previewOf(item, txMap.get(item.id))}</Text>
                     {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
                     <Text className="chat__tm num">
                       {conversationTimeLabel(item.lastMessageAt, now)}

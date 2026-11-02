@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import {
   badgeText,
   chatListState,
@@ -118,6 +119,79 @@ describe('previewOf —— 列表行预览文案', () => {
       })
     expect(previewOf(sys(JSON.stringify({ type: 'tx.unknown' })))).toBe('{"type":"tx.unknown"}')
     expect(previewOf(sys('你的学号认证已通过'))).toBe('你的学号认证已通过')
+  })
+})
+
+describe('previewOf —— 交易进度按交易行渲染（#522）', () => {
+  /** 最后一个消息就是「已接受交易」——成交 / 取消之后聊天里不会再有新消息 */
+  const accepted = () =>
+    dto({
+      lastMessage: {
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_1' }),
+        senderId: null,
+        createdAt: '2026-09-21T04:00:00.000Z',
+      },
+    })
+
+  function tx(overrides: Partial<TransactionDto> = {}): TransactionDto {
+    return {
+      id: 'txn_1',
+      conversationId: 'c-1',
+      listingId: 'l-1',
+      buyerId: 'u-1',
+      sellerId: 'u-2',
+      role: 'buyer',
+      listing: {
+        id: 'l-1',
+        title: 'K380 键盘',
+        priceCents: 15000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+      counterpart: { id: 'u-2', nickname: '卖家', avatarUrl: null },
+      amountCents: 15000,
+      status: 'PENDING_MEETUP',
+      buyerConfirmedAt: null,
+      sellerConfirmedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      createdAt: '2026-09-21T03:30:00.000Z',
+      updatedAt: '2026-09-21T03:30:00.000Z',
+      ...overrides,
+    }
+  }
+
+  test('成交 / 取消后预览不再停在「约定面交中」（不能与行首胶囊矛盾）', () => {
+    expect(previewOf(accepted(), tx({ status: 'COMPLETED' }))).toBe('交易已完成')
+    expect(previewOf(accepted(), tx({ status: 'CANCELLED' }))).toBe('交易已取消')
+  })
+
+  test('待面交与「我已确认」各说各的（买卖两侧对称）', () => {
+    expect(previewOf(accepted(), tx())).toBe('交易已确认 · 约定面交中')
+    expect(previewOf(accepted(), tx({ buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }))).toBe(
+      '你已确认交易，等待对方确认',
+    )
+    expect(
+      previewOf(accepted(), tx({ role: 'seller', sellerConfirmedAt: '2026-09-21T05:00:00.000Z' })),
+    ).toBe('你已确认交易，等待对方确认')
+  })
+
+  test('没有交易行（接口失败 / 未加载）→ 退回消息原文，不编状态', () => {
+    expect(previewOf(accepted())).toBe('交易已确认 · 约定面交中')
+    expect(previewOf(accepted(), null)).toBe('交易已确认 · 约定面交中')
+  })
+
+  test('非 tx.accepted 的预览不受交易行影响（提案仍按消息说）', () => {
+    const proposal = dto({
+      lastMessage: {
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }),
+        senderId: null,
+        createdAt: '2026-09-21T04:00:00.000Z',
+      },
+    })
+    expect(previewOf(proposal, tx({ status: 'COMPLETED' }))).toBe('买家发起交易确认 · ¥150，待确认')
   })
 })
 

@@ -4,6 +4,7 @@ import {
   type MediaMessageDto,
   type MessageDto,
 } from '@fish/contracts/chat/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, ScrollView, Text, Textarea, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -43,12 +44,15 @@ import { ChatRealtime, type ChatRealtimeEvent } from '@/features/chat/realtime'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
 import { requestSubscribe } from '@/features/subscribe/request'
+import { fetchConversationTransaction } from '@/features/transaction/conversation'
+import { meetupUrlById } from '@/features/transaction/order-links'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { randomUuidV4 } from '@/lib/uuid'
+import { TxCard } from './tx-card'
 import {
   applyMediaRecalled,
   applyPresenceEvent,
@@ -72,6 +76,7 @@ import {
   isStaleMediaTask,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
+  lastTxAcceptedId,
   listingStatusText,
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
@@ -101,6 +106,7 @@ import {
   sortMessages,
   startMediaRetry,
   systemPillText,
+  txCardView,
 } from './view'
 import './index.scss'
 
@@ -189,6 +195,16 @@ export default function Conversation() {
   const [convState, setConvState] = useState<'loading' | 'ok' | 'missing' | 'failed'>('loading')
   const [messages, setMessages] = useState<MessageDto[]>([])
   const [msgState, setMsgState] = useState<'loading' | 'ok' | 'failed'>('loading')
+  /**
+   * 这条会话**当前**那笔交易（#522）。终态（COMPLETED / CANCELLED）按契约不产生
+   * SYSTEM 消息，所以卡片只能由交易域驱动；`failed` 时保留上一次的值，绝不拿
+   * 「没查到」当「已完成」，也不清空已有入口（`view.ts` 的 `txCardView` 会在
+   * 完全取不到时退回消息里的 `tx.accepted` id）。
+   */
+  const [txLoad, setTxLoad] = useState<{
+    status: 'idle' | 'ok' | 'failed'
+    tx: TransactionDto | null
+  }>({ status: 'idle', tx: null })
   /** 更早一页的游标；null = 已到最早 */
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
@@ -345,6 +361,7 @@ export default function Conversation() {
     setConvState('loading')
     setMessages([])
     setMsgState('loading')
+    setTxLoad({ status: 'idle', tx: null })
     setNextCursor(null)
     setLoadingEarlier(false)
     setEarlierFailed(false)
@@ -472,7 +489,28 @@ export default function Conversation() {
       ])
         .then(([detail, page, mediaPage]) => {
           if (current !== epoch.current) return
-          if (detail.status === 'ok') setConversation(detail.conversation)
+          if (detail.status === 'ok') {
+            setConversation(detail.conversation)
+            /**
+             * 交易进度单独查（#522）：聊天记录里的 `tx.accepted` 是不可变事件，成交 /
+             * 取消都不再写 SYSTEM 消息，只看消息流会永远停在「待面交」。所以每次
+             * load（进页、从子页返回、断线补刷）都顺带查一次交易域。
+             *
+             * 失败**不降级成任何终态**：保留上一份 `tx`，只把 status 记为 failed，
+             * 让卡片退回「状态待更新」（有消息里的 id 就仍然给入口）。下一次 load
+             * 就是重试 —— 交易接口没有自己的重试钮，也不需要：它不是页面主数据。
+             */
+            void fetchConversationTransaction(conversationId, detail.conversation.role)
+              .then((tx) => {
+                if (current !== epoch.current) return
+                setTxLoad({ status: 'ok', tx })
+              })
+              .catch((error) => {
+                console.warn('[miniapp] 会话交易进度加载失败', error)
+                if (current !== epoch.current) return
+                setTxLoad((prev) => ({ status: 'failed', tx: prev.tx }))
+              })
+          }
           /**
            * 后台刷新（silent）**只做确认、不做降级**（判据见 `./view` 的 `resolveConvState`）。
            *
@@ -829,6 +867,11 @@ export default function Conversation() {
    *   再落一次无害；正在引用的那条被撤回时收起引用栏（与 `doRecall` 同一步）。
    *   两条流都要落：撤回端点对 TEXT / MEDIA 没有类型过滤。
    */
+  /**
+   * 「silent 补刷一次会话」的稳定引用：断线重连与「对方刚接受交易」（#522）共用。
+   * 声明提前是因为事件处理闭包要用它；实现体在下面（依赖 pending / deferred 等 ref）。
+   */
+  const realtimeOpenRef = useRef<() => void>(() => {})
   const realtimeEventRef = useRef<(event: ChatRealtimeEvent) => void>(() => {})
   realtimeEventRef.current = (event) => {
     // pong 在客户端内部就被心跳消费掉（`handleMessage`），这里到不了；
@@ -844,10 +887,22 @@ export default function Conversation() {
     // 其余四类都带会话 id：推送覆盖「我参与的全部会话」，本页只消费当前打开的这一条
     if (event.conversationId !== conversationId) return
     switch (event.type) {
-      case 'message.new':
+      case 'message.new': {
         setMessages((prev) => mergePushedMessage(prev, event.message))
         markIncomingRead(event.message.senderId)
+        /**
+         * 对方刚接受交易时补刷一次（#522）：交易行是那一刻才创建的，本页不重拉就
+         * 只剩一条「已接受交易」的胶囊，吸底卡要等到下次进页才出现。走 `silent`
+         * 并复用「有在途发送就延后」的闸 —— 它的语义与 didShow 那次重拉完全相同。
+         */
+        if (
+          event.message.type === 'SYSTEM' &&
+          parseTxEvent(event.message.content)?.type === 'tx.accepted'
+        ) {
+          realtimeOpenRef.current()
+        }
         break
+      }
       case 'media.new':
         setMedia((prev) => mergePushedMedia(prev, event.media))
         markIncomingRead(event.media.senderId)
@@ -878,7 +933,6 @@ export default function Conversation() {
    * - 有在途发送（含媒体上传）时**只记账不补** —— 与 `useDidShow` 的延后刷新
    *   同一纪律，由落定后的 finally 补（`DeferredReload` 状态机）。
    */
-  const realtimeOpenRef = useRef<() => void>(() => {})
   realtimeOpenRef.current = () => {
     if (convStateRef.current === 'loading') return
     const sending =
@@ -1745,9 +1799,17 @@ export default function Conversation() {
     })
   }
 
-  const openMeetup = () => {
-    // 交易码页需要交易 id；会话里只做入口，不在这里推断是哪一笔（那是 A1/A2 的事）
-    void Taro.navigateTo({ url: '/pkg-trade/pages/transaction-meetup/index' })
+  /**
+   * 打开交易码页。**必须带交易 id**（#521）：面交页的 `router.params.id` 为空时
+   * 直接落「找不到这笔交易」，连请求都不发。卡片只在拿得到 id 时渲染，这里再兜一道
+   * —— 拿不到 id 时给一句话，而不是跳过去撞错误页。
+   */
+  const openMeetup = (transactionId: string) => {
+    if (!transactionId) {
+      void Taro.showToast({ title: '交易信息已失效，请从「我的订单」进入', icon: 'none' })
+      return
+    }
+    void Taro.navigateTo({ url: meetupUrlById(transactionId) })
   }
 
   /**
@@ -1796,6 +1858,12 @@ export default function Conversation() {
     ],
     [messages, media, pending, pendingMedia],
   )
+
+  /**
+   * 消息流里最后一条 `tx.accepted` 带的交易 id：交易接口失败时的兜底入口。
+   * 必须是 hook，所以放在下面「取不到会话」的早退分支之前（hooks 不能跟在 return 后）。
+   */
+  const fallbackTxId = useMemo(() => lastTxAcceptedId(messages), [messages])
 
   /**
    * 「打开即看最新」：会话流挂在 ScrollView 的 `scrollIntoView` 上，指向最后一条
@@ -1911,41 +1979,19 @@ export default function Conversation() {
   }
 
   /**
-   * SYSTEM 消息按 1版稿口径渲染：
-   * - `tx.accepted` → 灰胶囊「已接受交易，待面交」+ 交易码卡（进 A2 的入口，CTA 在右）；
-   * - 其余（`tx.proposal` / `tx.rejected` / 普通系统文本）→ 居中灰胶囊。
+   * SYSTEM 消息一律渲染成居中灰胶囊（`tx.proposal` / `tx.rejected` / `tx.accepted` /
+   * 普通系统文本）。
+   *
+   * `tx.accepted` 不再在消息流里画交易码卡（#522）：那张卡拍的是**事件发生那一刻**
+   * 的快照，成交 / 取消之后仍然写着「待面交」，而聊天记录不可变、也没法就地更正。
+   * 当前进度改由输入栏上方的吸底卡（`TxCard`）按交易行渲染；历史里只留「已接受交易」
+   * 这一句事实，谁点谁进面交页（入口在吸底卡上，带交易 id）。
    */
-  const renderSystem = (message: MessageDto) => {
-    const event = parseTxEvent(message.content)
-
-    if (event?.type === 'tx.accepted') {
-      return (
-        <View key={message.id} id={`e-${message.id}`} className="conv__syswrap">
-          <View className="conv__sys">
-            <Text className="conv__sys-tx">已接受交易，待面交</Text>
-          </View>
-          <View className="conv__txcard">
-            <Image className="conv__txcard-ic" src={ICONS.qr} mode="aspectFit" />
-            <View className="conv__txcard-main">
-              <Text className="conv__txcard-t">卖家已接受交易</Text>
-              <Text className="conv__txcard-d">
-                面交时与对方核对 6 位交易码，确认后订单才算完成。
-              </Text>
-            </View>
-            <View className="conv__txcard-act" onClick={openMeetup}>
-              <Text>查看交易码</Text>
-            </View>
-          </View>
-        </View>
-      )
-    }
-
-    return (
-      <View key={message.id} id={`e-${message.id}`} className="conv__sys">
-        <Text className="conv__sys-tx">{systemPillText(message.content)}</Text>
-      </View>
-    )
-  }
+  const renderSystem = (message: MessageDto) => (
+    <View key={message.id} id={`e-${message.id}`} className="conv__sys">
+      <Text className="conv__sys-tx">{systemPillText(message.content)}</Text>
+    </View>
+  )
 
   /**
    * LISTING 消息（#359）：服务端富化的商品卡（缩略图 + 标题 + 价格），点击进商品详情。
@@ -2019,6 +2065,13 @@ export default function Conversation() {
       </View>
     )
   }
+
+  /**
+   * 吸底交易进度卡（#521 / #522，模式①）：挂在输入栏上方、常驻显示，状态变化只改
+   * 卡片内容。`idle`（还没查过交易）时不渲染，避免首帧闪一张「状态待更新」；
+   * 查过之后即便 `tx` 为 null 也交给 `txCardView` 判断要不要退到消息里的 id。
+   */
+  const txCard = txLoad.status === 'idle' ? null : txCardView(txLoad.tx, fallbackTxId)
 
   const statusLabel = listingStatusText(listing.status)
 
@@ -2356,6 +2409,8 @@ export default function Conversation() {
         空内容时「发送」置灰（稿子 .send.is-off）。
       */}
       <View className="conv__bar">
+        {/* 交易进度卡（模式①）：吸附在输入框上方，长期显示、只改内容 */}
+        {txCard ? <TxCard view={txCard} onAction={() => openMeetup(txCard.transactionId)} /> : null}
         {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
         {replyTarget ? (
           <View className="conv__replybar">
