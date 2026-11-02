@@ -5,7 +5,7 @@
  * 重出图：`bun run --filter @fish/miniapp icons`。
  *
  * 命名 = 字形 + 语义色：`Brand` 品牌蓝 / `Fg` 主文字 / `Muted` 次要灰 / `White` 反白 /
- * `Danger` 警示红 / `Duo` 深色描边 + 品牌蓝填充（仅 TabBar 选中态）。页面与组件**只从这里取图标**，不要直接 import 具体 png。
+ * `Danger` 警示红。页面与组件**只从这里取图标**，不要直接 import 具体 png。
  * 显示尺寸只用 24 / 32 / 40 / 48（SCSS px = rpx）四档。
  */
 import backFg from '@/assets/lib-icons/back-fg@3x.png'
@@ -75,13 +75,13 @@ import shieldFg from '@/assets/lib-icons/shield-fg@3x.png'
 import shieldMuted from '@/assets/lib-icons/shield-muted@3x.png'
 import sparkleBrand from '@/assets/lib-icons/sparkle-brand@3x.png'
 import starBrand from '@/assets/lib-icons/star-brand@3x.png'
-import tabHomeDuo from '@/assets/lib-icons/tab-home-duo@3x.png'
+import tabHomeBrand from '@/assets/lib-icons/tab-home-brand@3x.png'
 import tabHomeMuted from '@/assets/lib-icons/tab-home-muted@3x.png'
-import tabMeDuo from '@/assets/lib-icons/tab-me-duo@3x.png'
+import tabMeBrand from '@/assets/lib-icons/tab-me-brand@3x.png'
 import tabMeMuted from '@/assets/lib-icons/tab-me-muted@3x.png'
-import tabMessageDuo from '@/assets/lib-icons/tab-message-duo@3x.png'
+import tabMessageBrand from '@/assets/lib-icons/tab-message-brand@3x.png'
 import tabMessageMuted from '@/assets/lib-icons/tab-message-muted@3x.png'
-import tabWishDuo from '@/assets/lib-icons/tab-wish-duo@3x.png'
+import tabWishBrand from '@/assets/lib-icons/tab-wish-brand@3x.png'
 import tabWishMuted from '@/assets/lib-icons/tab-wish-muted@3x.png'
 import tagBrand from '@/assets/lib-icons/tag-brand@3x.png'
 import tagMuted from '@/assets/lib-icons/tag-muted@3x.png'
@@ -97,16 +97,13 @@ import wishMuted from '@/assets/lib-icons/wish-muted@3x.png'
 
 export const ICONS = {
   tabHomeMuted,
-  tabHomeDuo,
+  tabHomeBrand,
   tabWishMuted,
-  tabWishDuo,
+  tabWishBrand,
   tabMessageMuted,
-  tabMessageDuo,
+  tabMessageBrand,
   tabMeMuted,
-  tabMeDuo,
-  homeMuted,
-  wishMuted,
-  userFg,
+  tabMeBrand,
   backFg,
   closeFg,
   searchMuted,
@@ -182,6 +179,9 @@ export const ICONS = {
   catTransportBrand,
   catBeautyBrand,
   catOtherBrand,
+  homeMuted,
+  wishMuted,
+  userFg,
 } as const
 
 export type IconName = keyof typeof ICONS

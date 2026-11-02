@@ -3,8 +3,8 @@
  *
  * - 字形真源：`tools/icons/glyphs/<glyph>.svg`（24×24 网格、1.75 描边、圆头圆角、单色，
  *   画在 4–20 的内容框里；`heart-fill` 是同一轮廓的实心版，只给「已收藏」用；
- *   `tab-*` 是 TabBar 专用字形，主体带 `fill="accentColor"` 的错位填充块，只在 `duo` 下显色）。
- * - 颜色只认这里的语义名（单色 5 个 + TabBar 选中态的双色 `duo`），值与 `src/styles/_token-vars.scss` 的令牌一一对应；
+ *   `tab-*` 是 TabBar 专用字形，主体带 `fill="accentColor"` 的错位填充块，只在 `brand` 下显色）。
+ * - 颜色只认这里的 5 个语义名，值与 `src/styles/_token-vars.scss` 的令牌一一对应；
  *   页面不再挑具体色值，换色 = 改这里的 tone + 重出图。
  * - 产物：`src/assets/lib-icons/<glyph>-<tone>@3x.png` 与出口 `ICONS.<glyph><Tone>`
  *   （如 `chevron-right` × `muted` → `ICONS.chevronRightMuted`），名字与颜色一一对应。
@@ -18,25 +18,20 @@ export const TONES = {
   muted: '#71809C', // --muted
   white: '#FFFFFF', // 深色/品牌色底上的反白
   danger: '#FF5F6D', // --danger：仅退出登录、警示
-  /** 双色：描边 --fg（加粗到 2）+ 错位填充 --brand。只给 TabBar 选中态，同一 svg 出 muted 即未选中态 */
-  duo: '#17233D',
 } as const
 
-/** 字形里 `fill="accentColor"` 的填充块：只有 `duo` 时显色，其它语义色下不画 */
-export const ACCENT = TONES.brand
+/** 字形里 `fill="accentColor"` 的填充块：`brand` 下画成半透明品牌蓝（描边同时加粗到 2），其它语义色下不画 */
+export const ACCENT_OPACITY = 0.35
 
 export type Tone = keyof typeof TONES
 
 export const MANIFEST: Record<string, readonly Tone[]> = {
-  /* TabBar：同一字形，未选中 = 灰色线稿，选中 = 深色加粗描边 + 品牌蓝错位填充；
+  /* TabBar：同一字形，未选中 = 灰色线稿，选中 = 品牌蓝加粗描边 + 浅品牌蓝错位填充；
      「出物」凸起钮用 plus × white */
-  'tab-home': ['muted', 'duo'],
-  'tab-wish': ['muted', 'duo'],
-  'tab-message': ['muted', 'duo'],
-  'tab-me': ['muted', 'duo'],
-  home: ['muted'],
-  wish: ['muted'],
-  user: ['fg'],
+  'tab-home': ['muted', 'brand'],
+  'tab-wish': ['muted', 'brand'],
+  'tab-message': ['muted', 'brand'],
+  'tab-me': ['muted', 'brand'],
 
   /* 导航与操作 */
   back: ['fg'],
@@ -104,4 +99,8 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   'cat-transport': ['brand'],
   'cat-beauty': ['brand'],
   'cat-other': ['brand'],
+  /* 页面内的线性小图：约饭地点、识图结果「许愿」入口、头像占位 */
+  home: ['muted'],
+  wish: ['muted'],
+  user: ['fg'],
 }

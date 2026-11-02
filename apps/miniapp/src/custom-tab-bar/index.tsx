@@ -56,7 +56,7 @@ const TAB_ITEMS: TabItem[] = [
     path: '/pages/home/index',
     route: 'pages/home/index',
     icon: ICONS.tabHomeMuted,
-    iconOn: ICONS.tabHomeDuo,
+    iconOn: ICONS.tabHomeBrand,
   },
   {
     key: 'wish',
@@ -64,7 +64,7 @@ const TAB_ITEMS: TabItem[] = [
     path: '/pages/wish/index',
     route: 'pages/wish/index',
     icon: ICONS.tabWishMuted,
-    iconOn: ICONS.tabWishDuo,
+    iconOn: ICONS.tabWishBrand,
   },
   // 中间「出物」是凸起钮：品牌渐变圆底 + 反白加号，与其余 4 个槽位一样用图标资源绘制
   {
@@ -81,7 +81,7 @@ const TAB_ITEMS: TabItem[] = [
     path: '/pages/chat/index',
     route: 'pages/chat/index',
     icon: ICONS.tabMessageMuted,
-    iconOn: ICONS.tabMessageDuo,
+    iconOn: ICONS.tabMessageBrand,
   },
   {
     key: 'profile',
@@ -89,7 +89,7 @@ const TAB_ITEMS: TabItem[] = [
     path: '/pages/profile/index',
     route: 'pages/profile/index',
     icon: ICONS.tabMeMuted,
-    iconOn: ICONS.tabMeDuo,
+    iconOn: ICONS.tabMeBrand,
   },
 ]
 
