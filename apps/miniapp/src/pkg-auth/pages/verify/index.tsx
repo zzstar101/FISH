@@ -373,7 +373,7 @@ export default function Verify() {
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
                   <Text className="verify__name">{nickname}</Text>
-                  <Image className="verify__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
+                  <Image className="verify__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
                 </View>
                 <Text className="verify__badge-sub">我的 · 个人页</Text>
               </View>
@@ -387,7 +387,7 @@ export default function Verify() {
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
                   <Text className="verify__name">{nickname}</Text>
-                  <Image className="verify__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
+                  <Image className="verify__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
                 </View>
                 <Text className="verify__badge-sub">商品详情 · 卖家页</Text>
               </View>
@@ -441,7 +441,7 @@ export default function Verify() {
         {/* ---- 未认证说明（稿 01 帧：白卡 + 左侧渐变圆盘 + 右侧黄胶囊） ---- */}
         <View className="verify__vcard">
           <View className="verify__vcard-disc">
-            <Image className="verify__vcard-ic" src={ICONS.shieldLine} mode="aspectFit" />
+            <Image className="verify__vcard-ic" src={ICONS.shieldBrand} mode="aspectFit" />
           </View>
           <View className="verify__vcard-txt">
             <Text className="verify__vcard-title">未认证</Text>
@@ -458,7 +458,7 @@ export default function Verify() {
               <Text className="verify__req">* 必填</Text>
             </View>
             <View className={`verify__input${emailError ? ' is-error' : ''}`}>
-              <Image className="verify__input-ic" src={ICONS.mail} mode="aspectFit" />
+              <Image className="verify__input-ic" src={ICONS.mailFg} mode="aspectFit" />
               <Input
                 className="verify__val"
                 type="text"
@@ -493,7 +493,7 @@ export default function Verify() {
               <Text>教育邮箱</Text>
             </View>
             <View className="verify__input is-readonly">
-              <Image className="verify__input-ic" src={ICONS.mail} mode="aspectFit" />
+              <Image className="verify__input-ic" src={ICONS.mailFg} mode="aspectFit" />
               <Text className="verify__val num">{maskEmail(email)}</Text>
               <Text
                 className="verify__edit"
@@ -545,7 +545,7 @@ export default function Verify() {
 
             {codeError ? (
               <View className="verify__errbox">
-                <Image className="verify__err-ic" src={ICONS.warn} mode="aspectFit" />
+                <Image className="verify__err-ic" src={ICONS.warnDanger} mode="aspectFit" />
                 <Text className="verify__err-tx">{codeError}</Text>
               </View>
             ) : null}
@@ -561,7 +561,7 @@ export default function Verify() {
                 className={`verify__resend-btn${left > 0 ? ' is-off' : ''}`}
                 onClick={() => void send()}
               >
-                <Image className="verify__resend-ic" src={ICONS.clock} mode="aspectFit" />
+                <Image className="verify__resend-ic" src={ICONS.clockMuted} mode="aspectFit" />
                 <Text>重新发送</Text>
               </View>
             </View>

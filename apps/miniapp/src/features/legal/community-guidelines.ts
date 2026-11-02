@@ -9,7 +9,7 @@ import type { LegalDoc } from './types'
 export const COMMUNITY_GUIDELINES_DOC: LegalDoc = {
   navTitle: '社区规范与交易安全须知',
   kicker: {
-    icon: 'shieldLine',
+    icon: 'shieldBrand',
     text: 'Community · 规范与安全',
   },
   title: '鱼小应社区规范与交易安全须知',
@@ -59,7 +59,7 @@ export const COMMUNITY_GUIDELINES_DOC: LegalDoc = {
           key: 's1-b1',
           kind: 'list',
           head: {
-            icon: 'warn',
+            icon: 'warnDanger',
             text: '严禁发布与交易的 10 类红线内容',
           },
           items: [
@@ -359,7 +359,7 @@ export const COMMUNITY_GUIDELINES_DOC: LegalDoc = {
           key: 's6-b1',
           kind: 'list',
           head: {
-            icon: 'warnInk',
+            icon: 'warnFg',
             text: '平台违规处置梯度（均记录管理员审计日志）',
           },
           items: [
@@ -417,17 +417,17 @@ export const COMMUNITY_GUIDELINES_DOC: LegalDoc = {
   ],
   links: [
     {
-      icon: 'docInk',
+      icon: 'docFg',
       label: '《用户协议》',
       page: '/pkg-legal/pages/terms/index',
     },
     {
-      icon: 'safeAccent',
+      icon: 'shieldCheckBrand',
       label: '《隐私政策》',
       page: '/pkg-legal/pages/privacy/index',
     },
     {
-      icon: 'feedback',
+      icon: 'feedbackFg',
       label: '意见反馈',
       page: '/pkg-legal/pages/feedback/index',
     },

@@ -149,7 +149,7 @@
 
 /*
  * 认证徽章（稿 `.badge`）：浅强调底 + 中强调描边 + 品牌深字，与 `watchers` 页的
- * 认证徽章同一套色值，也正是 `ICONS.verifiedAccent`（品牌蓝 `#4285ff`）的icon 需要的底。
+ * 认证徽章同一套色值，也正是 `ICONS.verifiedBrand`（品牌蓝 `#4285ff`）的icon 需要的底。
  * 尺寸按稿 20pt / 10.5pt / 8pt·6pt → 40 / 21 / 16·12px。
  *
  * `--nav` 变体只补居中标题里的**左间距**（稿 `.mp-title` 的 `gap: 6pt` = 12px）：
@@ -175,8 +175,8 @@
 }
 
 .uhome__badge-ic {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 /*
@@ -208,20 +208,20 @@
 
 /*
  * 关注钮占位（#188）：与 `.uhome__follow` 同高同圆角，宽度对齐**最宽态**「已关注 + check」
- * —— padding 28×2 + icon 28 + gap 10 + 3 字 ×26 + border 2×2 = 176px。窄了会让昵称区
+ * —— padding 28×2 + icon 32 + gap 10 + 3 字 ×26 + border 2×2 = 180px。窄了会让昵称区
  * 在状态到位时抖一下（`.uhome__nameRow` 是 nowrap，宽度变化直接改省略号位置）。
  */
 .uhome__follow-skel {
   flex: 0 0 auto;
-  width: 176px;
+  width: 180px;
   height: 64px;
   border-radius: var(--r-pill);
   background: var(--accent-faint);
 }
 
 .uhome__follow-ic {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 /* 「关注中」的转圈：稿 `.btn-follow .spin-mini`（12pt 圆环、1.6pt 环宽，
@@ -289,8 +289,8 @@
   position: absolute;
   right: 0;
   top: 4px;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   transition: transform 0.22s ease;
 }
 
@@ -536,8 +536,8 @@
 }
 
 .uhome__empty-ic {
-  width: 60px;
-  height: 60px;
+  width: 48px;
+  height: 48px;
 }
 
 .uhome__empty-title {

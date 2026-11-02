@@ -332,13 +332,13 @@ export default function ReviewDialog({ transactionId, listingTitle, onClose, onS
                 </Text>
               )}
               <View className="rvw__photo-del" onClick={() => removeImage(slot.id)}>
-                <Image className="rvw__photo-del-img" src={ICONS.delete} mode="aspectFit" />
+                <Image className="rvw__photo-del-img" src={ICONS.trashWhite} mode="aspectFit" />
               </View>
             </View>
           ))}
           {full ? null : (
             <View className="rvw__photo rvw__photo--add" onClick={addImages}>
-              <Image className="rvw__photo-add-img" src={ICONS.plusLine} mode="aspectFit" />
+              <Image className="rvw__photo-add-img" src={ICONS.plusBrand} mode="aspectFit" />
             </View>
           )}
         </View>

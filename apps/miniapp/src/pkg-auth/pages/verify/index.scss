@@ -6,7 +6,7 @@
  * 未认证：白卡（渐变圆盘 + 黄胶囊）+ 邮箱字段 → 发码后换成「只读邮箱 + 修改」
  * + 6 格验证码 + 重发倒计时 + 主按钮。
  * 已认证：整页替换成成功态（双层圆盘 + 徽章一致性卡 + 隐私白卡 + 返回我的主页）。
- * 徽章统一用 `ICONS.verifiedAccent`，与个人页 / 卖家卡是同一个图标（交付验收要求）。
+ * 徽章统一用 `ICONS.verifiedBrand`，与个人页 / 卖家卡是同一个图标（交付验收要求）。
  */
 
 .verify {
@@ -94,7 +94,7 @@
 
 .verify__vcard-ic {
   width: 40px;
-  height: 44px;
+  height: 40px;
 }
 
 .verify__vcard-txt {
@@ -397,8 +397,8 @@
 }
 
 .verify__resend-ic {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 /* ---------------------------------------------------------------- 隐私说明 */
@@ -537,8 +537,8 @@
 }
 
 .verify__tick {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 

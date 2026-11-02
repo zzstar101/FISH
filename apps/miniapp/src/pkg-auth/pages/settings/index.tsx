@@ -282,14 +282,14 @@ export default function Settings() {
       label: '新消息',
       value: notifyChat,
       set: setNotifyChat,
-      icon: ICONS.chatInk,
+      icon: ICONS.chatFg,
     },
     {
       key: 'notifyWish',
       label: '许愿命中',
       value: notifyWish,
       set: setNotifyWish,
-      icon: ICONS.heartOn,
+      icon: ICONS.heartFillBrand,
     },
     {
       key: 'notifyDeal',
@@ -303,7 +303,7 @@ export default function Settings() {
       label: '活动与公告',
       value: notifyNews,
       set: setNotifyNews,
-      icon: ICONS.feedback,
+      icon: ICONS.feedbackFg,
     },
   ]
 
@@ -329,7 +329,7 @@ export default function Settings() {
             <View className="st__av">
               <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
               {verified ? (
-                <Image className="st__av-bdg" src={ICONS.verifiedAccent} mode="aspectFit" />
+                <Image className="st__av-bdg" src={ICONS.verifiedBrand} mode="aspectFit" />
               ) : null}
             </View>
             <View className="st__acct-main">
@@ -345,7 +345,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/verify/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.safeAccent} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.shieldCheckBrand} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">教育邮箱</Text>
             <Text className="st__rvalue">{verified ? '已验证' : '去验证'}</Text>
@@ -358,7 +358,7 @@ export default function Settings() {
               冻结（让这个按钮在已绑定时可点，等于替 #86 先把「再授权 = 换绑」定下来）。 */}
           <View className="st__row">
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.serviceMuted} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.headsetMuted} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">手机号</Text>
             <Text className="st__rvalue">{phoneValue}</Text>
@@ -380,7 +380,7 @@ export default function Settings() {
         <View className="st__group">
           <View className="st__row">
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.bellInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.bellFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">通知设置</Text>
             <View
@@ -421,7 +421,7 @@ export default function Settings() {
             }}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.bellInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.bellFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">微信消息提醒</Text>
             <Text className="st__rvalue">去开启</Text>
@@ -472,7 +472,7 @@ export default function Settings() {
             }
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.chatInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.chatFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">谁可以给我留言</Text>
             <Text className="st__rvalue">{commentPolicy}</Text>
@@ -491,7 +491,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/feedback/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.feedback} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.feedbackFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">意见反馈</Text>
             <View className="st__arrow" />
@@ -502,7 +502,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/about/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.app} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.gridFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">关于鱼小应</Text>
             <Text className="st__rvalue num">{`v${APP_VERSION}`}</Text>
@@ -514,7 +514,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/terms/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.docInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.docFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">用户协议</Text>
             <View className="st__arrow" />
@@ -525,7 +525,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-legal/pages/privacy/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.docInk} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.docFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">隐私政策</Text>
             <View className="st__arrow" />
@@ -537,14 +537,14 @@ export default function Settings() {
             会下架商品），放在最后一行可以少一点误触。 */}
         <View className="st__danger-card">
           <View className="st__danger-row" onClick={() => setLogoutOpen(true)}>
-            <Image className="st__danger-ic" src={ICONS.power} mode="aspectFit" />
+            <Image className="st__danger-ic" src={ICONS.powerDanger} mode="aspectFit" />
             <Text>退出登录</Text>
           </View>
           <View
             className="st__danger-row"
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/account-deletion/index' })}
           >
-            <Image className="st__danger-ic" src={ICONS.delete} mode="aspectFit" />
+            <Image className="st__danger-ic" src={ICONS.trashFg} mode="aspectFit" />
             <Text>注销账号</Text>
           </View>
         </View>
@@ -561,7 +561,7 @@ export default function Settings() {
           <View className="st__scrim" onClick={() => setLogoutOpen(false)} />
           <View className="st__sheet">
             <View className="st__sheet-ic">
-              <Image className="st__sheet-ic-img" src={ICONS.power} mode="aspectFit" />
+              <Image className="st__sheet-ic-img" src={ICONS.powerDanger} mode="aspectFit" />
             </View>
             <Text className="st__sheet-title">确认退出登录？</Text>
             <Text className="st__sheet-text">

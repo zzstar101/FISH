@@ -13,7 +13,7 @@ import type { LegalDoc } from './types'
 export const TERMS_DOC: LegalDoc = {
   navTitle: '用户协议',
   kicker: {
-    icon: 'docInk',
+    icon: 'docFg',
     text: 'Legal · 用户协议',
   },
   title: '鱼小应用户协议',
@@ -691,27 +691,27 @@ export const TERMS_DOC: LegalDoc = {
   ],
   links: [
     {
-      icon: 'safeAccent',
+      icon: 'shieldCheckBrand',
       label: '《隐私政策》',
       page: '/pkg-legal/pages/privacy/index',
     },
     {
-      icon: 'shieldLine',
+      icon: 'shieldBrand',
       label: '《社区规范与交易安全须知》',
       page: '/pkg-legal/pages/community-guidelines/index',
     },
     {
-      icon: 'category',
+      icon: 'tagMuted',
       label: '《个人信息收集清单》',
       page: '/pkg-legal/pages/info-collection/index',
     },
     {
-      icon: 'share',
+      icon: 'shareFg',
       label: '《第三方信息共享清单》',
       page: '/pkg-legal/pages/third-party-sharing/index',
     },
     {
-      icon: 'editAccent',
+      icon: 'editBrand',
       label: '意见反馈',
       page: '/pkg-legal/pages/feedback/index',
     },

@@ -17,7 +17,7 @@ import type { LegalDoc } from './types'
 export const PRIVACY_DOC: LegalDoc = {
   navTitle: '隐私政策',
   kicker: {
-    icon: 'safeAccent',
+    icon: 'shieldCheckBrand',
     text: 'Privacy · 隐私政策',
   },
   title: '鱼小应隐私政策',
@@ -102,7 +102,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b1',
           kind: 'list',
           head: {
-            icon: 'user',
+            icon: 'userFg',
             text: '（一）账号登录、资料、认证与手机号绑定',
           },
           items: [
@@ -154,7 +154,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b2',
           kind: 'list',
           head: {
-            icon: 'category',
+            icon: 'tagMuted',
             text: '（二）商品发布、求购匹配、交易、评价与争议',
           },
           items: [
@@ -214,7 +214,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b3',
           kind: 'list',
           head: {
-            icon: 'chat',
+            icon: 'chatFg',
             text: '（三）站内聊天、互动、在线状态与通知提醒',
           },
           items: [
@@ -264,7 +264,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b4',
           kind: 'list',
           head: {
-            icon: 'ai',
+            icon: 'sparkleBrand',
             text: '（四）AI 辅助、拍照识图、浏览足迹与个性化推荐',
           },
           items: [
@@ -314,7 +314,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b5',
           kind: 'list',
           head: {
-            icon: 'shieldLine',
+            icon: 'shieldBrand',
             text: '（五）举报、意见反馈与安全风控日志',
           },
           items: [
@@ -354,7 +354,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's2-b6',
           kind: 'notlist',
           head: {
-            icon: 'checkAccent',
+            icon: 'checkBrand',
             text: '我们严格不收集或绝不触碰的信息',
           },
           runs: [
@@ -384,7 +384,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's3-b1',
           kind: 'list',
           head: {
-            icon: 'serviceMuted',
+            icon: 'headsetMuted',
             text: '小程序权限与系统接口调用明细',
           },
           items: [
@@ -461,7 +461,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's4-b1',
           kind: 'list',
           head: {
-            icon: 'file',
+            icon: 'fileFg',
             text: '小程序本地 Storage 键名清单',
           },
           items: [
@@ -569,7 +569,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's5-b1',
           kind: 'list',
           head: {
-            icon: 'share',
+            icon: 'shareFg',
             text: '第三方合作与受托处理方概览',
           },
           items: [
@@ -668,7 +668,7 @@ export const PRIVACY_DOC: LegalDoc = {
           key: 's6-b1',
           kind: 'list',
           head: {
-            icon: 'clock',
+            icon: 'clockMuted',
             text: '核心信息保存期限规则',
           },
           items: [
@@ -898,27 +898,27 @@ export const PRIVACY_DOC: LegalDoc = {
   ],
   links: [
     {
-      icon: 'category',
+      icon: 'tagMuted',
       label: '《个人信息收集清单》',
       page: '/pkg-legal/pages/info-collection/index',
     },
     {
-      icon: 'share',
+      icon: 'shareFg',
       label: '《第三方信息共享清单》',
       page: '/pkg-legal/pages/third-party-sharing/index',
     },
     {
-      icon: 'docInk',
+      icon: 'docFg',
       label: '《用户协议》',
       page: '/pkg-legal/pages/terms/index',
     },
     {
-      icon: 'shieldLine',
+      icon: 'shieldBrand',
       label: '《社区规范与交易安全须知》',
       page: '/pkg-legal/pages/community-guidelines/index',
     },
     {
-      icon: 'editAccent',
+      icon: 'editBrand',
       label: '意见反馈',
       page: '/pkg-legal/pages/feedback/index',
     },

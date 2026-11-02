@@ -190,7 +190,7 @@ export default function SendListing() {
 
       {/* 按标题过滤（客户端过滤：单侧在售量级小，不值得为它加一次服务端往返） */}
       <View className="sl__search">
-        <Image className="sl__search-ic" src={ICONS.search} mode="aspectFit" />
+        <Image className="sl__search-ic" src={ICONS.searchMuted} mode="aspectFit" />
         <Input
           className="sl__search-in"
           placeholder="搜索商品标题"

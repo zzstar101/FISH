@@ -866,7 +866,7 @@ export default function Sell() {
         <View className="sell__body">
           <View className="sell__result">
             <View className="sell__result-badge">
-              <Image className="sell__result-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="sell__result-ic" src={ICONS.warnFg} mode="aspectFit" />
             </View>
             <Text className="sell__result-title">已提交，正在审核</Text>
             <Text className="sell__result-text">
@@ -944,7 +944,7 @@ export default function Sell() {
         {/* 服务端拒绝的整块提示：字段细节贴在各输入框下方，这里只说有几处要改 */}
         {blockMessage ? (
           <View className="sell__alert">
-            <Image className="sell__alert-ic" src={ICONS.warnInk} mode="aspectFit" />
+            <Image className="sell__alert-ic" src={ICONS.warnFg} mode="aspectFit" />
             <View className="sell__alert-main">
               <Text className="sell__alert-title">{blockMessage}</Text>
               <Text className="sell__alert-desc">
@@ -987,7 +987,11 @@ export default function Sell() {
                       setExistingPhotos((prev) => prev.filter((item) => item.url !== photo.url))
                     }
                   >
-                    <Image className="sell__photo-del-img" src={ICONS.delete} mode="aspectFit" />
+                    <Image
+                      className="sell__photo-del-img"
+                      src={ICONS.trashWhite}
+                      mode="aspectFit"
+                    />
                   </View>
                 </View>
               ))}
@@ -1009,29 +1013,33 @@ export default function Sell() {
                     className="sell__photo-del"
                     onClick={() => setPhotos((prev) => prev.filter((item) => item.id !== photo.id))}
                   >
-                    <Image className="sell__photo-del-img" src={ICONS.delete} mode="aspectFit" />
+                    <Image
+                      className="sell__photo-del-img"
+                      src={ICONS.trashWhite}
+                      mode="aspectFit"
+                    />
                   </View>
                 </View>
               ))}
               {totalImages < MAX_LISTING_IMAGES ? (
                 <View className="sell__photo sell__photo--add" onClick={pickImage}>
-                  <Image className="sell__photo-add-img" src={ICONS.plusLine} mode="aspectFit" />
+                  <Image className="sell__photo-add-img" src={ICONS.plusBrand} mode="aspectFit" />
                 </View>
               ) : null}
             </View>
             {imagesError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{imagesError}</Text>
               </View>
             ) : hasUploadFailure ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">有图片上传失败，点缩略图上的「重传」再提交。</Text>
               </View>
             ) : hasStaleImage ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">
                   标着「需重选」的图片不能再使用，请删掉后重新选一张。
                 </Text>
@@ -1062,7 +1070,7 @@ export default function Sell() {
             />
             {titleError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{`${titleError}，请修改后再发布。`}</Text>
               </View>
             ) : null}
@@ -1090,13 +1098,13 @@ export default function Sell() {
                 }`}
                 onClick={openPolish}
               >
-                <Image className="sell__polish-ic" src={ICONS.ai} mode="aspectFit" />
+                <Image className="sell__polish-ic" src={ICONS.sparkleBrand} mode="aspectFit" />
                 <Text>{polishButtonText({ loading: polish.phase === 'loading', cooldown })}</Text>
               </View>
             </View>
             {descriptionError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{`${descriptionError}，请修改后再发布。`}</Text>
               </View>
             ) : null}
@@ -1121,7 +1129,7 @@ export default function Sell() {
             </View>
             {priceError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{priceError}</Text>
               </View>
             ) : null}
@@ -1171,7 +1179,7 @@ export default function Sell() {
             </View>
             {categoryError ? (
               <View className="sell__err">
-                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="sell__err-ic" src={ICONS.warnFg} mode="aspectFit" />
                 <Text className="sell__err-tx">{categoryError}</Text>
               </View>
             ) : null}
@@ -1234,7 +1242,7 @@ export default function Sell() {
                   <View className="sell__badge-thumb-ph">
                     <Image
                       className="sell__badge-thumb-ph-ic"
-                      src={ICONS.camera}
+                      src={ICONS.cameraMuted}
                       mode="aspectFit"
                     />
                   </View>
@@ -1263,7 +1271,7 @@ export default function Sell() {
 
         <View className="sell__submit" onClick={submit}>
           {submitting ? null : (
-            <Image className="sell__submit-icon" src={ICONS.plus} mode="aspectFit" />
+            <Image className="sell__submit-icon" src={ICONS.plusWhite} mode="aspectFit" />
           )}
           <Text className="sell__submit-text">
             {submitting
@@ -1299,7 +1307,7 @@ export default function Sell() {
           <View className="sell__scrim" onClick={closeSheet} />
           <View className="sell__sheet">
             <View className="sell__sheet-h">
-              <Image className="sell__sheet-h-ic" src={ICONS.ai} mode="aspectFit" />
+              <Image className="sell__sheet-h-ic" src={ICONS.sparkleBrand} mode="aspectFit" />
               <Text className="sell__sheet-h-tx">AI 润色建议</Text>
             </View>
 

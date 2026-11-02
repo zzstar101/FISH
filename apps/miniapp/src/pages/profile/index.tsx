@@ -1,7 +1,7 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import brandLockup from '@/assets/brand/brand-lockup.png'
+import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
 import {
   applyProfile,
@@ -438,7 +438,7 @@ export default function Profile() {
     {
       key: 'onsale',
       label: '在售',
-      icon: ICONS.profileOnsale,
+      icon: ICONS.tagBrand,
       url: '/pkg-browse/pages/mylist/index',
       count: counts.activeListings ?? undefined,
     },
@@ -447,14 +447,14 @@ export default function Profile() {
     {
       key: 'sold',
       label: '卖出',
-      icon: ICONS.profileSold,
+      icon: ICONS.uploadBrand,
       url: '/pkg-trade/pages/orders-sell/index',
       count: counts.pendingMeetupSell ?? undefined,
     },
     {
       key: 'bought',
       label: '买入',
-      icon: ICONS.profileBought,
+      icon: ICONS.downloadBrand,
       url: '/pkg-trade/pages/orders-buy/index',
       count: counts.pendingMeetupBuy ?? undefined,
     },
@@ -463,17 +463,17 @@ export default function Profile() {
     {
       key: 'review',
       label: '评价',
-      icon: ICONS.profileReview,
+      icon: ICONS.starBrand,
       url: '/pkg-browse/pages/comments/index',
     },
     // #252：举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标；
-    // 图标用 safeAccent 与格子家族同色 —— shieldLine 是浅灰蓝，混进品牌蓝的格子
+    // 图标用 shieldCheckBrand 与格子家族同色 —— 旧 shieldLine 是浅灰蓝，混进品牌蓝的格子
     // 里发灰）。提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态
     // （举报后端未上线），见 pages/my-reports 的文件头。
     {
       key: 'reports',
       label: '举报',
-      icon: ICONS.safeAccent,
+      icon: ICONS.shieldCheckBrand,
       url: '/pkg-trade/pages/my-reports/index',
     },
   ]
@@ -497,7 +497,7 @@ export default function Profile() {
       icon: ICONS.feedbackMuted,
       url: '/pkg-legal/pages/feedback/index',
     },
-    { key: 'service', title: '联系客服', sub: '在线客服与常见问题', icon: ICONS.serviceMuted },
+    { key: 'service', title: '联系客服', sub: '在线客服与常见问题', icon: ICONS.headsetMuted },
     {
       key: 'about',
       title: '关于与版本',
@@ -532,7 +532,7 @@ export default function Profile() {
         <View className="profile__list">
           <View className="profile__row-item is-danger" onClick={onLogout}>
             <View className="profile__row-disc is-danger">
-              <Image className="profile__row-ic" src={ICONS.power} mode="aspectFit" />
+              <Image className="profile__row-ic" src={ICONS.powerDanger} mode="aspectFit" />
             </View>
             <View className="profile__row-main">
               <Text className="profile__row-title">退出登录</Text>
@@ -548,7 +548,7 @@ export default function Profile() {
   /** 版权行：在卡片外面（Owner 指定的组合 logo：鱼形标 + 鱼小应 YUXIAOYING） */
   const footer = (
     <View className="profile__footer">
-      <Image className="profile__footer-logo" src={brandLockup} mode="aspectFit" />
+      <Image className="profile__footer-logo" src={BRAND.lockup} mode="aspectFit" />
       <Text className="profile__footer-copy">©2026 鱼小应，版权所有</Text>
     </View>
   )
@@ -564,7 +564,7 @@ export default function Profile() {
         <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
           <View className="profile__card profile__guest">
             <View className="profile__guest-av">
-              <Image className="profile__guest-ic" src={ICONS.user} mode="aspectFit" />
+              <Image className="profile__guest-ic" src={ICONS.userFg} mode="aspectFit" />
             </View>
             <Text className="profile__guest-title">你还没有登录</Text>
             <Text className="profile__guest-text">
@@ -656,7 +656,7 @@ export default function Profile() {
             {user.avatarUrl ? (
               <Image className="profile__avatar-img" src={user.avatarUrl} mode="aspectFill" />
             ) : (
-              <Image className="profile__avatar-ph" src={ICONS.user} mode="aspectFit" />
+              <Image className="profile__avatar-ph" src={ICONS.userFg} mode="aspectFit" />
             )}
           </View>
           <View className="profile__info">
@@ -690,7 +690,7 @@ export default function Profile() {
                 ⚠️ 他人视角的用户主页（页面尚未落地）要按同一口径只显首行，并额外给一个
                 「点击展开全部」的入口；该页后续再改，这里先留提示 —— 本页**不加**展开 */}
             <View className="profile__sig" onClick={editSignature}>
-              <Image className="profile__sig-ic" src={ICONS.editAccent} mode="aspectFit" />
+              <Image className="profile__sig-ic" src={ICONS.editBrand} mode="aspectFit" />
               <Text className={`profile__sig-txt${sigText ? '' : ' is-ph'}`}>
                 {sigText || '设置个性签名'}
               </Text>
@@ -701,7 +701,7 @@ export default function Profile() {
             className="profile__scanbtn"
             onClick={() => void Taro.navigateTo({ url: '/pkg-vision/pages/scan-pr/index' })}
           >
-            <Image className="profile__scanbtn-ic" src={ICONS.scanAccent} mode="aspectFit" />
+            <Image className="profile__scanbtn-ic" src={ICONS.scanBrand} mode="aspectFit" />
           </View>
         </View>
 

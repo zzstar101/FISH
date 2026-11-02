@@ -9,7 +9,7 @@ import type { LegalDoc } from './types'
 export const INFO_COLLECTION_DOC: LegalDoc = {
   navTitle: '个人信息收集清单',
   kicker: {
-    icon: 'category',
+    icon: 'tagMuted',
     text: 'Privacy · 收集清单',
   },
   title: '鱼小应个人信息收集清单',
@@ -49,7 +49,7 @@ export const INFO_COLLECTION_DOC: LegalDoc = {
           key: 's1-b0',
           kind: 'list',
           head: {
-            icon: 'user',
+            icon: 'userFg',
             text: '账号与认证类信息（共 6 项）',
           },
           items: [
@@ -168,7 +168,7 @@ export const INFO_COLLECTION_DOC: LegalDoc = {
           key: 's2-b0',
           kind: 'list',
           head: {
-            icon: 'order',
+            icon: 'orderFg',
             text: '商品、求购与交易履约类信息（共 5 项）',
           },
           items: [
@@ -272,7 +272,7 @@ export const INFO_COLLECTION_DOC: LegalDoc = {
           key: 's3-b0',
           kind: 'list',
           head: {
-            icon: 'chat',
+            icon: 'chatFg',
             text: '聊天、留言、关系链与通知类信息（共 5 项）',
           },
           items: [
@@ -370,7 +370,7 @@ export const INFO_COLLECTION_DOC: LegalDoc = {
           key: 's4-b0',
           kind: 'list',
           head: {
-            icon: 'ai',
+            icon: 'sparkleBrand',
             text: '智能辅助与浏览推荐类信息（共 5 项）',
           },
           items: [
@@ -470,7 +470,7 @@ export const INFO_COLLECTION_DOC: LegalDoc = {
           key: 's5-b0',
           kind: 'list',
           head: {
-            icon: 'shieldLine',
+            icon: 'shieldBrand',
             text: '治理反馈与防滥用限流信息（共 3 项）',
           },
           items: [
@@ -530,22 +530,22 @@ export const INFO_COLLECTION_DOC: LegalDoc = {
   ],
   links: [
     {
-      icon: 'safeAccent',
+      icon: 'shieldCheckBrand',
       label: '《隐私政策》',
       page: '/pkg-legal/pages/privacy/index',
     },
     {
-      icon: 'share',
+      icon: 'shareFg',
       label: '《第三方信息共享清单》',
       page: '/pkg-legal/pages/third-party-sharing/index',
     },
     {
-      icon: 'docInk',
+      icon: 'docFg',
       label: '《用户协议》',
       page: '/pkg-legal/pages/terms/index',
     },
     {
-      icon: 'shieldLine',
+      icon: 'shieldBrand',
       label: '《社区规范与交易安全须知》',
       page: '/pkg-legal/pages/community-guidelines/index',
     },

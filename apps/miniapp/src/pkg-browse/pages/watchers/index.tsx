@@ -206,7 +206,7 @@ export default function Watchers() {
                 {listing.images[0] ? (
                   <Image className="wt__lthumb-img" src={listing.images[0].url} mode="aspectFill" />
                 ) : (
-                  <Image className="wt__lthumb-fallback" src={ICONS.starAccent} mode="aspectFit" />
+                  <Image className="wt__lthumb-fallback" src={ICONS.starBrand} mode="aspectFit" />
                 )}
               </View>
               <View className="wt__lmain">
@@ -237,7 +237,7 @@ export default function Watchers() {
 
         {page.phase === 'error' ? (
           <View className="wt__fail">
-            <Image className="wt__fail-img" src={ICONS.warnInk} mode="aspectFit" />
+            <Image className="wt__fail-img" src={ICONS.warnFg} mode="aspectFit" />
             <View className="wt__fail-main">
               <Text className="wt__fail-title">想要的人列表加载失败，请检查网络后重试</Text>
               <View className="wt__fail-act" onClick={retry}>
@@ -248,7 +248,7 @@ export default function Watchers() {
         ) : null}
         {page.phase === 'forbidden' || page.phase === 'not-found' ? (
           <View className="wt__empty">
-            <Image className="wt__empty-ic" src={ICONS.info} mode="aspectFit" />
+            <Image className="wt__empty-ic" src={ICONS.infoFg} mode="aspectFit" />
             <Text className="wt__empty-title">无法查看</Text>
             <Text className="wt__empty-text">
               {page.phase === 'forbidden' ? '只有商品卖家可以查看想要的人' : '商品不存在或无法查看'}
@@ -278,7 +278,7 @@ export default function Watchers() {
               </View>
             ) : page.items.length === 0 ? (
               <View className="wt__empty">
-                <Image className="wt__empty-ic" src={ICONS.starAccent} mode="aspectFit" />
+                <Image className="wt__empty-ic" src={ICONS.starBrand} mode="aspectFit" />
                 <Text className="wt__empty-title">还没有人想要</Text>
                 <Text className="wt__empty-text">还没有同学为这件商品发起聊天</Text>
               </View>
@@ -317,7 +317,7 @@ export default function Watchers() {
                             <View className="wt__badge">
                               <Image
                                 className="wt__badge-ic"
-                                src={ICONS.verifiedAccent}
+                                src={ICONS.verifiedBrand}
                                 mode="aspectFit"
                               />
                               <Text>已认证</Text>
@@ -336,7 +336,7 @@ export default function Watchers() {
                   ))}
                 </View>
                 <View className="wt__banner">
-                  <Image className="wt__banner-ic-img" src={ICONS.info} mode="aspectFit" />
+                  <Image className="wt__banner-ic-img" src={ICONS.infoFg} mode="aspectFit" />
                   <Text className="wt__banner-tx">
                     只展示对方的昵称、头像、认证状态和发起聊天时间；建立会话不代表已收藏或发布愿望。
                   </Text>

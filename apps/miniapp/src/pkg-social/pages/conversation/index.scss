@@ -197,8 +197,8 @@
 }
 
 .conv__pcard-ph {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
 }
 
 .conv__pcard-main {
@@ -243,8 +243,8 @@
 }
 
 .conv__pcard-caret {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
 }
 
 /**
@@ -287,8 +287,8 @@
 }
 
 .conv__lcard-ph {
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
 }
 
 .conv__lcard-main {
@@ -321,8 +321,8 @@
 }
 
 .conv__lcard-caret {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 
@@ -612,8 +612,8 @@
 }
 
 .conv__replybar-ic {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   opacity: 0.6;
 }
 
@@ -858,8 +858,9 @@
 
 .conv__txcard-ic {
   flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: 48px;
+  height: 48px;
+  margin: 10px; /* 图标收敛到 48（#513），外边距保住原 68 的占位，卡片高度与文字位置不变 */
 }
 
 .conv__txcard-main {
@@ -1072,8 +1073,8 @@
 }
 
 .conv__ptile-ic {
-  width: 56px;
-  height: 56px;
+  width: 48px;
+  height: 48px;
 }
 
 .conv__ptile-label {

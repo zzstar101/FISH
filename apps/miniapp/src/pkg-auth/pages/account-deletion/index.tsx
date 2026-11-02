@@ -246,7 +246,7 @@ export default function AccountDeletion() {
                 {submitting ? (
                   <View className="ad__spin" />
                 ) : (
-                  <Image className="ad__danger-ic" src={ICONS.delete} mode="aspectFit" />
+                  <Image className="ad__danger-ic" src={ICONS.trashFg} mode="aspectFit" />
                 )}
                 <Text>{submitting ? '提交中…' : '申请注销账号'}</Text>
               </View>
@@ -261,7 +261,7 @@ export default function AccountDeletion() {
           <>
             <View className="ad__state">
               <View className="ad__state-ic">
-                <Image className="ad__state-ic-img" src={ICONS.warnInk} mode="aspectFit" />
+                <Image className="ad__state-ic-img" src={ICONS.warnFg} mode="aspectFit" />
               </View>
               <Text className="ad__state-title">注销申请已提交</Text>
               <Text className="ad__state-days">{coolingOffLabel(purgeAt, Date.now())}</Text>
@@ -283,7 +283,7 @@ export default function AccountDeletion() {
                 {withdrawing ? (
                   <View className="ad__spin" />
                 ) : (
-                  <Image className="ad__danger-ic" src={ICONS.refresh} mode="aspectFit" />
+                  <Image className="ad__danger-ic" src={ICONS.refreshBrand} mode="aspectFit" />
                 )}
                 <Text>{withdrawing ? '撤回中…' : '撤回注销申请'}</Text>
               </View>

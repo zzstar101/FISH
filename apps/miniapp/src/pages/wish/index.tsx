@@ -356,11 +356,8 @@ export default function Wish() {
                     void Taro.navigateTo({ url: '/pkg-social/pages/wish-publish/index' })
                   }
                 >
-                  {/*
-                加号用 `plusLine`（本地补画的那枚线稿加号），不要用 `plus` ——
-                后者在图标库里其实是一枚盾形图标，不是加号。
-              */}
-                  <Image className="wish__new-ic" src={ICONS.plusLine} mode="aspectFit" />
+                  {/* 按钮是深墨底，加号用反白版 `plusWhite` */}
+                  <Image className="wish__new-ic" src={ICONS.plusWhite} mode="aspectFit" />
                   <Text>我要许愿</Text>
                 </View>
               ) : (
@@ -410,7 +407,7 @@ export default function Wish() {
               mineList.length === 0 ? (
                 <View className="wishempty">
                   <View className="wishempty__mk">
-                    <Image className="wishempty__ic" src={ICONS.starAccent} mode="aspectFit" />
+                    <Image className="wishempty__ic" src={ICONS.starBrand} mode="aspectFit" />
                   </View>
                   <Text className="wishempty__title">这个筛选下还没有愿望</Text>
                   <Text className="wishempty__text">换个筛选条件，或点右上角「我要许愿」</Text>
@@ -492,7 +489,7 @@ export default function Wish() {
                             <View className="mw__truth-hd">
                               <Image
                                 className="mw__truth-ic"
-                                src={ICONS.checkAccent}
+                                src={ICONS.checkBrand}
                                 mode="aspectFit"
                               />
                               <Text>{`愿望成真 · 命中 ${hitCount} 件`}</Text>
@@ -505,7 +502,11 @@ export default function Wish() {
 
                         <View className="mw__act">
                           <View className="mw__act-lk" onClick={() => goSearch(wish.keyword)}>
-                            <Image className="mw__act-ic" src={ICONS.search} mode="aspectFit" />
+                            <Image
+                              className="mw__act-ic"
+                              src={ICONS.searchMuted}
+                              mode="aspectFit"
+                            />
                             <Text>按关键词搜索</Text>
                             <Text className="mw__act-cnt">{hitCount}</Text>
                           </View>
@@ -539,7 +540,7 @@ export default function Wish() {
             ) : poolList.length === 0 ? (
               <View className="wishempty">
                 <View className="wishempty__mk">
-                  <Image className="wishempty__ic" src={ICONS.starAccent} mode="aspectFit" />
+                  <Image className="wishempty__ic" src={ICONS.starBrand} mode="aspectFit" />
                 </View>
                 <Text className="wishempty__title">这个分类下还没有人求购</Text>
                 <Text className="wishempty__text">

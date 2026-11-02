@@ -9,7 +9,7 @@ import Taro, {
   useUnload,
 } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
-import brandLogo from '@/assets/brand/logo.png'
+import { BRAND } from '@/assets/brand'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -57,9 +57,11 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 
 export default function Home() {
   // 右上角菜单转发：分享出去落地本页（tab 页天然支持冷启动直入）。
+  // 封面用 5:4 品牌图（包内路径）；不给 imageUrl 时微信会截当前页做封面，没有品牌元素。
   useShareAppMessage(() => ({
     title: '鱼小应 · 校园闲置好物，来看看',
     path: '/pages/home/index',
+    imageUrl: BRAND.share,
   }))
   const [items, setItems] = useState<MockListing[]>([])
   /**
@@ -454,7 +456,7 @@ export default function Home() {
         spacer
         left={
           <View className="home__logo-wrap">
-            <Image className="home__logo" src={brandLogo} mode="aspectFit" />
+            <Image className="home__logo" src={BRAND.lockup} mode="aspectFit" />
           </View>
         }
         center={
@@ -464,10 +466,10 @@ export default function Home() {
               （占位文案 / 右侧放大镜）仍走 `goSearch` 进文字搜索。
             */}
             <View className="home__search-cam-hit" onClick={onCameraTap}>
-              <Image className="home__search-cam" src={ICONS.camera} mode="aspectFit" />
+              <Image className="home__search-cam" src={ICONS.cameraMuted} mode="aspectFit" />
             </View>
             <Text className="home__search-ph">搜「键盘」「考研教材」</Text>
-            <Image className="home__search-icon" src={ICONS.search} mode="aspectFit" />
+            <Image className="home__search-icon" src={ICONS.searchMuted} mode="aspectFit" />
           </View>
         }
       />

@@ -66,8 +66,8 @@ const MAX_PROPOSAL_SCANS = 12
  * `decorateNotification`，与 web 端同口径），这里只负责「把 tone 映射成一张图」。
  */
 const TONE_ICON: Record<MockNotification['tone'], string> = {
-  mint: ICONS.heartOn,
-  warn: ICONS.safeAccent,
+  mint: ICONS.heartFillBrand,
+  warn: ICONS.shieldCheckBrand,
 }
 
 /**
@@ -660,7 +660,7 @@ export default function Chat() {
             <View className="chat__readall" onClick={markAllRead}>
               <Image
                 className="chat__readall-ic"
-                src={unreadItems.length === 0 ? ICONS.readallMuted : ICONS.readallAccent}
+                src={unreadItems.length === 0 ? ICONS.checkDoubleMuted : ICONS.checkDoubleBrand}
                 mode="aspectFit"
               />
             </View>
@@ -700,7 +700,7 @@ export default function Chat() {
               <EmptyState
                 title="还没有通知"
                 text="愿望匹配上闲置、交易有进展时会出现在这里"
-                icon={ICONS.bellInk}
+                icon={ICONS.bellFg}
               />
             ) : null}
           </View>

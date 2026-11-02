@@ -279,7 +279,7 @@ export default function ProductCard({
             <Image className="pcard__avatar" src={seller.avatarUrl} mode="aspectFill" />
             <Text className="pcard__who">{seller.nickname}</Text>
             {verified ? (
-              <Image className="pcard__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
+              <Image className="pcard__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
             ) : null}
           </View>
         ) : null}

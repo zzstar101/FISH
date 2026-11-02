@@ -210,7 +210,7 @@ export default function MyReports() {
             <EmptyState
               title={copyEmpty.title}
               text={copyEmpty.text}
-              icon={demo ? ICONS.docMuted : ICONS.shieldLine}
+              icon={demo ? ICONS.docMuted : ICONS.shieldMuted}
               actionText={copyEmpty.actionLabel ?? undefined}
               onAction={copyEmpty.actionLabel ? onEmptyAction : undefined}
             />
@@ -227,7 +227,7 @@ export default function MyReports() {
                     </View>
                   ) : (
                     <View className="rpts__thumb rpts__thumb--ava">
-                      <Image className="rpts__thumb-ic" src={ICONS.user} mode="aspectFit" />
+                      <Image className="rpts__thumb-ic" src={ICONS.userFg} mode="aspectFit" />
                     </View>
                   )}
                   <View className="rpts__main">

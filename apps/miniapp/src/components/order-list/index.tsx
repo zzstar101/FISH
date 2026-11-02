@@ -384,7 +384,7 @@ export default function OrderList({
         {!loading && !failed && shown.length === 0 ? (
           <View className={`orders__empty${emptyRole ? '' : ' orders__empty--inline'}`}>
             <View className="orders__empty-disc">
-              <Image className="orders__empty-ic" src={ICONS.order} mode="aspectFit" />
+              <Image className="orders__empty-ic" src={ICONS.orderFg} mode="aspectFit" />
             </View>
             <Text className="orders__empty-title">
               {emptyRole
@@ -466,7 +466,7 @@ export default function OrderList({
                           className="orders__btn orders__btn--ghost"
                           onClick={() => openConversation(item)}
                         >
-                          <Image className="orders__btn-ic" src={ICONS.chatInk} mode="aspectFit" />
+                          <Image className="orders__btn-ic" src={ICONS.chatFg} mode="aspectFit" />
                           <Text>查看会话</Text>
                         </View>
                         {/* 取消是双方的动作，放次级危险位：真发 DELETE 语义的写端点前有二级确认 */}
@@ -483,7 +483,7 @@ export default function OrderList({
                           className="orders__btn orders__btn--pri"
                           onClick={() => openMeetup(item)}
                         >
-                          <Image className="orders__btn-ic" src={ICONS.qr} mode="aspectFit" />
+                          <Image className="orders__btn-ic" src={ICONS.qrFg} mode="aspectFit" />
                           <Text>{item.role === 'buyer' ? '打开二维码' : '打开交易码'}</Text>
                         </View>
                       </>
@@ -508,7 +508,7 @@ export default function OrderList({
                           >
                             <Image
                               className="orders__btn-ic"
-                              src={ICONS.starAccent}
+                              src={ICONS.starBrand}
                               mode="aspectFit"
                             />
                             <Text>{reviewedIds.includes(item.id) ? '已评价' : '评价'}</Text>
@@ -518,7 +518,7 @@ export default function OrderList({
                           className="orders__btn orders__btn--sec"
                           onClick={() => openConversation(item)}
                         >
-                          <Image className="orders__btn-ic" src={ICONS.chatInk} mode="aspectFit" />
+                          <Image className="orders__btn-ic" src={ICONS.chatFg} mode="aspectFit" />
                           <Text>查看会话</Text>
                         </View>
                       </>

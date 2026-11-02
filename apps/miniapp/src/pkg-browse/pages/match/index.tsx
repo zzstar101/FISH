@@ -377,7 +377,7 @@ export default function Match() {
       ) : total === 0 ? (
         <View className="match__empty">
           <View className="match__empty-disc">
-            <Image className="match__empty-ic" src={ICONS.bellInk} mode="aspectFit" />
+            <Image className="match__empty-ic" src={ICONS.bellFg} mode="aspectFit" />
           </View>
           <Text className="match__empty-title">
             {forbidden ? '无权查看这条愿望' : gone ? '这条愿望已结束' : '还没有匹配到'}

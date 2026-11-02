@@ -335,7 +335,7 @@ export default function Following() {
         /* 「关注动态」：没有数据源 → 状态页如实说明，不编一屏假动态（稿决策③） */
         <View className="fw__state">
           <View className="fw__state-disc">
-            <Image className="fw__state-ic" src={ICONS.rank} mode="aspectFit" />
+            <Image className="fw__state-ic" src={ICONS.crownBrand} mode="aspectFit" />
           </View>
           <Text className="fw__state-title">关注动态</Text>
           <Text className="fw__state-tag">未上线</Text>
@@ -378,7 +378,7 @@ export default function Following() {
         */
         <View className="fw__emptypad">
           <EmptyState
-            icon={ICONS.personAdd}
+            icon={ICONS.userAddBrand}
             title="还没有关注的人"
             text="去别人的主页点「关注」，TA 就会出现在这里。"
             actionText="去首页看看"
@@ -391,7 +391,7 @@ export default function Following() {
           {ready.demo ? (
             <View className="fw__demo">
               <View className="fw__demo-ic">
-                <Image className="fw__demo-ic-img" src={ICONS.info} mode="aspectFit" />
+                <Image className="fw__demo-ic-img" src={ICONS.infoFg} mode="aspectFit" />
               </View>
               <Text className="fw__demo-tx">
                 {`演示数据：下面这 ${ready.total} 人是设计稿的示例。`}
@@ -441,7 +441,7 @@ export default function Following() {
                     </Text>
                     {/* 认证勾：未认证时整块不占位 */}
                     {row.verified ? (
-                      <Image className="fw__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
+                      <Image className="fw__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
                     ) : null}
                   </View>
                   {/* 签名 / 最近活跃只有演示稿有数据源；真实行为空串，整行不渲染 */}
