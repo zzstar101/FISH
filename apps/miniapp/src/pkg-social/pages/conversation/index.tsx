@@ -213,6 +213,12 @@ export default function Conversation() {
    * COMPLETED 覆盖回「待面交」（#522 第 1/4/6 条）。
    */
   const txSeqRef = useRef(0)
+  /**
+   * 当前会话里「我」的角色：轮询重试交易列表时需要它决定查 buyer 还是 seller 视角。
+   * 用 ref 而不是把 `conversation` 塞进轮询 effect 依赖 —— 后者每跳都被 presence 更新，
+   * 会让定时器反复重建。
+   */
+  const txRoleRef = useRef<TransactionDto['role']>('buyer')
   /** 交易查询成功：卡片与页头商品摘要一起换（成交后 listing 会变 SOLD，不能只改卡） */
   const applyTx = useCallback((tx: TransactionDto | null) => {
     setTxLoad({ status: 'ok', tx })
@@ -509,6 +515,7 @@ export default function Conversation() {
           if (current !== epoch.current) return
           if (detail.status === 'ok') {
             setConversation(detail.conversation)
+            txRoleRef.current = detail.conversation.role
             /**
              * 交易进度单独查（#522）：聊天记录里的 `tx.accepted` 是不可变事件，成交 /
              * 取消都不再写 SYSTEM 消息，只看消息流会永远停在「待面交」。所以每次
@@ -824,13 +831,31 @@ export default function Conversation() {
         const current = epoch.current
         /**
          * 进度卡实时性（#522）：契约没有交易推送，成交 / 取消也不写 SYSTEM 消息 ——
-         * 对方在我停留期间确认或取消时，本页只能靠自己轮询。只在 PENDING_MEETUP 时
-         * 多打一个按 id 的详情请求（进终态后这一跳自然停掉），不重拉交易列表。
+         * 对方在我停留期间确认或取消时，本页只能靠自己轮询。进展中只多打一个按 id
+         * 的详情请求（进终态后这一跳自然停掉），不重拉交易列表。
          */
-        const pendingTx = txLoadRef.current.tx
-        if (pendingTx?.status === 'PENDING_MEETUP') {
+        const txState = txLoadRef.current
+        if (txState.status === 'failed') {
+          /**
+           * 上一次查询失败：每一跳重试一次列表 —— 失败卡自带「重新加载」，但用户不点
+           * 也不该被永久卡住；普通聊天不显示卡，恢复后交易会话的卡会自己回来。
+           */
           const txSeq = ++txSeqRef.current
-          void fetchTransaction(pendingTx.id)
+          void fetchConversationTransaction(conversationId, txRoleRef.current)
+            .then((tx) => {
+              if (current !== epoch.current || txSeq !== txSeqRef.current || !visibleRef.current)
+                return
+              applyTx(tx)
+            })
+            .catch((error) => {
+              console.warn('[miniapp] 会话交易进度轮询重试失败', error)
+              if (current !== epoch.current || txSeq !== txSeqRef.current || !visibleRef.current)
+                return
+              setTxLoad((prev) => ({ status: 'failed', tx: prev.tx }))
+            })
+        } else if (txState.tx?.status === 'PENDING_MEETUP') {
+          const txSeq = ++txSeqRef.current
+          void fetchTransaction(txState.tx.id)
             .then((tx) => {
               if (current !== epoch.current || txSeq !== txSeqRef.current || !visibleRef.current)
                 return

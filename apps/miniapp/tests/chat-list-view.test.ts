@@ -167,6 +167,18 @@ describe('previewOf —— 交易进度按交易行渲染（#522）', () => {
     expect(previewOf(accepted(), tx({ status: 'CANCELLED' }))).toBe('交易已取消')
   })
 
+  test('老数据的 accepted 没带 id 也按交易行渲染（与行首胶囊同一口径）', () => {
+    const legacy = dto({
+      lastMessage: {
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.accepted', amountCents: 15000 }),
+        senderId: null,
+        createdAt: '2026-09-21T04:00:00.000Z',
+      },
+    })
+    expect(previewOf(legacy, tx({ status: 'CANCELLED' }))).toBe('交易已取消')
+  })
+
   test('待面交与「我已确认」各说各的（买卖两侧对称）', () => {
     expect(previewOf(accepted(), tx())).toBe('交易已确认 · 约定面交中')
     expect(previewOf(accepted(), tx({ buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }))).toBe(

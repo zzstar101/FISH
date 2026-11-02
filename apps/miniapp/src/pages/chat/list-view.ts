@@ -1,5 +1,6 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import { txMessageEventOfContent } from '@/features/transaction/tx-signal'
 import { formatAmount } from '@/lib/money'
 import { localDayIndex, WEEKDAY } from '@/lib/time'
 
@@ -81,24 +82,18 @@ export function previewOf(item: ConversationDto, tx?: TransactionDto | null): st
   if (!last) return EMPTY_PREVIEW
   if (last.type !== 'SYSTEM') return last.content
 
-  try {
-    const event: unknown = JSON.parse(last.content)
-    if (event && typeof event === 'object' && 'type' in event) {
-      const type = (event as { type: unknown }).type
-      if (type === 'tx.proposal') {
-        const amount = (event as { amountCents?: unknown }).amountCents
-        return typeof amount === 'number'
-          ? `买家发起交易确认 · ¥${formatAmount(amount)}，待确认`
-          : '买家发起交易确认，待确认'
-      }
-      if (type === 'tx.accepted') {
-        return tx ? txPreview(tx) : '交易已确认 · 约定面交中'
-      }
-      if (type === 'tx.rejected') return '卖家已拒绝本次议价'
-    }
-  } catch {
-    // 不是 JSON：按普通文本渲染
+  // 与胶囊共用同一个宽松解析：`tx.accepted` 缺 `transactionId` 的老数据也要认出来，
+  // 否则同一行会出现「胶囊：待同意 / 预览：交易已取消」两套口径（#522）。
+  const event = txMessageEventOfContent(last.content)
+  if (event?.type === 'tx.proposal') {
+    return typeof event.amountCents === 'number'
+      ? `买家发起交易确认 · ¥${formatAmount(event.amountCents)}，待确认`
+      : '买家发起交易确认，待确认'
   }
+  if (event?.type === 'tx.accepted') {
+    return tx ? txPreview(tx) : '交易已确认 · 约定面交中'
+  }
+  if (event?.type === 'tx.rejected') return '卖家已拒绝本次议价'
   return last.content
 }
 

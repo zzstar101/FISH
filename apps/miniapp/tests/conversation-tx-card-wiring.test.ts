@@ -36,12 +36,14 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     expect(code).not.toContain('/pkg-trade/pages/transaction-meetup/index')
   })
 
-  test('停留在页面时 PENDING_MEETUP 的交易靠详情轮询刷新（服务端没有交易推送）', async () => {
+  test('停留在页面时靠详情轮询刷新：PENDING 按 id 查详情，失败则自动重试整份查询', async () => {
     const code = await source()
     const poll = sliceFrom(code, 'timer = setInterval(', 'presenceSeq.current += 1')
-    expect(poll).toContain('txLoadRef.current.tx')
-    expect(poll).toContain("pendingTx?.status === 'PENDING_MEETUP'")
-    expect(poll).toContain('fetchTransaction(pendingTx.id)')
+    expect(poll).toContain('txLoadRef.current')
+    expect(poll).toContain("txState.status === 'failed'")
+    expect(poll).toContain('fetchConversationTransaction(conversationId, txRoleRef.current)')
+    expect(poll).toContain("txState.tx?.status === 'PENDING_MEETUP'")
+    expect(poll).toContain('fetchTransaction(txState.tx.id)')
     // 轮询失败也要记进状态，别把缓存里的 PENDING 当「刚读到的最新进度」
     expect(poll).toContain("setTxLoad((prev) => ({ status: 'failed', tx: prev.tx }))")
   })

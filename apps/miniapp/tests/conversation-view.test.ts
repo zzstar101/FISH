@@ -235,6 +235,17 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
     expect(txCardView(null, null)).toBeNull()
   })
 
+  test('失败时只有「另一笔」才提示查看本笔：当前这笔的胶囊没有该入口', () => {
+    // fallback 就是缓存这笔：消息胶囊仍是「已接受交易」，不能把用户指向不存在的入口
+    expect(txCardView(tx({ status: 'COMPLETED' }), 'txn_1', { failed: true })?.desc).not.toContain(
+      '查看本笔',
+    )
+    // fallback 是另一笔：历史胶囊确实有「查看本笔」
+    expect(txCardView(tx({ status: 'COMPLETED' }), 'txn_msg', { failed: true })?.desc).toContain(
+      '查看本笔',
+    )
+  })
+
   test('查询失败：不信上一份状态，永远给就地重试（有 id 时入口留在消息胶囊上）', () => {
     expect(txCardView(tx({ status: 'CANCELLED' }), 'txn_msg', { failed: true })).toMatchObject({
       tone: 'is-warn',
@@ -267,6 +278,10 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
     expect(txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: null })).toMatchObject({
       title: '交易已取消',
     })
+    // 老 accepted 没有 id，但它是最后一条交易事件：取消卡必须照常显示
+    expect(
+      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: 'tx.accepted' }),
+    ).toMatchObject({ title: '交易已取消' })
   })
 
   test('取消后新提案的判据直接取消息流（最后一条是 TEXT 也找得到提案）', () => {

@@ -131,9 +131,12 @@ export function txCardView(
       tone: 'is-warn',
       icon: 'refresh',
       title: '交易状态待更新',
-      desc: fallbackTxId
-        ? '刚才没取到最新进度，点一下重新加载；也可以从消息里的「查看本笔」进入。'
-        : '刚才没取到最新进度，点一下重新加载。',
+      // 消息胶囊只有「这一笔不是当前交易」时才叫「查看本笔」；fallback 就是当前这笔时
+      // 胶囊仍是「已接受交易」，不能再让文案把用户指到一个不存在的入口上。
+      desc:
+        fallbackTxId && fallbackTxId !== tx?.id
+          ? '刚才没取到最新进度，点一下重新加载；也可以从消息里的「查看本笔」进入。'
+          : '刚才没取到最新进度，点一下重新加载。',
       actionLabel: '重新加载',
       action: 'retry',
       transactionId: '',
