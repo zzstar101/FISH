@@ -36,6 +36,7 @@ import {
   type ChatImageMime,
   imageRejectReason,
   mediaObjectUrl,
+  normalizeRecordedWav,
   type VoiceMime,
   voiceMimeFromBytes,
 } from './media'
@@ -209,7 +210,7 @@ export async function uploadChatImage(
 /**
  * 上传一段录音。
  *
- * 容器由**字节头**判定（不信任录音机声明的格式）：契约只接受可解析时长的 WebM / MP4，
+ * 容器由**字节头**判定（不信任录音机声明的格式）：契约只接受可解析时长的 WebM / MP4 / WAV，
  * 认不出来就明确报错，而不是发一个必然 422 的请求让用户看到「媒体实际属性与声明不一致」。
  * `isActive` 的语义同 `uploadChatImage`。
  */
@@ -219,8 +220,9 @@ export async function uploadChatVoice(
   isActive?: () => boolean,
 ): Promise<UploadedVoice> {
   assertMediaActive(isActive)
-  const buffer = await readLocalFile(voice.path, '语音读取失败，请重试')
+  const raw = await readLocalFile(voice.path, '语音读取失败，请重试')
   assertMediaActive(isActive)
+  const buffer = normalizeRecordedWav(raw)
   const contentType: VoiceMime | null = voiceMimeFromBytes(buffer)
   if (!contentType) throw new Error('当前录音格式暂不支持发送语音')
   const objectKey = await putObject(conversationId, 'VOICE', contentType, buffer, isActive)
