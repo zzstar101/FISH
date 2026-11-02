@@ -175,6 +175,18 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(code).toContain("lastTxEvent?.type === 'tx.accepted'")
   })
 
+  test('首屏交易查询还在 idle 时不给「查看交易码」兜底：这道闸不许被简化掉', async () => {
+    // 剥注释：注释里留一份同名三元表达式不能冒充接线
+    const code = stripComments(await source())
+    const call = sliceFrom(code, 'const txBar = txBarView({', '})')
+    /**
+     * `idle` = 首屏交易查询还没回来，不是「查不到」。此时把消息里的 `tx.accepted` id 当兜底
+     * 入口摆出来，会先闪一下「查看交易码」再变回商品状态 —— 这条闸存在的唯一理由就是防这一闪，
+     * 所以必须钉住整条三元表达式：只断言 `fallbackTxId,` 在场，改回裸传也照样绿。
+     */
+    expect(call).toContain("fallbackTxId: txLoad.status === 'idle' ? null : fallbackTxId")
+  })
+
   test('「待评价」靠评价边判定：只有 404 REVIEW_NOT_FOUND 才算我还没评', async () => {
     const code = await source()
     expect(code).toContain('fetchMyTransactionReview(')
@@ -229,6 +241,17 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     // 接受提案：先二次确认，再把提案金额原样带回（提案不落库，服务端无处可读）
     const accept = sliceFrom(code, 'const confirmProposal =', 'acceptBusyRef.current = false')
     expect(accept).toContain('Taro.showModal(')
+    /**
+     * 入口锁的另一半：**进来先读锁**。只钉「在 showModal 之前置真」是不够的 —— 把
+     * `if (acceptBusyRef.current) return` 删掉后，置真照样发生在 showModal 之前，锁却再也
+     * 没人读，两次快速点击就会各起一个确认框、两次「确认」就是两次 accept 请求。
+     * 所以这一段必须在**本函数里**、且在 `Taro.showModal(` 之前（`code` 已剥注释，
+     * 注释里留一份同名语句不能冒充）。
+     */
+    expect(accept).toContain('if (acceptBusyRef.current) return')
+    expect(accept.indexOf('if (acceptBusyRef.current) return')).toBeLessThan(
+      accept.indexOf('Taro.showModal('),
+    )
     expect(accept).toContain('acceptTransaction(conversationId, amountCents)')
     expect(code).toContain('formatAmount(amountCents)')
     // 409 不代表「接受失败」，但也不能零反馈：说一句商品现状 + 重查本页让 listing 状态跟上，
@@ -260,6 +283,17 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     // 与接受共用一把锁，且必须在弹确认框之前置真
     expect(decline.indexOf('acceptBusyRef.current = true')).toBeLessThan(
       decline.indexOf('Taro.showModal('),
+    )
+    /**
+     * 入口锁的另一半：**进来先读锁**（与接受同一条纪律）。只钉置真的位置不够 —— 删掉
+     * `if (acceptBusyRef.current) return` 后置真仍在 showModal 之前，锁却没人读，两次快速点
+     * 点出两个确认框。本用例切的是未剥注释的源码，所以断言前单独剥一次，避免注释里那句
+     * 「入口就上锁」被当成承重墙。
+     */
+    const declineCode = stripComments(decline)
+    expect(declineCode).toContain('if (acceptBusyRef.current) return')
+    expect(declineCode.indexOf('if (acceptBusyRef.current) return')).toBeLessThan(
+      declineCode.indexOf('Taro.showModal('),
     )
     expect(decline).toContain('.finally(() => {')
     // 在途换号：迟到的 reject 响应不许把上一个账号的页面刷成「已拒绝」

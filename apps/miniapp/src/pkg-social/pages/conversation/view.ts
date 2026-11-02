@@ -112,6 +112,13 @@ export function systemPillText(content: string): string {
  *   文案本来就是成交前口径），其余一律「交易状态待更新 + 重新加载」；而 `PENDING_MEETUP`
  *   那一档即便沿用成交前状态词，**主钮也必须切回「重新加载」**—— 否则查询失败会被静默
  *   吞掉（main 的 `txCardView` 就是 `failed ? '重新加载' : '查看交易码'`）。
+ * - **入参 `role` 与 `tx.role` 必须一致**（同一笔交易 ⟷ 同一条会话的商品，真实数据里不会
+ *   不一致）。但两者在类型上各自可选、互不校验，所以这里**明确分工**，别当成冗余去合并：
+ *   「待对方确认」这一档读的是**交易行那一侧**的确认时间戳，因此 `myConfirmedAt` 取
+ *   `currentTx.role`（确认时间戳属于交易行，算错一侧就会把我方已确认读成对方已确认）；
+ *   主钮文案「打开交易码 / 开启扫码」读的是**会话侧**的入参 `role`。取 `tx.role` 不是
+ *   笔误，`tests/conversation-view.test.ts` 里有一条用例把这份约定（以及不一致时的实际
+ *   表现）钉死，改动这一行会让它变红。
  */
 export type TxBarTone = 'is-plain' | 'is-warn' | 'is-pending' | 'is-ok'
 
@@ -170,6 +177,14 @@ export function txBarView(input: {
    * 取消后买家又提了新案：判据与 `features/chat/capsule.ts` 的 `proposalSupersedes` 同一份
    * —— 此刻更该回答「现在等我做什么」的是提案，不是那笔已取消的行。否则顶部写着
    * 「交易已取消」，同一会话的列表胶囊却写着「待接受」，两处自相矛盾。
+   *
+   * **已确认的边界（Owner 定论 2026-11-03：保留现状）**：同一会话存在过一笔 `CANCELLED`
+   * 交易行、买家再提案、卖家拒绝之后，拒绝只写一条 `tx.rejected`（不落表），于是「消息里
+   * 最后一个 `tx.*` 事件」变成 `tx.rejected` ⇒ 这里 `proposal` 为 null ⇒ 取回那笔 `CANCELLED`
+   * 行 ⇒ 顶部按终态陈述「交易已取消 · 查看」，不再退回「在售」。商品事实上仍在售，与
+   * #551 验收第 2 条「拒绝后顶部退回『在售 · 查看』」的字面只在**首次提案（无历史交易行）**
+   * 时完全一致；多笔历史交易时按终态陈述。此处行为不要「顺手修」—— 改判据要连
+   * `capsule.ts` 一起改，且需 Owner 重新拍板。例外口径已写进 PR 正文。
    */
   const proposalSupersedes = tx?.status === 'CANCELLED' && proposal !== null
   const currentTx = proposalSupersedes ? null : tx

@@ -310,6 +310,29 @@ describe('txBarView —— 页头商品交易状态条（#551）', () => {
     })
   })
 
+  /**
+   * `myConfirmedAt` 取 `tx.role`、主钮文案取入参 `role` —— 两者在真实数据里必然一致
+   * （同一笔交易 ⟷ 同一条会话的商品），但类型上各自独立、互不校验。这条用例把这份约定
+   * 写死在测试里：**确认时间戳属于交易行那一侧**，所以「待面交 / 待对方确认」由 `tx.role`
+   * 决定。故意构造一个不一致的组合，钉住「状态词跟着 `tx.role`、文案跟着入参 `role`」，
+   * 免得日后有人把 `currentTx.role` 「简化」成入参 `role` 而无人察觉。
+   */
+  test('确认时间戳按交易行的 role 取（与入参 role 不一致时，状态词仍以 tx.role 为准）', () => {
+    const view = txBarView(
+      input({
+        role: 'seller',
+        tx: tx({ role: 'buyer', buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }),
+      }),
+    )
+    // 交易行写明「我在买家侧」且买家已确认 → 按 tx.role 读 buyerConfirmedAt ⇒「待对方确认」。
+    // 若改成读入参 role（seller），读到的是 sellerConfirmedAt = null ⇒ 退成「待面交」，本断言即红。
+    expect(view.status).toBe('待对方确认')
+    expect(view.tone).toBe('is-pending')
+    // 主钮文案仍来自会话侧入参 role：卖家 →「打开交易码」
+    expect(view.label).toBe('打开交易码')
+    expect(view.action).toEqual({ kind: 'code', transactionId: 'txn_1' })
+  })
+
   test('已完成且我还没评价 →「评价」进面交页（端上唯一评价入口）', () => {
     expect(txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: false }))).toMatchObject({
       tone: 'is-ok',
