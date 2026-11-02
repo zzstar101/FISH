@@ -617,9 +617,15 @@
   opacity: 0.6;
 }
 
-/* 撤回路上的那条气泡：整块压暗，视觉上告知「正在撤回」 */
-.conv__bubble.is-busy {
+/* 撤回路上的那条气泡/商品卡：整块压暗，视觉上告知「正在撤回」 */
+.conv__bubble.is-busy,
+.conv__lcard.is-busy {
   opacity: 0.55;
+}
+
+/* 商品卡没有气泡的 padding/背景，压暗之外再挡住重复点击 */
+.conv__lcard.is-busy {
+  pointer-events: none;
 }
 
 .conv__rd {

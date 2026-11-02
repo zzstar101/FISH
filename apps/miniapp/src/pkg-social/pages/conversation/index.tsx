@@ -1284,11 +1284,18 @@ export default function Conversation() {
   }
 
   /** 新建一条本地乐观媒体并开始上传（图片 / 语音共用） */
-  const sendMedia = (draft: PendingMediaDraft) => {
+  const sendMedia = (
+    draft: PendingMediaDraft,
+    /**
+     * 多选图片时由调用方显式下发：第一张拿引用，其余传 `null`。
+     * 不能在这里读 `replyTarget` —— `setReplyTarget(null)` 要等下一次渲染，同步循环里
+     * 每一张都会读到同一个旧值，导致整批图都带上同一条引用（#518 审查）。
+     */
+    replyOverride?: ReplyTarget | null,
+  ) => {
     // 引用只跟着这一条发出：先快照，再收起引用栏（与文本 `send` 同一口径；#518）
-    const reply = replyTarget
-      ? { id: replyTarget.id, excerpt: localReplyExcerpt(replyTarget) }
-      : null
+    const target = replyOverride === undefined ? replyTarget : replyOverride
+    const reply = target ? { id: target.id, excerpt: localReplyExcerpt(target) } : null
     setReplyTarget(null)
     localSeq.current += 1
     const item: PendingMedia = {
@@ -1364,18 +1371,24 @@ export default function Conversation() {
     if (picked.rejected) {
       void Taro.showToast({ title: picked.rejected, icon: 'none' })
     }
-    for (const image of picked.images) {
-      sendMedia({
-        kind: 'IMAGE',
-        clientRequestId: randomUuidV4(),
-        path: image.path,
-        image: {
-          mime: image.mime,
-          width: image.width,
-          height: image.height,
-          sizeBytes: image.sizeBytes,
+    // 引用是「这一条」的，不是「这一批」的：同步循环里 setState 还没生效，
+    // 必须显式只给第一张（其余传 null），否则整批图都会复制同一个 replyToId（#518 审查）。
+    const replyForBatch = replyTarget
+    for (const [index, image] of picked.images.entries()) {
+      sendMedia(
+        {
+          kind: 'IMAGE',
+          clientRequestId: randomUuidV4(),
+          path: image.path,
+          image: {
+            mime: image.mime,
+            width: image.width,
+            height: image.height,
+            sizeBytes: image.sizeBytes,
+          },
         },
-      })
+        index === 0 ? replyForBatch : null,
+      )
     }
   }
 
@@ -1636,11 +1649,14 @@ export default function Conversation() {
     onPress: () => void,
     failed = false,
     onLongPress?: () => void,
+    busy = false,
   ) => {
     const playing = playingId === keyId
     return (
       <View
-        className={`conv__bubble conv__bubble--voice${mine ? ' is-mine' : ''}`}
+        className={`conv__bubble conv__bubble--voice${mine ? ' is-mine' : ''}${
+          busy ? ' is-busy' : ''
+        }`}
         onTouchStart={resetBubbleTapGuard}
         onLongPress={onLongPress}
         onClick={() => {
@@ -1750,7 +1766,11 @@ export default function Conversation() {
    * 不会有第二次撤回并发进来抢这个槽位。
    */
   const doRecall = async (message: ReplyTarget) => {
-    if (recallingId) return
+    if (recallingId) {
+      // 撤回按钮在途时没有 loading 文案的话，用户会以为没点上；再点另一条也会被静默吞掉。
+      void Taro.showToast({ title: '正在撤回，请稍候', icon: 'none' })
+      return
+    }
     setRecallingId(message.id)
     try {
       await recallMessage(conversationId, message.id)
@@ -1782,11 +1802,45 @@ export default function Conversation() {
    * `scrollIntoView` 拿到一个不存在的 id 会静默什么都不做 —— 用户点了没反应、也没有提示。
    */
   const locateMessage = (messageId: string) => {
-    if (!messages.some((item) => item.id === messageId)) {
+    // 媒体消息不在 `messages` 里（两条流互斥），只查文本流会把「引用一张图/一段语音」
+    // 误判成未加载；媒体条目的 DOM id 同样是 `e-${keyId}`（keyId = media.id）。
+    const exists =
+      messages.some((item) => item.id === messageId) || media.some((item) => item.id === messageId)
+    if (!exists) {
       void Taro.showToast({ title: '引用的消息在更早的记录里', icon: 'none' })
       return
     }
     setJumpTo({ id: `e-${messageId}`, tail: tailId })
+  }
+
+  /**
+   * 媒体气泡上方的引用摘引（#518）。
+   *
+   * 图片/语音本体是固定尺寸的媒体块，摘引不塞进气泡内部（会挤压 400×300 的图），
+   * 单独放在气泡上方；本地待发条目只有本地临时 id，不能定位，因此不接 onClick。
+   */
+  const renderMediaQuote = (
+    replyTo: { id: string; excerpt: string } | null | undefined,
+    mine: boolean,
+    canLocate: boolean,
+  ) => {
+    if (!replyTo) return null
+    return (
+      <View
+        className={`conv__quote${mine ? ' is-mine' : ''}`}
+        onTouchStart={resetBubbleTapGuard}
+        onClick={
+          canLocate
+            ? () => {
+                if (consumeBubbleTap()) return
+                locateMessage(replyTo.id)
+              }
+            : undefined
+        }
+      >
+        <Text className="conv__quote-tx">{replyTo.excerpt}</Text>
+      </View>
+    )
   }
 
   /** 「+」开合面板：开面板时退回键盘态 */
@@ -2043,7 +2097,7 @@ export default function Conversation() {
             </View>
           ) : card ? (
             <View
-              className="conv__lcard"
+              className={`conv__lcard${recallingId === message.id ? ' is-busy' : ''}`}
               onTouchStart={resetBubbleTapGuard}
               onLongPress={() => void onLongPressMessage(message)}
               onClick={
@@ -2082,7 +2136,11 @@ export default function Conversation() {
               ) : null}
             </View>
           ) : (
-            <View className="conv__bubble" onLongPress={() => void onLongPressMessage(message)}>
+            <View
+              className="conv__bubble"
+              onTouchStart={resetBubbleTapGuard}
+              onLongPress={() => void onLongPressMessage(message)}
+            >
               <Text className="conv__bubble-tx">[商品]</Text>
             </View>
           )}
@@ -2274,6 +2332,7 @@ export default function Conversation() {
                     >
                       {renderAvatar(mine)}
                       <View className="conv__col">
+                        {renderMediaQuote(item.replyTo, mine, true)}
                         {item.kind === 'VOICE' ? (
                           renderVoiceBubble(
                             item.id,
@@ -2282,10 +2341,13 @@ export default function Conversation() {
                             () => openVoice(item),
                             false,
                             () => void onLongPressMessage(item),
+                            recallingId === item.id,
                           )
                         ) : (
                           <View
-                            className="conv__bubble conv__bubble--media"
+                            className={`conv__bubble conv__bubble--media${
+                              recallingId === item.id ? ' is-busy' : ''
+                            }`}
                             onTouchStart={resetBubbleTapGuard}
                             onLongPress={() => void onLongPressMessage(item)}
                             onClick={() => {
@@ -2315,6 +2377,7 @@ export default function Conversation() {
                     <View key={entry.keyId} id={`e-${entry.keyId}`} className="conv__row is-mine">
                       {renderAvatar(true)}
                       <View className="conv__col">
+                        {renderMediaQuote(item.replyTo, true, false)}
                         {item.kind === 'VOICE' ? (
                           // 本地录音文件直接播，不下载：自己刚录的这段就在本地。
                           // 失败同样给 `!` 角标（#364 审查）：修复前只有 IMAGE 分支有，
@@ -2397,13 +2460,18 @@ export default function Conversation() {
                           className={`conv__bubble${mine ? ' is-mine' : ''}${
                             recallingId === message.id ? ' is-busy' : ''
                           }`}
+                          onTouchStart={resetBubbleTapGuard}
                           onLongPress={() => void onLongPressMessage(message)}
                         >
-                          {/* 摘引（#359 3c）：点它定位到被引用的原消息 */}
+                          {/* 摘引（#359 3c）：点它定位到被引用的原消息；长按菜单后的
+                              补发 tap 由守卫吞掉，避免撤回反馈被意外跳转盖掉（#518） */}
                           {message.replyTo ? (
                             <View
                               className={`conv__quote${mine ? ' is-mine' : ''}`}
-                              onClick={() => locateMessage(message.replyTo?.id ?? '')}
+                              onClick={() => {
+                                if (consumeBubbleTap()) return
+                                locateMessage(message.replyTo?.id ?? '')
+                              }}
                             >
                               <Text className="conv__quote-tx">{message.replyTo.excerpt}</Text>
                             </View>

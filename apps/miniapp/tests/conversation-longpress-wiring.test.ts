@@ -46,4 +46,29 @@ describe('会话页长按气泡的接线（#518）', () => {
     expect(voice).toContain('onLongPress={onLongPress}')
     expect(voice).toContain('if (consumeBubbleTap()) return')
   })
+
+  test('媒体气泡显示引用、引用媒体可定位、多选图片只让第一张带引用', async () => {
+    const code = await source('pkg-social/pages/conversation/index.tsx')
+    const media = sliceFrom(
+      code,
+      "if (entry.kind === 'media')",
+      "if (entry.kind === 'pending-media')",
+    )
+    const pendingMedia = sliceFrom(
+      code,
+      "if (entry.kind === 'pending-media')",
+      'const message = entry.message',
+    )
+    const locate = sliceFrom(code, 'const locateMessage = (', 'const renderMediaQuote = (')
+    const picker = sliceFrom(code, 'const pickAndSendImages = async', 'const handleVoiceFailure = ')
+
+    // 服务端与本地乐观媒体都要画出摘引；本地条目没有服务端 id，不接定位点击
+    expect(media).toContain('renderMediaQuote(item.replyTo, mine, true)')
+    expect(pendingMedia).toContain('renderMediaQuote(item.replyTo, true, false)')
+    // 引用媒体消息时，定位判据必须同时查 media 流
+    expect(locate).toContain('media.some((item) => item.id === messageId)')
+    // 多选图片：同步循环里只有第一张拿引用，其余显式 null
+    expect(picker).toContain('const replyForBatch = replyTarget')
+    expect(picker).toContain('index === 0 ? replyForBatch : null')
+  })
 })
