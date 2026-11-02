@@ -95,9 +95,10 @@ export function systemPillText(content: string): string {
  * | `PENDING_MEETUP` | 「待面交」；我已确认则「待对方确认」 | 卖家「打开交易码」→ 面交页；买家「开启扫码」→ 扫码页 |
  * | `COMPLETED` 且我还没评价（`reviewed === false`） | 「已完成交易」 | 「评价」→ 面交页（端上唯一评价入口） |
  * | `COMPLETED` 已评价（`reviewed === true`） | 「已完成交易」 | 「查看」→ 商品详情 |
- * | `COMPLETED` 评价态**没查到**（`reviewed === null`） | 「已完成交易」 | 「查看」→ 面交页（中性文案，不替用户断言他没评过） |
+ * | `COMPLETED` 评价态**没查到**（`reviewed === null`） | 「已完成交易」 | 「查看交易」→ 面交页（中性措辞，不替用户断言他没评过，也不与「查看」撞名） |
  * | `CANCELLED` | 「交易已取消」 | 「查看」→ 商品详情 |
  * | 交易查询失败（有交易证据） | 「交易状态待更新」 | 「重新加载」 |
+ * | 交易查询失败、缓存仍 `PENDING_MEETUP` | 沿用成交前状态词（「待面交」／「待对方确认」） | 「重新加载」 |
  *
  * 几个被验收钉住的取舍：
  * - **已取消不给交易码入口**（#522）：面交页标题仍是「交易码」，即便它渲的是取消结果卡，
@@ -105,10 +106,12 @@ export function systemPillText(content: string): string {
  * - **评价态是严格三态**（`reviewed: boolean | null`）：只有 404 `REVIEW_NOT_FOUND` 才落
  *   `false`（= 待评价），成功落 `true`；`null` 是「还没查 / 查不到」，**不能**当成
  *   「已确认未评价」写「评价」—— 那是在替用户断言一件没查清的事。但入口也不丢：按钮文案
- *   退回中性的「查看」，去向仍是那一笔的面交页（端上唯一评价入口，且该页自己按服务端
+ *   退回中性的「查看交易」，去向仍是那一笔的面交页（端上唯一评价入口，且该页自己按服务端
  *   现状渲染评价块），所以未知态既不说谎，也不会让用户无处可评。
  * - **失败不信任旧终态**：只有仍在 `PENDING_MEETUP` 的缓存可以继续用（它不是终态，
- *   文案本来就是成交前口径），其余一律「交易状态待更新 + 重新加载」。
+ *   文案本来就是成交前口径），其余一律「交易状态待更新 + 重新加载」；而 `PENDING_MEETUP`
+ *   那一档即便沿用成交前状态词，**主钮也必须切回「重新加载」**—— 否则查询失败会被静默
+ *   吞掉（main 的 `txCardView` 就是 `failed ? '重新加载' : '查看交易码'`）。
  */
 export type TxBarTone = 'is-plain' | 'is-warn' | 'is-pending' | 'is-ok'
 
@@ -171,6 +174,11 @@ export function txBarView(input: {
   const proposalSupersedes = tx?.status === 'CANCELLED' && proposal !== null
   const currentTx = proposalSupersedes ? null : tx
 
+  /**
+   * 失败降级的第一档：终态 / 没有缓存 / 别的交易的缓存都不算数，一律「交易状态待更新」。
+   * 仍是 `PENDING_MEETUP` 的缓存例外 —— 它不是终态，按要求退回成交前状态词并给重试，
+   * 所以这里放它过去，由下面 PENDING 分支的 `failed` 判断换钮。
+   */
   if (failed && currentTx?.status !== 'PENDING_MEETUP') {
     return {
       tone: 'is-warn',
@@ -240,8 +248,11 @@ export function txBarView(input: {
      *
      * 「待评价」只认 `reviewed === false`（404 `REVIEW_NOT_FOUND` 才落到这个值）。`null`
      * 是**没查到**（首帧还没查回来 / 网络失败），不是「未评价」—— 写成「评价」就是替用户
-     * 断言他没评过。未知态退回中性的「查看」，去向仍是那一笔的面交页：页面上只有那里
+     * 断言他没评过。未知态退回中性的「查看交易」，去向仍是那一笔的面交页：页面上只有那里
      * 有评价入口，且面交页会按服务端现状渲染，所以既不说谎也不会让用户无处可评。
+     *
+     * 为什么不是「查看」：上面两档（无交易 / 已评价）的「查看」都去商品详情，这里去向是
+     * 面交页 —— 同一个字两种去向，用户没法预判。带宾语的「查看交易」把去向说清楚。
      */
     if (reviewed === true) {
       return { tone: 'is-ok', status: '已完成交易', label: '查看', action: { kind: 'listing' } }
@@ -257,7 +268,7 @@ export function txBarView(input: {
     return {
       tone: 'is-ok',
       status: '已完成交易',
-      label: '查看',
+      label: '查看交易',
       action: { kind: 'review', transactionId },
     }
   }
@@ -268,9 +279,22 @@ export function txBarView(input: {
   // PENDING_MEETUP：契约里「双方各点一次确认」，只看得到自己那一侧的时间戳
   const myConfirmedAt =
     currentTx.role === 'buyer' ? currentTx.buyerConfirmedAt : currentTx.sellerConfirmedAt
+  const pendingStatus = myConfirmedAt === null ? '待面交' : '待对方确认'
+  /**
+   * 查询失败、但缓存仍停在 `PENDING_MEETUP`：状态词照旧用成交前口径（缓存不是终态，
+   * 没被判死），主钮则必须切回「重新加载」—— 与 main 的 `txCardView`
+   * （`actionLabel: failed ? '重新加载' : '查看交易码'`）对齐。删掉吸底卡之后这条状态条
+   * 是唯一的表达位，若这一档还把「开启扫码 / 打开交易码」摆着，查询失败就被静默吞掉
+   * （#551 改动三第 3 点）。只换钮、不给状态词加「· 待更新」后缀：状态词与价格、长标题
+   * 同排在一条渐变头上，加字会挤掉标题省略号的位置，而「重新加载」本身已经说明状态没取到
+   * —— 也就不必为此新增第三套状态词。
+   */
+  if (failed) {
+    return { tone: 'is-warn', status: pendingStatus, label: '重新加载', action: { kind: 'retry' } }
+  }
   return {
     tone: myConfirmedAt === null ? 'is-warn' : 'is-pending',
-    status: myConfirmedAt === null ? '待面交' : '待对方确认',
+    status: pendingStatus,
     label: role === 'seller' ? '打开交易码' : '开启扫码',
     action: role === 'seller' ? { kind: 'code', transactionId } : { kind: 'scan' },
   }

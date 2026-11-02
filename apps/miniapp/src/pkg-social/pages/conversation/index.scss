@@ -377,7 +377,7 @@
   white-space: nowrap;
 }
 
-/* 金额一律红（与页头状态条的 `.conv__pbar-price` 同一 --price 口径） */
+/* 金额一律红：消息流商品卡仍走 `--price`（页头状态条的价格因渐变底另取深一档，见上方 .conv__pbar-price） */
 .conv__lcard-price {
   color: var(--price);
   font-weight: 700;

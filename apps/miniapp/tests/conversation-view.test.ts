@@ -322,14 +322,19 @@ describe('txBarView —— 页头商品交易状态条（#551）', () => {
   test('评价态没查到（reviewed === null）不虚报「待评价」：文案中性，目的地仍是面交页', () => {
     // `null` = 还没查（首帧）/ 查询失败，不是「确认未评价」：写着「评价」等于替用户断言
     // 他没评过。但入口不能一起丢 —— 面交页是端上唯一的评价入口，且它自己会按服务端
-    // 现状渲染，所以按钮文案退回中性的「查看」，去向仍是那一笔的面交页。
+    // 现状渲染，所以按钮文案退回中性措辞，去向仍是那一笔的面交页。
+    //
+    // 措辞必须是「查看交易」这种带宾语的写法：光写「查看」与上面两档「查看 → 商品详情」
+    // 完全撞名，同一个字点下去却去面交页，用户无从判断。
     const unknown = txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: null }))
     expect(unknown).toMatchObject({
       tone: 'is-ok',
       status: '已完成交易',
-      label: '查看',
+      label: '查看交易',
     })
     expect(unknown.label).not.toBe('评价')
+    // 不许与「查看（商品详情）」撞名 —— 两档都在读「查看」，去向却不同
+    expect(unknown.label).not.toBe('查看')
     expect(unknown.action).toEqual({ kind: 'review', transactionId: 'txn_1' })
     // 三态必须真的分开：null（未知）与 true（已评）文案相同、去向不同
     expect(txBarView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: true })).action).toEqual({
@@ -381,11 +386,29 @@ describe('txBarView —— 页头商品交易状态条（#551）', () => {
     })
   })
 
-  test('查询失败但缓存仍是待面交：退回成交前文案，入口与重试都还在', () => {
+  test('查询失败但缓存仍是待面交：保留成交前状态词，主钮切回「重新加载」', () => {
+    // 相对 main 的 `txCardView`（`actionLabel: failed ? '重新加载' : '查看交易码'`）不能回退：
+    // 这一档下顶部若照旧摆「开启扫码」，查询失败就被静默吞掉了（#551 改动三第 3 点）。
     expect(txBarView(input({ role: 'buyer', tx: tx(), failed: true }))).toMatchObject({
       tone: 'is-warn',
       status: '待面交',
-      action: { kind: 'scan' },
+      label: '重新加载',
+      action: { kind: 'retry' },
+    })
+    // 「我已确认」那一档同样：状态词照旧是成交前口径，但按钮必须是重试，不是扫码 / 交易码
+    expect(
+      txBarView(
+        input({
+          role: 'seller',
+          tx: tx({ role: 'seller', sellerConfirmedAt: '2026-09-21T05:00:00.000Z' }),
+          failed: true,
+        }),
+      ),
+    ).toMatchObject({
+      tone: 'is-warn',
+      status: '待对方确认',
+      label: '重新加载',
+      action: { kind: 'retry' },
     })
   })
 
