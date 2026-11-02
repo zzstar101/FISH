@@ -92,8 +92,9 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(code).toContain('fetchMyTransactionReview(')
     expect(code).toContain('REVIEW_NOT_FOUND')
     expect(code).toContain("txLoad.tx?.status === 'COMPLETED'")
-    // 判据要真的喂给状态条，否则查了也白查
-    expect(code).toContain('reviewed,')
+    // 判据要真的喂进状态条的入参，否则查了也白查
+    const call = sliceFrom(code, 'const txBar = txBarView({', '})')
+    expect(call).toContain('reviewed,')
   })
 
   test('五档动作都接到了：确认→二次确认 + acceptTransaction，扫码→扫码页，其余→面交页/重查', async () => {
@@ -118,14 +119,18 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(accept).toContain('Taro.showModal(')
     expect(accept).toContain('acceptTransaction(conversationId, amountCents)')
     expect(code).toContain('formatAmount(amountCents)')
-    // 409 不代表失败：失败后重查一次交易，让状态条说服务端的现状
+    // 409 不代表「接受失败」，但也不能零反馈：说一句商品现状 + 重查本页让 listing 状态跟上，
+    // 否则顶部那颗「待确认」会原地复活、点一次 409 一次
+    expect(accept).toContain('LISTING_NOT_ACTIVE')
+    expect(accept).toContain('已被其他买家预订')
+    expect(accept).toContain('loadRef.current({ silent: true })')
     expect(accept).toContain('retryTx()')
   })
 
   test('吸底交易卡已删除：页面不再挂 TxCard，样式里也不再有 .conv__txcard', async () => {
     const code = await source()
     expect(code).not.toContain('<TxCard')
-    expect(code).not.toContain('tx-card')
+    expect(code).not.toContain("from './tx-card'")
     expect(code).not.toContain('conv__txcard')
     // 状态只由页头一条承载：动作区在 .conv__pbar-act 里，且整条仍是「点进商品详情」
     expect(code).toContain('conv__pbar-act')

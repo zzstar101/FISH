@@ -2036,7 +2036,9 @@ export default function Conversation() {
   const confirmProposal = (amountCents: number | null) => {
     if (acceptBusyRef.current) return
     if (amountCents === null) {
-      void Taro.showToast({ title: '没读到提案金额，请从「我的发布」处理', icon: 'none' })
+      // 契约里 `tx.proposal.amountCents` 是必填，读到 null 只可能是脏数据 —— 不能把用户
+      // 指去「我的发布」：那边按严格解析同样列不出这条脏提案，等于指进另一条死路。
+      void Taro.showToast({ title: '没读到提案金额，请让对方重新发起面交申请', icon: 'none' })
       return
     }
     /**
@@ -2065,22 +2067,28 @@ export default function Conversation() {
             console.warn('[miniapp] 接受面交申请失败', error)
             if (epoch !== sessionEpoch()) return
             /**
-             * 409 `LISTING_NOT_ACTIVE` 按契约**不代表这次失败**（并发买家先成交 / 响应丢了
-             * 重试），用它的话术报错会与随后 `retryTx` 查出来的「待面交」自相矛盾 ——
-             * 这种情况只重查、不报失败口吻。
+             * 409 `LISTING_NOT_ACTIVE` 按契约**不代表「接受失败」**（并发买家先成交 / 商品
+             * 已非在售），所以不报「接受没成功」这种口吻 —— 但它也不是「什么都没发生」：
+             * 什么提示都不给，用户面对的还是一颗必然再 409 的「待确认」。于是：说一句商品
+             * 现状 + 重查本页（`listing.status` 要跟着变，否则顶部不会自己退到「已预订」）。
              */
-            if (!(isApiError(error) && error.code === 'LISTING_NOT_ACTIVE')) {
-              void Taro.showToast({
-                title: isApiError(error) ? error.message : '接受没成功，请重试',
-                icon: 'none',
-              })
+            if (isApiError(error) && error.code === 'LISTING_NOT_ACTIVE') {
+              void Taro.showToast({ title: '这件商品已被其他买家预订', icon: 'none' })
+              retryTx()
+              void loadRef.current({ silent: true })
+              return
             }
+            void Taro.showToast({
+              title: isApiError(error) ? error.message : '接受没成功，请重试',
+              icon: 'none',
+            })
             retryTx()
           })
       })
       .catch((error) => {
         // 确认框本身没弹出来（基础库 / 平台差异）：不静默，也不当作已接受
         console.warn('[miniapp] 面交确认框打开失败', error)
+        void Taro.showToast({ title: '确认框没打开，请重试', icon: 'none' })
       })
       .finally(() => {
         acceptBusyRef.current = false

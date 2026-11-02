@@ -168,8 +168,8 @@
  *
  * 配色前提：`--grad-page` 是 **浅冰蓝**（`#dcebff → #f7faff`），不是深蓝 —— 所以文字
  * 一律走深色（--fg / --muted-2），与同用这块渐变头的其它页面（如 pkg-browse/user）
- * 同一口径；状态词按 tone 取胶囊那套「深字」色（--warn-ink / #3b74dd / --ok-ink /
- * #5f6e8a，见 `pages/chat/index.scss` 的 `.chat__pill`）。白字压在这个底上等于看不见。
+ * 同一口径；状态词按 tone 取「深字」色（--warn-ink / --brand-deep-2 / --ok-ink /
+ * --muted-2，均为能压在浅底上的一档）。白字压在这个底上等于看不见。
  */
 .conv__pbar {
   margin: 20px 32px 0;
@@ -232,9 +232,13 @@
   white-space: nowrap;
 }
 
-/* 价格仍走 --price（与商品详情、我的发布同一口径） */
+/*
+ * 价格：浅冰蓝渐变底上比 --price 深一档。--price(#4375e8) 在白卡上是 4.2:1，挪到
+ * #dcebff 上掉到 3.7:1，而这里是 --fs-2xs 小字，AA 要 4.5:1 —— 取 --brand-deep-2
+ * (#3260b5, ≈5.2:1)，仍是同一个品牌蓝族。
+ */
 .conv__pbar-price {
-  color: var(--price);
+  color: var(--brand-deep-2);
   font-weight: 700;
 }
 
@@ -259,12 +263,18 @@
   font-weight: 600;
 }
 
+/*
+ * tone 四色都用能压在浅底上的「深字」档：`pages/chat/index.scss` 的 `.chat__pill` 用
+ * #3b74dd / #5f6e8a 是因为它自带一块浅底（#e8f1ff / --bg）；本条没有胶囊底，直接坐
+ * 在 #dcebff 渐变上，同样的颜色只剩 3.6:1 / 4.0:1（21rpx 小字不达 AA），所以换
+ * --brand-deep-2(≈5.2:1) 与 --muted-2(≈7.2:1)，语义不变。
+ */
 .conv__pbar.is-warn .conv__pbar-status {
   color: var(--warn-ink);
 }
 
 .conv__pbar.is-pending .conv__pbar-status {
-  color: #3b74dd;
+  color: var(--brand-deep-2);
 }
 
 .conv__pbar.is-ok .conv__pbar-status {
@@ -272,7 +282,7 @@
 }
 
 .conv__pbar.is-plain .conv__pbar-status {
-  color: #5f6e8a;
+  color: var(--muted-2);
 }
 
 /**

@@ -230,7 +230,31 @@ describe('txBarView —— 页头商品交易状态条（#551）', () => {
     })
   })
 
-  test('提案消息没带金额：不给凭空的金额，交给页面提示走「我的发布」', () => {
+  test('提案还在、商品却已被别人买走 / 下架：不给必然 409 的「待确认」，如实说商品现状', () => {
+    // `tx.proposal` 是不可变历史，商品却是活的：非 ACTIVE 时接受必然 409，按钮点了也没用
+    for (const [listingStatus, status] of [
+      ['RESERVED', '已预订'],
+      ['SOLD', '已售出'],
+      ['OFFLINE', '已下架'],
+    ] as const) {
+      expect(
+        txBarView(
+          input({
+            role: 'seller',
+            listingStatus,
+            lastEvent: { type: 'tx.proposal', amountCents: 12000 },
+          }),
+        ),
+      ).toMatchObject({ tone: 'is-warn', status, label: '查看', action: { kind: 'listing' } })
+      // 买家侧同样不能停在「待卖家确认」：那件事不会发生了
+      expect(
+        txBarView(input({ role: 'buyer', listingStatus, lastEvent: { type: 'tx.proposal' } }))
+          .action,
+      ).toEqual({ kind: 'listing' })
+    }
+  })
+
+  test('提案消息没带金额：不给凭空的金额，交给页面提示让对方重新发起', () => {
     expect(txBarView(input({ role: 'seller', lastEvent: { type: 'tx.proposal' } })).action).toEqual(
       { kind: 'confirm', amountCents: null },
     )

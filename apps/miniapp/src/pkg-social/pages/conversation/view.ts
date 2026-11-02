@@ -173,7 +173,19 @@ export function txBarView(input: {
       /**
        * 提案只由买家发起（`capsule.ts` 第 20 行的冻结口径）：卖家看到的是「等我点头」，
        * 买家看到的是「等人点头」。卖家那颗钮点了要二次确认再由页面调 `acceptTransaction`。
+       *
+       * 但商品已不是 ACTIVE 时，这条提案必然被服务端拒（409 `LISTING_NOT_ACTIVE`）：
+       * `tx.proposal` 是不可变历史，商品却可能已被别的买家成交 / 被卖家下架。这时候再摆
+       * 一颗「待确认」就是给用户一个必然失败的按钮 —— 如实说商品现状，动作退回查看。
        */
+      if (input.listingStatus !== 'ACTIVE') {
+        return {
+          tone: 'is-warn',
+          status: listingStatusText(input.listingStatus),
+          label: '查看',
+          action: { kind: 'listing' },
+        }
+      }
       const amountCents = typeof proposal.amountCents === 'number' ? proposal.amountCents : null
       if (role === 'seller') {
         return {
