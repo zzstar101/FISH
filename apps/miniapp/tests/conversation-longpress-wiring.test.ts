@@ -43,7 +43,8 @@ describe('会话页长按气泡的接线（#518）', () => {
     const voice = sliceFrom(code, 'const renderVoiceBubble = (', 'const abortRecording = () =>')
 
     expect(voice).toContain('onTouchStart={resetBubbleTapGuard}')
-    expect(voice).toContain('onLongPress={onLongPress}')
+    // 待发语音没有菜单可开，但也必须用 no-op 长按置位，否则长按后的 tap 会播放本地录音
+    expect(voice).toContain('onLongPress={onLongPress ?? beginBubbleLongPress}')
     expect(voice).toContain('if (consumeBubbleTap()) return')
   })
 
@@ -63,8 +64,9 @@ describe('会话页长按气泡的接线（#518）', () => {
     const picker = sliceFrom(code, 'const pickAndSendImages = async', 'const handleVoiceFailure = ')
 
     // 服务端与本地乐观媒体都要画出摘引；本地条目没有服务端 id，不接定位点击
-    expect(media).toContain('renderMediaQuote(item.replyTo, mine, true)')
-    expect(pendingMedia).toContain('renderMediaQuote(item.replyTo, true, false)')
+    // 引用条在气泡外，固定用 floating 配色（不能用气泡内的 is-mine 白字）
+    expect(media).toContain('renderMediaQuote(item.replyTo, true)')
+    expect(pendingMedia).toContain('renderMediaQuote(item.replyTo, false)')
     // 引用媒体消息时，定位判据必须同时查 media 流
     expect(locate).toContain('media.some((item) => item.id === messageId)')
     // 多选图片：同步循环里只有第一张拿引用，其余显式 null

@@ -560,6 +560,18 @@
   }
 }
 
+/*
+ * 媒体气泡上方的引用条在气泡**外面**，底下是页面 --bg，不是我方气泡的渐变底。
+ * 复用 `.is-mine` 的白字会变成近白底上的白字（对比度约 1.1:1），发送方看不见。
+ */
+.conv__quote--floating {
+  border-left-color: var(--accent-mid);
+
+  .conv__quote-tx {
+    color: var(--muted-2);
+  }
+}
+
 /* 撤回碑（稿子 .recalled）：灰底小胶囊，体积与 SYSTEM 胶囊一致但不占整行 */
 .conv__recalled {
   display: inline-flex;

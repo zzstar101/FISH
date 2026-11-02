@@ -56,6 +56,7 @@ import {
   applyReadEvent,
   applyReadPoll,
   applyRecalled,
+  applyReplyRecalled,
   beginSend,
   type ChatEntry,
   canRetry,
@@ -317,6 +318,8 @@ export default function Conversation() {
   const downloadingRef = useRef<Set<string>>(new Set())
   /** 语音播放请求令牌：每次点击 +1，迟到的下载回来据此判「已经不是当前这次」 */
   const playSeqRef = useRef(0)
+  /** 正在下载、还没出声的语音消息 id：撤回时要让这次下载失效，别再播出来。 */
+  const loadingVoiceIdRef = useRef<string | null>(null)
   /**
    * 正在重试的媒体 id（#364 审查）：`canRetryMedia` 读的是**渲染态**，同一帧连点两次
    * 两次看到的都还是 `failed`，于是起两条链。必须有一把同步锁，在 `runMediaSend` 的
@@ -876,10 +879,22 @@ export default function Conversation() {
         setConversation((prev) => (prev === null ? prev : applyReadEvent(prev, event.readAt)))
         break
       case 'message.recalled':
-        setMessages((prev) => applyRecalled(prev, event.messageId, event.recalledAt))
+        setMessages((prev) =>
+          applyReplyRecalled(
+            applyRecalled(prev, event.messageId, event.recalledAt),
+            event.messageId,
+          ),
+        )
         // 媒体走独立一条流：撤回端点对 TEXT / MEDIA 没有类型过滤，图片 / 语音的撤回碑
         // 必须同时落到 `media`（否则气泡纹丝不动，刷新也修不回来 —— 见 view 的说明）
-        setMedia((prev) => applyMediaRecalled(prev, event.messageId, event.recalledAt))
+        setMedia((prev) =>
+          applyReplyRecalled(
+            applyMediaRecalled(prev, event.messageId, event.recalledAt),
+            event.messageId,
+          ),
+        )
+        setPendingMedia((prev) => applyReplyRecalled(prev, event.messageId))
+        stopVoiceForRecall(event.messageId)
         setReplyTarget((prev) => (prev?.id === event.messageId ? null : prev))
         break
     }
@@ -1498,6 +1513,18 @@ export default function Conversation() {
     }
   }
 
+  /**
+   * 撤回一条语音时收口播放：正在放就停掉；还在下载就推进令牌，让回来的字节不再出声。
+   * 只处理这一条，别误伤用户同时点开的另一段语音。
+   */
+  const stopVoiceForRecall = (messageId: string) => {
+    if (playingId === messageId) stopAudio()
+    if (loadingVoiceIdRef.current === messageId) {
+      playSeqRef.current += 1
+      loadingVoiceIdRef.current = null
+    }
+  }
+
   /** 播放一段语音（`src` 必须是本地临时文件，见 `downloadChatMedia`） */
   const playVoice = (keyId: string, src: string) => {
     stopAudio()
@@ -1543,6 +1570,7 @@ export default function Conversation() {
       return
     }
     playSeqRef.current += 1
+    loadingVoiceIdRef.current = item.id
     const task: MediaTaskIdentity = {
       cookie: sessionCookieHeader() ?? '',
       userId: userIdRef.current,
@@ -1556,6 +1584,7 @@ export default function Conversation() {
       })
     void downloadChatMedia(conversationId, item.mediaId, isCurrent)
       .then((path) => {
+        if (loadingVoiceIdRef.current === item.id) loadingVoiceIdRef.current = null
         if (!isCurrent()) return
         rememberPath(item.mediaId, path)
         /**
@@ -1567,6 +1596,7 @@ export default function Conversation() {
         playVoice(item.id, path)
       })
       .catch((error) => {
+        if (loadingVoiceIdRef.current === item.id) loadingVoiceIdRef.current = null
         // 换号 / 离页导致的中止是预期路径：不出声、也不当失败打日志。换号要说一句（见上）
         if (error instanceof MediaAbortedError) {
           noticeIdentityLost(task, '账号已切换，请重新打开语音')
@@ -1658,7 +1688,7 @@ export default function Conversation() {
           busy ? ' is-busy' : ''
         }`}
         onTouchStart={resetBubbleTapGuard}
-        onLongPress={onLongPress}
+        onLongPress={onLongPress ?? beginBubbleLongPress}
         onClick={() => {
           if (consumeBubbleTap()) return
           onPress()
@@ -1775,10 +1805,16 @@ export default function Conversation() {
     try {
       await recallMessage(conversationId, message.id)
       const recalledAt = new Date().toISOString()
-      setMessages((prev) => applyRecalled(prev, message.id, recalledAt))
+      setMessages((prev) =>
+        applyReplyRecalled(applyRecalled(prev, message.id, recalledAt), message.id),
+      )
       // 媒体消息还要落到 `media` 流（#518）：只改 `messages` 的话，图片/语音要等推送
       // 或下一次 load 才翻碑，点了撤回的当下仍显示原图/原语音。
-      setMedia((prev) => applyMediaRecalled(prev, message.id, recalledAt))
+      setMedia((prev) =>
+        applyReplyRecalled(applyMediaRecalled(prev, message.id, recalledAt), message.id),
+      )
+      setPendingMedia((prev) => applyReplyRecalled(prev, message.id))
+      stopVoiceForRecall(message.id)
       // 撤回的正是正在引用的那条：引用栏里的摘引已经失效，收起它
       setReplyTarget((prev) => (prev?.id === message.id ? null : prev))
     } catch (error) {
@@ -1821,13 +1857,12 @@ export default function Conversation() {
    */
   const renderMediaQuote = (
     replyTo: { id: string; excerpt: string } | null | undefined,
-    mine: boolean,
     canLocate: boolean,
   ) => {
     if (!replyTo) return null
     return (
       <View
-        className={`conv__quote${mine ? ' is-mine' : ''}`}
+        className="conv__quote conv__quote--floating"
         onTouchStart={resetBubbleTapGuard}
         onClick={
           canLocate
@@ -2332,7 +2367,7 @@ export default function Conversation() {
                     >
                       {renderAvatar(mine)}
                       <View className="conv__col">
-                        {renderMediaQuote(item.replyTo, mine, true)}
+                        {renderMediaQuote(item.replyTo, true)}
                         {item.kind === 'VOICE' ? (
                           renderVoiceBubble(
                             item.id,
@@ -2377,7 +2412,7 @@ export default function Conversation() {
                     <View key={entry.keyId} id={`e-${entry.keyId}`} className="conv__row is-mine">
                       {renderAvatar(true)}
                       <View className="conv__col">
-                        {renderMediaQuote(item.replyTo, true, false)}
+                        {renderMediaQuote(item.replyTo, false)}
                         {item.kind === 'VOICE' ? (
                           // 本地录音文件直接播，不下载：自己刚录的这段就在本地。
                           // 失败同样给 `!` 角标（#364 审查）：修复前只有 IMAGE 分支有，

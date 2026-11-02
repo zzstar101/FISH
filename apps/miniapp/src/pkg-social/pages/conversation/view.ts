@@ -456,6 +456,25 @@ export function applyMediaRecalled(
 }
 
 /**
+ * 被引用的那条撤回后，把其它消息/媒体/待发条目上的引用摘引同步改成「已撤回」。
+ *
+ * 服务端在每次读 `replyTo` 时都会按目标当前状态重算（`reply.ts` 的 `toReply`），
+ * 但客户端不重新拉取就不会更新；撤回是本地立即落碑的，引用条也不能落后到下次刷新。
+ * 没有命中时返回原引用，避免白触发一轮渲染。
+ */
+export function applyReplyRecalled<T extends { replyTo?: { id: string; excerpt: string } | null }>(
+  items: T[],
+  messageId: string,
+): T[] {
+  if (!items.some((item) => item.replyTo?.id === messageId)) return items
+  return items.map((item) =>
+    item.replyTo?.id === messageId
+      ? { ...item, replyTo: { ...item.replyTo, excerpt: '[消息已撤回]' } }
+      : item,
+  )
+}
+
+/**
  * 撤回不可回退：快照里「还没撤回」的那条不能把本地刚落地的媒体撤回碑写回正文
  * （`keepRecalledTombstones` 的媒体侧对应物）。
  *

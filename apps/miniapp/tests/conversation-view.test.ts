@@ -7,6 +7,7 @@ import {
   applyPresencePoll,
   applyReadEvent,
   applyRecalled,
+  applyReplyRecalled,
   beginSend,
   canRecallMessage,
   canRetry,
@@ -629,6 +630,26 @@ describe('applyMediaRecalled —— 撤回落到媒体那条流（#359 3c 媒体
   test('id 不在流里时逐条原样返回（文本消息的撤回落到媒体流上无害）', () => {
     const items = [picture('m1', '2026-09-21T10:00:00.000Z')]
     expect(applyMediaRecalled(items, 'msg-other', '2026-09-21T10:00:30.000Z')).toBe(items)
+  })
+})
+
+describe('applyReplyRecalled —— 引用目标撤回后摘引同步翻碑（#518 审查）', () => {
+  test('命中 replyTo.id 的摘引改成已撤回，其它条目原样保留', () => {
+    const quoted = {
+      ...text('msg-quoted', '2026-09-21T10:00:01.000Z'),
+      replyTo: { id: 'msg-target', excerpt: '原来的话' },
+    }
+    const other = text('msg-other', '2026-09-21T10:00:02.000Z')
+    const merged = applyReplyRecalled([quoted, other], 'msg-target')
+    expect(merged[0]?.replyTo?.excerpt).toBe('[消息已撤回]')
+    expect(merged[1]).toBe(other)
+    // 不改动入参数组
+    expect(quoted.replyTo.excerpt).toBe('原来的话')
+  })
+
+  test('没有引用目标时返回原数组引用', () => {
+    const items = [text('msg-1', '2026-09-21T10:00:01.000Z')]
+    expect(applyReplyRecalled(items, 'msg-target')).toBe(items)
   })
 })
 
