@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   applyVoiceAutoStop,
+  applyVoiceRelease,
   isVoiceCancelArmed,
   startRecordingTicker,
   VOICE_CANCEL_DISTANCE_PX,
@@ -80,6 +81,35 @@ describe('录音自停的处置（#535 复审）', () => {
 
   test('取消优先于录满：取消态即便录满也不发送', () => {
     expect(run(true, false).sent).toEqual([])
+  })
+})
+
+/*
+  #549 收口判据 2：松手时到底能不能把这一段当正常语音发出去，取决于**当前**是不是还处在
+  中断态（`onInterruptionBegin` 之后、`onInterruptionEnd` 之前）。「中断发生过」不是状态：
+  恢复之后照常发送，否则一次已经恢复的 59s 正常录音会被历史标记吃掉。
+*/
+describe('松手投递的处置（#549）', () => {
+  function run(interrupted: boolean) {
+    const sent: string[] = []
+    const toasts: string[] = []
+    applyVoiceRelease(
+      { interrupted },
+      { toast: (title) => toasts.push(title), send: () => sent.push('voice') },
+    )
+    return { sent, toasts }
+  }
+
+  test('中断已结束（当前不在中断态）：照常发送', () => {
+    const { sent, toasts } = run(false)
+    expect(sent).toEqual(['voice'])
+    expect(toasts).toEqual([])
+  })
+
+  test('当前仍处于中断态：不发这段被截断的音频，并明确告诉用户重录', () => {
+    const { sent, toasts } = run(true)
+    expect(sent).toEqual([])
+    expect(toasts).toEqual(['录音已被来电打断，请重新录制'])
   })
 })
 

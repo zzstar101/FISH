@@ -112,3 +112,26 @@ export function applyVoiceAutoStop(
   effect.toast('已达最长录音时长，已发送')
   effect.send()
 }
+
+/**
+ * 用户松手时怎么处置这一段（#549 收口判据 2）。
+ *
+ * `interrupted` 是**松手这一刻**是否仍处于中断态（来电 / 视频通话把录音暂停了）：
+ * - 仍在中断态：这一段音频是截断的，不能当正常语音发出去 —— 丢弃并明确告诉用户重录。
+ *   静默发出去的话，对方只会听到半句话，而用户以为发的是完整的一段。
+ * - 中断已经结束（或从未中断）：照常发送。**「中断发生过」不是状态** —— 拿历史标记去拦
+ *   会把一次已经恢复、正常录满的录音吃掉。
+ *
+ * 与 `applyVoiceAutoStop` 一样，副作用全部经 `effect` 注入：发送只可能发生在「当前未处于
+ * 中断态」这一支，这一点必须由行为用例钉住，而不是靠源码里搜字符串。
+ */
+export function applyVoiceRelease(
+  input: { interrupted: boolean },
+  effect: { toast: (title: string) => void; send: () => void },
+): void {
+  if (input.interrupted) {
+    effect.toast('录音已被来电打断，请重新录制')
+    return
+  }
+  effect.send()
+}

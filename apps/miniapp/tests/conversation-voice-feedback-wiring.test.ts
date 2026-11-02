@@ -69,6 +69,21 @@ describe('录音反馈接线契约（#535）', () => {
     expect(auto).not.toMatch(/if \(!capped\)/)
   })
 
+  test('松手投递前先看「此刻是否仍在中断态」（#549 收口判据 2）', async () => {
+    const text = await read(PAGE)
+    const finish = between(text, 'const finishVoice', 'resetUi: recordingRef.current === null })')
+    /*
+      中断态（来电 / 视频通话把录音暂停了）下这一段音频是截断的，不能当正常语音发出去；
+      但「中断发生过」不算数 —— 中断结束之后照常发送。取舍在 `applyVoiceRelease`
+      （行为用例见 voice-recording-view.test.ts），页面这里只允许把发送作为它的 `send`
+      回调出现一次，不许在它之外直接发。
+    */
+    expect(finish).toContain('session.wasInterrupted()')
+    expect(finish).toContain('applyVoiceRelease(')
+    expect(finish.match(/sendRecordedVoice\(recorded, identity\)/g) ?? []).toHaveLength(1)
+    expect(finish).not.toMatch(/if \(interrupted\)/)
+  })
+
   test('身份按「这一段」传下去（起录时拍下，发送不再读页面级 ref）', async () => {
     const text = await read(PAGE)
     const start = between(text, 'const startVoice', 'catch (error)')

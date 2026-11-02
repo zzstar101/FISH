@@ -121,7 +121,7 @@ import {
   txCardView,
 } from './view'
 import VoiceRecordPanel from './voice-record-panel'
-import { applyVoiceAutoStop, isVoiceCancelArmed } from './voice-recording-view'
+import { applyVoiceAutoStop, applyVoiceRelease, isVoiceCancelArmed } from './voice-recording-view'
 
 /** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
 function touchClientY(event: unknown): number {
@@ -1769,6 +1769,11 @@ export default function Conversation() {
     if (!session) return
     /** 同上：松手这一刻页面还握着这一段，先把身份快照取下来再放异步链 */
     const identity = voiceIdentityRef.current
+    /*
+      松手这一刻录音是否仍处于中断态（来电 / 视频通话把录音暂停了，还没结束）。
+      必须是**此刻**的快照：「中断发生过」不算数，中断结束之后这一段仍应照常发送（#549）。
+    */
+    const interrupted = session.wasInterrupted()
     recordingRef.current = null
     setRecording(false)
     resetRecordingUi()
@@ -1778,7 +1783,16 @@ export default function Conversation() {
     }
     void session
       .stop()
-      .then((recorded) => sendRecordedVoice(recorded, identity))
+      .then((recorded) =>
+        // 中断态下这段音频是截断的：丢掉并让用户重录，而不是静默发半句（判定见纯逻辑用例）
+        applyVoiceRelease(
+          { interrupted },
+          {
+            toast: (title) => void Taro.showToast({ title, icon: 'none' }),
+            send: () => sendRecordedVoice(recorded, identity),
+          },
+        ),
+      )
       .catch((error) => {
         /*
           这一段失败时用户可能已经又按下了下一段（`recordingRef` 换成新的那段，`stop()` 的

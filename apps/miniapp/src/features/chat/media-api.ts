@@ -384,8 +384,17 @@ type VoiceSession = {
   stopRequested: boolean
   /** `abort()` 放弃的这一段：事件到了也直接丢掉（不交付、不弹错） */
   abandoned: boolean
-  /** 被系统占用打断过（`onInterruptionBegin`）：自停不能算「录满」 */
+  /**
+   * **当前仍处于中断态**（`onInterruptionBegin` 之后、`onInterruptionEnd` 之前）。
+   *
+   * 只在「当前」有意义，不是「中断发生过」的历史标记（#549 收口判据 2）：中断结束
+   * （= 录音恢复）就必须清掉，否则一次已经恢复的正常录音会被历史标记判成「被打断」。
+   */
   interrupted: boolean
+  /** 起录时刻（ms）：只用来判「这段最迟该在这时交回收尾事件」，见 `settleOverdue` */
+  startedAtMs: number
+  /** `stop()` / `abort()` 发出的时刻（ms）：同上；没叫过就是 `null` */
+  stopRequestedAtMs: number | null
   /** 录音**进行中**失败（页面据此立刻复位 + 提示） */
   onError?: (error: Error) => void
   /** 录音器**自己停了**（没人调用 `stop()`）时的回调 */
@@ -403,7 +412,12 @@ type VoiceSession = {
  * 还在录），或者上一段的音频被当成新一段「录满」自动发给对方。
  *
  * 这条不变量只在两处维护：起录时的闸（`startVoiceRecording`），以及销账
- * （收尾事件到达；`start()` / `stop()` **同步抛错** —— 那种情况下平台不会再投这段的事件）。
+ * （收尾事件到达；`start()` **同步抛错** —— 起录被平台拒绝，不存在「这一段」，见那里的注释）。
+ *
+ * **`stop()` / `abort()` 同步抛错不销账**（#549 收口判据 1）：抛错只说明这条命令没被接受，
+ * 不说明平台已经收尾。录音可能还在走（那这一段的 `onStop` 迟早会来），也可能已经自己停了、
+ * 事件还在路上 —— 两种情况下这条收尾事件都可能晚于下一次起录到达。拿不到平台证据时按
+ * fail-closed 处理：账留着、闸门关着，事件真到了自然销账。
  */
 let voiceSession: VoiceSession | null = null
 
@@ -467,6 +481,13 @@ export type VoiceRecording = {
   stop: () => Promise<RecordedVoice>
   /** 放弃这次录音（不 resolve、不 reject，也不弹错） */
   abort: () => void
+  /**
+   * 此刻是否**仍处于中断态**（来电 / 视频通话把录音暂停了，还没 `onInterruptionEnd`）。
+   *
+   * 页面在松手投递前读它（`applyVoiceRelease`）：中断态下这一段音频是被截断的，不能当
+   * 正常语音发出去。中断结束（恢复）之后读到的就是 `false` —— 历史上中断过不算数（#549）。
+   */
+  wasInterrupted: () => boolean
 }
 
 /**
@@ -478,6 +499,28 @@ export type VoiceRecording = {
  * 留 1 秒余量，用户最多录 59 秒，不会出现「录满一分钟反而发不出去」。
  */
 const VOICE_RECORD_MAX_MS = MEDIA_MAX_VOICE_DURATION_MS - 1000
+
+/**
+ * 收尾事件的宽限（毫秒）：**只用于把「忙」升级成「录音器没响应」这句文案，不用于放行**
+ * （#549 收口判据 3）。
+ *
+ * 正常的收尾窗口是毫秒级（`stop()` → `onStop`）。松手之后 5s 还没有任何收尾事件，就说明
+ * 这一段的收尾大概率丢了：能让用户等到的只有「下次再按」，而重按永远不会成功 —— 必须把
+ * 「怎么办」说出来。但它**不是**解闸依据：这里没有任何时间判据会把账销掉（判据 4 禁止
+ * 任意 TTL 清账），账单只由「收尾事件到了」或「起录被平台拒绝」来销。
+ */
+const VOICE_RECORD_SETTLE_GRACE_MS = 5_000
+
+/**
+ * 这一段是不是已经**远超**「本该收到收尾事件」的时刻。
+ *
+ * 基线取两者中较晚者：叫过 `stop()` / `abort()` 就是那一刻（收尾本该几毫秒内到）；没叫过
+ * 就是「起录时刻 + 录音上限」（录音器最迟在自己录满时收尾）。只喂给文案，不参与解闸。
+ */
+function settleOverdue(session: VoiceSession, nowMs: number): boolean {
+  const dueAtMs = session.stopRequestedAtMs ?? session.startedAtMs + VOICE_RECORD_MAX_MS
+  return nowMs - dueAtMs >= VOICE_RECORD_SETTLE_GRACE_MS
+}
 
 /**
  * 开始录音（按住说话）。
@@ -513,8 +556,13 @@ export function startVoiceRecording(
    * 这里有意的取舍：拒绝是**同步**失败，页面照旧 `catch → 提示`，不会进入「正在录」的假
    * 状态，也不会误发上一段的音频、误复位还在录的那一段。代价是那几十毫秒的收尾窗口里
    * 用户按下的那一次不生效 —— 比起悄悄把两段录音混在一台单例上，这是可解释、可测的行为。
+   *
+   * 收尾事件**丢了**（平台不再投递）时闸门会一直关着：这是**有意的 fail-closed**（收口判据
+   * 3）—— 换一个「猜时间到了就放行」的解闸法，等于把单槽记账要防的「两条回调靠猜归属」
+   * 又请回来（判据 4 明确排除任意 TTL）。代价是用户重按不会成功，所以拒绝文案必须说清
+   * 怎么办（见 `VoiceRecordingBusyError` 的 `overdue`）。
    */
-  if (voiceSession) throw new VoiceRecordingBusyError()
+  if (voiceSession) throw new VoiceRecordingBusyError(settleOverdue(voiceSession, Date.now()))
   const manager = recorder()
   /** 这一段的账：事件到达时按它自己身上记的状态销账。 */
   const session: VoiceSession = {
@@ -523,6 +571,8 @@ export function startVoiceRecording(
     stopRequested: false,
     abandoned: false,
     interrupted: false,
+    startedAtMs: Date.now(),
+    stopRequestedAtMs: null,
     onError,
     onAutoStop,
   }
@@ -548,7 +598,13 @@ export function startVoiceRecording(
       encodeBitRate: 48_000,
     })
   } catch (error) {
-    // `start()` 都没成功就不会有这一段的事件：当场销账，否则这段账会锁住录音器
+    /*
+      `start()` 同步抛错时当场销账。这是**明确假设**（不是平台证据，见报告「平台假设」一栏）：
+      同步抛错表示平台拒绝了这次 start，因此不存在「这一段」可供收尾。
+      反过来把账留着会让**最常见**的失败（设备忙 / 起录失败）永久关死闸门 —— 那一段本来就
+      不会有任何事件来销账，等于把「一次起录失败」变成「进程内再也录不了音」。
+      端上取证项：D7（同步抛错后平台是否仍会投一次 onStop / onError）。
+    */
     settleSession(session)
     throw error
   }
@@ -556,17 +612,18 @@ export function startVoiceRecording(
   return {
     stop: () => {
       session.stopRequested = true
+      session.stopRequestedAtMs = Date.now()
       try {
         manager.stop()
       } catch (error) {
         /*
-          `stop()` 都没发出去就永远等不到这一段的 onStop（同 `abort()` 的处理，`abort()` 早就
-          这么写了、`stop()` 漏了 —— #535 follow-up）：当场销账，否则这段「等收尾」的账会一直
-          占着单例、把之后每一次起录都挡在闸外（#549）。
-          失败必须以 **promise** 交出去：同步抛出的话页面
-          `session.stop().then().catch()` 这条链根本没建立，异常会一路冒进触摸事件处理。
+          失败必须以 **promise** 交出去：同步抛出的话页面 `session.stop().then().catch()`
+          这条链根本没建立，异常会一路冒进触摸事件处理（#535 follow-up）。
+          但**不许当场销账**（#549 收口判据 1）：同步抛错只说明这条命令没被平台接受，不能据此
+          断言「这一段不会再有收尾事件」—— 录音可能还在走（`onStop` 迟早会来），也可能平台
+          已经停了、事件还在路上。任一情况下这条收尾事件都会落在下一次起录之后，于是「这条
+          回调属于谁」又得靠猜。没有平台证据就 fail-closed：账留着，事件真到了自然销账。
          */
-        settleSession(session)
         console.error('[chat-media] 停止录音失败', error)
         return Promise.reject(voiceError(error))
       }
@@ -575,14 +632,19 @@ export function startVoiceRecording(
     abort: () => {
       session.abandoned = true
       session.stopRequested = true
+      session.stopRequestedAtMs = Date.now()
       try {
         manager.stop()
       } catch (error) {
-        // `stop()` 都没发出去就永远等不到这一段的 onStop：当场销账，别把单例一起锁住
-        settleSession(session)
+        /*
+          同上（#549 收口判据 1）：销账等于假定「放弃的这一段也不会再有收尾事件」，而这条
+          假定拿不到证据。账留着反而更安全 —— 那一段的 `onStop` 到了会被 `abandoned` 丢掉
+          并顺便销账；一直不来就按可见的「录音器没响应」处理。
+         */
         console.error('[chat-media] 取消录音失败', error)
       }
     },
+    wasInterrupted: () => session.interrupted,
   }
 }
 
@@ -592,6 +654,11 @@ export function startVoiceRecording(
  * 只按时长判据的话，59s 上限前最后 500ms 里被打断的半句会被当成「录满」自动发给对方。
  * 平台有真正的信号（`onInterruptionBegin`：来电 / 视频通话占用麦克风），中断过的这一段
  * 一律不算录满；`- 500ms` 的余量留给录音机按帧对齐收尾时回报的时长略小于配置值。
+ *
+ * 判据只读**当前**中断态（`onInterruptionEnd` 就清零），**不**改成「中断过一次就永久不算
+ * 录满」（#549 收口判据 2）：一次中断已经恢复、之后正常录满 59s 的那一段，用户要的是发送，
+ * 把它判成「被打断」不发等于拿历史标记吃掉一次完整录音。中断结束之后剩下的风险（暂停期间
+ * 音频是否缺一段）属于平台语义，登记为端上假设 D4，不由时间/历史标记去猜。
  */
 function voiceCapped(session: VoiceSession, recorded: RecordedVoice): boolean {
   if (session.interrupted) return false
@@ -617,11 +684,23 @@ export class VoicePermissionError extends Error {
  * 与 `VoicePermissionError` 分开：这**不是失败**，而是「稍后再按」—— 页面照旧提示，
  * 但不必把用户送去设置页。文案要说清是「上一段还在收尾」，否则用户只会看到
  * 「录音失败，请重试」并以为功能坏了。
+ *
+ * `overdue=true`（收尾事件很可能已经丢了，见 `settleOverdue`）：同样的拒绝，但「稍后再按」
+ * 在下一次、下下一次都不会成功 —— 这时必须给出可执行的恢复动作。闸门本身仍然关着
+ * （fail-closed，不拿时间当解闸依据），改的只是**这句话**。
  */
 export class VoiceRecordingBusyError extends Error {
-  constructor() {
-    super('上一段录音还在收尾，请稍后再按住说话')
+  /** 这一段的收尾已远超预期（文案因此要给恢复动作），与「正在收尾」区分开 */
+  readonly overdue: boolean
+
+  constructor(overdue = false) {
+    super(
+      overdue
+        ? '录音器没有响应，请关闭小程序后重新打开再试'
+        : '上一段录音还在收尾，请稍后再按住说话',
+    )
     this.name = 'VoiceRecordingBusyError'
+    this.overdue = overdue
   }
 }
 
