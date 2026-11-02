@@ -19,7 +19,7 @@ export default function EmptyState({
   text,
   actionText,
   onAction,
-  icon = ICONS.category,
+  icon = ICONS.tagMuted,
 }: EmptyStateProps) {
   return (
     <View className="empty">

@@ -310,7 +310,7 @@ export default function ReportUser() {
       <Image className={`rpu__ava ${sizeClass}`} src={avatar} mode="aspectFill" />
     ) : (
       <View className={`rpu__ava-ph ${sizeClass}`}>
-        <Image className="rpu__ava-ph-ic" src={ICONS.user} mode="aspectFit" />
+        <Image className="rpu__ava-ph-ic" src={ICONS.userFg} mode="aspectFit" />
       </View>
     )
 
@@ -384,10 +384,10 @@ export default function ReportUser() {
               className="rpu__banner-ic"
               src={
                 viewRecord.status === 'HANDLED'
-                  ? ICONS.checkAccent
+                  ? ICONS.checkBrand
                   : viewRecord.status === 'REJECTED'
-                    ? ICONS.warnInk
-                    : ICONS.clockInk
+                    ? ICONS.warnFg
+                    : ICONS.clockFg
               }
               mode="aspectFit"
             />
@@ -434,7 +434,7 @@ export default function ReportUser() {
             <EmptyState
               title={unavailableCopy(DEMO_MODE).title}
               text={unavailableCopy(DEMO_MODE).text}
-              icon={ICONS.shieldLine}
+              icon={ICONS.shieldMuted}
             />
           </View>
           <View className="rpu__acts">
@@ -454,7 +454,7 @@ export default function ReportUser() {
         <View className="rpu__content">
           <View className="rpu__hero">
             <View className="rpu__hero-ic">
-              <Image className="rpu__hero-ic-img" src={ICONS.checkAccent} mode="aspectFit" />
+              <Image className="rpu__hero-ic-img" src={ICONS.checkBrand} mode="aspectFit" />
             </View>
             <Text className="rpu__hero-t">{done.created ? '举报已提交' : '这条举报已受理'}</Text>
             <Text className="rpu__hero-s">
@@ -513,7 +513,7 @@ export default function ReportUser() {
         <View className="rpu__content">
           <View className="rpu__head">
             <View className="rpu__kicker">
-              <Image className="rpu__kicker-ic" src={ICONS.shieldLine} mode="aspectFit" />
+              <Image className="rpu__kicker-ic" src={ICONS.shieldBrand} mode="aspectFit" />
               <Text>Report · 举报用户</Text>
             </View>
             <Text className="rpu__title">举报这个用户</Text>
@@ -592,7 +592,7 @@ export default function ReportUser() {
           </View>
 
           <View className="rpu__note">
-            <Image className="rpu__note-ic" src={ICONS.shieldLine} mode="aspectFit" />
+            <Image className="rpu__note-ic" src={ICONS.shieldMuted} mode="aspectFit" />
             <Text className="rpu__note-tx">
               提交后平台会核查被举报内容；恶意举报可能影响你的账号信用。
             </Text>

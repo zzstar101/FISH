@@ -128,7 +128,7 @@ export default function LoginConfirm() {
       return (
         <View className="lc__stage">
           <View className="lc__disc">
-            <Image className="lc__disc-ic" src={ICONS.info} mode="aspectFit" />
+            <Image className="lc__disc-ic" src={ICONS.infoFg} mode="aspectFit" />
           </View>
           <Text className="lc__headline">
             {phase === 'conflict' ? '登录码已被占用' : '无效的登录码'}
@@ -148,7 +148,7 @@ export default function LoginConfirm() {
       return (
         <View className="lc__stage">
           <View className="lc__disc lc__disc--ok">
-            <Image className="lc__disc-ic" src={ICONS.checkCircle} mode="aspectFit" />
+            <Image className="lc__disc-ic" src={ICONS.checkCircleBrand} mode="aspectFit" />
           </View>
           <Text className="lc__headline">已在电脑端登录</Text>
           <Text className="lc__sub">本次登录确认已完成，回到电脑端即可继续使用。</Text>
@@ -166,7 +166,7 @@ export default function LoginConfirm() {
             {user?.avatarUrl ? (
               <Image className="lc__avatar-img" src={user.avatarUrl} mode="aspectFill" />
             ) : (
-              <Image className="lc__avatar-ph" src={ICONS.user} mode="aspectFit" />
+              <Image className="lc__avatar-ph" src={ICONS.userFg} mode="aspectFit" />
             )}
           </View>
           <Text className="lc__name">{user?.nickname ?? '—'}</Text>

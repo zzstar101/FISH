@@ -303,7 +303,7 @@ export default function Scan() {
       {/* -------- 手动输入 6 位码入口（取景态；6 位码在面交页输入） -------- */}
       {mode === 'viewfinder' ? (
         <View className="scan__btn-manual" onClick={goManualInput}>
-          <Image className="scan__btn-manual-ic" src={ICONS.key} mode="aspectFit" />
+          <Image className="scan__btn-manual-ic" src={ICONS.keyFg} mode="aspectFit" />
           <Text>输入 6 位交易码</Text>
         </View>
       ) : null}

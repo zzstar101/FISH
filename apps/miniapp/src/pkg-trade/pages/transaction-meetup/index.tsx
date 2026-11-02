@@ -846,7 +846,7 @@ export default function TransactionMeetup() {
       {loadError === 'notFound' ? (
         <View className="meetup__varcard">
           <View className="meetup__vdisc meetup__vdisc--danger">
-            <Image className="meetup__vdisc-ic" src={ICONS.warnInk} mode="aspectFit" />
+            <Image className="meetup__vdisc-ic" src={ICONS.warnFg} mode="aspectFit" />
           </View>
           <Text className="meetup__varcard-title">找不到这笔交易</Text>
           <Text className="meetup__varcard-text">
@@ -864,7 +864,7 @@ export default function TransactionMeetup() {
       {loadError === 'failed' ? (
         <View className="meetup__varcard">
           <View className="meetup__vdisc meetup__vdisc--warn">
-            <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
+            <Image className="meetup__vdisc-ic" src={ICONS.warnDanger} mode="aspectFit" />
           </View>
           <Text className="meetup__varcard-title">加载失败</Text>
           <Text className="meetup__varcard-text">网络不给力，请稍后重试。</Text>
@@ -885,7 +885,7 @@ export default function TransactionMeetup() {
       {scannedInvalid ? (
         <View className="meetup__varcard">
           <View className="meetup__vdisc meetup__vdisc--danger">
-            <Image className="meetup__vdisc-ic" src={ICONS.warnInk} mode="aspectFit" />
+            <Image className="meetup__vdisc-ic" src={ICONS.warnFg} mode="aspectFit" />
           </View>
           <Text className="meetup__varcard-title">这不是鱼小应的交易码</Text>
           <Text className="meetup__varcard-text">
@@ -972,7 +972,7 @@ export default function TransactionMeetup() {
             {/* 吸底栏在震屏包裹层**之外**：见上面关于 `position: fixed` 包含块的说明 */}
             <View className={`meetup__bar${fxPhase === 'on' ? ' is-enter' : ''}`}>
               <View className="meetup__bar-btn meetup__btn--sec" onClick={goHome}>
-                <Image className="meetup__bar-ic" src={ICONS.tabHome} mode="aspectFit" />
+                <Image className="meetup__bar-ic" src={ICONS.homeMuted} mode="aspectFit" />
                 <Text>返回主页</Text>
               </View>
               {/* 主按钮（品牌渐变底 + 白字）不带图标：图标库是固定色 PNG，
@@ -986,7 +986,7 @@ export default function TransactionMeetup() {
         ) : (
           <View className="meetup__varcard">
             <View className="meetup__vdisc meetup__vdisc--warn">
-              <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
+              <Image className="meetup__vdisc-ic" src={ICONS.warnDanger} mode="aspectFit" />
             </View>
             <Text className="meetup__varcard-title">交易已取消</Text>
             <Text className="meetup__varcard-text">本单已被取消，交易码随之失效。</Text>
@@ -1011,7 +1011,7 @@ export default function TransactionMeetup() {
             {unavailable ? (
               <View className="meetup__varcard">
                 <View className="meetup__vdisc meetup__vdisc--warn">
-                  <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
+                  <Image className="meetup__vdisc-ic" src={ICONS.warnDanger} mode="aspectFit" />
                 </View>
                 <Text className="meetup__varcard-title">这是你出示的交易码</Text>
                 <Text className="meetup__varcard-text">
@@ -1052,7 +1052,7 @@ export default function TransactionMeetup() {
                 </View>
 
                 <View className="meetup__notice">
-                  <Image className="meetup__notice-ic" src={ICONS.lock} mode="aspectFit" />
+                  <Image className="meetup__notice-ic" src={ICONS.lockFg} mode="aspectFit" />
                   <Text className="meetup__notice-tx">
                     交易码一次性有效，面交完成后自动失效；请勿截图或转发，仅当面出示。
                   </Text>
@@ -1097,7 +1097,7 @@ export default function TransactionMeetup() {
                  也不可能再卡在「加载中…」上。 */
               <View className="meetup__varcard">
                 <View className="meetup__vdisc meetup__vdisc--warn">
-                  <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
+                  <Image className="meetup__vdisc-ic" src={ICONS.warnDanger} mode="aspectFit" />
                 </View>
                 <Text className="meetup__varcard-title">交易码没能取回来</Text>
                 <Text className="meetup__varcard-text">
@@ -1175,14 +1175,14 @@ export default function TransactionMeetup() {
 
             {inputError ? (
               <View className="meetup__errbox">
-                <Image className="meetup__err-ic" src={ICONS.warn} mode="aspectFit" />
+                <Image className="meetup__err-ic" src={ICONS.warnDanger} mode="aspectFit" />
                 <Text className="meetup__err-tx">{inputError}</Text>
               </View>
             ) : null}
 
             <View className="meetup__bar">
               <View className="meetup__bar-btn meetup__btn--sec" onClick={openScanner}>
-                <Image className="meetup__bar-ic" src={ICONS.qr} mode="aspectFit" />
+                <Image className="meetup__bar-ic" src={ICONS.qrFg} mode="aspectFit" />
                 <Text>扫码验证</Text>
               </View>
               <View
@@ -1194,7 +1194,7 @@ export default function TransactionMeetup() {
             </View>
 
             <View className="meetup__notice">
-              <Image className="meetup__notice-ic" src={ICONS.lock} mode="aspectFit" />
+              <Image className="meetup__notice-ic" src={ICONS.lockFg} mode="aspectFit" />
               <Text className="meetup__notice-tx">
                 交易码一次性有效，核销成功即完成面交确认；重复提交不会重复成交。
               </Text>

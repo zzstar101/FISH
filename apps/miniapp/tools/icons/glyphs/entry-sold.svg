@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+  <title>entry-sold</title>
+  <defs><clipPath id="body"><path d="M4.5 12a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z"/></clipPath></defs>
+  <g clip-path="url(#body)" fill="accentColor" stroke="none"><g transform="translate(3 3)"><path d="M4.5 12a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z"/></g></g>
+  <path d="M4.5 12a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-11a2 2 0 0 1-2-2z"/>
+  <path d="M12 14.5V4M8.75 7.25 12 4l3.25 3.25"/>
+</svg>

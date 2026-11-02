@@ -167,23 +167,9 @@
   box-shadow: 0 20px 40px -16px rgba(66, 133, 255, 0.62);
 }
 
-/* 用两条横竖条拼「＋」，避免再引一个仅此处使用的图标资源。
-   设计稿 `.pub svg{width:20px;height:20px}` → 40px 跨度 */
+/* 反白加号与其余 tab 一样走 `ICONS`（`plusWhite`），一栏一种绘制方式。
+   字形占画布约 3/4，48px 的图标画出约 36px 的「＋」，接近稿 `.pub svg` 的 40px 跨度 */
 .tabbar__plus {
-  position: relative;
-  width: 40px;
-  height: 4px;
-  border-radius: 2px;
-  background: #fff;
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: 18px;
-    top: -18px;
-    width: 4px;
-    height: 40px;
-    border-radius: 2px;
-    background: #fff;
-  }
+  width: 48px;
+  height: 48px;
 }

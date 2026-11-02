@@ -64,9 +64,9 @@
 }
 
 .wt__lthumb-fallback {
-  width: 56px;
-  height: 56px;
-  margin: 12px;
+  width: 48px;
+  height: 48px;
+  margin: 16px; /* 图标收敛到 48（#513），外边距补齐原 56 + 2×12 的 80 占位 */
 }
 
 .wt__lmain {
@@ -237,8 +237,8 @@
 }
 
 .wt__badge-ic {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
 }
 
 .wt__meta {
@@ -269,8 +269,8 @@
 }
 
 .wt__act-ic {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 .wt__empty {
@@ -283,8 +283,9 @@
 }
 
 .wt__empty-ic {
-  width: 60px;
-  height: 60px;
+  width: 48px;
+  height: 48px;
+  margin: 6px; /* 图标收敛到 48（#513），外边距保住原 60 的占位，下方文字不上移 */
 }
 
 .wt__empty-title {
@@ -316,8 +317,8 @@
 
 .wt__banner-ic-img {
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
 }
 
 .wt__banner-tx {

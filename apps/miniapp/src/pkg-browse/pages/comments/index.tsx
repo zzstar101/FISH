@@ -547,7 +547,7 @@ export default function MyComments() {
           <EmptyState
             title="评论没读出来"
             text={error}
-            icon={ICONS.box}
+            icon={ICONS.boxMuted}
             actionText="重试"
             onAction={() => void read(segment)}
           />
@@ -555,7 +555,7 @@ export default function MyComments() {
           <>
             {demo ? (
               <View className="cmt__demo">
-                <Image className="cmt__demo-ic" src={ICONS.info} mode="aspectFit" />
+                <Image className="cmt__demo-ic" src={ICONS.infoFg} mode="aspectFit" />
                 <Text className="cmt__demo-tx">
                   演示数据 · 下列内容来自本地演示库，与你的账号无关
                 </Text>
@@ -566,7 +566,7 @@ export default function MyComments() {
               <EmptyState
                 title={empty.title}
                 text={empty.text}
-                icon={ICONS.comment}
+                icon={ICONS.commentMuted}
                 actionText={empty.action}
                 onAction={() => {
                   // 「全部」段的空态是「去逛逛」；具体段的空态按钮切回「全部」段

@@ -1867,7 +1867,7 @@ export default function ListingDetail() {
           {visibleSimilarCount === 0 ? null : (
             <View className="detail__similar">
               <View className="detail__seclabel">
-                <Image className="detail__seclabel-img" src={ICONS.category} mode="aspectFit" />
+                <Image className="detail__seclabel-img" src={ICONS.tagMuted} mode="aspectFit" />
                 <Text>同类推荐</Text>
               </View>
 
@@ -1956,7 +1956,7 @@ export default function ListingDetail() {
             <View className={`detail__fav${faved ? ' is-on' : ''}`} onClick={toggleFavorite}>
               <Image
                 className="detail__fav-img"
-                src={faved ? ICONS.heartOn : ICONS.heartMuted}
+                src={faved ? ICONS.heartFillBrand : ICONS.heartMuted}
                 mode="aspectFit"
               />
             </View>
@@ -1967,7 +1967,7 @@ export default function ListingDetail() {
               onClick={openBuy}
             >
               {buyRequested ? null : (
-                <Image className="detail__btn-img" src={ICONS.heartOn} mode="aspectFit" />
+                <Image className="detail__btn-img" src={ICONS.heartFillBrand} mode="aspectFit" />
               )}
               <Text>{buyRequested ? '待店家确认' : '立即购买'}</Text>
             </View>

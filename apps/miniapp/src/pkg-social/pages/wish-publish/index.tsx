@@ -178,7 +178,7 @@ export default function WishPublish() {
           />
           {errors.keyword ? (
             <View className="wp__err">
-              <Image className="wp__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="wp__err-ic" src={ICONS.warnFg} mode="aspectFit" />
               <Text className="wp__err-tx">{errors.keyword}</Text>
             </View>
           ) : null}
@@ -232,7 +232,7 @@ export default function WishPublish() {
           </View>
           {errors.budget ? (
             <View className="wp__err">
-              <Image className="wp__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="wp__err-ic" src={ICONS.warnFg} mode="aspectFit" />
               <Text className="wp__err-tx">{errors.budget}</Text>
             </View>
           ) : null}

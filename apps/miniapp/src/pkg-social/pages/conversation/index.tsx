@@ -158,9 +158,9 @@ import './index.scss'
  * `Taro.chooseMedia` 的 `sourceType` 决定，对发送流程没有区别）；商品卡是另一件事。
  */
 const PANEL_TILES = [
-  { key: 'image', label: '图片', icon: ICONS.image },
-  { key: 'camera', label: '拍照', icon: ICONS.camera },
-  { key: 'product', label: '商品', icon: ICONS.cart },
+  { key: 'image', label: '图片', icon: ICONS.imageMuted },
+  { key: 'camera', label: '拍照', icon: ICONS.cameraMuted },
+  { key: 'product', label: '商品', icon: ICONS.cartFg },
 ] as const
 
 /**
@@ -2646,7 +2646,7 @@ export default function Conversation() {
             <View className="conv__earlier">
               {earlierFailed ? (
                 <View className="conv__retry" onClick={loadEarlier}>
-                  <Image className="conv__retry-ic" src={ICONS.refresh} mode="aspectFit" />
+                  <Image className="conv__retry-ic" src={ICONS.refreshBrand} mode="aspectFit" />
                   <Text>更早的消息没加载出来 · 重试</Text>
                 </View>
               ) : (
@@ -2692,7 +2692,7 @@ export default function Conversation() {
                           <View className="conv__retry" onClick={() => retry(entry.pending)}>
                             <Image
                               className="conv__retry-ic"
-                              src={ICONS.refresh}
+                              src={ICONS.refreshBrand}
                               mode="aspectFit"
                             />
                             <Text>发送失败 · 重试</Text>
@@ -2823,7 +2823,7 @@ export default function Conversation() {
                           <View className="conv__retry" onClick={() => retryMedia(item)}>
                             <Image
                               className="conv__retry-ic"
-                              src={ICONS.refresh}
+                              src={ICONS.refreshBrand}
                               mode="aspectFit"
                             />
                             <Text>发送失败 · 重试</Text>
@@ -2935,7 +2935,7 @@ export default function Conversation() {
               <Text className="conv__replybar-tx">{localReplyExcerpt(replyTarget)}</Text>
             </View>
             <View className="conv__replybar-cancel" onClick={() => setReplyTarget(null)}>
-              <Image className="conv__replybar-ic" src={ICONS.closeInk} mode="aspectFit" />
+              <Image className="conv__replybar-ic" src={ICONS.closeFg} mode="aspectFit" />
             </View>
           </View>
         ) : null}
@@ -2950,7 +2950,7 @@ export default function Conversation() {
           <View className={`conv__cbtn${voiceMode ? ' is-on' : ''}`} onClick={toggleVoiceMode}>
             <Image
               className="conv__cbtn-ic"
-              src={voiceMode ? ICONS.keyboard : ICONS.mic}
+              src={voiceMode ? ICONS.keyboardFg : ICONS.micFg}
               mode="aspectFit"
             />
           </View>
@@ -2984,7 +2984,7 @@ export default function Conversation() {
           )}
 
           <View className={`conv__plus${panelOpen ? ' is-open' : ''}`} onClick={togglePanel}>
-            <Image className="conv__plus-ic" src={ICONS.plusLine} mode="aspectFit" />
+            <Image className="conv__plus-ic" src={ICONS.plusBrand} mode="aspectFit" />
           </View>
 
           {/* 历史没读出来时也置灰：那时乐观气泡渲染不出来，发了也看不到反馈 */}

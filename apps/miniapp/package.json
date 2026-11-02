@@ -8,7 +8,9 @@
     "dev:weapp": "taro build --type weapp --watch",
     "build:weapp": "taro build --type weapp && bun run check:es5",
     "check:es5": "bun scripts/check-es5.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "icons": "bun tools/icons/build.ts",
+    "brand": "bun tools/brand/build.ts"
   },
   "browserslist": [
     "defaults and fully supports es6-module",
@@ -33,6 +35,7 @@
   "devDependencies": {
     "@babel/core": "^7.24.4",
     "@babel/preset-react": "^7.24.1",
+    "@resvg/resvg-wasm": "^2.6.2",
     "@tarojs/cli": "4.2.1",
     "@tarojs/webpack5-runner": "4.2.1",
     "@types/node": "^22.0.0",

@@ -572,7 +572,7 @@ export default function Favorites() {
           <EmptyState
             title="收藏没读出来"
             text={error}
-            icon={ICONS.box}
+            icon={ICONS.boxMuted}
             actionText="重试"
             onAction={() => {
               setLoading(true)
@@ -583,7 +583,7 @@ export default function Favorites() {
           <EmptyState
             title={empty.title}
             text={empty.text}
-            icon={empty.icon === 'heart' ? ICONS.heartMuted : ICONS.box}
+            icon={empty.icon === 'heart' ? ICONS.heartMuted : ICONS.boxMuted}
             actionText={empty.actionLabel}
             onAction={onEmptyAction}
           />
@@ -669,11 +669,7 @@ export default function Favorites() {
                         <Image className="fav__av" src={item.avatarUrl} mode="aspectFill" />
                         <Text className="fav__nm">{item.seller}</Text>
                         {item.verified ? (
-                          <Image
-                            className="fav__tick"
-                            src={ICONS.verifiedAccent}
-                            mode="aspectFit"
-                          />
+                          <Image className="fav__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
                         ) : null}
                       </View>
                       <View className="fav__fmeta">

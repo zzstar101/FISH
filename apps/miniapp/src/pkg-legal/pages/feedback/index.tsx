@@ -49,18 +49,18 @@ import './index.scss'
  *
  * ## 图标映射（稿的内联 SVG 描边图标 → `ICONS`；库里没有一一对应的，按语义就近取）
  *
- * `ic-alert`→`warnInk`（行内错误 / 弹层警示）、`ic-edit`→`editAccent`（页头 kicker）、
- * `ic-chat`→`chatInk`（交易纠纷）、`ic-shield`→`safeAccent`（违规举报 / 隐私提示）、
- * `ic-phone`→`serviceMuted`（账号与认证 / 联系方式输入框）、`ic-mail`→`mail`（其他 / 客服邮箱行）、
- * `ic-copy`→`docMuted`（复制）、`ic-trash`→`delete`（清空本机暂存）、
- * `ic-clock`→`clockMuted`（暂存恢复提示）、`ic-check`→`checkAccent`（知道了）。
+ * `ic-alert`→`warnFg`（行内错误 / 弹层警示）、`ic-edit`→`editBrand`（页头 kicker）、
+ * `ic-chat`→`chatFg`（交易纠纷）、`ic-shield`→`shieldCheckBrand`（违规举报 / 隐私提示）、
+ * `ic-phone`→`headsetMuted`（账号与认证 / 联系方式输入框）、`ic-mail`→`mailFg`（其他 / 客服邮箱行）、
+ * `ic-copy`→`docMuted`（复制）、`ic-trash`→`trashFg`（清空本机暂存）、
+ * `ic-clock`→`clockMuted`（暂存恢复提示）、`ic-check`→`checkBrand`（知道了）。
  * 稿里没有 `ic-chevron` 这个 symbol（返回箭头由 `components/nav-bar` 自绘），
  * 所以 `chevronRightMuted` 本页用不到。
  *
  * ⚠️ **已知色偏（记录，不修）**：稿的图标是内联 SVG 描边、走 `currentColor`，所以
  * `.err .ic-line` 能被染成稿要求的 `--danger` 红；仓内 `ICONS` 是固定色 PNG、不可染色，
- * `warnInk` 实测是 **#17233D（墨色）**。所以行内错误图标与弹层警示图标比稿「暗一档」。
- * 要严格对齐得往图标生成器里加一个 danger 红变体，不是在本页调色。
+ * `warnFg` 是 **#17233D（墨色）**。所以行内错误图标与弹层警示图标比稿「暗一档」。
+ * 要严格对齐就改用生成器里的 `warnDanger`（`tools/icons/manifest.ts`），不是在本页调色。
  *
  * ## 行为口径（照稿）
  *
@@ -93,37 +93,37 @@ const TYPES: readonly FeedbackType[] = [
   {
     key: 'bug',
     label: '功能异常',
-    icon: 'warnInk',
+    icon: 'warnFg',
     hint: '请描述出现问题的页面、你的操作步骤，以及你期望的结果，便于我们复现',
   },
   {
     key: 'ux',
     label: '体验建议',
-    icon: 'editAccent',
+    icon: 'editBrand',
     hint: '请描述你觉得不顺手的地方，以及你希望改成什么样',
   },
   {
     key: 'dispute',
     label: '交易纠纷',
-    icon: 'chatInk',
+    icon: 'chatFg',
     hint: '请提供商品名称、对方昵称与大致交易时间，便于我们核对交易记录',
   },
   {
     key: 'report',
     label: '违规举报',
-    icon: 'safeAccent',
+    icon: 'shieldCheckBrand',
     hint: '请提供违规内容的位置（商品 / 会话 / 用户昵称）与具体情形，我们会尽快核查',
   },
   {
     key: 'account',
     label: '账号与认证',
-    icon: 'serviceMuted',
+    icon: 'headsetMuted',
     hint: '请描述你遇到的问题，例如收不到验证码、认证状态异常、无法登录等',
   },
   {
     key: 'other',
     label: '其他',
-    icon: 'mail',
+    icon: 'mailFg',
     hint: '请描述你遇到的问题或建议，包含出现的位置、操作步骤与期望结果，便于我们定位',
   },
 ]
@@ -364,7 +364,7 @@ export default function Feedback() {
       {/* ── 渐变页头（稿 .headblock；随内容滚走，玻璃栏不动） ── */}
       <View className="fb__head">
         <View className="fb__kicker">
-          <Image className="fb__kicker-ic" src={ICONS.editAccent} mode="aspectFit" />
+          <Image className="fb__kicker-ic" src={ICONS.editBrand} mode="aspectFit" />
           <Text>Feedback · 意见反馈</Text>
         </View>
         <Text className="fb__title">告诉我们哪里不对</Text>
@@ -417,7 +417,7 @@ export default function Feedback() {
           </View>
           {typeErr ? (
             <View className="fb__err">
-              <Image className="fb__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="fb__err-ic" src={ICONS.warnFg} mode="aspectFit" />
               <Text>{ERR_TYPE}</Text>
             </View>
           ) : null}
@@ -454,7 +454,7 @@ export default function Feedback() {
           </View>
           {descErr === null ? null : (
             <View className="fb__err">
-              <Image className="fb__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="fb__err-ic" src={ICONS.warnFg} mode="aspectFit" />
               <Text>{descErr}</Text>
             </View>
           )}
@@ -471,7 +471,7 @@ export default function Feedback() {
             <Text className="fb__strong">不会对外公开</Text>。
           </Text>
           <View className={`fb__inputwrap${contactFocus ? ' is-focus' : ''}`}>
-            <Image className="fb__input-ic" src={ICONS.serviceMuted} mode="aspectFit" />
+            <Image className="fb__input-ic" src={ICONS.headsetMuted} mode="aspectFit" />
             <Input
               className="fb__input"
               value={contact}
@@ -486,7 +486,7 @@ export default function Feedback() {
 
         {/* ══ 隐私提示 + 提交（表单末尾，不吸底：键盘会顶起页面） ══ */}
         <View className="fb__privacy">
-          <Image className="fb__privacy-ic" src={ICONS.safeAccent} mode="aspectFit" />
+          <Image className="fb__privacy-ic" src={ICONS.shieldCheckBrand} mode="aspectFit" />
           <Text className="fb__privacy-tx">
             提交即表示你同意我们为处理本次反馈使用上述信息，相关规则见
             <Text className="fb__link" onClick={goPrivacy}>
@@ -514,7 +514,7 @@ export default function Feedback() {
           <View className="fb__sheet">
             <View className="fb__sheet-grip" />
             <View className="fb__sheet-ic">
-              <Image className="fb__sheet-ic-img" src={ICONS.warnInk} mode="aspectFit" />
+              <Image className="fb__sheet-ic-img" src={ICONS.warnFg} mode="aspectFit" />
             </View>
             <Text className="fb__sheet-title">提交功能待接入</Text>
             {/*
@@ -532,7 +532,7 @@ export default function Feedback() {
             </Text>
 
             <View className="fb__mailrow">
-              <Image className="fb__mail-ic" src={ICONS.mail} mode="aspectFit" />
+              <Image className="fb__mail-ic" src={ICONS.mailFg} mode="aspectFit" />
               <View className="fb__mail-txt">
                 <Text className="fb__mail-em">客服邮箱</Text>
                 <Text className="fb__mail-b">
@@ -550,7 +550,7 @@ export default function Feedback() {
 
             <View className="fb__sheet-acts">
               <View className="fb__btn-ghost" onClick={() => setSheetOpen(false)}>
-                <Image className="fb__btn-ic" src={ICONS.checkAccent} mode="aspectFit" />
+                <Image className="fb__btn-ic" src={ICONS.checkBrand} mode="aspectFit" />
                 <Text>知道了，我稍后再发</Text>
               </View>
               {/*
@@ -567,7 +567,7 @@ export default function Feedback() {
                     toast('已清空本机暂存')
                   }}
                 >
-                  <Image className="fb__btn-ic" src={ICONS.delete} mode="aspectFit" />
+                  <Image className="fb__btn-ic" src={ICONS.trashFg} mode="aspectFit" />
                   <Text>清空本机暂存的内容</Text>
                 </View>
               )}

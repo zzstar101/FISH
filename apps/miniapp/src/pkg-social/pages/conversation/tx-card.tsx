@@ -13,12 +13,18 @@ import { Image, Text, View } from '@tarojs/components'
 import { ICONS } from '@/assets/lib-icons'
 import type { TxCardView } from './view'
 
+/**
+ * 图标按 #513 的语义色命名取值（合入 #531 后新增的消费者）：
+ * `qr` → `qrFg`、`clockInk` → `clockFg`、`checkCircle` → `checkCircleBrand`、
+ * `closeInk` → `closeFg`、`refresh` → `refreshBrand` —— 与 `lib-icons.ts` 里
+ * 「字形 × 语义色」的唯一出口一致，不另开别名。
+ */
 const TX_CARD_ICON = {
-  qr: ICONS.qr,
-  clock: ICONS.clockInk,
-  check: ICONS.checkCircle,
-  close: ICONS.closeInk,
-  refresh: ICONS.refresh,
+  qr: ICONS.qrFg,
+  clock: ICONS.clockFg,
+  check: ICONS.checkCircleBrand,
+  close: ICONS.closeFg,
+  refresh: ICONS.refreshBrand,
 } as const
 
 type TxCardProps = {
