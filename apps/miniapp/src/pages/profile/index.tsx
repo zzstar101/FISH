@@ -468,7 +468,7 @@ export default function Profile() {
       url: '/pkg-browse/pages/comments/index',
     },
     // #252：举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标；
-    // 图标与格子家族同一画法（entry-*：品牌蓝加粗描边 + 浅色错位填充））。提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态
+    // 图标与格子家族同一画法（entry-*：品牌蓝加粗描边 + 浅色错位填充）。提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态
     // （举报后端未上线），见 pages/my-reports 的文件头。
     {
       key: 'reports',
