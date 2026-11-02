@@ -327,7 +327,12 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })}
           >
             <View className="st__av">
-              <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
+              {/* 有真头像画真图，无图（含 /me 未回来）才退首字，同「我的」页口径 */}
+              {user?.avatarUrl ? (
+                <Image className="st__av-img" src={user.avatarUrl} mode="aspectFill" />
+              ) : (
+                <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
+              )}
               {verified ? (
                 <Image className="st__av-bdg" src={ICONS.verifiedAccent} mode="aspectFit" />
               ) : null}

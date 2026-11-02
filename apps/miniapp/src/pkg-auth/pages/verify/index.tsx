@@ -368,7 +368,11 @@ export default function Verify() {
 
             <View className="verify__badgerow">
               <View className="verify__av">
-                <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
+                {user?.avatarUrl ? (
+                  <Image className="verify__av-img" src={user.avatarUrl} mode="aspectFill" />
+                ) : (
+                  <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
+                )}
               </View>
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
@@ -382,7 +386,11 @@ export default function Verify() {
 
             <View className="verify__badgerow">
               <View className="verify__av">
-                <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
+                {user?.avatarUrl ? (
+                  <Image className="verify__av-img" src={user.avatarUrl} mode="aspectFill" />
+                ) : (
+                  <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
+                )}
               </View>
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
