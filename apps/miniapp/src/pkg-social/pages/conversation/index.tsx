@@ -239,6 +239,12 @@ export default function Conversation() {
    * 判据是 404 `REVIEW_NOT_FOUND` = 还没评；其余失败**不当成未评价**（不猜）。
    */
   const [txReview, setTxReview] = useState<{ txId: string; reviewed: boolean } | null>(null)
+  /**
+   * 评价边的重查信号：`completedTxId` 只在交易 id 变化时才变，而「去面交页写完评价再
+   * 返回本页」时 id 一个字都没变 —— 只靠 id 做依赖，顶栏会一直停在「评价」。所以每次
+   * 回到本页都 ++，把它并进 effect 依赖里重查一次。
+   */
+  const [txReviewTick, setTxReviewTick] = useState(0)
   /** 「待确认」在途锁：接受提案会建交易行，连点两次没有意义（服务端虽然 409，也不该打两次） */
   const acceptBusyRef = useRef(false)
 
@@ -690,6 +696,8 @@ export default function Conversation() {
     visibleRef.current = true
     // 回到本页：把在线态的轮询表续上（隐藏时真的停掉了，见 useDidHide）
     detailPollRef.current?.start()
+    // 从面交页写完评价回来时交易 id 不变，靠这个信号让「评价 / 查看」重新判一次
+    setTxReviewTick((tick) => tick + 1)
     /**
      * 「有在途发送」把媒体也算上：上传中的媒体与发送中的文本是同一个危害 ——
      * 此刻重拉会把 `epoch` +1，在途的直传 / create 响应被判过期，乐观气泡永远停在
@@ -1963,8 +1971,12 @@ export default function Conversation() {
    * 交易完成为「待评价」时查一次我的评价（#551）。只有 404 `REVIEW_NOT_FOUND` 才算
    * 「我还没评」；其余失败留在 `null`（按未评价给入口，见 `view.ts` 的 `txBarView`），
    * 不猜。`alive` 挡住「换了交易之后旧响应才回来」的串档。
+   *
+   * 依赖里除了交易 id 还有 `txReviewTick`：**评价是在面交页写的**，写完返回本页时
+   * 交易 id 没变，只有每回到本页重查一次，顶栏才会从「评价」变成「查看」。
    */
   const completedTxId = txLoad.tx?.status === 'COMPLETED' ? txLoad.tx.id : null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: txReviewTick 是刻意的重查信号（回到本页就 ++），不是体内读到的值
   useEffect(() => {
     if (completedTxId === null) {
       setTxReview(null)
@@ -1986,7 +1998,7 @@ export default function Conversation() {
     return () => {
       alive = false
     }
-  }, [completedTxId])
+  }, [completedTxId, txReviewTick])
 
   /**
    * 失败卡上的「重新加载」：只重查交易，不整页重拉 —— 不 bump `epoch`、不动消息流，
@@ -2027,30 +2039,46 @@ export default function Conversation() {
       void Taro.showToast({ title: '没读到提案金额，请从「我的发布」处理', icon: 'none' })
       return
     }
+    /**
+     * 入口就上锁（不是等点完「确认」才上锁）：两次快速点击会各起一个确认框，两次都点
+     * 「确认」就是两次 accept 请求。锁到确认框与请求都落定才放开。
+     */
+    acceptBusyRef.current = true
     void Taro.showModal({
       title: '确认这笔面交申请？',
       content: `接受后按 ¥${formatAmount(amountCents)} 当面交易，商品会被预订、其他买家不能再拍。`,
       confirmText: '确认接受',
-    }).then((result) => {
-      if (!result.confirm) return
-      acceptBusyRef.current = true
-      void acceptTransaction(conversationId, amountCents)
-        .then((tx) => {
-          applyTx(tx)
-          void Taro.showToast({ title: '已接受，去面交吧', icon: 'none' })
-        })
-        .catch((error) => {
-          console.warn('[miniapp] 接受面交申请失败', error)
-          void Taro.showToast({
-            title: isApiError(error) ? error.message : '接受没成功，请重试',
-            icon: 'none',
-          })
-          retryTx()
-        })
-        .finally(() => {
-          acceptBusyRef.current = false
-        })
     })
+      .then((result) => {
+        if (!result.confirm) return
+        return acceptTransaction(conversationId, amountCents)
+          .then((tx) => {
+            applyTx(tx)
+            void Taro.showToast({ title: '已接受，去面交吧', icon: 'none' })
+          })
+          .catch((error) => {
+            console.warn('[miniapp] 接受面交申请失败', error)
+            /**
+             * 409 `LISTING_NOT_ACTIVE` 按契约**不代表这次失败**（并发买家先成交 / 响应丢了
+             * 重试），用它的话术报错会与随后 `retryTx` 查出来的「待面交」自相矛盾 ——
+             * 这种情况只重查、不报失败口吻。
+             */
+            if (!(isApiError(error) && error.code === 'LISTING_NOT_ACTIVE')) {
+              void Taro.showToast({
+                title: isApiError(error) ? error.message : '接受没成功，请重试',
+                icon: 'none',
+              })
+            }
+            retryTx()
+          })
+      })
+      .catch((error) => {
+        // 确认框本身没弹出来（基础库 / 平台差异）：不静默，也不当作已接受
+        console.warn('[miniapp] 面交确认框打开失败', error)
+      })
+      .finally(() => {
+        acceptBusyRef.current = false
+      })
   }
 
   /**

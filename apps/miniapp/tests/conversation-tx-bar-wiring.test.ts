@@ -135,6 +135,27 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(bar).toContain('conv__pbar-status')
   })
 
+  test('从面交页写完评价返回本页：评价边按「回到本页」的信号重查（交易 id 不变也要重查）', async () => {
+    const code = await source()
+    // 评价是在面交页写的，返回时 completedTxId 一个字都没变 —— 只靠它做依赖会一直停在「评价」
+    expect(code).toContain('setTxReviewTick((tick) => tick + 1)')
+    const show = sliceFrom(code, 'useDidShow(() => {', 'setTxReviewTick((tick) => tick + 1)')
+    expect(show).toContain('visibleRef.current = true')
+    expect(code).toContain('}, [completedTxId, txReviewTick])')
+  })
+
+  test('接受失败不报失败口吻：409 只重查，连点被入口锁挡掉，确认框失败不炸', async () => {
+    const code = await source()
+    const accept = sliceFrom(code, 'const confirmProposal =', 'acceptBusyRef.current = false')
+    expect(accept).toContain("error.code === 'LISTING_NOT_ACTIVE'")
+    // 锁必须在弹确认框之前置真，否则两次快速点击会各起一个确认框、点两次就是两次请求
+    expect(accept.indexOf('acceptBusyRef.current = true')).toBeLessThan(
+      accept.indexOf('Taro.showModal('),
+    )
+    expect(accept).toContain('.finally(() => {')
+    expect(accept).toContain('面交确认框打开失败')
+  })
+
   test('历史 tx.accepted 仍能定位到本笔（同一会话多笔交易不串单）', async () => {
     const code = await source()
     expect(code).toContain("event?.type === 'tx.accepted'")

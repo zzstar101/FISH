@@ -165,8 +165,11 @@
  * 商品交易状态条（#551）：**不再是白卡** —— 没有 --surface 底、没有卡片描边、没有
  * --shadow-card，直接坐在 `.conv__head` 的 --grad-page 渐变上。只留图 / 名 / 价 / 状态，
  * 右侧动作区按交易状态换（旧版那颗固定的「查看」已并入动作区）。
- * 底色是渐变，所以文字与图标一律走白色系；状态词再按 tone 上色（见文件末尾的
- * `.conv__pbar.is-*`）。
+ *
+ * 配色前提：`--grad-page` 是 **浅冰蓝**（`#dcebff → #f7faff`），不是深蓝 —— 所以文字
+ * 一律走深色（--fg / --muted-2），与同用这块渐变头的其它页面（如 pkg-browse/user）
+ * 同一口径；状态词按 tone 取胶囊那套「深字」色（--warn-ink / #3b74dd / --ok-ink /
+ * #5f6e8a，见 `pages/chat/index.scss` 的 `.chat__pill`）。白字压在这个底上等于看不见。
  */
 .conv__pbar {
   margin: 20px 32px 0;
@@ -180,14 +183,14 @@
   }
 }
 
-/* 缩略图：渐变底上的半透明白托，不是白框（不形成「白卡里嵌一张图」的观感） */
+/* 缩略图：浅渐变底上的柔托（与商品缩略图同一套 --grad-ph / --accent-faint 语言） */
 .conv__pbar-thumb {
   width: 76px;
   height: 76px;
   flex: 0 0 auto;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.22);
-  border: 2px solid rgba(255, 255, 255, 0.36);
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -215,7 +218,7 @@
   font-size: var(--fs-sm);
   font-weight: 600;
   line-height: 1.35;
-  color: #fff;
+  color: var(--fg);
   @include ellipsis;
 }
 
@@ -223,7 +226,7 @@
   display: block;
   margin-top: 6px;
   font-size: var(--fs-2xs);
-  color: rgba(255, 255, 255, 0.86);
+  color: var(--muted-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -235,13 +238,13 @@
   font-weight: 700;
 }
 
-/* 状态词：蓝底上默认白字，按 tone 换成黄 / 浅蓝 / 浅绿 */
+/* 状态词：默认随 meta 的灰，按 tone 换成「待我动手 / 等对方 / 完成 / 终态」四种深色字 */
 .conv__pbar-status {
-  color: rgba(255, 255, 255, 0.86);
+  color: var(--muted-2);
   font-weight: 600;
 }
 
-/* 动作区：白药丸压渐变。黄=要我做、蓝=等对方、绿=已完成、灰=终态 */
+/* 动作区：品牌蓝实心药丸（浅底上要够显眼，也是本页唯一的主操作） */
 .conv__pbar-act {
   flex: 0 0 auto;
   display: inline-flex;
@@ -250,22 +253,26 @@
   height: 56px;
   padding: 0 22px;
   border-radius: var(--r-pill);
-  background: rgba(255, 255, 255, 0.94);
-  color: var(--brand-deep);
+  background: var(--brand-deep);
+  color: var(--surface);
   font-size: var(--fs-xs);
   font-weight: 600;
 }
 
 .conv__pbar.is-warn .conv__pbar-status {
-  color: #ffe9a8;
+  color: var(--warn-ink);
 }
 
 .conv__pbar.is-pending .conv__pbar-status {
-  color: #d6e6ff;
+  color: #3b74dd;
 }
 
 .conv__pbar.is-ok .conv__pbar-status {
-  color: #b8f0cf;
+  color: var(--ok-ink);
+}
+
+.conv__pbar.is-plain .conv__pbar-status {
+  color: #5f6e8a;
 }
 
 /**
