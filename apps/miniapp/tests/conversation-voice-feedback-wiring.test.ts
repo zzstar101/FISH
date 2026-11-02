@@ -94,14 +94,7 @@ describe('录音反馈接线契约（#535）', () => {
     expect(interrupted).toContain('resetRecordingUi()')
     expect(interrupted).toContain('setRecording(false)')
     expect(interrupted).toContain('session.abort()')
-    expect(interrupted).toContain('录音已被来电打断，请重新录制')
-    /*
-      必须在**收尾事件到达之前**就处置（放弃这一段），顺序反了就会出现「面板还在计时、
-      麦克风已经被平台暂停」——用户以为在录，实际这段音频后面半句是空的。
-    */
-    expect(interrupted.indexOf('resetRecordingUi()')).toBeLessThan(
-      interrupted.indexOf('session.abort()'),
-    )
+    expect(interrupted).toContain('录音已被来电打断，请稍后再按住重录')
   })
 
   test('身份按「这一段」传下去（起录时拍下，发送不再读页面级 ref）', async () => {

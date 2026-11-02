@@ -109,7 +109,7 @@ describe('松手投递的处置（#549）', () => {
   test('当前仍处于中断态：不发这段被截断的音频，并明确告诉用户重录', () => {
     const { sent, toasts } = run(true)
     expect(sent).toEqual([])
-    expect(toasts).toEqual(['录音已被来电打断，请重新录制'])
+    expect(toasts).toEqual(['录音已被来电打断，请稍后再按住重录'])
   })
 })
 

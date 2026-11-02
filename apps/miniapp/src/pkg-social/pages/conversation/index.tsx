@@ -1682,7 +1682,7 @@ export default function Conversation() {
     setRecording(false)
     resetRecordingUi()
     session.abort()
-    void Taro.showToast({ title: '录音已被来电打断，请重新录制', icon: 'none' })
+    void Taro.showToast({ title: '录音已被来电打断，请稍后再按住重录', icon: 'none' })
   }
 
   /**

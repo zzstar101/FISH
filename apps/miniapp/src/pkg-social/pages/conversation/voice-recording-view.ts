@@ -130,7 +130,7 @@ export function applyVoiceRelease(
   effect: { toast: (title: string) => void; send: () => void },
 ): void {
   if (input.interrupted) {
-    effect.toast('录音已被来电打断，请重新录制')
+    effect.toast('录音已被来电打断，请稍后再按住重录')
     return
   }
   effect.send()
