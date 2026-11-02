@@ -98,10 +98,13 @@ const {
   cachedMediaPath,
   clearMediaCache,
   downloadChatMedia,
+  MediaUploadError,
   startVoiceRecording,
   uploadChatImage,
   uploadChatVoice,
+  VoiceContainerError,
   VoicePermissionError,
+  VoicePrivacyError,
   voiceError,
 } = await import('../src/features/chat/media-api')
 
@@ -349,6 +352,79 @@ describe('uploadChatImage —— 上传链每一步都问一次在途判据（#6
   })
 })
 
+describe('uploadChatVoice —— 容器不可识别时必须在 presign 前失败且可诊断（#516）', () => {
+  /** 裸 ADTS（AAC）头：微信 Android / 开发者工具下的常见回落，契约白名单不收 */
+  const ADTS = [0xff, 0xf1, 0x50, 0x80, 0x00, 0x1f, 0xfc]
+  /** 最小 RIFF/WAVE 头：只够 `voiceMimeFromBytes` 判定容器 */
+  const RIFF_WAV = [
+    0x52,
+    0x49,
+    0x46,
+    0x46, // RIFF
+    0x24,
+    0x00,
+    0x00,
+    0x00, // chunk size
+    0x57,
+    0x41,
+    0x56,
+    0x45, // WAVE
+  ]
+
+  test('ADTS：抛 VoiceContainerError，size/header 可取证，且一个请求都不发', async () => {
+    localFile = new Uint8Array(ADTS).buffer
+    const error = await uploadChatVoice(CONVERSATION, {
+      path: 'wxfile://tmp/voice.aac',
+      durationMs: 1200,
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(VoiceContainerError)
+    expect((error as VoiceContainerError).sizeBytes).toBe(ADTS.length)
+    expect((error as VoiceContainerError).header).toContain('ff f1')
+    expect((error as VoiceContainerError).message).toBe('当前录音格式暂不支持发送语音')
+    // 锁住「容器判定必须在 presign 之前」：不是本 PR 新引入的回归，而是既有约束。
+    expect(apiCalls).toHaveLength(0)
+    expect(uploads).toHaveLength(0)
+  })
+
+  test('RIFF/WAVE：正常 presign → PUT，content-type 是 audio/wav', async () => {
+    localFile = new Uint8Array(RIFF_WAV).buffer
+    const uploaded = await uploadChatVoice(
+      CONVERSATION,
+      { path: 'wxfile://tmp/voice.wav', durationMs: 1200 },
+      () => true,
+    )
+
+    expect(apiCalls[0]?.body).toEqual({
+      kind: 'VOICE',
+      contentType: 'audio/wav',
+      sizeBytes: RIFF_WAV.length,
+    })
+    expect(uploads).toHaveLength(1)
+    expect(uploads[0]?.header).toEqual({ 'content-type': 'audio/wav' })
+    expect(uploaded).toEqual({
+      kind: 'VOICE',
+      objectKey: `chat-media/${CONVERSATION}/me/1.png`,
+      contentType: 'audio/wav',
+      sizeBytes: RIFF_WAV.length,
+      durationMs: 1200,
+    })
+  })
+
+  test('PUT 非 2xx：抛 MediaUploadError，保留 HTTP 状态且文案不暴露状态码', async () => {
+    localFile = new Uint8Array(RIFF_WAV).buffer
+    uploadStatus = 503
+    const error = await uploadChatVoice(CONVERSATION, {
+      path: 'wxfile://tmp/voice.wav',
+      durationMs: 1200,
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(MediaUploadError)
+    expect((error as MediaUploadError).statusCode).toBe(503)
+    expect((error as MediaUploadError).message).toBe('语音发送失败，请重试')
+  })
+})
+
 describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364 审查）', () => {
   test('录音上限比契约上限小：服务端严格大于即 422，而 WAV 时长是精确值', () => {
     startVoiceRecording()
@@ -385,6 +461,15 @@ describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364
 })
 
 describe('voiceError —— 权限被拒必须与普通失败可区分', () => {
+  test('隐私授权错误不会被误判成麦克风权限错误', () => {
+    const error = voiceError({
+      errMsg: 'operateRecorder:fail privacy permission is not authorized',
+    })
+    expect(error).toBeInstanceOf(VoicePrivacyError)
+    expect(error).not.toBeInstanceOf(VoicePermissionError)
+    expect(error.message).toContain('隐私保护指引')
+  })
+
   test('权限 / auth 类错误：VoicePermissionError（页面据此给「去设置」）', () => {
     const error = voiceError({ errMsg: 'operateRecorder:fail auth deny' })
     expect(error).toBeInstanceOf(VoicePermissionError)

@@ -38,6 +38,7 @@ import {
   uploadChatImage,
   uploadChatVoice,
   VoicePermissionError,
+  VoicePrivacyError,
   type VoiceRecording,
   voiceError,
 } from '@/features/chat/media-api'
@@ -50,6 +51,11 @@ import { fetchConversationTransaction } from '@/features/transaction/conversatio
 import { meetupUrlById } from '@/features/transaction/order-links'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
+import {
+  canEnterVoiceMode,
+  getPrivacyAuthorizationState,
+  requestPrivacyAuthorize,
+} from '@/lib/privacy'
 import { isApiError } from '@/lib/request'
 import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
@@ -352,6 +358,10 @@ export default function Conversation() {
   const pendingMediaRef = useRef<PendingMedia[]>([])
   /** 当前这次录音的句柄（`null` = 没在录） */
   const recordingRef = useRef<VoiceRecording | null>(null)
+  /** 隐私授权弹窗在途：连点麦克风按钮时只弹一次，避免重复弹窗 */
+  const privacyPendingRef = useRef(false)
+  /** 语音授权在途的代次：await 回来时用户可能已经开了面板/离开页面，旧结果不许落地 */
+  const voiceGateSeqRef = useRef(0)
   /** 语音播放器（切歌 / 离页 / 换账号都要先停掉） */
   const audioRef = useRef<ReturnType<typeof Taro.createInnerAudioContext> | null>(null)
   /** 正在下载的媒体 id：兜住「推送与 HTTP 同时把一条媒体放进流」造成的重复下载 */
@@ -399,6 +409,8 @@ export default function Conversation() {
     // 身份清场 +1：作废 A 在途的所有响应。下面登录态 effect 紧接着会再 +1 占位
     // 本次 load —— 两者语义独立但共用计数器，判过期只看「是否相等」，不区分语义。
     epoch.current += 1
+    // 语音授权是异步的：在途结果回来时若 seq 没变，会把新账号重新拉进语音态。
+    voiceGateSeqRef.current += 1
     localSeq.current = 0
     // 待刷新标记与在途计数一起归到新 epoch：否则上个账号留下的陈旧标记会被
     // 新账号后续某次发送落定消费掉，闪一次无来由的整页加载。
@@ -1555,9 +1567,39 @@ export default function Conversation() {
    * 设置页。不是被拒（例如麦克风被别的应用占着）就别拉设置页，那会让用户白跑一趟。
    */
   const handleVoiceFailure = (error: unknown) => {
+    console.error('[miniapp] 录音失败', error)
     recordingRef.current = null
     setRecording(false)
     const failure = voiceError(error)
+    if (failure instanceof VoicePrivacyError) {
+      // 平台在录音阶段才报 privacy：先退回键盘态，下一次点话筒会重新走授权闸；
+      // 同时给一个「去授权」入口，避免只能看到同一句 toast 反复出现（#526 审查）。
+      setVoiceMode(false)
+      void Taro.showModal({
+        title: '需要隐私授权',
+        content: failure.message,
+        confirmText: '去授权',
+        cancelText: '取消',
+      })
+        .then((modal) => {
+          if (!modal.confirm) return
+          // 这个分支前面已经 setVoiceMode(false)；授权成功后要把用户送回语音态，
+          // 否则「请按住说话」指向的是已被卸载的控件（#526 审查）。
+          const gateSeq = ++voiceGateSeqRef.current
+          return requestPrivacyAuthorize().then((authorized) => {
+            if (!authorized) {
+              void Taro.showToast({ title: '隐私授权未完成，请检查微信隐私设置', icon: 'none' })
+              return
+            }
+            if (gateSeq !== voiceGateSeqRef.current || !aliveRef.current) return
+            setPanelOpen(false)
+            setVoiceMode(true)
+            void Taro.showToast({ title: '已授权，请按住说话', icon: 'none' })
+          })
+        })
+        .catch(() => undefined)
+      return
+    }
     if (!(failure instanceof VoicePermissionError)) {
       void Taro.showToast({ title: failure.message, icon: 'none' })
       return
@@ -1581,7 +1623,13 @@ export default function Conversation() {
       .catch(() => undefined)
   }
 
-  /** 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态 */
+  /**
+   * 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态。
+   *
+   * 这里必须是**同步**的：`onTouchStart → onTouchEnd` 是一段不可打断的触摸序列。隐私授权
+   * 若放在这里 await，弹窗期间用户松手会让 `finishVoice` 看不到 `recordingRef` 而直接
+   * return，授权完成后反而在没有手指按着时开始录音（#526 审查）。
+   */
   const startVoice = () => {
     if (!canSend || recordingRef.current) return
     try {
@@ -1866,11 +1914,42 @@ export default function Conversation() {
     session.abort()
   }
 
-  /** 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致） */
-  const toggleVoiceMode = () => {
-    if (!voiceMode) setPanelOpen(false)
-    else abortRecording()
-    setVoiceMode(!voiceMode)
+  /**
+   * 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致）。
+   *
+   * 隐私授权放在这里而不是 `startVoice`：这是普通点击，可以安全 await；进入语音态时
+   * 就把授权走完，后面按住说话的触摸序列保持全同步。
+   */
+  const toggleVoiceMode = async () => {
+    if (voiceMode) {
+      abortRecording()
+      setVoiceMode(false)
+      return
+    }
+    if (privacyPendingRef.current) return
+    privacyPendingRef.current = true
+    const seq = ++voiceGateSeqRef.current
+    let state: Awaited<ReturnType<typeof getPrivacyAuthorizationState>>
+    try {
+      state = await getPrivacyAuthorizationState()
+    } finally {
+      privacyPendingRef.current = false
+    }
+    // await 期间用户可能点了「+」、离开页面，或又切回了键盘态；旧结果不许覆盖新状态。
+    if (!canEnterVoiceMode(state, seq, voiceGateSeqRef.current, aliveRef.current)) {
+      if (seq !== voiceGateSeqRef.current || !aliveRef.current) return
+      // 查询失败/超时与用户明确拒绝要分开提示：前者按「去同意」操作也不会恢复。
+      void Taro.showToast({
+        title:
+          state === 'denied'
+            ? '请先同意《用户隐私保护指引》后重试'
+            : '无法确认隐私授权状态，请稍后重试或检查微信设置',
+        icon: 'none',
+      })
+      return
+    }
+    setPanelOpen(false)
+    setVoiceMode(true)
   }
 
   /**
@@ -2015,6 +2094,8 @@ export default function Conversation() {
 
   /** 「+」开合面板：开面板时退回键盘态 */
   const togglePanel = () => {
+    // 授权 await 期间用户主动开了「+」：作废这次待落地的语音态切换。
+    voiceGateSeqRef.current += 1
     if (!panelOpen) {
       abortRecording()
       setVoiceMode(false)
