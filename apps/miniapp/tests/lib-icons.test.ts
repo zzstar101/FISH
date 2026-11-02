@@ -15,7 +15,7 @@ import {
   type RenderedIcon,
   renderAll,
 } from '../tools/icons/build'
-import { MANIFEST, TONES } from '../tools/icons/manifest'
+import { ACCENT_OPACITY, MANIFEST, TONES } from '../tools/icons/manifest'
 
 const icons: RenderedIcon[] = await renderAll()
 
@@ -117,6 +117,25 @@ describe('图标契约', () => {
         color: TONES[tone],
       })
     }
+  })
+
+  test('只有 TabBar 选中态（tab-*-brand）带半透明错位填充', () => {
+    const fillAlpha = Math.round(ACCENT_OPACITY * 255)
+    const withFill = icons
+      .filter((icon) => {
+        let n = 0
+        for (let i = 3; i < icon.pixels.length; i += 4) {
+          if (Math.abs((icon.pixels[i] ?? 0) - fillAlpha) <= 3) n += 1
+        }
+        return n >= 50
+      })
+      .map((icon) => icon.file)
+    expect(withFill.sort()).toEqual(
+      Object.keys(MANIFEST)
+        .filter((glyph) => glyph.startsWith('tab-'))
+        .map((glyph) => `${glyph}-brand@3x.png`)
+        .sort(),
+    )
   })
 
   test('24pt 网格：字形 48–56px、四周留白 ≥ 8px、最深处不发虚（alpha ≥ 200）', () => {
