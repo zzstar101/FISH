@@ -119,6 +119,25 @@ describe('图标契约', () => {
     }
   })
 
+  /**
+   * 允许带「半透明错位填充块」的字形**白名单**。
+   *
+   * 期望集不能从 manifest / svg 自身推导 —— 那样只要新加 `accentColor` 的字形恰好有
+   * brand tone，期望集就跟着一起变大，断言恒绿（等于只验证「渲染 == 声明」这条恒等式，
+   * 没验证「哪些字形允许这么画」）。这里写死，新增必须显式登记。
+   */
+  const ACCENT_GLYPHS = [
+    'entry-bought',
+    'entry-onsale',
+    'entry-report',
+    'entry-review',
+    'entry-sold',
+    'tab-home',
+    'tab-me',
+    'tab-message',
+    'tab-wish',
+  ] as const
+
   test('只有带填充块的字形（TabBar / 「我的」交易入口）在 brand 下出半透明错位填充', () => {
     const fillAlpha = Math.round(ACCENT_OPACITY * 255)
     const withFill = icons
@@ -130,17 +149,31 @@ describe('图标契约', () => {
         return n >= 50
       })
       .map((icon) => icon.file)
-    expect(withFill.sort()).toEqual(
-      Object.keys(MANIFEST)
-        .filter((glyph) =>
-          readFileSync(join(GLYPH_DIR, `${glyph}.svg`), 'utf8').includes('accentColor'),
-        )
-        .map((glyph) => `${glyph}-brand@3x.png`)
-        .sort(),
-    )
+    expect(withFill.sort()).toEqual(ACCENT_GLYPHS.map((glyph) => `${glyph}-brand@3x.png`).sort())
+    // 反向：白名单里的字形必须真的声明并画出填充块（丢了也算回归）
+    for (const glyph of ACCENT_GLYPHS) {
+      expect({
+        glyph,
+        declaresAccent: readFileSync(join(GLYPH_DIR, `${glyph}.svg`), 'utf8').includes(
+          'accentColor',
+        ),
+      }).toEqual({ glyph, declaresAccent: true })
+      expect({ glyph, painted: withFill.includes(`${glyph}-brand@3x.png`) }).toEqual({
+        glyph,
+        painted: true,
+      })
+    }
   })
 
-  test('24pt 网格：字形 48–56px、四周留白 ≥ 8px、最深处不发虚（alpha ≥ 200）', () => {
+  /**
+   * 口径说明（#513 验收第 3 条）：验收原文写的是「bbox 48–56px（占画布 44%–60%）」，
+   * 括号里的面积区间是对**正方形**字形的换算（48²/72²=44%、56²/72²=60%）。对勾、箭头、
+   * 横排分类图标这类非正方形字形，短边不可能也 ≥48px（否则会撑满画布），因此本条断言
+   * 取**最长边 ∈ [48,56]px**，面积区间对非正方形字形豁免：实测 88 张图面积占比
+   * 27%–58%（旧库 5%–92%），相对旧库是数量级收敛。若要改成真正的面积下限
+   * （例如 ≥25%）应先改验收口径再改断言。
+   */
+  test('24pt 网格：字形最长边 48–56px、四周留白 ≥ 8px、最深处不发虚（alpha ≥ 200）', () => {
     for (const icon of icons) {
       const { w, h, margin, maxAlpha } = inkBox(icon.pixels)
       const size = Math.max(w, h)

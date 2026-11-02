@@ -47,6 +47,12 @@ const INDIRECT_ICON_IMAGES = [
     why: 'PANEL_TILES 的 ICONS.*',
   },
   {
+    // #531 新增：`src={TX_CARD_ICON[view.icon]}` 不含 `ICONS` 前缀，不登记就会被静默跳过
+    file: 'pkg-social/pages/conversation/tx-card.tsx',
+    className: 'conv__txcard-ic',
+    why: 'TX_CARD_ICON 映射到 ICONS.*',
+  },
+  {
     file: 'pkg-auth/pages/settings/index.tsx',
     className: 'st__ric-ic',
     why: '设置行配置的 ICONS.*',
