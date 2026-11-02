@@ -1,6 +1,10 @@
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
-import type { TransactionDto, TransactionSystemEvent } from '@fish/contracts/transactions/schema'
-import { lastTxSignalOf, txEventOfContent } from '@/features/transaction/tx-signal'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import {
+  lastTxMessageEventOf,
+  type TxMessageEvent,
+  txMessageEventOfContent,
+} from '@/features/transaction/tx-signal'
 
 /**
  * 会话行的交易进度胶囊（任务一 #89：昵称后随状态变色的胶囊）。
@@ -39,7 +43,7 @@ export type ConversationCapsule = {
 }
 
 /** `conversationId → 该会话最后一个 tx.* 事件`（`null` = 扫过、确认没有） */
-export type TxEventIndex = Map<string, TransactionSystemEvent | null>
+export type TxEventIndex = Map<string, TxMessageEvent | null>
 
 /**
  * 这一行是否**需要**拉消息页才能判定胶囊：没有交易行、且 `lastMessage` 推不出结论。
@@ -64,14 +68,18 @@ export function needsProposalScan(
   const last = conversation.lastMessage
   if (!last) return false
   if (last.type !== 'SYSTEM') return true
-  return txEventOfContent(last.content) === null
+  return txMessageEventOfContent(last.content) === null
 }
 
-/** 一页消息 → 该会话最后一个交易事件（`null` = 确实没有）。供页面扫描提案时调用。 */
-export function lastEventOfMessages(
-  messages: readonly MessageDto[],
-): TransactionSystemEvent | null {
-  return lastTxSignalOf(messages)?.event ?? null
+/**
+ * 一页消息 → 该会话最后一个交易事件（`null` = 确实没有）。供页面扫描提案时调用。
+ *
+ * 用**宽松**解析：老数据的 `tx.accepted` 可能没有 `transactionId`（#521），严格 schema
+ * 会把它整条丢掉，最后一个事件就退回更早的 `tx.proposal` —— 已取消的行会显示成
+ * 「待同意」，与预览的「交易已取消」自相矛盾。
+ */
+export function lastEventOfMessages(messages: readonly MessageDto[]): TxMessageEvent | null {
+  return lastTxMessageEventOf(messages)
 }
 
 /**
@@ -124,10 +132,10 @@ export function capsuleFor(
 }
 
 /** 会话行摘要能给出的最后一个事件：只有 `lastMessage` 本身就是 `tx.*` 时才知道 */
-function lastEventOfLastMessage(conversation: ConversationDto): TransactionSystemEvent | null {
+function lastEventOfLastMessage(conversation: ConversationDto): TxMessageEvent | null {
   const last = conversation.lastMessage
   if (last?.type !== 'SYSTEM') return null
-  return txEventOfContent(last.content)
+  return txMessageEventOfContent(last.content)
 }
 
 /**
@@ -137,8 +145,9 @@ function lastEventOfLastMessage(conversation: ConversationDto): TransactionSyste
  * `conversation_id`（`transactions` 的部分唯一索引只约束 PENDING_MEETUP / COMPLETED，
  * CANCELLED 行可累积）。列表按 `created_at DESC` 返回 —— 数组**末尾是最旧的**，
  * 无脑 `map.set` 会让最旧那笔（例如早已取消的）永久盖住当前那笔。所以按
- * `createdAt` 取最新：越新的覆盖越旧的，`createdAt` 相同时后出现的胜（同毫秒属
- * 极端巧合，取哪笔都不影响「当前状态」的正确性）。
+ * `createdAt` 取最新：越新的覆盖越旧的；`createdAt` **完全相同**时保留先出现的
+ * 那笔 —— 列表是 `created_at DESC`，同一毫秒里排在前面的才是服务端认定的新交易。
+ * （用 `>=` 会让同毫秒的旧交易反过来盖住新的，等于把上面的结论又推翻。）
  */
 export function transactionsByConversation(
   buyer: TransactionDto[],
@@ -147,7 +156,7 @@ export function transactionsByConversation(
   const map = new Map<string, TransactionDto>()
   for (const tx of [...buyer, ...seller]) {
     const current = map.get(tx.conversationId)
-    if (!current || Date.parse(tx.createdAt) >= Date.parse(current.createdAt)) {
+    if (!current || Date.parse(tx.createdAt) > Date.parse(current.createdAt)) {
       map.set(tx.conversationId, tx)
     }
   }

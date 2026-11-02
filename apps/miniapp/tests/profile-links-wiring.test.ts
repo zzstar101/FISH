@@ -42,7 +42,9 @@ describe('会话页：头像 / 顶部昵称 → 主页（#517）', () => {
     const openSelf = sliceFrom(
       code,
       'const openSelfProfile = () => {',
-      'const openMeetup = () => {',
+      // #531 起 `openMeetup` 接收交易 id，签名变了但「声明在 openSelfProfile 之后」的
+      // 结构不变：这里只钉 openSelfProfile 的函数体边界，不钉邻居的签名。
+      'const openMeetup = (transactionId: string) => {',
     )
     expect(openSelf).toContain("url: '/pkg-auth/pages/profile-edit/index'")
     expect(openSelf).not.toContain('/pkg-browse/pages/user/index')

@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'bun:test'
 import {
   conversationUrlOf,
   DEMO_ORDER_HINT,
+  meetupUrlById,
   meetupUrlOf,
 } from '../src/features/transaction/order-links'
 
@@ -57,6 +58,13 @@ const { nextIdentityState } = await import('../src/features/transaction/useOrder
 /** 源码读成字符串；路径与 `index.tsx` 同侧的组件目录 */
 async function orderListSource(): Promise<string> {
   return await Bun.file(new URL('../src/components/order-list/index.tsx', import.meta.url)).text()
+}
+
+/** 会话页（`pkg-social/pages/conversation`）的源码 */
+async function conversationSource(): Promise<string> {
+  return await Bun.file(
+    new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url),
+  ).text()
 }
 
 /** 评价弹层（`components/review-dialog`，#475 起订单卡与面交页共用）的源码 */
@@ -518,6 +526,33 @@ describe('演示来源的卡 —— 只说明，不跳真实接口页（#304）'
       'fetchMyTransactionReview(',
       '演示来源不打评价接口',
     )
+  })
+})
+
+describe('会话页的交易码入口 —— 必须带交易 id（#521）', () => {
+  test('meetupUrlById 拼出带 id 的面交页地址', () => {
+    expect(meetupUrlById('txn_01jc000000e00800000000002h')).toBe(
+      '/pkg-trade/pages/transaction-meetup/index?id=txn_01jc000000e00800000000002h',
+    )
+  })
+
+  test('会话页不再硬编码无 id 地址：跳转统一走 meetupUrlById', async () => {
+    const code = codeOnly(await conversationSource())
+    expect(code).toContain('meetupUrlById(')
+    // 传进去的必须是选中的那笔交易，而不是空串 / 别的 id
+    expect(code).toContain('openMeetup(txCard.transactionId)')
+    expect(code).toContain('url: meetupUrlById(transactionId)')
+    // 无 id 直跳会让面交页 `router.params.id` 为空 → 直接落「找不到这笔交易」
+    expect(code).not.toContain('/pkg-trade/pages/transaction-meetup/index')
+  })
+
+  test('交易进度卡挂在输入栏、按交易行取数；消息流不再画交易码卡（#522）', async () => {
+    const code = codeOnly(await conversationSource())
+    expect(code).toContain('fetchConversationTransaction(conversationId')
+    expect(code).toContain('<TxCard')
+    expect(code).toContain('view={txCard}')
+    // 交易码卡只应存在于 `tx-card.tsx`；会话页再画一份就又回到「按事件快照说话」
+    expect(code).not.toContain('conv__txcard')
   })
 })
 
