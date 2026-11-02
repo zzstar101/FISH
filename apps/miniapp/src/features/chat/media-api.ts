@@ -399,6 +399,8 @@ type VoiceSession = {
   onError?: (error: Error) => void
   /** 录音器**自己停了**（没人调用 `stop()`）时的回调 */
   onAutoStop?: (recorded: RecordedVoice, capped: boolean) => void
+  /** 被系统占用**打断**（来电 / 视频通话把录音暂停了）时的回调：页面据此放弃这一段 */
+  onInterrupted?: () => void
 }
 
 /**
@@ -463,10 +465,19 @@ function recorder(): VoiceRecorder {
     // `stop()` 之后才到的错误会从 `done` 的 reject 走到 `stop()` 的 catch，这里不再重复上报
     if (!session.stopRequested) session.onError?.(failure)
   })
-  // 来电 / 视频通话占用麦克风：这一段不是「录满收尾」
+  // 来电 / 视频通话占用麦克风：这一段不是「录满收尾」，而且**当场**就该告诉页面
   manager.onInterruptionBegin(() => {
     const session = liveSession()
-    if (session) session.interrupted = true
+    if (!session) return
+    session.interrupted = true
+    /*
+      带外通知（#549，需求 4 的「中断」失效路径）：平台的语义是「录音被暂停」—— 暂停期间
+      用户说的话不会被录进去，这一段音频是截断的。只记一个布尔的话，用户要等到松手（或被
+      平台自停）才知道出事，那时他已经对着面板又说了半天。页面收到通知就放弃这一段、复位
+      面板并明确提示重录；`interrupted` 标记留着兜住「通知晚于松手」的竞态
+      （松手投递读 `wasInterrupted`，见 `applyVoiceRelease`）。
+    */
+    session.onInterrupted?.()
   })
   manager.onInterruptionEnd(() => {
     const session = liveSession()
@@ -538,6 +549,9 @@ function settleOverdue(session: VoiceSession, nowMs: number): boolean {
  * `onAutoStop`：录音器**自己停了**（时长上限 / 被系统打断）时的带外通知。`capped` 由
  * 「**此刻**是否仍处于中断态」+「时长是否贴着上限」两件事共同判定，见 `voiceCapped`。
  *
+ * `onInterrupted`：被来电 / 视频通话**打断**（`onInterruptionBegin`）时的带外通知，页面据此
+ * 放弃这一段并提示重录 —— 中断即「暂停」，暂停之后这段话没被录进去，不能当正常语音发。
+ *
  * **抛错**：上一段还没交回收尾事件、录音器仍被它占着时同步抛 `VoiceRecordingBusyError`
  * （与平台 `start()` 失败不同，那一条仍照旧直接抛出，见函数体）。两者都走页面的
  * `catch → 提示`，不会留下「正在录」的假状态。
@@ -545,6 +559,7 @@ function settleOverdue(session: VoiceSession, nowMs: number): boolean {
 export function startVoiceRecording(
   onError?: (error: Error) => void,
   onAutoStop?: (recorded: RecordedVoice, capped: boolean) => void,
+  onInterrupted?: () => void,
 ): VoiceRecording {
   /**
    * 闸：录音器一次只录一段（#549）。
@@ -575,6 +590,7 @@ export function startVoiceRecording(
     stopRequestedAtMs: null,
     onError,
     onAutoStop,
+    onInterrupted,
   }
   const done = new Promise<RecordedVoice>((resolve, reject) => {
     session.resolve = resolve
@@ -603,7 +619,8 @@ export function startVoiceRecording(
       同步抛错表示平台拒绝了这次 start，因此不存在「这一段」可供收尾。
       反过来把账留着会让**最常见**的失败（设备忙 / 起录失败）永久关死闸门 —— 那一段本来就
       不会有任何事件来销账，等于把「一次起录失败」变成「进程内再也录不了音」。
-      端上取证项：D7（同步抛错后平台是否仍会投一次 onStop / onError）。
+      端上探针见 PR 描述「平台假设与端上探针」的 **D7**（记录同步抛错后是否仍收到一次
+      onStop / onError）：若真会投，这条假设不成立，那段迟到的收尾会被算到下一段头上。
     */
     settleSession(session)
     throw error
@@ -658,7 +675,8 @@ export function startVoiceRecording(
  * 判据只读**当前**中断态（`onInterruptionEnd` 就清零），**不**改成「中断过一次就永久不算
  * 录满」（#549 收口判据 2）：一次中断已经恢复、之后正常录满 59s 的那一段，用户要的是发送，
  * 把它判成「被打断」不发等于拿历史标记吃掉一次完整录音。中断结束之后剩下的风险（暂停期间
- * 音频是否缺一段）属于平台语义，登记为端上假设 D4，不由时间/历史标记去猜。
+ * 音频是否缺一段）属于平台语义，登记为端上探针 D4（记录 interruptionBegin / onPause /
+ * onInterruptionEnd / onStop 的实际顺序与 duration），不由时间/历史标记去猜。
  */
 function voiceCapped(session: VoiceSession, recorded: RecordedVoice): boolean {
   if (session.interrupted) return false

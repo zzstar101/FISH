@@ -755,6 +755,37 @@ describe('startVoiceRecording —— 单例同一时刻只交给一段录音（#
     expect((refused as Error).message).toContain('重新打开')
   })
 
+  /*
+    需求 4 的「中断」失效路径：来电 / 视频通话把录音暂停了（`onInterruptionBegin`），这一段
+    音频已经是截断的。修复前平台信号只被记成一个布尔，页面在录音期间完全不知道发生过什么 ——
+    提示要等到松手（或被平台自停）才出现，而那时用户已经又对着面板说了半分钟。
+    现在中断信号立刻带外通知页面：放弃这一段 + 复位面板 + 明确提示重录。
+  */
+  test('来电中断：立刻带外通知一次（页面据此放弃这一段），收尾事件到了也不交付', () => {
+    const events: string[] = []
+    const autoStops: string[] = []
+    let session: ReturnType<typeof startVoiceRecording> | null = null
+    session = startVoiceRecording(
+      () => events.push('error'),
+      () => autoStops.push('auto'),
+      () => {
+        events.push('interrupted')
+        // 页面收到通知的处置（与 index.tsx 的 `handleVoiceInterrupted` 一致）：放弃这一段
+        session?.abort()
+      },
+    )
+
+    recorderHooks.onInterruptionBegin?.()
+    expect(events).toEqual(['interrupted'])
+    // 中断开始的那一刻仍然是「当前中断态」（松手竞态兜底用得上）
+    expect(session.wasInterrupted()).toBe(true)
+
+    // 被放弃的那一段自己的收尾到了：不交付、不通知
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/cut.wav', duration: 20_000 })
+    expect(events).toEqual(['interrupted'])
+    expect(autoStops).toEqual([])
+  })
+
   test('正常收尾窗口内（几十毫秒级）仍然是「稍后再按」，不要拿大词吓用户', () => {
     const first = startVoiceRecording()
     first.stop()

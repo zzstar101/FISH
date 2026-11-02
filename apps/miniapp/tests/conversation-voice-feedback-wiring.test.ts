@@ -52,7 +52,11 @@ describe('录音反馈接线契约（#535）', () => {
 
   test('录音器自停：复位后把「取消 / 被打断 / 录满」的取舍交给被测过的判定（#535 复审）', async () => {
     const text = await read(PAGE)
-    expect(text).toContain('startVoiceRecording(handleVoiceFailure, handleVoiceAutoStop)')
+    expect(text).toContain('startVoiceRecording(')
+    expect(text).toContain('handleVoiceFailure,')
+    expect(text).toContain('handleVoiceAutoStop,')
+    // 中断（来电 / 视频通话）也必须接上：不接的话这一段音频会被当成正常语音发出去（#549）
+    expect(text).toContain('handleVoiceInterrupted,')
     const auto = between(text, 'const handleVoiceAutoStop', '\n  }')
     expect(auto).toContain('setRecording(false)')
     expect(auto).toContain('resetRecordingUi()')
@@ -82,6 +86,22 @@ describe('录音反馈接线契约（#535）', () => {
     expect(finish).toContain('applyVoiceRelease(')
     expect(finish.match(/sendRecordedVoice\(recorded, identity\)/g) ?? []).toHaveLength(1)
     expect(finish).not.toMatch(/if \(interrupted\)/)
+  })
+
+  test('来电中断当场放弃这一段：复位面板 + 明确提示重录（#549 / 需求 4 失效路径）', async () => {
+    const text = await read(PAGE)
+    const interrupted = between(text, 'const handleVoiceInterrupted', '\n  }')
+    expect(interrupted).toContain('resetRecordingUi()')
+    expect(interrupted).toContain('setRecording(false)')
+    expect(interrupted).toContain('session.abort()')
+    expect(interrupted).toContain('录音已被来电打断，请重新录制')
+    /*
+      必须在**收尾事件到达之前**就处置（放弃这一段），顺序反了就会出现「面板还在计时、
+      麦克风已经被平台暂停」——用户以为在录，实际这段音频后面半句是空的。
+    */
+    expect(interrupted.indexOf('resetRecordingUi()')).toBeLessThan(
+      interrupted.indexOf('session.abort()'),
+    )
   })
 
   test('身份按「这一段」传下去（起录时拍下，发送不再读页面级 ref）', async () => {

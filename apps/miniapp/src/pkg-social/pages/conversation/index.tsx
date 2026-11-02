@@ -1667,6 +1667,25 @@ export default function Conversation() {
   }
 
   /**
+   * 来电 / 视频通话占用了麦克风（`RecorderManager.onInterruptionBegin`，见
+   * `startVoiceRecording` 的 `onInterrupted`）。
+   *
+   * 平台的中断语义是「录音被暂停」：暂停期间用户说的话不会被录进去，这一段的音频是截断的。
+   * 所以**当场**放弃这一段（不等松手）：复位面板 + 明确提示重录 —— 等松手才提示的话，用户
+   * 已经对着面板又说了半分钟。放弃之后闸门会一直关到这一段自己的收尾事件到达，这期间重按
+   * 会得到「稍后再按」的提示（与取消后立刻重按同一条路径）。
+   */
+  const handleVoiceInterrupted = () => {
+    const session = recordingRef.current
+    if (!session) return
+    recordingRef.current = null
+    setRecording(false)
+    resetRecordingUi()
+    session.abort()
+    void Taro.showToast({ title: '录音已被来电打断，请重新录制', icon: 'none' })
+  }
+
+  /**
    * 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态。
    *
    * 这里必须是**同步**的：`onTouchStart → onTouchEnd` 是一段不可打断的触摸序列。隐私授权
@@ -1680,8 +1699,13 @@ export default function Conversation() {
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
       // 第二个回调管「录音器自己停了」（时长上限）：不接的话面板会继续计时且无提示
+      // 第三个回调管「被来电 / 视频通话打断」：那一段音频是截断的，当场放弃并提示重录
       voiceIdentityRef.current = currentIdentity()
-      recordingRef.current = startVoiceRecording(handleVoiceFailure, handleVoiceAutoStop)
+      recordingRef.current = startVoiceRecording(
+        handleVoiceFailure,
+        handleVoiceAutoStop,
+        handleVoiceInterrupted,
+      )
       recordOriginYRef.current = touchClientY(event)
       cancelArmedRef.current = false
       setCancelArmed(false)
