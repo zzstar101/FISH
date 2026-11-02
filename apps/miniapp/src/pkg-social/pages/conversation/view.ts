@@ -33,7 +33,9 @@ export function parseTxEvent(content: string): TxEvent | null {
         // 只保留契约里确实有的字段：脏数据里的 transactionId 不是字符串就当没有，
         // 不能让一个 `[object Object]` 拼进跳转地址。
         const transactionId = (event as { transactionId?: unknown }).transactionId
-        return typeof transactionId === 'string' ? { type, transactionId } : { type }
+        return typeof transactionId === 'string' && transactionId.length > 0
+          ? { type, transactionId }
+          : { type }
       }
     }
   } catch {
@@ -115,29 +117,22 @@ export function txCardView(
 ): TxCardView | null {
   /**
    * 交易查询失败：**绝不拿上一次的 `tx` 冒充当前状态**（#522 验收：失败不误报终态）。
-   * 有消息里的 id 就给入口（面交页按 id 自己查，看到的是准确状态）；连 id 都没有
-   * 就给一个就地重试的按钮 —— 否则整张卡消失，用户既不知道进度、也没有重试入口。
+   * 无论有没有消息里的 id，卡片都给「重新加载」—— 失败后最该先做的是重试，而「看
+   * 某一笔」的入口在消息胶囊的「查看本笔」上（历史 id 不随交易查询失败消失）。
+   * 没有重试按钮的话，整张卡要么变成一次性的跳转链接、要么直接消失。
    */
   if (options?.failed) {
-    return fallbackTxId
-      ? {
-          tone: 'is-warn',
-          icon: 'refresh',
-          title: '交易状态待更新',
-          desc: '刚才没取到最新进度，点开交易码页可以看到准确状态。',
-          actionLabel: '查看交易码',
-          action: 'open',
-          transactionId: fallbackTxId,
-        }
-      : {
-          tone: 'is-warn',
-          icon: 'refresh',
-          title: '交易状态待更新',
-          desc: '刚才没取到最新进度，点一下重新加载。',
-          actionLabel: '重新加载',
-          action: 'retry',
-          transactionId: '',
-        }
+    return {
+      tone: 'is-warn',
+      icon: 'refresh',
+      title: '交易状态待更新',
+      desc: fallbackTxId
+        ? '刚才没取到最新进度，点一下重新加载；也可以从消息里的「查看本笔」进入。'
+        : '刚才没取到最新进度，点一下重新加载。',
+      actionLabel: '重新加载',
+      action: 'retry',
+      transactionId: '',
+    }
   }
 
   /**

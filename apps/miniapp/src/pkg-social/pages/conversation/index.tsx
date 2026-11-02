@@ -2066,22 +2066,33 @@ export default function Conversation() {
   const renderSystem = (message: MessageDto) => {
     const event = parseTxEvent(message.content)
     const txId = event?.transactionId
+    /**
+     * 历史交易的判据只看「消息里的 id 与当前交易行是否不同」：
+     * - 查到当前交易行：与它不同的都是历史，给「查看本笔」；
+     * - 没查到（接口失败 / 数据缺失）：无从判断哪一笔是当前，宁可把每条带 id 的
+     *   `tx.accepted` 都当入口 —— 点进去至少落到本笔交易码页，比一条死文案有用。
+     * `idle` 是首屏查询还没回来，此时不提前给入口，避免文案闪一下又变回去。
+     */
     const historical =
       event?.type === 'tx.accepted' &&
-      txLoad.status === 'ok' &&
-      txLoad.tx !== null &&
       typeof txId === 'string' &&
-      txId !== txLoad.tx.id
+      txLoad.status !== 'idle' &&
+      (txLoad.tx === null || txId !== txLoad.tx.id)
     const historicalTxId = historical ? txId : null
     /**
      * 老数据里的 `tx.accepted` 可能没带 transactionId：这时**不能**给一个空 id 的
      * 跳转（#521 的 notFound 就是这么来的），但也不能只留一句「已接受交易」让用户
      * 无处可去 —— 明说去「我的订单」查，是唯一不会说谎的引导。
      */
-    const noIdHint =
-      event?.type === 'tx.accepted' &&
-      typeof txId !== 'string' &&
-      (txLoad.status !== 'ok' || txLoad.tx === null)
+    const noIdHint = event?.type === 'tx.accepted' && typeof txId !== 'string'
+    /** 没有 id 可跳时，「我的订单」是唯一能自己查到这笔交易的地方：让这句引导本身可点。 */
+    const ordersUrl =
+      conversation.role === 'buyer'
+        ? '/pkg-trade/pages/orders-buy/index'
+        : '/pkg-trade/pages/orders-sell/index'
+    const goOrders = () => {
+      void Taro.navigateTo({ url: ordersUrl })
+    }
     let label = systemPillText(message.content)
     if (historical) label = '已接受交易 · 查看本笔'
     else if (noIdHint) label = '已接受交易 · 请从「我的订单」查看'
@@ -2090,7 +2101,9 @@ export default function Conversation() {
         key={message.id}
         id={`e-${message.id}`}
         className="conv__sys"
-        onClick={historicalTxId ? () => openMeetup(historicalTxId) : undefined}
+        onClick={
+          historicalTxId ? () => openMeetup(historicalTxId) : noIdHint ? goOrders : undefined
+        }
       >
         <Text className="conv__sys-tx">{label}</Text>
       </View>

@@ -100,9 +100,13 @@ describe('parseTxEvent —— 交易 id 透传（#521）', () => {
     ).toEqual({ type: 'tx.accepted', transactionId: 'txn_1' })
   })
 
-  test('缺 id / id 不是字符串时只留 type（脏值不拼进跳转 URL）', () => {
+  test('缺 id / id 不是字符串 / 空串时只留 type（脏值不拼进跳转 URL）', () => {
     expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted' }))).toEqual({ type: 'tx.accepted' })
     expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted', transactionId: 42 }))).toEqual({
+      type: 'tx.accepted',
+    })
+    // 空串会让「查看本笔」变成一条点了没反应的死文案
+    expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted', transactionId: '' }))).toEqual({
       type: 'tx.accepted',
     })
   })
@@ -231,14 +235,14 @@ describe('txCardView —— 吸底交易进度卡（#522）', () => {
     expect(txCardView(null, null)).toBeNull()
   })
 
-  test('查询失败：不信上一份状态，有 id 给入口、没 id 给就地重试', () => {
+  test('查询失败：不信上一份状态，永远给就地重试（有 id 时入口留在消息胶囊上）', () => {
     expect(txCardView(tx({ status: 'CANCELLED' }), 'txn_msg', { failed: true })).toMatchObject({
       tone: 'is-warn',
       icon: 'refresh',
       title: '交易状态待更新',
-      actionLabel: '查看交易码',
-      action: 'open',
-      transactionId: 'txn_msg',
+      actionLabel: '重新加载',
+      action: 'retry',
+      transactionId: '',
     })
     expect(txCardView(null, null, { failed: true })).toMatchObject({
       tone: 'is-warn',

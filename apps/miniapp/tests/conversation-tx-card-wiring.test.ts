@@ -82,16 +82,20 @@ describe('#521 / #522 会话页交易进度卡 · 接线', () => {
     const code = await source()
     expect(code).toContain("event?.type === 'tx.accepted'")
     expect(code).toContain('txId !== txLoad.tx.id')
+    // 查不到当前交易行（接口失败 / 数据缺失）时也要保留入口，不能整条变成死文案
+    expect(code).toContain('txLoad.tx === null || txId !== txLoad.tx.id')
     expect(code).toContain('已接受交易 · 查看本笔')
     // 光有文案不够：点击必须把这条消息自己的 id 交给 openMeetup
-    expect(code).toContain(
-      'onClick={historicalTxId ? () => openMeetup(historicalTxId) : undefined}',
-    )
+    expect(code).toContain('() => openMeetup(historicalTxId)')
+    expect(code).toContain('onClick={')
   })
 
   test('老数据的 tx.accepted 没带 id 时不让用户白点，明确指到「我的订单」', async () => {
     const code = await source()
     expect(code).toContain('已接受交易 · 请从「我的订单」查看')
+    // 这句话本身要能点进订单页，否则只是换个说法让用户自己找
+    expect(code).toContain('noIdHint ? goOrders : undefined')
+    expect(code).toContain("conversation.role === 'buyer'")
   })
 
   test('卡片按 CTA 语义分流：retry 就地重查，open 走带 id 的面交页', async () => {
