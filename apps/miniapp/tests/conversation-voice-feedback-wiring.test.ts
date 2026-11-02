@@ -42,20 +42,36 @@ describe('录音反馈接线契约（#535）', () => {
     expect(move).toContain('setCancelArmed(armed)')
   })
 
-  test('录音器自停（时长上限）有回调，且会复位 + 发送', async () => {
+  test('录音器自停：复位 + 按「取消态 / 被打断 / 录满」三种情形分别处理', async () => {
     const text = await read(PAGE)
     expect(text).toContain('startVoiceRecording(handleVoiceFailure, handleVoiceAutoStop)')
-    const auto = between(text, 'const handleVoiceAutoStop', 'Taro.showToast')
+    const auto = between(text, 'const handleVoiceAutoStop', 'sendRecordedVoice(recorded)')
     expect(auto).toContain('setRecording(false)')
     expect(auto).toContain('resetRecordingUi()')
+    // 取消态：丢弃；被打断（capped=false）：不发送；录满：发送
+    expect(auto).toContain('const cancelled = cancelArmedRef.current')
+    expect(auto).toContain('if (cancelled)')
+    expect(auto).toContain('if (!capped)')
     expect(text).toContain('sendRecordedVoice(recorded)')
+  })
+
+  test('身份快照在起录时拍下（守住「松手 → 拿到音频」窗口换号，复审 medium）', async () => {
+    const text = await read(PAGE)
+    const start = between(text, 'const startVoice', 'catch (error)')
+    expect(start).toContain('voiceIdentityRef.current = currentIdentity()')
+    const send = between(text, 'const sendRecordedVoice', 'if (!aliveRef.current)')
+    expect(send).toContain('const identity = voiceIdentityRef.current')
+    // 发送路径不再自己取当前身份（否则判据恒假）
+    expect(send).not.toContain('currentIdentity()')
   })
 
   test('media-api 暴露 onAutoStop，且只在「没人调 stop()」时触发', async () => {
     const text = await read(MEDIA_API)
-    expect(text).toContain('onAutoStop?: (recorded: RecordedVoice) => void')
+    expect(text).toContain('onAutoStop?: (recorded: RecordedVoice, capped: boolean) => void')
     const resolve = between(text, 'resolve: (recorded) =>', 'reject:')
-    expect(resolve).toContain('if (!stopping) onAutoStop?.(recorded)')
+    expect(resolve).toContain('if (!stopping) onAutoStop?.(recorded, ')
+    // 「录满」的判定在 media-api 侧给出，页面不该自己猜时长
+    expect(resolve).toContain('VOICE_RECORD_MAX_MS - 500')
   })
 
   test('所有结束路径都过 resetRecordingUi（松手 / 放弃 / 失败 / 卸载）', async () => {

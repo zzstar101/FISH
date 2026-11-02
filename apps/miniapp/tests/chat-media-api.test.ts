@@ -43,7 +43,8 @@ let duringDownload: (() => void) | null = null
  */
 const recorderHooks: {
   onError: ((error: { errMsg: string }) => void) | null
-} = { onError: null }
+  onStop: ((result: { tempFilePath: string; duration: number }) => void) | null
+} = { onError: null, onStop: null }
 let recorderStartOptions: { duration?: number } | null = null
 
 mock.module('@tarojs/taro', () => ({
@@ -55,7 +56,9 @@ mock.module('@tarojs/taro', () => ({
       },
     }),
     getRecorderManager: () => ({
-      onStop: () => undefined,
+      onStop: (handler: (result: { tempFilePath: string; duration: number }) => void) => {
+        recorderHooks.onStop = handler
+      },
       onError: (handler: (error: { errMsg: string }) => void) => {
         recorderHooks.onError = handler
       },
@@ -274,6 +277,40 @@ describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364
     // 会因为未处理的 Promise 拒绝而变红。）
     expect(reported).toHaveLength(1)
     expect(reported[0]).toBeInstanceOf(VoicePermissionError)
+  })
+
+  test('录音器自己停（没人调 stop）→ onAutoStop 触发一次，并区分「录满」与「被打断」（#535）', () => {
+    const calls: Array<{ durationMs: number; capped: boolean }> = []
+    startVoiceRecording(undefined, (recorded, capped) => {
+      calls.push({ durationMs: recorded.durationMs, capped })
+    })
+
+    // 录满：时长贴着上限（VOICE_RECORD_MAX_MS = 契约上限 - 1s = 59000）
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/voice.wav', duration: 59_000 })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.capped).toBe(true)
+
+    // 被系统打断：时长离上限很远 → 不该被当成「录满」
+    startVoiceRecording(undefined, (recorded, capped) => {
+      calls.push({ durationMs: recorded.durationMs, capped })
+    })
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/voice.wav', duration: 5_000 })
+    expect(calls).toHaveLength(2)
+    expect(calls[1]?.capped).toBe(false)
+  })
+
+  test('stop() 之后才到的 onStop 不触发 onAutoStop（否则同一段会发两次）', async () => {
+    const calls: number[] = []
+    const session = startVoiceRecording(undefined, () => calls.push(1))
+
+    const stopped = session.stop()
+    recorderHooks.onStop?.({ tempFilePath: 'wxfile://tmp/voice.wav', duration: 3_000 })
+
+    await expect(stopped).resolves.toEqual({
+      path: 'wxfile://tmp/voice.wav',
+      durationMs: 3_000,
+    })
+    expect(calls).toHaveLength(0)
   })
 
   test('onError 在 stop() 之后才到：交给 stop() 的 catch 上报一次，不重复弹', async () => {

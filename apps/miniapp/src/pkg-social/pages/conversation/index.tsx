@@ -318,6 +318,11 @@ export default function Conversation() {
   const [cancelArmed, setCancelArmed] = useState(false)
   const recordOriginYRef = useRef(Number.NaN)
   const cancelArmedRef = useRef(false)
+  /**
+   * 这次录音属于哪个身份（#364 审查的判据，复审指出重构后退化成恒假）：
+   * 必须**起录时**拍，才能守住「松手 → 拿到音频」这段窗口里换号的情况。
+   */
+  const voiceIdentityRef = useRef<MediaTaskIdentity>({ cookie: '', userId: null })
 
   /**
    * 收掉录音期的显示态（取消态）。
@@ -1401,6 +1406,7 @@ export default function Conversation() {
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
       // 第二个回调管「录音器自己停了」（时长上限）：不接的话面板会继续计时且无提示
+      voiceIdentityRef.current = currentIdentity()
       recordingRef.current = startVoiceRecording(handleVoiceFailure, handleVoiceAutoStop)
       recordOriginYRef.current = touchClientY(event)
       cancelArmedRef.current = false
@@ -1437,10 +1443,7 @@ export default function Conversation() {
    * 期间一次 `load()` 推进的只是 epoch —— 那段录音还是当前账号录的，不该被丢掉。
    */
   const sendRecordedVoice = (recorded: RecordedVoice) => {
-    const identity: MediaTaskIdentity = {
-      cookie: sessionCookieHeader() ?? '',
-      userId: userIdRef.current,
-    }
+    const identity = voiceIdentityRef.current
     // 离页（卸载）：这段录音已经没人接了，静默丢弃
     if (!aliveRef.current) return
     if (isStaleMediaIdentity(identity, currentIdentity())) {
@@ -1463,10 +1466,21 @@ export default function Conversation() {
    * 用户松手时才把这段当正常录音发出去（或更早被丢弃）。现在：复位 + 明确提示 + 直接发送
    * 这一段（与微信「到时自动发送」一致，也避免用户刚录满的一分钟凭空消失）。
    */
-  const handleVoiceAutoStop = (recorded: RecordedVoice) => {
+  const handleVoiceAutoStop = (recorded: RecordedVoice, capped: boolean) => {
+    const cancelled = cancelArmedRef.current
     recordingRef.current = null
     setRecording(false)
     resetRecordingUi()
+    // 用户已经滑到「松开 取消」：他表达的是丢弃，停录一律不发
+    if (cancelled) {
+      void Taro.showToast({ title: '录音已取消', icon: 'none' })
+      return
+    }
+    // 被系统打断（来电 / 切后台）：不把没说完的半句发出去
+    if (!capped) {
+      void Taro.showToast({ title: '录音已中断，请重试', icon: 'none' })
+      return
+    }
     void Taro.showToast({ title: '已达最长录音时长，已发送', icon: 'none' })
     sendRecordedVoice(recorded)
   }

@@ -414,8 +414,11 @@ const VOICE_RECORD_MAX_MS = MEDIA_MAX_VOICE_DURATION_MS - 1000
  */
 export function startVoiceRecording(
   onError?: (error: Error) => void,
-  /** 录音达到时长上限、录音器**自己停了**（没有人调用 `stop()`）时的回调（#535 审查） */
-  onAutoStop?: (recorded: RecordedVoice) => void,
+  /**
+   * 录音器**自己停了**（没有人调用 `stop()`）时的回调（#535 审查）。
+   * `capped` = 是否录到时长上限（否则就是被系统打断：来电 / 切后台等）。
+   */
+  onAutoStop?: (recorded: RecordedVoice, capped: boolean) => void,
 ): VoiceRecording {
   const manager = recorder()
   /**
@@ -428,8 +431,9 @@ export function startVoiceRecording(
       resolve: (recorded) => {
         resolve(recorded)
         // `stopping === false` = 录音器自己停的（时长上限 / 系统打断）：
-        // 这时页面还没松手，也就没人消费 `stop()`，必须带外通知，否则面板会继续计时
-        if (!stopping) onAutoStop?.(recorded)
+        // 这时页面还没松手，也就没人消费 `stop()`，必须带外通知，否则面板会继续计时。
+        // `capped` 让页面区分「录满了」与「被打断」——后者不该把半句话发出去。
+        if (!stopping) onAutoStop?.(recorded, recorded.durationMs >= VOICE_RECORD_MAX_MS - 500)
       },
       reject: (error) => {
         reject(error)

@@ -17,7 +17,7 @@ const WAVE_BARS = [0, 1, 2, 3, 4] as const
  */
 export default function VoiceRecordPanel({ cancelArmed }: { cancelArmed: boolean }) {
   const [seconds, setSeconds] = useState(0)
-  const startedAtRef = useRef(Date.now())
+  const startedAtRef = useRef(0)
 
   useEffect(() => {
     startedAtRef.current = Date.now()
