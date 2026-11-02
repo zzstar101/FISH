@@ -1107,13 +1107,6 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
   })
 })
 
-/**
- * 服务端确证行为的埋点（#323 §M0：COMMENT / CHAT_START / TRANSACTION_START / PURCHASE）。
- *
- * 这些事件刻意**不走客户端上报**：评论成功、交易建行、成交这些事实只有服务端知道，
- * 客户端断网重试会丢或重复。这里验证的是"行为真的发生 → 事件真的落库"，以及
- * 归因缺失（没带推荐上下文头）时事件仍然落库（归因可以丢，行为不能丢）。
- */
 describe('recommendation rec-v2 (#524)', () => {
   const rawListingId = (publicId: string) => decodePublicId(PUBLIC_ID_PREFIX.listing, publicId)
 
@@ -1258,6 +1251,13 @@ describe('recommendation rec-v2 (#524)', () => {
   })
 })
 
+/**
+ * 服务端确证行为的埋点（#323 §M0：COMMENT / CHAT_START / TRANSACTION_START / PURCHASE）。
+ *
+ * 这些事件刻意**不走客户端上报**：评论成功、交易建行、成交这些事实只有服务端知道，
+ * 客户端断网重试会丢或重复。这里验证的是"行为真的发生 → 事件真的落库"，以及
+ * 归因缺失（没带推荐上下文头）时事件仍然落库（归因可以丢，行为不能丢）。
+ */
 describe('recommendation domain events (#323 R1)', () => {
   test('评论成功 → 服务端补一条 COMMENT 事件（无归因也落库）', async () => {
     const seller = await registerUser('11')

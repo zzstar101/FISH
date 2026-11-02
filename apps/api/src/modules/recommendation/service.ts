@@ -445,6 +445,18 @@ export function createRecommendationService(deps: {
       })
       ordered = reranked.items
       exploreListingIds = reranked.exploreListingIds
+      const relaxedExploreSlots = reranked.summary.relaxations.explore
+      if (relaxedExploreSlots > 0) {
+        // 探索位只在探索池为空时让出；记下来，否则"探索占比没兑现"在线上不可见。
+        metrics?.recordExploreSlotsRelaxed(relaxedExploreSlots)
+        console.info(
+          JSON.stringify({
+            event: 'recommendation.explore_relaxed',
+            requestId,
+            relaxedSlots: relaxedExploreSlots,
+          }),
+        )
+      }
     } catch (error) {
       return serveDegradedFeed(input, 'rank_error', error)
     }

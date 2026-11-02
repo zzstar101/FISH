@@ -69,6 +69,11 @@ export type RecommendationProcessMetrics = {
    * 这种配错会让语义召回 / 画像全部静默落空，所以单独暴露成一个布尔，而不是只打一行日志。
    */
   embeddingModelMismatch: boolean
+  /**
+   * 因探索池为空而让出的探索位总数（#524）。持续增长 ⇒ 曝光不足池长期为空，
+   * 约 20% 的探索占比没有兑现。
+   */
+  exploreSlotsRelaxed: number
 }
 
 export type RecommendationDegradedFeedCounts = Record<RecommendationDegradeReason, number>
@@ -80,6 +85,7 @@ export interface RecommendationProcessMetricsRecorder {
   recordEventRejection(reason: RecommendationRejectionReason): void
   recordDegradedFeed(reason: RecommendationDegradeReason): void
   recordEmbeddingModelMismatch(): void
+  recordExploreSlotsRelaxed(count: number): void
   /** 只读快照：admin 每次请求读一份，拿到的是副本（调用方改不动计数器）。 */
   snapshot(): RecommendationProcessMetrics
 }
@@ -111,6 +117,7 @@ export function createRecommendationProcessMetrics(): RecommendationProcessMetri
   let eventWriteFailures = 0
   let rateLimitedRequests = 0
   let embeddingModelMismatch = false
+  let exploreSlotsRelaxed = 0
   const eventRejectionReasons = emptyRejectionCounts()
   const degradedFeedReasons = emptyDegradedFeedCounts()
 
@@ -133,6 +140,9 @@ export function createRecommendationProcessMetrics(): RecommendationProcessMetri
     recordEmbeddingModelMismatch(): void {
       embeddingModelMismatch = true
     },
+    recordExploreSlotsRelaxed(count: number): void {
+      exploreSlotsRelaxed += count
+    },
     snapshot(): RecommendationProcessMetrics {
       return {
         eventWriteAttempts,
@@ -141,6 +151,7 @@ export function createRecommendationProcessMetrics(): RecommendationProcessMetri
         eventRejectionReasons: { ...eventRejectionReasons },
         degradedFeedReasons: { ...degradedFeedReasons },
         embeddingModelMismatch,
+        exploreSlotsRelaxed,
       }
     },
   }
@@ -160,4 +171,5 @@ export const NO_RECOMMENDATION_PROCESS_METRICS: RecommendationProcessMetrics = {
   eventRejectionReasons: emptyRejectionCounts(),
   degradedFeedReasons: emptyDegradedFeedCounts(),
   embeddingModelMismatch: false,
+  exploreSlotsRelaxed: 0,
 }

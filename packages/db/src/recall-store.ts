@@ -353,29 +353,32 @@ export async function findUnderexposedRecallCandidates(
   // 从可见商品出发，逐个按 `listing_id` 索引数窗口内的去重曝光身份（`limit` 只截断计数结果，
   // 判断"是否 < 阈值"不需要精确总数）。只碰可见商品自己的曝光行：已下架 / 已售商品的曝光不再
   // 参与，也没有全窗口 group by；规模化后若仍成瓶颈，改为 worker 定时预计算曝光数。
-  // 单表 select 里 drizzle 渲染的列不带表名，关联子查询里会被就近解析到事件表；
-  // 因此这里用显式别名 `ev` 与全限定的 `"listings"."id"`。
-  const exposed = sql<number>`(
-    select count(*) from (
+  // `LATERAL` 让每个可见商品只算一次（标量子查询塞进 select / where / order by 会被执行三遍）。
+  // 子查询里用显式别名 `ev` 与全限定的 `"listings"."id"`：drizzle 在单表 select 里渲染的列
+  // 不带表名，关联条件会被就近解析到事件表自己身上。
+  const exposure = db
+    .select({ identities: sql<number>`count(*)::int`.as('identities') })
+    .from(sql`(
       select distinct coalesce('u:' || ev.user_id::text, 'a:' || ev.anonymous_session_id::text)
       from ${recommendationEvents} as ev
       where ev.listing_id = "listings"."id"
         and ev.event_type = 'IMPRESSION'
         and ev.occurred_at >= ${input.windowStart}
       limit ${input.maxExposedIdentities}
-    ) as exposed_identities
-  )`
+    ) as exposed_identities`)
+    .as('exposure')
 
   const rows = await db
-    .select({ listingId: listings.id, exposedIdentities: exposed })
+    .select({ listingId: listings.id, exposedIdentities: exposure.identities })
     .from(listings)
+    .innerJoinLateral(exposure, sql`true`)
     .where(
       and(
         ...visibleListingConditions(input.viewerUserId),
-        sql`${exposed} < ${input.maxExposedIdentities}`,
+        sql`${exposure.identities} < ${input.maxExposedIdentities}`,
       ),
     )
-    .orderBy(asc(exposed), desc(listings.createdAt), desc(listings.id))
+    .orderBy(asc(exposure.identities), desc(listings.createdAt), desc(listings.id))
     .limit(input.limit)
 
   return rows.map((row) => ({

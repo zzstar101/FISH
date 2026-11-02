@@ -366,6 +366,7 @@ function createFeedService(options: {
   listingIds: string[]
   history?: ExposureHistory[]
   historyError?: Error
+  metrics?: ReturnType<typeof createRecommendationProcessMetrics>
 }): {
   startFeed: ReturnType<typeof createRecommendationService>['startFeed']
   snapshotRows: () => readonly RecommendationRequestItemRecord[]
@@ -418,6 +419,7 @@ function createFeedService(options: {
     },
     interest: { enqueue: async () => {} },
     clock: () => NOW,
+    metrics: options.metrics,
   })
 
   return { startFeed: service.startFeed, snapshotRows: () => records }
@@ -494,5 +496,26 @@ describe('重复曝光冷却的服务层接线（#323 M6）', () => {
       encodePublicId(PUBLIC_ID_PREFIX.listing, second),
     ])
     expect(snapshotRows().map((row) => row.listingId)).toEqual([first, second])
+  })
+})
+
+describe('探索位让出可观测（#524）', () => {
+  test('探索池为空 ⇒ 探索位让出计入指标，并打一行结构化日志', async () => {
+    const metrics = createRecommendationProcessMetrics()
+    // 10 个候选都不在探索池（exploreEligible = false）⇒ 每个 5 位窗口的探索位都只能让出。
+    const ids = Array.from({ length: 10 }, () => newId())
+    const { startFeed } = createFeedService({ listingIds: ids, metrics })
+    const info = spyOn(console, 'info').mockImplementation(() => {})
+    try {
+      await startFeed({ viewerId: null, anonymousSessionId: SESSION_ID, limit: 20 })
+      expect(metrics.snapshot().exploreSlotsRelaxed).toBe(2)
+      const logged = info.mock.calls
+        .map(([line]) => (typeof line === 'string' ? JSON.parse(line) : null))
+        .find((line) => line?.event === 'recommendation.explore_relaxed')
+      expect(logged?.relaxedSlots).toBe(2)
+      expect(typeof logged?.requestId).toBe('string')
+    } finally {
+      info.mockRestore()
+    }
   })
 })

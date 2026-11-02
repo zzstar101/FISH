@@ -257,6 +257,7 @@ test('进程内计数：写失败率分母是尝试次数，429 与拒收原因�
       snapshot_write_failed: 2,
     },
     embeddingModelMismatch: true,
+    exploreSlotsRelaxed: 6,
   }
   const { service } = metricsService(metricsRow(), { processMetrics })
   const metrics = await service.getRecommendationMetrics({ window: '24h' })
@@ -270,7 +271,7 @@ test('进程内计数：写失败率分母是尝试次数，429 与拒收原因�
     occurredAtOutOfRange: 3,
     serverConfirmedEventType: 4,
   })
-  // #524：降级原因按契约的驼峰键透出，模型配错标志原样透出。
+  // #524：降级原因按契约的驼峰键透出，模型配错标志与探索位让出数原样透出。
   expect(metrics.guardrails.degradedFeedReasons).toEqual({
     noCandidates: 5,
     recallError: 1,
@@ -278,6 +279,7 @@ test('进程内计数：写失败率分母是尝试次数，429 与拒收原因�
     snapshotWriteFailed: 2,
   })
   expect(metrics.guardrails.embeddingModelMismatch).toBe(true)
+  expect(metrics.guardrails.exploreSlotsRelaxed).toBe(6)
 
   // 同一实例被读两次不能互相影响（计数是进程级只读快照）。
   const again = await service.getRecommendationMetrics({ window: '24h' })
@@ -313,6 +315,7 @@ test('进程内计数是每次请求现读的：不是启动时那份快照', as
         snapshot_write_failed: 0,
       },
       embeddingModelMismatch: false,
+      exploreSlotsRelaxed: 0,
     }),
   })
 

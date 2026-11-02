@@ -248,6 +248,11 @@ export const RecommendationGuardrailsSchema = z.object({
    * 为 `true` 时语义召回与兴趣画像全部落空，通常是 API 与 worker 的模型配置不一致。
    */
   embeddingModelMismatch: z.boolean(),
+  /**
+   * 因探索池（近 7 天曝光不足的商品）为空而让出的探索位总数；进程内（#524）。
+   * 持续增长说明约 20% 的探索占比没有兑现。
+   */
+  exploreSlotsRelaxed: z.number().int().nonnegative(),
 })
 
 export type RecommendationGuardrails = z.infer<typeof RecommendationGuardrailsSchema>

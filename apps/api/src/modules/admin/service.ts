@@ -606,6 +606,7 @@ export function createAdminService({
             snapshotWriteFailed: processMetrics.degradedFeedReasons.snapshot_write_failed,
           },
           embeddingModelMismatch: processMetrics.embeddingModelMismatch,
+          exploreSlotsRelaxed: processMetrics.exploreSlotsRelaxed,
         },
         latency: latencyRecorder.snapshot(),
       })
