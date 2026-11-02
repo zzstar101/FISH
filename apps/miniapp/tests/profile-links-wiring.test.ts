@@ -47,6 +47,16 @@ describe('会话页：头像 / 顶部昵称 → 主页（#517）', () => {
     expect(openSelf).toContain("url: '/pkg-auth/pages/profile-edit/index'")
     expect(openSelf).not.toContain('/pkg-browse/pages/user/index')
   })
+
+  test('标题定位层 pointer-events:none，昵称必须单独恢复点击', async () => {
+    const scss = await Bun.file(
+      new URL('../src/pkg-social/pages/conversation/index.scss', import.meta.url),
+    ).text()
+    const title = sliceFrom(scss, '.conv__title {', '}')
+    expect(title).toContain('pointer-events: none')
+    const nickname = sliceFrom(scss, '.conv__title-nm {', '}')
+    expect(nickname).toContain('pointer-events: auto')
+  })
 })
 
 describe('商品详情：卖家区一个入口，留言作者可进主页（#517）', () => {

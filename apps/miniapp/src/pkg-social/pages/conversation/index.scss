@@ -114,6 +114,9 @@
 }
 
 .conv__title-nm {
+  /* 父级 `.conv__title` 是盖在返回钮上的纯定位层（pointer-events: none），
+     昵称要接 #517 的主页点击，必须在这里单独恢复事件。 */
+  pointer-events: auto;
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
