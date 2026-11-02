@@ -1819,6 +1819,22 @@ export default function Conversation() {
   const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailId
 
   /**
+   * 滚动动画只留给「点摘引跳过去」这一条路径（#540）。
+   *
+   * `scrollIntoView` 在首帧就会把滚动位置从 0 带到尾行，动画常开等于每次进页都把
+   * 「顶部 → 底部」完整演一遍 —— 这正是本票要修的现象。判据与 `scrollTarget` 同源：
+   * `jumpTo` 命中时目标是被引用的那条，需要动画交代「跳到哪儿去了」；其余时刻目标
+   * 恒为尾行，瞬时贴底即可。
+   *
+   * 代价（验收第 2 条要求写明）：新消息追加也从「滑过去」变成「瞬移贴底」。最容易被
+   * 看出来的是「用户正向上翻历史，对方发来一条」—— 改前有一次滑动交代去向，改后是硬跳。
+   * 两者的落点完全一致（都强制贴底），丢的只是过渡；不在这里加 `onScroll` 首帧 settled
+   * 判定还原跟随动画，是因为那依赖「程序化滚动也触发 bindscroll」这条静态无法证伪的端上
+   * 行为，一旦不触发就会静默退化成「永远瞬时」，比写明取舍更难排查。
+   */
+  const animateScroll = jumpTo !== null && jumpTo.tail === tailId
+
+  /**
    * DOM 那一次**只给预览（h5）用**：预览桩把 scrollIntoView 透传成普通属性、
    * 不会真的滚动，截图验收要在「已滚到底」的状态下看最后一屏。
    *
@@ -2097,7 +2113,7 @@ export default function Conversation() {
         className="conv__scroll"
         scrollY
         scrollIntoView={scrollTarget}
-        scrollWithAnimation
+        scrollWithAnimation={animateScroll}
       >
         <View className="conv__list">
           {/* 更早一页：文本与媒体两条流各有游标，任一还有更早就给入口（#67 N3） */}
