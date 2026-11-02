@@ -15,23 +15,28 @@ import {
   type RenderedIcon,
   renderAll,
 } from '../tools/icons/build'
-import { MANIFEST, TONES } from '../tools/icons/manifest'
+import { ACCENT, MANIFEST, TONES } from '../tools/icons/manifest'
 
 const icons: RenderedIcon[] = await renderAll()
 
 const hex = (r: number, g: number, b: number) =>
   `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0').toUpperCase()).join('')}`
 
-/** 不透明像素里出现最多的颜色 */
-function dominantColor(px: Uint8Array): string {
+/** 不透明像素里出现最多的 n 种颜色（按出现次数降序） */
+function topColors(px: Uint8Array, n: number): string[] {
   const count = new Map<string, number>()
   for (let i = 0; i < px.length; i += 4) {
     if (px[i + 3] !== 255) continue
     const c = hex(px[i] ?? 0, px[i + 1] ?? 0, px[i + 2] ?? 0)
     count.set(c, (count.get(c) ?? 0) + 1)
   }
-  return [...count.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'none'
+  return [...count.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([c]) => c)
 }
+
+const dominantColor = (px: Uint8Array) => topColors(px, 1)[0] ?? 'none'
 
 /** 字形墨迹（alpha > 0）的外接框与最大 alpha */
 function inkBox(px: Uint8Array) {
@@ -97,6 +102,7 @@ describe('图标契约', () => {
       muted: token('muted') ?? 'missing',
       white: '#FFFFFF',
       danger: token('danger') ?? 'missing',
+      duo: token('fg') ?? 'missing',
     })
     const banned = ['#397AFA', '#2377F4', '#0F4DC8', '#146BED', '#A8C5FA']
     expect(
@@ -104,17 +110,21 @@ describe('图标契约', () => {
     ).toEqual([])
   })
 
-  test('名字里的语义色就是烘焙色（只有 Brand / Fg / Muted / White / Danger）', () => {
+  test('名字里的语义色就是烘焙色（只有 Brand / Fg / Muted / White / Danger / Duo）', () => {
     // 旧库的 -ink / -accent / -line 后缀说不清颜色，已全部换成语义名
-    expect(Object.keys(ICONS).filter((k) => !/(Brand|Fg|Muted|White|Danger)$/.test(k))).toEqual([])
+    expect(Object.keys(ICONS).filter((k) => !/(Brand|Fg|Muted|White|Danger|Duo)$/.test(k))).toEqual(
+      [],
+    )
     for (const icon of icons) {
       const tone = icon.file
         .replace(/@3x\.png$/, '')
         .split('-')
         .at(-1) as keyof typeof TONES
-      expect({ file: icon.file, color: dominantColor(icon.pixels) }).toEqual({
+      // 双色：描边 --fg + 填充 --brand，两种颜色都得在，且就是最多的两种
+      const expected = tone === 'duo' ? [TONES.duo, ACCENT].sort() : [TONES[tone]]
+      expect({ file: icon.file, colors: topColors(icon.pixels, expected.length).sort() }).toEqual({
         file: icon.file,
-        color: TONES[tone],
+        colors: expected,
       })
     }
   })

@@ -5,7 +5,7 @@
  * 重出图：`bun run --filter @fish/miniapp icons`。
  *
  * 命名 = 字形 + 语义色：`Brand` 品牌蓝 / `Fg` 主文字 / `Muted` 次要灰 / `White` 反白 /
- * `Danger` 警示红。页面与组件**只从这里取图标**，不要直接 import 具体 png。
+ * `Danger` 警示红 / `Duo` 深色描边 + 品牌蓝填充（仅 TabBar 选中态）。页面与组件**只从这里取图标**，不要直接 import 具体 png。
  * 显示尺寸只用 24 / 32 / 40 / 48（SCSS px = rpx）四档。
  */
 import backFg from '@/assets/lib-icons/back-fg@3x.png'
@@ -49,7 +49,6 @@ import headsetMuted from '@/assets/lib-icons/headset-muted@3x.png'
 import heartFillBrand from '@/assets/lib-icons/heart-fill-brand@3x.png'
 import heartMuted from '@/assets/lib-icons/heart-muted@3x.png'
 import heartWhite from '@/assets/lib-icons/heart-white@3x.png'
-import homeFillBrand from '@/assets/lib-icons/home-fill-brand@3x.png'
 import homeMuted from '@/assets/lib-icons/home-muted@3x.png'
 import imageMuted from '@/assets/lib-icons/image-muted@3x.png'
 import infoFg from '@/assets/lib-icons/info-fg@3x.png'
@@ -58,8 +57,6 @@ import keyFg from '@/assets/lib-icons/key-fg@3x.png'
 import keyboardFg from '@/assets/lib-icons/keyboard-fg@3x.png'
 import lockFg from '@/assets/lib-icons/lock-fg@3x.png'
 import mailFg from '@/assets/lib-icons/mail-fg@3x.png'
-import messageFillBrand from '@/assets/lib-icons/message-fill-brand@3x.png'
-import messageMuted from '@/assets/lib-icons/message-muted@3x.png'
 import micFg from '@/assets/lib-icons/mic-fg@3x.png'
 import orderFg from '@/assets/lib-icons/order-fg@3x.png'
 import orderMuted from '@/assets/lib-icons/order-muted@3x.png'
@@ -78,6 +75,14 @@ import shieldFg from '@/assets/lib-icons/shield-fg@3x.png'
 import shieldMuted from '@/assets/lib-icons/shield-muted@3x.png'
 import sparkleBrand from '@/assets/lib-icons/sparkle-brand@3x.png'
 import starBrand from '@/assets/lib-icons/star-brand@3x.png'
+import tabHomeDuo from '@/assets/lib-icons/tab-home-duo@3x.png'
+import tabHomeMuted from '@/assets/lib-icons/tab-home-muted@3x.png'
+import tabMeDuo from '@/assets/lib-icons/tab-me-duo@3x.png'
+import tabMeMuted from '@/assets/lib-icons/tab-me-muted@3x.png'
+import tabMessageDuo from '@/assets/lib-icons/tab-message-duo@3x.png'
+import tabMessageMuted from '@/assets/lib-icons/tab-message-muted@3x.png'
+import tabWishDuo from '@/assets/lib-icons/tab-wish-duo@3x.png'
+import tabWishMuted from '@/assets/lib-icons/tab-wish-muted@3x.png'
 import tagBrand from '@/assets/lib-icons/tag-brand@3x.png'
 import tagMuted from '@/assets/lib-icons/tag-muted@3x.png'
 import trashFg from '@/assets/lib-icons/trash-fg@3x.png'
@@ -85,24 +90,23 @@ import trashWhite from '@/assets/lib-icons/trash-white@3x.png'
 import uploadBrand from '@/assets/lib-icons/upload-brand@3x.png'
 import userAddBrand from '@/assets/lib-icons/user-add-brand@3x.png'
 import userFg from '@/assets/lib-icons/user-fg@3x.png'
-import userFillBrand from '@/assets/lib-icons/user-fill-brand@3x.png'
-import userMuted from '@/assets/lib-icons/user-muted@3x.png'
 import verifiedBrand from '@/assets/lib-icons/verified-brand@3x.png'
 import warnDanger from '@/assets/lib-icons/warn-danger@3x.png'
 import warnFg from '@/assets/lib-icons/warn-fg@3x.png'
-import wishFillBrand from '@/assets/lib-icons/wish-fill-brand@3x.png'
 import wishMuted from '@/assets/lib-icons/wish-muted@3x.png'
 
 export const ICONS = {
+  tabHomeMuted,
+  tabHomeDuo,
+  tabWishMuted,
+  tabWishDuo,
+  tabMessageMuted,
+  tabMessageDuo,
+  tabMeMuted,
+  tabMeDuo,
   homeMuted,
-  homeFillBrand,
   wishMuted,
-  wishFillBrand,
-  messageMuted,
-  messageFillBrand,
   userFg,
-  userMuted,
-  userFillBrand,
   backFg,
   closeFg,
   searchMuted,

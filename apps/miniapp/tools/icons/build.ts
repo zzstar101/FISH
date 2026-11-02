@@ -13,7 +13,7 @@
 import { readdirSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { initWasm, Resvg } from '@resvg/resvg-wasm'
-import { MANIFEST, TONES, type Tone } from './manifest'
+import { ACCENT, MANIFEST, TONES, type Tone } from './manifest'
 
 export const ICON_PX = 72
 
@@ -54,7 +54,12 @@ export async function renderAll(): Promise<RenderedIcon[]> {
   for (const [glyph, tones] of Object.entries(MANIFEST)) {
     const svg = await Bun.file(join(GLYPH_DIR, `${glyph}.svg`)).text()
     for (const tone of tones) {
-      const resvg = new Resvg(svg.replaceAll('currentColor', TONES[tone]), {
+      const duo = tone === 'duo'
+      const colored = svg
+        .replace('stroke-width="1.75"', duo ? 'stroke-width="2"' : 'stroke-width="1.75"')
+        .replaceAll('currentColor', TONES[tone])
+        .replaceAll('accentColor', duo ? ACCENT : 'none')
+      const resvg = new Resvg(colored, {
         fitTo: { mode: 'width', value: ICON_PX },
         font: { loadSystemFonts: false },
       })
@@ -85,7 +90,7 @@ export function entrySource(icons: RenderedIcon[]): string {
  * 重出图：\`bun run --filter @fish/miniapp icons\`。
  *
  * 命名 = 字形 + 语义色：\`Brand\` 品牌蓝 / \`Fg\` 主文字 / \`Muted\` 次要灰 / \`White\` 反白 /
- * \`Danger\` 警示红。页面与组件**只从这里取图标**，不要直接 import 具体 png。
+ * \`Danger\` 警示红 / \`Duo\` 深色描边 + 品牌蓝填充（仅 TabBar 选中态）。页面与组件**只从这里取图标**，不要直接 import 具体 png。
  * 显示尺寸只用 24 / 32 / 40 / 48（SCSS px = rpx）四档。
  */
 ${imports.join('\n')}
