@@ -1558,7 +1558,7 @@ export default function ListingDetail() {
                   {/* 昵称行只有昵称 + 认证勾（稿子口径）：校区不在这里显示 */}
                   <View className="detail__sname">
                     <Text className="detail__snick">{data.seller.nickname}</Text>
-                    {/* 认证徽章（#534）：此前后用中性灰勾 `checkMuted`，与其它页面的
+                    {/* 认证徽章（#534）：此前用中性灰勾 `checkMuted`，与其它页面的
                         已认证徽章形态不一致；统一到 `verifiedAccent` */}
                     {data.seller.authStatus === 'VERIFIED' ? (
                       <Image
