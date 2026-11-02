@@ -59,6 +59,19 @@ describe('#516 会话页语音 · 接线', () => {
     expect(block).toContain('instanceof VoicePrivacyError')
     expect(block).toContain('setVoiceMode(false)')
     expect(block).toContain('requestPrivacyAuthorize()')
+    /**
+     * 判据要整条匹配，不能被短路：只要 `if (` 与 `instanceof VoicePrivacyError` 之间插进
+     * 任何东西（典型 `if (false && …)`，等价于关掉整个隐私失败分支、把用户又送回
+     * `openSetting` 那条麦克风权限路径），这条就红。
+     */
+    const privacyAt = block.indexOf('if (failure instanceof VoicePrivacyError) {')
+    expect(privacyAt).toBeGreaterThanOrEqual(0)
+    // 隐私分支必须**提前 return**：掉进下面的麦克风权限分支就等于没修。
+    const privacyBranch = block.slice(
+      privacyAt,
+      block.indexOf('if (!(failure instanceof VoicePermissionError))'),
+    )
+    expect(privacyBranch).toContain('return')
     // privacy 分支必须在麦克风权限分支之前，否则 privacy errMsg 又会走 openSetting。
     expect(block.indexOf('VoicePrivacyError')).toBeLessThan(block.indexOf('VoicePermissionError'))
   })

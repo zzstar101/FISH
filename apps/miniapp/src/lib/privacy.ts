@@ -105,19 +105,11 @@ export function getPrivacyAuthorizationState(): Promise<PrivacyAuthorizationStat
  *
  * 授权状态查询失败时返回 `true`（fail-open）：这是本函数的历史契约，头像页在挂载时
  * 就消费结果，fail-closed 会让一次桥接异常直接弹「需同意隐私保护指引」。
- * 语音录音需要严格的 fail-closed，请用 {@link ensurePrivacyAuthorizedStrict}。
+ * 语音路径不用这个「布尔」口径：它要区分「用户拒绝」与「查不到」，用
+ * {@link getPrivacyAuthorizationState} + {@link canEnterVoiceMode}（fail-closed）。
  */
 export async function ensurePrivacyAuthorized(): Promise<boolean> {
   return (await queryPrivacyAuthorization()) !== 'denied'
-}
-
-/**
- * 严格版：只有明确「已授权/平台不检查」才放行，查询失败/拒绝都返回 false。
- *
- * 需要区分两种失败原因时用 {@link getPrivacyAuthorizationState}。
- */
-export async function ensurePrivacyAuthorizedStrict(): Promise<boolean> {
-  return (await queryPrivacyAuthorization()) === 'authorized'
 }
 
 /**
