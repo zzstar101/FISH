@@ -1,6 +1,8 @@
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
 import type { AllowedImageMime } from '@/features/upload/mime'
+import { formatAmount } from '@/lib/money'
 
 /**
  * 会话页的展示逻辑（#89：从 fixture 改为真实历史 / 发送 / 已读）。
@@ -10,8 +12,13 @@ import type { AllowedImageMime } from '@/features/upload/mime'
  * 交易 SYSTEM 事件的中文化、时间文案、以及发送失败态。
  */
 
-/** 交易 SYSTEM 事件（`transactions/schema.ts` 的 `tx.*` 协议） */
-export type TxEvent = { type: string }
+/**
+ * 交易 SYSTEM 事件（`transactions/schema.ts` 的 `tx.*` 协议）。
+ *
+ * `transactionId` 只有 `tx.accepted` 带（契约 `transactionSystemEventSchema`）：它是
+ * 会话里唯一指向交易行的线索，交易码页少它就只会落「找不到这笔交易」（#521）。
+ */
+export type TxEvent = { type: string; transactionId?: string }
 
 /**
  * 解析交易 SYSTEM 事件的 JSON；非 JSON（普通文本系统消息）返回 null。
@@ -22,7 +29,14 @@ export function parseTxEvent(content: string): TxEvent | null {
     const event: unknown = JSON.parse(content)
     if (event && typeof event === 'object' && 'type' in event) {
       const type = (event as { type: unknown }).type
-      if (typeof type === 'string') return { type }
+      if (typeof type === 'string') {
+        // 只保留契约里确实有的字段：脏数据里的 transactionId 不是字符串就当没有，
+        // 不能让一个 `[object Object]` 拼进跳转地址。
+        const transactionId = (event as { transactionId?: unknown }).transactionId
+        return typeof transactionId === 'string' && transactionId.length > 0
+          ? { type, transactionId }
+          : { type }
+      }
     }
   } catch {
     // 非 JSON：当普通文本
@@ -31,17 +45,173 @@ export function parseTxEvent(content: string): TxEvent | null {
 }
 
 /**
+ * 会话里最后一条 `tx.accepted` 带的交易 id（`null` = 这条会话还没被接受过）。
+ *
+ * 用途只有一个：交易详情没取回来时（接口失败 / 列表被截断）仍然留一个能点的入口。
+ * 那个入口进的面交页会按 id 自己查状态，所以不会把「已完成」误报成「待面交」；
+ * 反过来，把入口整个抹掉才是用户不可恢复的损失（#521 的一半就是入口丢了 id）。
+ */
+export function lastTxAcceptedId(messages: readonly MessageDto[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.type !== 'SYSTEM') continue
+    const event = parseTxEvent(message.content)
+    if (event?.type === 'tx.accepted' && event.transactionId) return event.transactionId
+  }
+  return null
+}
+
+/**
  * 不属于专门卡片的 SYSTEM 消息的胶囊文案。
  *
- * `tx.accepted` 不走这里（它有自己的交易码卡）；`tx.proposal` / `tx.rejected`
- * 翻成中文，其余（含普通文本系统消息）按原文。
+ * `tx.proposal` / `tx.rejected` / `tx.accepted` 翻成中文，其余（含普通文本系统消息）
+ * 按原文。`tx.accepted` 说的是**这条消息发生过什么**（「已接受交易」），不是
+ * 「这笔交易现在在哪一步」—— 后者由吸底进度卡按交易行渲染（#522 的教训：
+ * 把不可变消息当实时状态，成交后就会一直停在「待面交」）。
  */
 export function systemPillText(content: string): string {
   const event = parseTxEvent(content)
   if (!event) return content
   if (event.type === 'tx.proposal') return '待对方同意'
+  if (event.type === 'tx.accepted') return '已接受交易'
   if (event.type === 'tx.rejected') return '卖家已拒绝这次交易'
   return content
+}
+
+/**
+ * 吸底交易进度卡的视图模型（#521 / #522）。
+ *
+ * 四种状态与 `features/chat/capsule.ts` 的胶囊档位一一对应（同一个 `tone` 词表），
+ * 会话行与会话页因此不会各说各话。已完成仍留「查看交易」入口（面交页对 COMPLETED
+ * 渲染专门的结果卡）；已取消**不给**入口 —— 面交页标题仍是「交易码」，与 #522
+ * 「已取消且没有交易码入口」冲突，卡片只陈述终态。
+ *
+ * `tx === null` 但拿得到 `fallbackTxId`（消息里有 `tx.accepted`）时给一张降级卡：
+ * 状态取不到就如实说取不到，入口照留。`tx` 与 `fallbackTxId` 都没有 → 不显示卡片
+ * （这条会话还没成交，输入栏上不该凭空多一块东西）。
+ *
+ * `options.failed` 是**查询失败**（不是「没查到」）：此时不信任任何一份旧状态，
+ * 只给「状态待更新」卡 —— 有消息里的 id 就还能进面交页，没有就留一个重试钮。
+ */
+export type TxCardTone = 'is-warn' | 'is-pending' | 'is-ok' | 'is-plain'
+
+/** CTA 的语义：打开交易页 / 就地重试（失败且没有可打开的 id 时）/ 无入口（已取消） */
+export type TxCardAction = 'open' | 'retry' | 'none'
+
+export type TxCardView = {
+  /** 与列表行胶囊同名同义：黄=待我面交，蓝=等对方，绿=完成，灰=取消 */
+  tone: TxCardTone
+  icon: 'qr' | 'clock' | 'check' | 'close' | 'refresh'
+  title: string
+  desc: string
+  actionLabel: string
+  action: TxCardAction
+  /** 点 CTA 要打开的那笔交易（面交页的唯一入参）；`retry` 时为空串 */
+  transactionId: string
+}
+
+export function txCardView(
+  tx: TransactionDto | null,
+  fallbackTxId?: string | null,
+  options?: { failed?: boolean; lastEventType?: string | null },
+): TxCardView | null {
+  const failed = options?.failed === true
+  /**
+   * 交易查询失败：**绝不拿上一次的 `tx` 冒充终态**（#522 验收：失败不误报终态）。
+   * 缓存里只有仍在 `PENDING_MEETUP` 的那一笔可以继续用 —— 它不是终态，文案本来就是
+   * 「成交前」口径（验收要求「退回成交前文案」）；其余情况（没有缓存 / 缓存已是终态）
+   * 一律「交易状态待更新」，不把旧结果当现状。
+   *
+   * 失败态的 CTA 统一换成「重新加载」：没有重试按钮的话，用户只能跳去交易码页或
+   * 干看着一张过期的卡；「看某一笔」的入口仍在消息胶囊的「查看本笔」上。
+   */
+  if (failed && tx?.status !== 'PENDING_MEETUP') {
+    if (tx?.status === 'CANCELLED' && options?.lastEventType === 'tx.proposal') return null
+    return {
+      tone: 'is-warn',
+      icon: 'refresh',
+      title: '交易状态待更新',
+      // 消息胶囊只有「这一笔不是当前交易」时才叫「查看本笔」；fallback 就是当前这笔时
+      // 胶囊仍是「已接受交易」，不能再让文案把用户指到一个不存在的入口上。
+      desc:
+        fallbackTxId && fallbackTxId !== tx?.id
+          ? '刚才没取到最新进度，点一下重新加载；也可以从消息里的「查看本笔」进入。'
+          : '刚才没取到最新进度，点一下重新加载。',
+      actionLabel: '重新加载',
+      action: 'retry',
+      transactionId: '',
+    }
+  }
+
+  /**
+   * 取消后买家又发起了新提案：`capsuleFor` 的 `proposalSupersedes` 会把这个会话
+   * 显示成「待同意 / 待接受」，卡片再挂一笔旧的「交易已取消」就自相矛盾了 ——
+   * 此刻还没有当前交易，整张卡收起，等新提案被接受、交易行建出来再出现。
+   */
+  if (tx?.status === 'CANCELLED' && options?.lastEventType === 'tx.proposal') return null
+
+  if (!tx) {
+    if (!fallbackTxId) return null
+    return {
+      tone: 'is-warn',
+      icon: 'qr',
+      title: '交易状态待更新',
+      desc: '刚才没取到最新进度，点开交易码页可以看到准确状态。',
+      actionLabel: '查看交易码',
+      action: 'open',
+      transactionId: fallbackTxId,
+    }
+  }
+
+  const amount = `¥${formatAmount(tx.amountCents)}`
+  if (tx.status === 'COMPLETED') {
+    return {
+      tone: 'is-ok',
+      icon: 'check',
+      title: '交易已完成',
+      desc: `${amount} · 订单已完成。`,
+      actionLabel: '查看交易',
+      action: 'open',
+      transactionId: tx.id,
+    }
+  }
+  if (tx.status === 'CANCELLED') {
+    /**
+     * 取消后**不给交易码入口**（#522 验收）：面交页标题仍是「交易码」，即便它渲染的
+     * 是取消结果卡，入口语义也与验收冲突。卡片只陈述终态，不提供跳转。
+     */
+    return {
+      tone: 'is-plain',
+      icon: 'close',
+      title: '交易已取消',
+      desc: `${amount} · 这笔交易已取消。`,
+      actionLabel: '',
+      action: 'none',
+      transactionId: tx.id,
+    }
+  }
+
+  // PENDING_MEETUP：契约里「双方各点一次确认」，只看得到自己那一侧的时间戳。
+  const myConfirmedAt = tx.role === 'buyer' ? tx.buyerConfirmedAt : tx.sellerConfirmedAt
+  return myConfirmedAt === null
+    ? {
+        tone: 'is-warn',
+        icon: 'qr',
+        title: '待面交',
+        desc: `${amount} · 面交时与对方核对 6 位交易码，双方确认后订单完成。`,
+        actionLabel: failed ? '重新加载' : '查看交易码',
+        action: failed ? 'retry' : 'open',
+        transactionId: tx.id,
+      }
+    : {
+        tone: 'is-pending',
+        icon: 'clock',
+        title: '待对方确认',
+        desc: `${amount} · 你已确认，等待对方确认后订单完成。`,
+        actionLabel: failed ? '重新加载' : '查看交易码',
+        action: failed ? 'retry' : 'open',
+        transactionId: tx.id,
+      }
 }
 
 /** 商品摘要条的状态文案（与「我的发布」同一口径） */

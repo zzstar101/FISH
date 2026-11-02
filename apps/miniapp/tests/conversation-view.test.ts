@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import { lastEventOfMessages } from '../src/features/chat/capsule'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
   applyMediaRecalled,
@@ -23,6 +25,7 @@ import {
   isStaleMediaTask,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
+  lastTxAcceptedId,
   listingStatusText,
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
@@ -47,6 +50,7 @@ import {
   sortMessages,
   startMediaRetry,
   systemPillText,
+  txCardView,
 } from '../src/pkg-social/pages/conversation/view'
 
 /**
@@ -80,6 +84,248 @@ describe('systemPillText —— 灰胶囊文案', () => {
   test('认不出的内容按原文降级，不吞消息', () => {
     expect(systemPillText(JSON.stringify({ type: 'tx.unknown' }))).toBe('{"type":"tx.unknown"}')
     expect(systemPillText('买家发起了交易确认。')).toBe('买家发起了交易确认。')
+  })
+
+  test('tx.accepted 只留一句事实（#522：状态不再由消息快照承担）', () => {
+    expect(systemPillText(JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_1' }))).toBe(
+      '已接受交易',
+    )
+  })
+})
+
+describe('parseTxEvent —— 交易 id 透传（#521）', () => {
+  test('tx.accepted 的 transactionId 要留住，否则入口拼不出 id', () => {
+    expect(
+      parseTxEvent(
+        JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_1', amountCents: 15000 }),
+      ),
+    ).toEqual({ type: 'tx.accepted', transactionId: 'txn_1' })
+  })
+
+  test('缺 id / id 不是字符串 / 空串时只留 type（脏值不拼进跳转 URL）', () => {
+    expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted' }))).toEqual({ type: 'tx.accepted' })
+    expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted', transactionId: 42 }))).toEqual({
+      type: 'tx.accepted',
+    })
+    // 空串会让「查看本笔」变成一条点了没反应的死文案
+    expect(parseTxEvent(JSON.stringify({ type: 'tx.accepted', transactionId: '' }))).toEqual({
+      type: 'tx.accepted',
+    })
+  })
+})
+
+describe('lastTxAcceptedId —— 交易接口失败时的兜底入口', () => {
+  const sys = (id: string, content: string, createdAt: string): MessageDto => ({
+    id,
+    conversationId: 'c-1',
+    senderId: null,
+    sender: null,
+    type: 'SYSTEM',
+    content,
+    createdAt,
+  })
+
+  test('取最后一条带 id 的 tx.accepted', () => {
+    const messages = [
+      sys(
+        'm1',
+        JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_old' }),
+        '2026-09-21T03:00:00.000Z',
+      ),
+      sys('m2', '你的学号认证已通过', '2026-09-21T03:10:00.000Z'),
+      sys(
+        'm3',
+        JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_new' }),
+        '2026-09-21T03:20:00.000Z',
+      ),
+    ]
+    expect(lastTxAcceptedId(messages)).toBe('txn_new')
+  })
+
+  test('没有 tx.accepted（或它没带 id）→ null', () => {
+    expect(lastTxAcceptedId([])).toBeNull()
+    expect(
+      lastTxAcceptedId([
+        sys(
+          'm1',
+          JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }),
+          '2026-09-21T03:00:00.000Z',
+        ),
+        sys('m2', JSON.stringify({ type: 'tx.accepted' }), '2026-09-21T03:10:00.000Z'),
+      ]),
+    ).toBeNull()
+  })
+})
+
+describe('txCardView —— 吸底交易进度卡（#522）', () => {
+  function tx(overrides: Partial<TransactionDto> = {}): TransactionDto {
+    return {
+      id: 'txn_1',
+      conversationId: 'c-1',
+      listingId: 'l-1',
+      buyerId: 'u-1',
+      sellerId: 'u-2',
+      role: 'buyer',
+      listing: {
+        id: 'l-1',
+        title: 'K380 键盘',
+        priceCents: 15000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+      counterpart: { id: 'u-2', nickname: '卖家', avatarUrl: null },
+      amountCents: 15000,
+      status: 'PENDING_MEETUP',
+      buyerConfirmedAt: null,
+      sellerConfirmedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      createdAt: '2026-09-21T03:30:00.000Z',
+      updatedAt: '2026-09-21T03:30:00.000Z',
+      ...overrides,
+    }
+  }
+
+  test('待面交：二维码入口 +「查看交易码」，点进去就是这一笔', () => {
+    expect(txCardView(tx())).toMatchObject({
+      tone: 'is-warn',
+      icon: 'qr',
+      title: '待面交',
+      actionLabel: '查看交易码',
+      transactionId: 'txn_1',
+    })
+  })
+
+  test('我方已确认（买卖两侧对称）→ 待对方确认', () => {
+    expect(txCardView(tx({ buyerConfirmedAt: '2026-09-21T05:00:00.000Z' }))).toMatchObject({
+      tone: 'is-pending',
+      title: '待对方确认',
+    })
+    expect(
+      txCardView(tx({ role: 'seller', sellerConfirmedAt: '2026-09-21T05:00:00.000Z' })),
+    ).toMatchObject({ tone: 'is-pending', title: '待对方确认' })
+  })
+
+  test('终态：已完成 / 已取消 各自换图标与 CTA，金额进描述', () => {
+    expect(txCardView(tx({ status: 'COMPLETED' }))).toMatchObject({
+      tone: 'is-ok',
+      icon: 'check',
+      title: '交易已完成',
+      actionLabel: '查看交易',
+      action: 'open',
+      desc: '¥150 · 订单已完成。',
+    })
+    // 已取消不给交易码入口（#522 验收）：卡面只陈述终态
+    expect(txCardView(tx({ status: 'CANCELLED' }))).toMatchObject({
+      tone: 'is-plain',
+      icon: 'close',
+      title: '交易已取消',
+      actionLabel: '',
+      action: 'none',
+      desc: '¥150 · 这笔交易已取消。',
+    })
+  })
+
+  test('交易接口失败但有消息里的 id → 降级卡保留入口；两者都没有 → 不显示', () => {
+    expect(txCardView(null, 'txn_msg')).toMatchObject({
+      tone: 'is-warn',
+      title: '交易状态待更新',
+      actionLabel: '查看交易码',
+      action: 'open',
+      transactionId: 'txn_msg',
+    })
+    expect(txCardView(null, null)).toBeNull()
+  })
+
+  test('失败时只有「另一笔」才提示查看本笔：当前这笔的胶囊没有该入口', () => {
+    // fallback 就是缓存这笔：消息胶囊仍是「已接受交易」，不能把用户指向不存在的入口
+    expect(txCardView(tx({ status: 'COMPLETED' }), 'txn_1', { failed: true })?.desc).not.toContain(
+      '查看本笔',
+    )
+    // fallback 是另一笔：历史胶囊确实有「查看本笔」
+    expect(txCardView(tx({ status: 'COMPLETED' }), 'txn_msg', { failed: true })?.desc).toContain(
+      '查看本笔',
+    )
+  })
+
+  test('查询失败：不信上一份状态，永远给就地重试（有 id 时入口留在消息胶囊上）', () => {
+    expect(txCardView(tx({ status: 'CANCELLED' }), 'txn_msg', { failed: true })).toMatchObject({
+      tone: 'is-warn',
+      icon: 'refresh',
+      title: '交易状态待更新',
+      actionLabel: '重新加载',
+      action: 'retry',
+      transactionId: '',
+    })
+    expect(txCardView(null, null, { failed: true })).toMatchObject({
+      tone: 'is-warn',
+      icon: 'refresh',
+      title: '交易状态待更新',
+      actionLabel: '重新加载',
+      action: 'retry',
+      transactionId: '',
+    })
+    // 缓存里这一笔还没成交：文案可以退回「待面交」，但 CTA 仍要是重试
+    expect(txCardView(tx({ status: 'PENDING_MEETUP' }), 'txn_1', { failed: true })).toMatchObject({
+      title: '待面交',
+      actionLabel: '重新加载',
+      action: 'retry',
+    })
+  })
+
+  test('取消后又有新提案：旧交易卡收起，不跟胶囊的「待同意 / 待接受」打架', () => {
+    expect(
+      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: 'tx.proposal' }),
+    ).toBeNull()
+    expect(txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: null })).toMatchObject({
+      title: '交易已取消',
+    })
+    // 老 accepted 没有 id，但它是最后一条交易事件：取消卡必须照常显示
+    expect(
+      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: 'tx.accepted' }),
+    ).toMatchObject({ title: '交易已取消' })
+  })
+
+  test('取消后新提案的判据直接取消息流（最后一条是 TEXT 也找得到提案）', () => {
+    const messages = [
+      {
+        id: 'm-1',
+        conversationId: 'c-1',
+        senderId: null,
+        sender: null,
+        type: 'SYSTEM',
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: 'txn_1',
+          amountCents: 15000,
+        }),
+        createdAt: '2026-10-01T02:00:00.000Z',
+      },
+      {
+        id: 'm-2',
+        conversationId: 'c-1',
+        senderId: null,
+        sender: null,
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }),
+        createdAt: '2026-10-01T02:10:00.000Z',
+      },
+      {
+        id: 'm-3',
+        conversationId: 'c-1',
+        senderId: 'u-2',
+        sender: null,
+        type: 'TEXT',
+        content: '那我再挂一次，还能按这个价吗',
+        createdAt: '2026-10-01T02:20:00.000Z',
+      },
+    ] as MessageDto[]
+
+    const lastTxEventType = lastEventOfMessages(messages)?.type
+    expect(lastTxEventType).toBe('tx.proposal')
+    expect(
+      txCardView(tx({ status: 'CANCELLED' }), null, { lastEventType: lastTxEventType }),
+    ).toBeNull()
   })
 })
 

@@ -265,7 +265,27 @@ describe('recommendation API wiring (#323 R1)', () => {
     const impression = rows.find((row) => row.eventType === 'IMPRESSION')
     expect(impression?.listingId).toBe(decodePublicId(PUBLIC_ID_PREFIX.listing, card.id))
     expect(impression?.position).toBe(0)
-    expect(impression?.source).toBe('fresh')
+    /*
+     * 期望值取快照真值，而不是硬编码 'fresh'：服务端会用快照里的 `primary_source` 覆盖客户端
+     * 上报的 source（#323 R4），而第 0 位算不算「探索位」由 `requestId` 哈希决定
+     * （`apps/api/src/modules/recommendation/rank/rerank.ts` 的 `isExploreSlot`，探索位记
+     * `explore`）—— 硬编码会随每次请求新生成的 requestId 随机变红（≈13%），与真实行为无关。
+     * 「客户端上报 fresh 也不会被信任」这条语义由下面这行断言保住。
+     */
+    const snapshot = await db
+      .select()
+      .from(recommendationRequestItems)
+      .where(
+        and(
+          eq(recommendationRequestItems.requestId, body.requestId),
+          eq(
+            recommendationRequestItems.listingId,
+            decodePublicId(PUBLIC_ID_PREFIX.listing, card.id),
+          ),
+        ),
+      )
+    expect(snapshot).toHaveLength(1)
+    expect(impression?.source).toBe(snapshot[0]?.primarySource)
     expect(impression?.anonymousSessionId).toBe(sessionId)
     expect(impression?.userId).toBeNull()
     expect(impression?.metadata).toEqual({ visibleRatio: 0.8, durationMs: 1500 })
