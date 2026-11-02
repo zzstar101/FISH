@@ -25,6 +25,7 @@ import {
   listingStatusText,
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
+  mediaActions,
   mergePushedMedia,
   mergePushedMessage,
   mergeRefreshedMedia,
@@ -591,6 +592,29 @@ const picture = (id: string, createdAt: string): MediaMessageDto => ({
   createdAt,
 })
 
+/** 一条商品卡消息（LISTING 的正文是公开 id，不能拿来做摘引文案） */
+const listingMessage = (over: Partial<MessageDto> = {}): MessageDto => ({
+  ...text('msg_01jc000000e0080000000000f1', '2026-09-21T09:59:30.000Z'),
+  type: 'LISTING',
+  recalledAt: null,
+  replyTo: null,
+  content: 'lst_01jc000000e00800000000000t',
+  listing: {
+    id: 'lst_01jc000000e00800000000000t',
+    title: '旧台灯',
+    priceCents: 1200,
+    status: 'ACTIVE',
+    coverUrl: null,
+  },
+  ...over,
+})
+
+/** 一张媒体（默认是图片；语音用 over 切 kind） */
+const media = (over: Partial<MediaMessageDto> = {}): MediaMessageDto => ({
+  ...picture('msg_01jc000000e0080000000000e1', '2026-09-21T09:59:30.000Z'),
+  ...over,
+})
+
 describe('applyMediaRecalled —— 撤回落到媒体那条流（#359 3c 媒体侧）', () => {
   test('目标那条清空 url 并落 recalledAt，其余不动', () => {
     const items = [picture('m1', '2026-09-21T10:00:00.000Z')]
@@ -1093,11 +1117,27 @@ describe('messageActions / canRecallMessage —— 长按菜单能做什么（#3
     expect(messageActions(system, ME, NOW, WINDOW)).toEqual([])
   })
 
+  test('LISTING 商品卡：没有可复制正文，只给引用与撤回', () => {
+    expect(messageActions(listingMessage({ senderId: ME }), ME, NOW, WINDOW)).toEqual([
+      'reply',
+      'recall',
+    ])
+    expect(messageActions(listingMessage({ senderId: 'usr_x' }), ME, NOW, WINDOW)).toEqual([
+      'reply',
+    ])
+    expect(
+      messageActions(listingMessage({ recalledAt: '2026-09-21T09:59:40.000Z' }), ME, NOW, WINDOW),
+    ).toEqual([])
+  })
+
+  test('canRecallMessage 接受媒体 DTO 的结构字段（#518）', () => {
+    expect(canRecallMessage(media({ senderId: ME }), ME, NOW, WINDOW)).toBe(true)
+    expect(canRecallMessage(media({ senderId: 'usr_x' }), ME, NOW, WINDOW)).toBe(false)
+  })
+
   /*
-    商品卡（LISTING）与媒体（MEDIA）的菜单口径不在这里测：本分支的契约里
-    `messageTypeSchema` 只有 TEXT / SYSTEM（LISTING 在 #366/#363、媒体在 #364 上，
-    都还没合入），构造那种 DTO 会是类型错误。等它们合入后按同一组断言补
-    「无正文可复制 → 只给引用与撤回」—— 已记在 #359 的合流清单里。
+    LISTING 已进入 `messageTypeSchema`（#363）：它没有可复制正文，只给引用/撤回。
+    媒体是独立 DTO，菜单走 `mediaActions`；这里用 media fixture 锁 canRecall 的结构字段。
   */
 
   test('未登录（meId 为 null）：撤回入口消失，本地动作仍在', () => {
@@ -1115,6 +1155,49 @@ describe('messageActions / canRecallMessage —— 长按菜单能做什么（#3
     for (const action of ['copy', 'reply', 'recall'] as const) {
       expect(MESSAGE_ACTION_LABEL[action].length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('mediaActions —— 媒体长按菜单（#518）', () => {
+  const WINDOW = 120_000
+  const NOW = Date.parse('2026-09-21T10:00:00.000Z')
+  const ME = 'usr_01jc000000e0080000000000a1'
+
+  test('自己的未撤回图片：引用 / 撤回', () => {
+    expect(mediaActions(media({ senderId: ME }), ME, NOW, WINDOW)).toEqual(['reply', 'recall'])
+  })
+
+  test('自己的未撤回语音：引用 / 撤回', () => {
+    const voice = media({
+      senderId: ME,
+      kind: 'VOICE',
+      durationMs: 3200,
+      width: null,
+      height: null,
+    })
+    expect(mediaActions(voice, ME, NOW, WINDOW)).toEqual(['reply', 'recall'])
+  })
+
+  test('对方发的：没有撤回项', () => {
+    expect(mediaActions(media({ senderId: 'usr_x' }), ME, NOW, WINDOW)).toEqual(['reply'])
+  })
+
+  test('超出 2 分钟窗口：只剩引用', () => {
+    const old = media({ senderId: ME, createdAt: '2026-09-21T09:57:00.000Z' })
+    expect(mediaActions(old, ME, NOW, WINDOW)).toEqual(['reply'])
+  })
+
+  test('已撤回的：没有任何动作', () => {
+    const recalled = media({
+      senderId: ME,
+      recalledAt: '2026-09-21T09:59:40.000Z',
+      url: '',
+    })
+    expect(mediaActions(recalled, ME, NOW, WINDOW)).toEqual([])
+  })
+
+  test('未登录（meId 为 null）：撤回入口消失，引用仍在', () => {
+    expect(mediaActions(media({ senderId: ME }), null, NOW, WINDOW)).toEqual(['reply'])
   })
 })
 
@@ -1146,6 +1229,23 @@ describe('localReplyExcerpt —— 本地摘引文案（与服务端 replyExcerp
     expect(
       localReplyExcerpt({ ...base, content: '', recalledAt: '2026-09-21T10:00:00.000Z' }),
     ).toBe('[消息已撤回]')
+  })
+
+  test('媒体摘引显示 [媒体]（媒体 DTO 没有 content）', () => {
+    expect(localReplyExcerpt(picture('m1', '2026-09-21T10:00:00.000Z'))).toBe('[媒体]')
+  })
+
+  test('商品卡摘引显示 [商品]，不把 lst_ 公开 id 当正文', () => {
+    expect(localReplyExcerpt(listingMessage())).toBe('[商品]')
+  })
+
+  test('已撤回的媒体仍优先显示 [消息已撤回]', () => {
+    const recalled = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    expect(localReplyExcerpt(recalled)).toBe('[消息已撤回]')
   })
 })
 
