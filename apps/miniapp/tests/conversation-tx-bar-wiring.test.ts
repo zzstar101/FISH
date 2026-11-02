@@ -205,8 +205,9 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
   })
 
   test('五档动作都接到了：确认→二次确认 + acceptTransaction，扫码→扫码页，其余→面交页/重查', async () => {
-    const code = await source()
-    const bar = sliceFrom(code, 'const runTxBarAction =', "// 'wait'")
+    // 剥注释：切片终点与断言都不许把注释当承重墙（下面用真实语法边界 `return (`）
+    const code = stripComments(await source())
+    const bar = sliceFrom(code, 'const runTxBarAction =', '\n  return (')
     // 动作钮不得顺带触发整条的「进商品详情」
     expect(bar).toContain('event.stopPropagation()')
     expect(bar).toContain("action.kind === 'listing'")
@@ -242,8 +243,7 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(acceptCopy).toContain('已不在售')
     expect(acceptCopy).not.toContain('其他买家预订')
     expect(acceptCopy).not.toContain('别的买家')
-    expect(accept).toContain('loadRef.current({ silent: true })')
-    expect(accept).toContain('retryTx()')
+    // 失败后的重拉与重查口径见下面「静默重拉」与「迟到的旧快照」两条用例
   })
 
   test('卖家提案态的「拒绝」：二次确认 + 只写 tx.rejected 消息，重拉本页让顶部自己退回在售', async () => {
@@ -254,7 +254,9 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(decline).toContain('rejectProposal(conversationId)')
     // 拒绝不建交易行、不改商品状态：本地不假改，重拉本页让那条 tx.rejected 消息说话
     expect(decline).toContain('已拒绝 · 商品仍在售')
-    expect(decline).toContain('loadRef.current({ silent: true })')
+    // 重拉必须走「有在途发送就只记账」的统一出口（见下一条用例），不许裸调 load
+    expect(decline).toContain('refreshConversationQuietly(')
+    expect(decline).not.toContain('loadRef.current({ silent: true })')
     // 与接受共用一把锁，且必须在弹确认框之前置真
     expect(decline.indexOf('acceptBusyRef.current = true')).toBeLessThan(
       decline.indexOf('Taro.showModal('),
@@ -269,6 +271,82 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(code).toContain('secondaryTxBar')
     expect(code).toContain('conv__pbar-act--ghost')
     expect(code).toContain('runTxBarAction(event, secondaryTxBar.action)')
+  })
+
+  test('接受 / 拒绝后的静默重拉走统一出口：有在途发送只记账，不把乐观气泡判死（#551 审查 F1）', async () => {
+    const code = stripComments(await source())
+    /**
+     * `load()` 一进来就 `++epoch.current`，在途的文本发送 / 媒体上传回来时会被
+     * `current !== epoch.current` 判过期丢弃 —— 气泡永远「发送中」，而消息可能已落库。
+     * 所以接受 / 拒绝之后的重拉必须与 `useDidShow` / `realtimeOpenRef` 同一条纪律。
+     */
+    const quiet = sliceFrom(
+      code,
+      'const refreshConversationQuietly =',
+      'loadRef.current({ silent: true })',
+    )
+    expect(quiet).toContain("item.status === 'sending'")
+    expect(quiet).toContain("item.status === 'uploading'")
+    expect(quiet).toContain('deferredRef.current = deferReload(deferredRef.current)')
+    // 记账必须在重拉之前，且记账那一支要 return 掉（不能记完照样拉）
+    const deferred = quiet.indexOf('deferredRef.current = deferReload(deferredRef.current)')
+    const reload = quiet.indexOf('loadRef.current({ silent: true })')
+    expect(deferred).toBeGreaterThanOrEqual(0)
+    expect(reload).toBeGreaterThan(deferred)
+    expect(quiet.slice(deferred, reload)).toContain('return')
+
+    // 三个调用点（接受 409 / 拒绝成功 / 拒绝失败）全部改用它，页面里不再有裸 load
+    const accept = sliceFrom(code, 'const confirmProposal =', 'const declineProposal =')
+    const decline = sliceFrom(code, 'const declineProposal =', 'const tail = entries.length > 0')
+    expect(accept).toContain('refreshConversationQuietly()')
+    expect(accept).not.toContain('loadRef.current({ silent: true })')
+    expect(decline.match(/refreshConversationQuietly\(\)/g) ?? []).toHaveLength(2)
+    expect(decline).not.toContain('loadRef.current({ silent: true })')
+  })
+
+  test('接受 409 不重复查交易：load 内部已经重查，不再顺手 retryTx 一次（#551 审查 F1 附带）', async () => {
+    const code = stripComments(await source())
+    const accept = sliceFrom(code, 'const confirmProposal =', 'const declineProposal =')
+    // 只剩通用失败分支那一处 retryTx（409 分支由 refreshConversationQuietly 覆盖）
+    expect(accept.match(/retryTx\(\)/g) ?? []).toHaveLength(1)
+    expect(accept.indexOf('retryTx()')).toBeGreaterThan(accept.indexOf('接受没成功，请重试'))
+  })
+
+  test('接受成功后先作废在途交易查询，迟到的旧快照不许把交易码入口顶回提案档（#551 审查 F2）', async () => {
+    const code = stripComments(await source())
+    const accept = sliceFrom(code, 'const confirmProposal =', 'const declineProposal =')
+    const onAccepted = sliceFrom(
+      accept,
+      'return acceptTransaction(conversationId, amountCents)',
+      "void Taro.showToast({ title: '已接受，去面交吧'",
+    )
+    // 进页那次交易查询可能还在飞（无 preferredTxId 时是多次串行请求）：不把它判过期，
+    // accept 先回来、旧快照后到就可能 `applyTx(null)`，顶部掉回提案档且 listing 已被置 RESERVED
+    expect(onAccepted).toContain('++txSeqRef.current')
+    expect(onAccepted.indexOf('++txSeqRef.current')).toBeLessThan(onAccepted.indexOf('applyTx(tx)'))
+    // 不许顺手加别的守卫：身份闸仍然只有 sessionEpoch
+    expect(onAccepted).not.toContain('epoch.current')
+  })
+
+  test('接受提案在手势同步阶段请求 TX 订阅授权；拒绝不请求（#462 / #551 审查 F4）', async () => {
+    const code = stripComments(await source())
+    const accept = sliceFrom(code, 'const confirmProposal =', 'const declineProposal =')
+    // #462 冻结口径：同意提案时请求 TX 授权（同仓 mylist 的 acceptProposal 同一处）
+    expect(accept).toContain("requestSubscribe(['TX'])")
+    // 微信硬约束：必须仍在用户手势的同步阶段 —— 不能等到弹框 / await 之后
+    const ask = accept.indexOf("requestSubscribe(['TX'])")
+    expect(ask).toBeGreaterThanOrEqual(0)
+    expect(ask).toBeLessThan(accept.indexOf('Taro.showModal('))
+    expect(ask).toBeLessThan(accept.indexOf('acceptBusyRef.current = true'))
+    // 拒绝之后没有交易可推，保持不请求（Issue 只对拒绝明示豁免）
+    const decline = sliceFrom(code, 'const declineProposal =', 'const tail = entries.length > 0')
+    expect(decline).not.toContain('requestSubscribe')
+  })
+
+  test('买家「待卖家确认」没有可点的动作：动作区整块不渲染，不会长出空药丸（#551 审查 F6）', async () => {
+    const code = stripComments(await source())
+    // 这一档 `txBar.action.kind === 'wait'`，右栏整块不渲染（否则会渲染一颗没有文案的按钮）
+    expect(code).toContain("txBar.action.kind === 'wait' ? null")
   })
 
   test('吸底交易卡已删除：页面不再挂 TxCard，样式里也不再有 .conv__txcard', async () => {
