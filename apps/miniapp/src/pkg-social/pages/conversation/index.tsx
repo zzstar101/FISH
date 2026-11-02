@@ -1749,6 +1749,19 @@ export default function Conversation() {
     })
   }
 
+  /** 对方主页：与商品卡卖家行/关注列表同一跳转口径（#517）。 */
+  const openCounterpart = () => {
+    if (!conversation) return
+    void Taro.navigateTo({
+      url: `/pkg-browse/pages/user/index?id=${encodeURIComponent(conversation.counterpart.id)}`,
+    })
+  }
+
+  /** 自己的头像：进编辑资料页（与「我的」页同一入口，#86 B）。 */
+  const openSelfProfile = () => {
+    void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })
+  }
+
   const openMeetup = () => {
     // 交易码页需要交易 id；会话里只做入口，不在这里推断是哪一笔（那是 A1/A2 的事）
     void Taro.navigateTo({ url: '/pkg-trade/pages/transaction-meetup/index' })
@@ -1915,12 +1928,19 @@ export default function Conversation() {
         : conversation.lastMessageAt
   const dayLabel = dayLabelOf(firstCreatedAt, now)
 
-  /** 30pt 圆头像：真实 avatarUrl 优先，无图回退首字（同消息列表行的降级） */
+  /**
+   * 30pt 圆头像：真实 avatarUrl 优先，无图回退首字（同消息列表行的降级）。
+   * 头像本身是独立点击区（#517）：对方 → 他人主页，自己 → 编辑资料。
+   * 消息行没有整行点击，头像与气泡是兄弟节点，所以不需要 stopPropagation。
+   */
   const renderAvatar = (mine: boolean) => {
     const url = mine ? (me?.avatarUrl ?? '') : (counterpart.avatarUrl ?? '')
     const initial = mine ? (me?.nickname[0] ?? '我') : (counterpart.nickname[0] ?? '同')
     return (
-      <View className={`conv__ava${mine ? ' is-mine' : ''}`}>
+      <View
+        className={`conv__ava${mine ? ' is-mine' : ''}`}
+        onClick={mine ? openSelfProfile : openCounterpart}
+      >
         {url ? (
           <Image className="conv__ava-img" src={url} mode="aspectFill" />
         ) : (
@@ -2082,7 +2102,10 @@ export default function Conversation() {
             }}
           >
             <View className="conv__title-in" style={{ maxWidth: `${titleMaxWidth}px` }}>
-              <Text className="conv__title-nm">{counterpart.nickname}</Text>
+              {/* 顶部昵称与对方头像同一入口（#517）；自己头像走上方的 openSelfProfile */}
+              <Text className="conv__title-nm" onClick={openCounterpart}>
+                {counterpart.nickname}
+              </Text>
               {/* 在线态（#359 第五点）：顶部栏用户名隔壁。绿点 + 文案；离线时说
                   「多久没上线」（`12 分钟前活跃`），拿不到在线态时整块不渲染。 */}
               {counterpartPresence ? (
