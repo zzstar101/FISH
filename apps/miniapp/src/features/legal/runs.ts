@@ -14,36 +14,33 @@ const TRAILING_BAN = /[（「『《【〔“‘]+$/
  *
  * - 以闭标点起首的片段：首部的标点并到**前一片段**尾部；
  * - 以开标点结尾的片段：尾部的标点并到**后一片段**首部；
- * - 并入后沿用接收方的 `b` / `em` / `ph` / `k`；掏空的片段（如单独的 `。`）直接丢弃；
+ * - 并入后沿用接收方的 `b` / `em` / `k`（所以相邻是加粗片段时，被并入的标点会跟着加粗）；
+ * - 接收方是待填占位（`ph`）时不并入：标点不该沾上虚线与警示色，该边界原样保留；
+ * - 掏空的片段（如单独的 `。`）直接丢弃；
  * - 首个片段的首标点、末个片段的尾标点没有可并入的邻居，原样保留。
  */
 export function mergeEdgePunctuation(runs: Run[]): Run[] {
   const out: Run[] = []
   let carry = ''
-  for (const run of runs) {
+  for (const [i, run] of runs.entries()) {
     let t = carry + run.t
     carry = ''
 
     const prev = out[out.length - 1]
-    const lead = prev ? LEADING_BAN.exec(t)?.[0] : undefined
+    const lead = prev && !prev.ph ? LEADING_BAN.exec(t)?.[0] : undefined
     if (prev && lead) {
       prev.t += lead
       t = t.slice(lead.length)
     }
 
-    const tail = TRAILING_BAN.exec(t)?.[0]
+    const next = runs[i + 1]
+    const tail = next && !next.ph ? TRAILING_BAN.exec(t)?.[0] : undefined
     if (tail) {
       carry = tail
       t = t.slice(0, t.length - tail.length)
     }
 
     if (t !== '') out.push({ ...run, t })
-  }
-
-  if (carry) {
-    const last = out[out.length - 1]
-    if (last) last.t += carry
-    else out.push({ t: carry })
   }
   return out
 }
