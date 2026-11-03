@@ -4,6 +4,7 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -314,14 +315,11 @@ export default function Watchers() {
                         <View className="wt__top">
                           <Text className="wt__name">{user.nickname}</Text>
                           {user.authStatus === 'VERIFIED' ? (
-                            <View className="wt__badge">
-                              <Image
-                                className="wt__badge-ic"
-                                src={ICONS.verifiedBrand}
-                                mode="aspectFit"
-                              />
-                              <Text>已认证</Text>
-                            </View>
+                            // 已认证徽章（#563）：这里原来是「浅强调胶囊 + 24×24 小勾 + 「已认证」文案」
+                            // 那一整套外壳。横向整图（BADGE.verified，61×24）自带「认证」字样，胶囊底与
+                            // 描边会跟图叠成两层装饰，所以外壳与文案整块撤掉、只留图本体 —— 别补回去
+                            // （tests/verified-badge-consistency.test.ts 有否定断言钉住外壳类名与文案）。
+                            <Image className="wt__badge-ic" src={BADGE.verified} mode="aspectFit" />
                           ) : null}
                         </View>
                         <Text className="wt__meta num">{dayLabelOf(startedAt, nowMs)}发起聊天</Text>

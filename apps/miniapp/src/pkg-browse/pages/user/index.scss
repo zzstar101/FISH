@@ -117,7 +117,7 @@
  *
  * 绿点用系统成功色 `--ok`（认证徽章的描边同款），离线态压成中性灰 `--muted`：
  * 在线/离线只靠颜色区分（形状一致），文案已经把「多久没上线」说清楚了。
- * 字号比昵称小一档（21px = 稿 10.5pt），与 `.uhome__badge` 同一档。
+ * 字号比昵称小一档（21px = 稿 10.5pt），与认证徽章同处昵称块。
  */
 .uhome__presence {
   display: flex;
@@ -148,35 +148,23 @@
 }
 
 /*
- * 认证徽章（稿 `.badge`）：浅强调底 + 中强调描边 + 品牌深字，与 `watchers` 页的
- * 认证徽章同一套色值，也正是 `ICONS.verifiedBrand`（品牌蓝 `#4285ff`）的icon 需要的底。
- * 尺寸按稿 20pt / 10.5pt / 8pt·6pt → 40 / 21 / 16·12px。
+ * 认证徽章（#563）：设计稿「认证」3D 整图（275×108，按比例 61×24），昵称右侧内联。
+ *
+ * 原先这里是「浅强调胶囊 + 24×24 多边形勾 + 已认证」那套外壳（稿 `.badge`）—— 横向整图
+ * 自带「认证」字样，胶囊底 + 描边与图会叠成两层装饰，所以外壳整块撤掉，只留图本身
+ * （同订单卡 #534 那次「昵称行内联」的口径）。
  *
  * `--nav` 变体只补居中标题里的**左间距**（稿 `.mp-title` 的 `gap: 6pt` = 12px）：
  * 居中标题是 flex 行，徽章作为整体参与排布，间距给在外侧而不是父级 gap。
  */
-.uhome__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 16px 0 12px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  border: 2px solid var(--accent-mid);
-  color: var(--brand-deep);
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  flex: 0 0 auto;
-}
-
-.uhome__badge--nav {
-  margin-left: 12px;
-}
-
 .uhome__badge-ic {
-  width: 24px;
+  flex: 0 0 auto;
+  width: 61px;
   height: 24px;
+}
+
+.uhome__badge-ic--nav {
+  margin-left: 12px;
 }
 
 /*
@@ -299,7 +287,7 @@
 }
 
 /* 导航居中标题里的昵称：跟随 `.navfloat__title--center` 的 34px 字号，
-   只补 min-width 让省略号在徽章之前生效（徽章左间距见 `.uhome__badge--nav`）。 */
+   只补 min-width 让省略号在徽章之前生效（徽章左间距见 `.uhome__badge-ic--nav`）。 */
 .uhome__navname {
   min-width: 0;
   @include ellipsis;

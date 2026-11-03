@@ -183,11 +183,15 @@
 
 .pcard__who {
   color: var(--fg);
+  /* 昵称右边挂的是 61px 宽的横向认证徽章（#563，原来是 24px 的方勾）：瀑布流半屏宽的卡片里，
+     长昵称会把这行撑破，`min-width: 0` 让省略号在徽章之前先生效（同 order-list 的 `.orders__oname`） */
+  min-width: 0;
   @include ellipsis;
 }
 
+/* 认证徽章（#563）：设计稿「认证」3D 整图 275×108 按比例显示，尺寸同详情卖家行 / 订单卡 */
 .pcard__tick {
-  width: 24px;
+  width: 61px;
   height: 24px;
   flex: 0 0 auto;
 }

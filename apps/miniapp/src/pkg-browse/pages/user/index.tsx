@@ -4,6 +4,7 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
@@ -686,15 +687,16 @@ export default function UserHome() {
       </View>
     ) : null
 
-  /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染） */
+  /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染；#563 起同为横向整图，无胶囊外壳） */
   const navTitle = profile ? (
     <>
       <Text className="uhome__navname">{profile.nickname}</Text>
       {verified ? (
-        <View className="uhome__badge uhome__badge--nav">
-          <Image className="uhome__badge-ic" src={ICONS.verifiedBrand} mode="aspectFit" />
-          <Text>已认证</Text>
-        </View>
+        <Image
+          className="uhome__badge-ic uhome__badge-ic--nav"
+          src={BADGE.verified}
+          mode="aspectFit"
+        />
       ) : null}
     </>
   ) : null
@@ -775,16 +777,12 @@ export default function UserHome() {
                   <View className="uhome__pinfo">
                     <View className="uhome__nameRow">
                       <Text className="uhome__pname">{profile.nickname}</Text>
-                      {/* 徽章只在 VERIFIED 时渲染：未认证不占位、不留白 */}
+                      {/* 徽章只在 VERIFIED 时渲染：未认证不占位、不留白。
+                          #563 起这里只放横向整图（BADGE.verified，61×24）—— 原先的「浅强调胶囊 +
+                          小勾 + 「已认证」文案」外壳撤掉了，因为整图自带「认证」字样，再套胶囊底
+                          与描边就是两层装饰。别补回外壳类名或文案（契约测试有否定断言）。 */}
                       {verified ? (
-                        <View className="uhome__badge">
-                          <Image
-                            className="uhome__badge-ic"
-                            src={ICONS.verifiedBrand}
-                            mode="aspectFit"
-                          />
-                          <Text>已认证</Text>
-                        </View>
+                        <Image className="uhome__badge-ic" src={BADGE.verified} mode="aspectFit" />
                       ) : null}
                     </View>
                     {/* 在线态（#359 第五点）：头像右边这一列的第二行。绿点 + 文案；
