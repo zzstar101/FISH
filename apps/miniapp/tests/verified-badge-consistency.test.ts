@@ -62,6 +62,13 @@ function slice(sourceText: string, anchor: string, end: string): string {
  *
  * 剥的是 `/* … *\/`（含 JSX 的 `{/* … *\/}`）与 `//` 行注释；`//` 前是冒号/反斜杠时不动，
  * 避免把 `https://` 这类字符串截断。
+ *
+ * **限制（别指望它字符串安全）**：纯正则、不认字符串字面量。
+ * - 跨字符串的 `/*` `*\/` 会被当注释吃掉中间代码（如 `'a/*b'` + `'c*\/d'`）；
+ * - 字符串/模板串里的 `//` 会被截断，实测全仓唯一真实触发是
+ *   `apps/miniapp/src/features/chat/realtime.ts:109`（截成 `` return `${scheme} ``），
+ *   该行不含任何被本文件守卫的字面量，所以今天无影响；
+ * - 反过来，注释里现在**可以**正常提及 `BADGE.verified` / `已认证`，不会被计成消费点。
  */
 function stripComments(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/[^\n]*/gm, '$1')
@@ -78,9 +85,21 @@ async function consumersOf(needle: string): Promise<string[]> {
   return files.sort()
 }
 
-/** scss 里 `.cls { … }` 这一条规则的声明文本 */
+/**
+ * 从 tsx 文本里取出所有当作类名候选的 token：双引号 / 单引号 / 模板串字面量都算。
+ *
+ * 只认 `className="…"` 双引号形态会漏掉 `` className={`wt__badge`} ``（对抗性审查实测：
+ * 不带文案时静默通过），所以这里按「所有字符串字面量」取 token，再按空格与 `${}` 拆开。
+ */
+function classTokens(text: string): string[] {
+  return [...text.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g)]
+    .flatMap((m) => (m[1] ?? m[2] ?? m[3] ?? '').split(/[\s${}]+/))
+    .filter(Boolean)
+}
+
+/** scss 里 `.cls { … }` 这一条规则的声明文本（同样先剥注释，与别处判据一致） */
 async function scssBlock(relPath: string, cls: string): Promise<string> {
-  const text = await source(relPath)
+  const text = stripComments(await source(relPath))
   const start = text.indexOf(`.${cls} {`)
   if (start === -1) return ''
   return text.slice(start, text.indexOf('}', start))
@@ -233,9 +252,8 @@ describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/
 
   test('大徽章的消费点白名单：只有已登记的消费点，新增必须显式登记', async () => {
     // 两种写法都算消费：`BADGE.verified` 与 `BADGE['verified']`。
-    // 注意：`consumersOf` 按**文件内容**匹配，所以 src 下的 ts/tsx **注释里也不要写**
-    // 这个字面量（否则一个只做说明的注释文件会被当成消费点，白名单直接对不上 ——
-    // 曾经在 features/following 的字段注释里踩过）。
+    // 判据是「代码里出现该字面量」—— `consumersOf` 内部已 `stripComments`，所以注释里
+    // 可以正常提及（例如 `features/following/load.ts` 的字段说明），不会被计成消费点。
     const viaDot = await consumersOf('BADGE.verified')
     const viaIndex = await consumersOf("BADGE['verified']")
     expect([...new Set([...viaDot, ...viaIndex])].sort()).toEqual(
@@ -382,9 +400,7 @@ describe('认证标识形态契约（#563 起：列表 / 卡片一律大徽章�
     ] as const
     for (const { tsx, scss, shell } of shells) {
       const text = stripComments(await source(tsx))
-      const classes = [...text.matchAll(/className="([^"]*)"/g)]
-        .flatMap((m) => (m[1] ?? '').split(/\s+/))
-        .filter(Boolean)
+      const classes = classTokens(text)
       // `<外壳>-ic`（成品图节点）是合法的；非法的是裸外壳类名与它的 `--nav` 修饰符
       expect({
         tsx,
@@ -398,6 +414,22 @@ describe('认证标识形态契约（#563 起：列表 / 卡片一律大徽章�
         dead: [`.${shell} {`, `.${shell}--`].filter((needle) => style.includes(needle)),
       }).toEqual({ scss, dead: [] })
     }
+  })
+
+  test('类名判据认得出模板字面量与不带白写文案的外壳（判据自身的回归用例）', () => {
+    // 只认 `className="…"` 双引号形态时，`className={`wt__badge`}` 且不带文案会静默通过
+    // （另一条「不许出现 已认证」兜不住它），所以判据改成扫所有字符串 / 模板串字面量。
+    const flagged = (src: string) =>
+      classTokens(stripComments(src)).filter(
+        (c) => c === 'wt__badge' || c.startsWith('wt__badge--'),
+      )
+    expect(flagged('<Image className={`wt__badge`} />')).toEqual(['wt__badge'])
+    expect(flagged('<View className="wt__badge" />')).toEqual(['wt__badge'])
+    expect(flagged("<View className='wt__badge--nav' />")).toEqual(['wt__badge--nav'])
+    expect(flagged('{/* 说明里的 wt__badge 不算 */}')).toEqual([])
+    // 合法的成品图节点与无关注释都不该被误伤
+    expect(flagged('<Image className="wt__badge-ic" />')).toEqual([])
+    expect(flagged('// 以前是 wt__badge 外壳\n<Image className="wt__badge-ic" />')).toEqual([])
   })
 
   test('checkMuted（灰勾）已无消费点，也不再由生成器产出', async () => {
