@@ -1,134 +1,7 @@
-import { describe, expect, mock, test } from 'bun:test'
-import type { DisputeStatus } from '@fish/contracts/disputes/schema'
+import { describe, expect, test } from 'bun:test'
 
-/**
- * 争议详情页异步生命周期的回归（账号隔离 / 卸载 / 争议状态变化）。
- *
- * 页面的六条异步动线（撤回、撤回确认弹窗、选图上传、读候选消息、翻更早、加证据、预览大图）
- * 都在 `await` 之后写状态或再发请求。旧实现这几处只看 `alive`（页面还挂着）或什么都不看：
- * 换号时页面**不卸载**，于是上一账号的响应会回写进新账号的界面，上传链更会带着新账号的
- * 会话去 confirm 上一账号的争议；`addAttachments` 还把「抓身份」放在 `pickPhotos` 之后，
- * 选图期间换号就会用新身份继续处理旧争议。本文件锁四件事：
- *
- * 1. 判据层 —— `opAliveIn` / `opWritableIn` 的语义，尤其是「写回作废」与「忙位必须放掉」
- *    这对**不同**的判据（同号静默刷新会推进世代：写回要丢，锁必须放，否则按钮永久卡住）；
- * 2. 接线层 —— 每条动线在 `await` **之前**抓身份令牌、在写回/副作用**之前**核身份，
- *    只钉「守卫存在」不够：把守卫挪到 setter 之后仍然会全绿，所以断言的是**位置**；
- * 3. 收尾层 —— `finally` 只判「还是同一账号」而不判世代，且换号清场把在途闩锁一并放掉；
- * 4. 不回退 —— 409 静默重同步、游标分页、附件与证据的幂等去重、PENDING 发起人权限仍在。
- *
- * 边界：没有组件渲染基建（仓里 `tests/` 只有纯逻辑与源码切片），所以接线层证明的是源码里
- * 这些语句的**位置**，不是运行时时序（React 批处理、ref 读取时刻）。端上时序仍按
- * `docs/miniapp-dev-workflow.md` 在微信开发者工具里演示，不拿本文件当端上证明。
- */
-
-// 页面模块经 `features/auth/store` → `demo.ts` 在求值期读这两个全局常量；缺了会 ReferenceError
-Object.assign(globalThis, { __ALLOW_MOCK_FALLBACK__: false, __DEMO_AUTH__: false })
-
-// 页面只用 Taro 的运行时 API 与四个基础组件；判据层是纯函数，不需要真渲染
-mock.module('@tarojs/components', () => ({
-  Image: 'img',
-  ScrollView: 'div',
-  Text: 'span',
-  View: 'div',
-}))
-mock.module('@tarojs/taro', () => ({
-  default: {
-    showToast: async () => {},
-    showModal: async () => ({ confirm: false }),
-    previewImage: async () => {},
-  },
-  useDidShow: () => {},
-  useRouter: () => ({ params: {} }),
-}))
-
-/** 页面导出的判据（模块级导出，不依赖 Taro 运行时） */
-type PageModule = typeof import('../src/pkg-trade/pages/dispute-detail/index')
-
-let pageModule: PageModule | null = null
-
-async function page(): Promise<PageModule> {
-  if (pageModule === null) pageModule = await import('../src/pkg-trade/pages/dispute-detail/index')
-  return pageModule
-}
-
-/** 发起一次异步操作时的归属令牌（页面的 `OpScope`） */
-type Op = { userId: string | null; disputeId: string; epoch: number; ownerEpoch: number }
-
-/** 页面这一刻的身份快照（页面的 `PageIdentity`） */
-type Identity = {
-  alive: boolean
-  epoch: number
-  ownerEpoch: number
-  userId: string | null
-  disputeId: string | null
-  status: DisputeStatus | null
-}
-
-const OP: Op = { userId: 'usr_a', disputeId: 'dsp_1', epoch: 7, ownerEpoch: 1 }
-const NOW: Identity = {
-  alive: true,
-  epoch: 7,
-  ownerEpoch: 1,
-  userId: 'usr_a',
-  disputeId: 'dsp_1',
-  status: 'PENDING',
-}
-
-/**
- * 页面里 `opSameAccount` 的判据（收尾用）：只看「页面还在 + 还是同一账号」，不看出身世代。
- *
- * 页面没有导出它（它不是业务判据，只是忙位收尾的闸门），所以这里按同一表达式建模，
- * 并由下面的接线测试钉住源码里确实是这个表达式。
- */
-function sameAccountIn(op: Op, now: Identity): boolean {
-  return now.alive && op.userId === now.userId && op.ownerEpoch === now.ownerEpoch
-}
-
-describe('判据：写回资格与忙位收尾是两把不同的闸门', () => {
-  test('账号 + 争议 + 世代都对得上才允许写回', async () => {
-    const { opAliveIn } = await page()
-    expect(opAliveIn(OP, NOW)).toBe(true)
-  })
-
-  test('同号静默刷新推进世代：写回作废，但忙位必须放掉（否则按钮永久卡在「上传中…」）', async () => {
-    const { opAliveIn } = await page()
-    const refreshed: Identity = { ...NOW, epoch: 8 }
-    expect(opAliveIn(OP, refreshed)).toBe(false)
-    expect(sameAccountIn(OP, refreshed)).toBe(true)
-  })
-
-  test('换号：写回作废，忙位也不归旧链管（新账号的页面自己那份状态由它自己维护）', async () => {
-    const { opAliveIn } = await page()
-    const switched: Identity = { ...NOW, userId: 'usr_b', disputeId: null, status: null, epoch: 8 }
-    expect(opAliveIn(OP, switched)).toBe(false)
-    expect(sameAccountIn(OP, switched)).toBe(false)
-  })
-
-  test('卸载：两把闸门一起关', async () => {
-    const { opAliveIn } = await page()
-    const gone: Identity = { ...NOW, alive: false }
-    expect(opAliveIn(OP, gone)).toBe(false)
-    expect(sameAccountIn(OP, gone)).toBe(false)
-  })
-
-  test('争议被换成另一条（或还没读到）：旧响应不许写回', async () => {
-    const { opAliveIn } = await page()
-    expect(opAliveIn(OP, { ...NOW, disputeId: 'dsp_2' })).toBe(false)
-    expect(opAliveIn(OP, { ...NOW, disputeId: null, status: null })).toBe(false)
-  })
-
-  test('补材料资格 = 写回资格 + 争议仍是 PENDING（撤回 / 处理完就停手）', async () => {
-    const { opAliveIn, opWritableIn } = await page()
-    expect(opWritableIn(OP, NOW)).toBe(true)
-    for (const status of ['WITHDRAWN', 'RESOLVED', 'CANCELLED'] as const) {
-      const settled: Identity = { ...NOW, status }
-      // 详情本身仍可写回（撤回成功后正是要把新状态写进页面），但不能再补材料
-      expect(opAliveIn(OP, settled)).toBe(true)
-      expect(opWritableIn(OP, settled)).toBe(false)
-    }
-  })
-})
+/** 接线回归：await 前捕获身份、写回前检查归属、忙位收尾和原功能不回退。
+ * 纯判据由 dispute-detail-identity.test.ts 覆盖；这里的源码断言不替代端上演示。 */
 
 /** 页面源码（接线层只读源码，不跑组件） */
 async function pageSource(): Promise<string> {
@@ -183,8 +56,8 @@ describe('接线：每条动线在 await 之前抓身份、在写回之前核身
 
   test('runWithdraw：await 回来的成功/失败都先核身份，再写详情与提示', async () => {
     const body = handlerBody(await pageSource(), 'runWithdraw')
-    expectBefore(body, 'if (!opAlive(op)) return', 'setDetail(next)')
-    expectBefore(body, 'if (!opAlive(op)) return', "'已撤回争议'")
+    expectBefore(body, 'if (!opAlive(op))', 'setDetail(next)')
+    expectBefore(body, 'if (!opAlive(op))', "'已撤回争议'")
     // 发请求用的是令牌里的争议 id，不是 await 之后重新读的 `detail`
     expectBefore(body, 'const op = beginOp(', 'withdrawDispute(op.disputeId)')
     expect(body).not.toContain('withdrawDispute(detail.id)')
@@ -227,26 +100,26 @@ describe('接线：每条动线在 await 之前抓身份、在写回之前核身
 
   test('翻更早：每页回来都先核身份，再拼消息与游标', async () => {
     const body = handlerBody(await pageSource(), 'loadOlderEvidence')
-    expectBefore(body, 'if (!opAlive(op)) return', 'setMessages((prev) =>')
-    expectBefore(body, 'if (!opAlive(op)) return', 'setEvidenceCursor(result.nextCursor)')
-    expectBefore(body, 'if (!opAlive(op)) return', "'更早的消息没读出来，再试一次'")
+    expectBefore(body, 'if (!opAlive(op))', 'setMessages((prev) =>')
+    expectBefore(body, 'if (!opAlive(op))', 'setEvidenceCursor(result.nextCursor)')
+    expectBefore(body, 'if (!opAlive(op))', "'更早的消息没读出来，再试一次'")
   })
 
   test('加证据：写详情、关弹层、弹提示都在归属判定之后', async () => {
     const body = handlerBody(await pageSource(), 'addEvidence')
-    expectBefore(body, 'await addDisputeEvidence(', 'if (!opAlive(op)) return')
-    expectBefore(body, 'if (!opAlive(op)) return', 'setDetail((prev) =>')
-    expectBefore(body, 'if (!opAlive(op)) return', 'setSheetOpen(false)')
+    expectBefore(body, 'await addDisputeEvidence(', 'if (!opAlive(op))')
+    expectBefore(body, 'if (!opAlive(op))', 'setDetail((prev) =>')
+    expectBefore(body, 'if (!opAlive(op))', 'setSheetOpen(false)')
     // 失败分支同样先核身份：换号后旧账号的 409 不该在新账号页面上触发重同步
     const catchBlock = sliceBetween(body, '} catch (error) {', '} finally {')
-    expectBefore(catchBlock, 'if (!opAlive(op)) return', 'resyncIfConflict(error)')
+    expectBefore(catchBlock, 'if (!opAlive(op))', 'resyncIfConflict(error)')
   })
 
   test('预览大图：重读回来的旧签名既不写回状态，也不拿去过期账号的证据', async () => {
     const body = handlerBody(await pageSource(), 'previewAttachment')
-    expectBefore(body, 'if (!opAlive(op)) return', 'setDetail(result.detail)')
+    expectBefore(body, 'if (!opAlive(op))', 'setDetail(result.detail)')
     // 守卫之后才允许用刷新后的 url 打开大图（openWith 的调用点在守卫下方）
-    expectBefore(body, 'if (!opAlive(op)) return', 'fresh.map((attachment) => attachment.url)')
+    expectBefore(body, 'if (!opAlive(op))', 'fresh.map((attachment) => attachment.url)')
     expect(body).toContain('loadDisputeDetail(op.disputeId)')
     expect(body).not.toContain('loadDisputeDetail(detail.id)')
   })
@@ -352,5 +225,31 @@ describe('不回退：409 重同步、分页、幂等去重与 PENDING 权限仍
     const body = handlerBody(await pageSource(), 'previewAttachment')
     expect(body).toContain('ATTACHMENT_URL_TTL_MS')
     expect(body).toContain('loadDisputeDetail(op.disputeId)')
+  })
+})
+
+describe('上传重试和刷新失效反馈', () => {
+  test('失败图片保留原临时路径，独立重试按钮不重新选图', async () => {
+    const source = await pageSource()
+    const body = handlerBody(source, 'addAttachments')
+    expect(body).toContain('retryPhoto: PickedPhoto | null = null')
+    expect(body.replace(/\s+/g, ' ')).toContain(
+      'retryPhoto ? { photos: [retryPhoto], rejected: null } : await pickPhotos(slots)',
+    )
+    expect(body).toContain('setFailedPickedPhoto(photo)')
+    expect(source).toContain('onClick={() => addAttachments(failedPickedPhoto)}')
+    expect(source).toContain('重试上次图片')
+    const reset = sliceBetween(source, 'if (prevUserId !== userId) {', 'useEffect(')
+    expect(reset).toContain('setFailedPickedPhoto(null)')
+  })
+  test('同一账号刷新使操作失效时提示重试，不放宽旧响应守卫', async () => {
+    const source = await pageSource()
+    const notice = handlerBody(source, 'notifyStaleOperation')
+    expect(notice).toContain('opSameAccount(op)')
+    expect(notice).toContain('detailRef.current?.id === op.disputeId')
+    expect(notice).toContain('状态已更新，请重试')
+    for (const name of ['onWithdraw', 'loadOlderEvidence', 'previewAttachment']) {
+      expect(handlerBody(source, name)).toContain('notifyStaleOperation(op)')
+    }
   })
 })

@@ -38,7 +38,7 @@ import {
   keepDetailOnSilentFailure,
 } from '@/features/disputes/view'
 import { UploadAbortedError } from '@/features/upload/active'
-import { pickPhotos } from '@/features/upload/api'
+import { type PickedPhoto, pickPhotos } from '@/features/upload/api'
 import { formatYuan } from '@/lib/money'
 import { goBackOrHome } from '@/lib/nav-back'
 import { isApiError } from '@/lib/request'
@@ -93,7 +93,7 @@ const ATTACHMENT_URL_TTL_MS = 600_000
 /**
  * 一次异步操作的**归属令牌**：发起那一刻的账号 + 争议 + 加载世代。
  *
- * 三样缺一不可。`alive` 只说明页面还挂着，而**换号时页面并不卸载** —— 只看 `alive`
+ * 三样缺一不可。登出跳转会卸载页面，但会话替换时可能尚未卸载 —— 只看 `alive`
  * 的写法会把上一账号的响应写进新账号的界面（附件链更会带着新账号的会话去 confirm
  * 上一账号的争议）。
  */
@@ -155,6 +155,7 @@ export default function DisputeDetailPage() {
   const [stale, setStale] = useState(false)
   const [withdrawing, setWithdrawing] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [failedPickedPhoto, setFailedPickedPhoto] = useState<PickedPhoto | null>(null)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [evidenceState, setEvidenceState] = useState<EvidenceState>('idle')
   const [messages, setMessages] = useState<MessageDto[]>([])
@@ -206,6 +207,11 @@ export default function DisputeDetailPage() {
    * 若也用 `opAlive` 收尾，按钮会永久卡在「上传中… / 撤回中…」。
    */
   const opSameAccount = (op: OpScope): boolean => opOwnsBusyIn(op, identityNow())
+  const notifyStaleOperation = (op: OpScope) => {
+    if (opSameAccount(op) && detailRef.current?.id === op.disputeId) {
+      void Taro.showToast({ title: '状态已更新，请重试', icon: 'none' })
+    }
+  }
 
   useEffect(() => {
     alive.current = true
@@ -229,6 +235,7 @@ export default function DisputeDetailPage() {
     setStale(false)
     setWithdrawing(false)
     setUploading(false)
+    setFailedPickedPhoto(null)
     setSheetOpen(false)
     setEvidenceState('idle')
     setMessages([])
@@ -335,7 +342,9 @@ export default function DisputeDetailPage() {
       cancelText: '再想想',
     })
       .then((result) => {
-        if (result.confirm && opWritable(op)) void runWithdraw()
+        if (!result.confirm) return
+        if (opWritable(op)) void runWithdraw()
+        else notifyStaleOperation(op)
       })
       .catch(() => {})
       .finally(() => {
@@ -343,16 +352,17 @@ export default function DisputeDetailPage() {
       })
   }
 
-  const addAttachments = () => {
+  const addAttachments = (retryPhoto: PickedPhoto | null = null) => {
     if (detail === null || uploading) return
     const slots = attachmentSlotsLeft(detail.attachments.length)
-    if (slots <= 0) {
+    if (slots <= 0 && retryPhoto === null) {
       void Taro.showToast({ title: '附件最多 6 张', icon: 'none' })
       return
     }
     // 身份必须在**拉起相册之前**抓：`pickPhotos` 是异步的，换号可能发生在选图期间。
     // 抓在它之后（旧写法）等于用新账号的世代去继续处理上一账号的争议。
     const op = beginOp(detail.id)
+    if (!opWritable(op) || stale) return
     // 先置「上传中」：`pickPhotos` 是异步拉起相册的，连点时第二次点击会再拉一次；
     // 顺带让按钮立刻变成「上传中…」给出反馈。
     setUploading(true)
@@ -360,7 +370,7 @@ export default function DisputeDetailPage() {
       try {
         let picked: Awaited<ReturnType<typeof pickPhotos>>
         try {
-          picked = await pickPhotos(slots)
+          picked = retryPhoto ? { photos: [retryPhoto], rejected: null } : await pickPhotos(slots)
         } catch (error) {
           if (!opWritable(op)) return
           void Taro.showToast({
@@ -375,6 +385,7 @@ export default function DisputeDetailPage() {
           void Taro.showToast({ title: picked.rejected, icon: 'none' })
         }
         if (picked.photos.length === 0) return
+        setFailedPickedPhoto(null)
 
         // 上传链每一步的前置判据：仍属同一次操作**且**争议仍可补材料（撤回 / 处理完就停手）
         const current = () => opWritable(op)
@@ -395,6 +406,7 @@ export default function DisputeDetailPage() {
           } catch (error) {
             if (error instanceof UploadAbortedError) break
             if (!opWritable(op)) break
+            setFailedPickedPhoto(photo)
             resyncIfConflict(error)
             void Taro.showToast({
               title: isApiError(error) ? disputeFailureText(error.code) : '图片上传失败，请重试',
@@ -448,13 +460,19 @@ export default function DisputeDetailPage() {
     setLoadingOlderEvidence(true)
     try {
       const conversationId = await loadDisputeConversationId(detail.transaction.id)
-      if (!opAlive(op)) return
+      if (!opAlive(op)) {
+        notifyStaleOperation(op)
+        return
+      }
       if (conversationId === null) {
         void Taro.showToast({ title: '没读到这段会话，稍后再试', icon: 'none' })
         return
       }
       const result = await loadEvidenceCandidates(conversationId, evidenceCursor)
-      if (!opAlive(op)) return
+      if (!opAlive(op)) {
+        notifyStaleOperation(op)
+        return
+      }
       if (result.failed) {
         void Taro.showToast({ title: '更早的消息没读出来，再试一次', icon: 'none' })
         return
@@ -528,7 +546,10 @@ export default function DisputeDetailPage() {
     void (async () => {
       const result = await loadDisputeDetail(op.disputeId)
       // 换号 / 重载期间读回来的旧签名既不该写回状态，也不该拿去弹大图（那是上一个账号的证据）
-      if (!opAlive(op)) return
+      if (!opAlive(op)) {
+        notifyStaleOperation(op)
+        return
+      }
       if (result.state !== 'ok') {
         openWith(
           targets.map((attachment) => attachment.url),
@@ -732,10 +753,18 @@ export default function DisputeDetailPage() {
                 <View className="dsd__inline-actions">
                   <View
                     className={`dsd__btn dsd__btn--sec${uploading ? ' is-off' : ''}`}
-                    onClick={addAttachments}
+                    onClick={() => addAttachments()}
                   >
                     <Text>{uploading ? '上传中…' : attachmentActionLabel(attachmentCount)}</Text>
                   </View>
+                  {failedPickedPhoto !== null ? (
+                    <View
+                      className={`dsd__btn dsd__btn--sec${uploading ? ' is-off' : ''}`}
+                      onClick={() => addAttachments(failedPickedPhoto)}
+                    >
+                      <Text>重试上次图片</Text>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
             </View>
