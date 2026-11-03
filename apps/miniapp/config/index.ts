@@ -89,6 +89,8 @@ export default defineConfig<'webpack5'>(async (merge) => {
      * 与 `compile` 不同（那个必须写在 `mini` 层，见 README 第 1 节）。
      */
     defineConstants: {
+      // 发版时与 cli upload -v 共用同一个 VERSION，开发/体验包不依赖微信返回版本。
+      __APP_VERSION__: JSON.stringify(process.env.TARO_APP_VERSION ?? ''),
       __API_BASE__: JSON.stringify(process.env.TARO_APP_API_BASE ?? ''),
       /**
        * 是否允许「真实接口失败 → 退回 mock fixture」（读取处 `src/features/fetchers.ts`）。
