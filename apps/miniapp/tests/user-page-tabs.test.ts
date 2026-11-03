@@ -159,6 +159,8 @@ describe('他人主页接线（#581）', () => {
     expect(soldHandler).toContain("if (seg === 'SOLD') {")
     const soldBranch = slice(soldHandler, "if (seg === 'SOLD') {", '}')
     expect(soldBranch).toContain('scrollToBody()')
+    // 滚完必须**提前返回**：少了 return 就会既滚动又往下走去压栈一个新实例
+    expect(soldBranch.replace(/\s+/g, ' ')).toContain('scrollToBody() return')
     expect(soldBranch).not.toContain('navigateTo')
     expect(soldHandler).toContain("Taro.navigateTo({ url: userHomeUrl(userId, 'SOLD') })")
     // 卖出格不许出现「返回」：从在售视图点「卖出」是往前开一页，不是退一页
@@ -168,6 +170,8 @@ describe('他人主页接线（#581）', () => {
     expect(activeHandler).toContain("if (seg === 'ACTIVE') {")
     const activeBranch = slice(activeHandler, "if (seg === 'ACTIVE') {", '}')
     expect(activeBranch).toContain('scrollToBody()')
+    // 同理：滚完必须提前返回，否则会接着「退一页」
+    expect(activeBranch.replace(/\s+/g, ' ')).toContain('scrollToBody() return')
     expect(activeBranch).not.toContain('navigateTo')
     expect(activeHandler).toContain('Taro.navigateBack({')
     // 在售格不许压栈：从已售出视图点「在售」是退回原来的在售实例，压栈会把同一页叠起来
@@ -181,8 +185,15 @@ describe('他人主页接线（#581）', () => {
     expect(code).toContain('id="uhome-body-b"')
     // 写死一个 id 的话连点第二次没有任何反应（scrollIntoView 同值不重滚）
     expect(code).not.toContain("setTopAnchor('uhome-body')")
+    // 锚点必须贴在列表上沿：搬到页顶也「两个 id 都在」，但落点就跑到页头去了
+    expect(code.replace(/\s+/g, ' ')).toContain(
+      '<View id="uhome-body-b" /> <View className="uhome__body">',
+    )
     const body = slice(code, 'const scrollToBody = useCallback(', '}, [])')
-    expect(body).toContain("toggleAnchor(prev, 'uhome-body-a', 'uhome-body-b')")
+    // 只钉「两个 id 都在、且交给交替函数」，不钉参数顺序 —— 两个 id 互换行为完全等价
+    expect(body).toContain("'uhome-body-a'")
+    expect(body).toContain("'uhome-body-b'")
+    expect(body).toContain('toggleAnchor(prev,')
     const handlers = slice(
       code,
       'const openSoldListings = useCallback(',
@@ -196,6 +207,10 @@ describe('他人主页接线（#581）', () => {
     const effect = slice(code, '列表还没拉过时补第一页', '}, [loadSegment, loadState, page])')
     expect(effect).toContain('void loadSegment(null)')
     expect(effect).toContain("if (loadState !== 'ok') return")
+    // 三态守卫缺一不可：只剩 `page.loaded` 的话，`failed` 之后每次渲染都会再打一次接口
+    expect(effect.replace(/\s+/g, ' ')).toContain(
+      'if (page.loaded || page.loading || page.failed) return',
+    )
   })
 
   test('列表失败的重试直接再拉这一页，不走整页 load()', async () => {
