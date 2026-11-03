@@ -209,7 +209,7 @@ export const ListingCardSchema = z.object({
   /**
    * 「想要数」= **与该商品已建立会话的买家数**（#74 的来源冻结 + Owner 2026-10-04 拍板：
    * 商品卡上的「N 人想要」就取这个口径）。与 `GET /listings/:id/watchers` 的 `total`
-   * **同源同义**——一个是计数、一个是名单，定义都在 `docs/design/issue-74-watchers-definition.md`。
+   * **同源同义**——一个是计数、一个是名单。
    *
    * 为什么**必填且非空**：这个数在库里恒可算（`conversations` 按 `listing_id` 计数），
    * 不存在「暂时取不到」。写成可空会让 `null` 与真实的 0（确实还没人开过会话）在页面上

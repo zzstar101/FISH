@@ -70,7 +70,7 @@ export type RecallCandidate = {
    * 该用户看过这件商品的次数；`null` = **未知**（曝光计数查询失败，或无身份）。
    *
    * R3 时这里写死 `number` 且失败退化成 0，等于把"不知道"谎报成"没看过"—— R4 的排序把它当
-   * 惩罚项用，两种含义会直接改变排序结果，因此必须区分（R3 §9 待办①）。
+   * 惩罚项用，两种含义会直接改变排序结果，因此必须区分（R3 待办①）。
    */
   alreadySeenCount: number | null
   sellerExposure: number

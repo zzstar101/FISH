@@ -493,7 +493,7 @@ describe('争议闭环（#465）', () => {
     )
     expect(system.status).toBe(201)
 
-    // 被诉方（卖家）不能补材料：与「争议不存在」同码同文案，不泄漏存在性（plan §4 冻结口径）。
+    // 被诉方（卖家）不能补材料：与「争议不存在」同码同文案，不泄漏存在性（冻结口径）。
     const respondent = await app.request(
       DISPUTE_ROUTES.evidenceMessages(disputeId),
       postAs(sellerCookie, {

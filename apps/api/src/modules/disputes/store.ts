@@ -38,7 +38,7 @@ export type DisputeNotificationInput = {
  * 通知写入器：**在状态变更的同一个事务里**被调用（`executor` 就是那个 tx）。
  *
  * 通知不能是 best-effort：结论提交后进程崩溃、或写通知失败，会让当事人**永久**收不到结论，
- * 而库里没有 outbox 可以补投（plan §2 冻结「与状态变更同事务，走 `writeNotification(executor, …)`」）。
+ * 而库里没有 outbox 可以补投（冻结「与状态变更同事务，走 `writeNotification(executor, …)`」）。
  */
 export type DisputeNotificationWriter = (
   executor: DisputeDbTransaction,
@@ -733,7 +733,7 @@ export function createSqlDisputeStore(
         WHERE m.id = ${messageId}
           AND c.listing_id = t.listing_id
           AND c.buyer_id = t.buyer_id
-          -- plan §4 第 4 条：只有买卖双方或 SYSTEM 的消息能升格为证据。当前会话层已经限制了
+          -- 只有买卖双方或 SYSTEM 的消息能升格为证据。当前会话层已经限制了
           -- 发送者（只有双方能发、SYSTEM 由服务端写），这里是纵深防御。
           AND (m.sender_id IN (t.buyer_id, t.seller_id) OR m.sender_id IS NULL)
       `)

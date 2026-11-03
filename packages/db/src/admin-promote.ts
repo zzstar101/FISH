@@ -1,5 +1,5 @@
 /**
- * 受控 Admin 初始化脚本（#73 设计 §3.3 方案 1）。
+ * 受控 Admin 初始化脚本（#73）。
  *
  * 用途：按**显式学号**把一名用户提升为 `ADMIN`，并把提升写入 `admin_audit_logs`。
  *
@@ -12,7 +12,7 @@
  *
  * 这不是公开注册接口：必须在生产 / 部署人员手动执行，且不可被任何 HTTP 路由调用。
  * 把一名用户提升为 ADMIN 之后，管理后台（/admin）才对他开放 —— 用户 / 商品查询、
- * 概览、审计日志都要求 role = ADMIN（设计 §3.2）。
+ * 概览、审计日志都要求 role = ADMIN。
  *
  * 用法（仓库根目录）：
  * ```bash
@@ -21,10 +21,10 @@
  * ```
  *
  * 提升与审计日志在同**一个数据库事务**里完成：任何一步失败整体回滚，不留
- * 「已提升但无记录」或「有记录但没提升」的假状态（设计 §6 末尾同理）。
+ * 「已提升但无记录」或「有记录但没提升」的假状态。
  *
  * 注意：不打印任何密码 / 密钥；不把 password_hash / 完整 Cookie 写进审计日志
- * （设计 §8 只写脱敏快照，这里 before/after 仅含 role）。
+ * （只写脱敏快照，这里 before/after 仅含 role）。
  */
 import { and, eq, ne, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/bun-sql'
@@ -175,7 +175,7 @@ try {
       action: 'ADMIN_PROMOTED',
       targetType: 'USER',
       targetId: targetUser.id,
-      // 只写脱敏快照（role），不写任何敏感字段（设计 §8）。
+      // 只写脱敏快照（role），不写任何敏感字段。
       before: jsonParam({ role: targetUser.role }),
       after: jsonParam({ role: 'ADMIN' }),
       reason,

@@ -165,7 +165,7 @@ describe('腾讯 provider · 文本判定', () => {
       fields: [{ field: 'title', value: TITLE }],
     })
 
-    // 设计文档允许调用方把 RequestId 写进日志：它必须只能是白名单形状（上游不可信）。
+    // RequestId 允许写进日志：它必须只能是白名单形状（上游不可信）。
     expect(result.decision).toBe('ALLOW')
     expect(result.fields[0]?.requestId).toBeNull()
   })

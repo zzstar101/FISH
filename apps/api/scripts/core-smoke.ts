@@ -147,7 +147,7 @@ const CHAIN_LISTING_FIELDS = {
 } as const
 
 /**
- * R4 起推荐 Feed 的策略版本是「生效的每一段策略」拼成的复合串（#323 R4 §策略版本）。
+ * R4 起推荐 Feed 的策略版本是「生效的每一段策略」拼成的复合串（#323 R4）。
  *
  * 从契约常量拼而不是抄字面量：任何一段策略升级都该让这条断言跟着变，抄死字符串只会让
  * smoke 变成"改了版本号就得改脚本"的告示牌。
@@ -1427,7 +1427,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '拒收原因 5 个桶齐全（第 5 桶"客户端伪报服务端确证行为"是真实拒绝分支）',
     )
 
-    // ④ 保留期清理（#323 R6 §7）：走文档化的根脚本、`--dry-run` 形态——它必须"能安全接进 CI"，
+    // ④ 保留期清理（#323 R6）：走文档化的根脚本、`--dry-run` 形态——它必须"能安全接进 CI"，
     // 即只数不删；真删路径由 cleanup.test.ts 的集成用例与 worker 定时任务覆盖。
     step = 'R6 保留期清理（dry-run）'
     section('R6 保留期清理：bun run recommendation:cleanup --once --dry-run --json')
@@ -2201,8 +2201,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 11. 交易与面交（#147）：三元组一致 → 取消终态销毁 → 一单一码 → 重取即解锁 → 成交终态销毁
     //
     // 为什么必须放在**最后一步**：本步骤会把主链 listing 推到 SOLD，插在「重启恢复」之前
-    // 会污染那两步对同一 listing 的 PATCH。取舍见
-    // docs/design/issue-147-transaction-invariants.md §4.1。
+    // 会污染那两步对同一 listing 的 PATCH。
     step = '交易与面交'
     section('交易与面交：三元组一致、取消/成交终态销毁、一单一码、重取解锁')
 

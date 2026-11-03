@@ -3,7 +3,7 @@ import { type AiPolishOutcome, aiPolishRequests } from '@fish/db/schema/ai-polis
 import { eq, sql } from 'drizzle-orm'
 
 /**
- * 配额（#141 设计 §5.2；`EMPTY` 独立桶见 #173）。常量一律不进 env（§3.3）：可配项越多，
+ * 配额（#141；`EMPTY` 独立桶见 #173）。常量一律不进 env：可配项越多，
  * stub 与 live 的行为差异越难对齐。
  */
 export const AI_POLISH_MIN_INTERVAL_SECONDS = 5
@@ -24,7 +24,7 @@ export type AiPolishStore = {
   /**
    * 配额检查 + 写占位行，**自带事务**：先取事务级 advisory lock 串行化"先查后插"——READ
    * COMMITTED 下并发事务都会读到旧的计数，仅靠事务拦不住并发突破额度（同 `verification-service`
-   * 的写法）。通过检查后立即写占位行："上游失败也扣配额"由这一步保证（设计 §5.2）。
+   * 的写法）。通过检查后立即写占位行："上游失败也扣配额"由这一步保证。
    *
    * 事务边界收在这里而不是 service：上游调用最长 8s，事务绝不能跨上游开着；service 因此不持有
    * db，整条流水线可以用假 store 单测。
@@ -60,7 +60,7 @@ export function createSqlAiPolishStore(db: Db): AiPolishStore {
         // 三个桶（#173）：
         // - 间隔桶**不区分 outcome**：占位行先落库、outcome 还是 NULL，必须计入，否则
         //   "崩一次就白送一次额度"；`EMPTY` 也计入——上游已被调用并计费，不能因为候选被我们
-        //   过滤掉就免掉间隔（这是 #173 相对 #141 §5.2 的口径变更）。
+        //   过滤掉就免掉间隔（这是 #173 相对 #141 的口径变更）。
         // - 正常日桶用 `outcome is distinct from 'EMPTY'` 而不是 `<> 'EMPTY'`（`<>` 对 NULL
         //   求值为 NULL，会把还没回写的占位行排除在计数外）。`EMPTY` 不占正常额度，保住
         //   #75"失败可无损返回"的承诺。
@@ -113,7 +113,7 @@ export function createSqlAiPolishStore(db: Db): AiPolishStore {
         if (retryAfterSeconds > 0) {
           // 刻意**不**在这里记日志：被拒请求不写行、也不出网，拒绝路径几乎免费，而 `app.ts` 没有
           // 全局限流——一个已经撞满桶的账号可以无限刷这一行，等于把日志变成刷量入口。校准 `EMPTY`
-          // 桶的 60 也不需要它：`EMPTY` 出口本来就照写行（§5.2），"24h 内有多少账号撞到 60"用一条
+          // 桶的 60 也不需要它：`EMPTY` 出口本来就照写行，"24h 内有多少账号撞到 60"用一条
           // `outcome = 'EMPTY'` 的分组查询就能从表里读出来，且可事后回溯。
           return { allowed: false, retryAfterSeconds }
         }

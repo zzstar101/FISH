@@ -421,17 +421,17 @@ export function createApp(
   // （`VISUAL_EMBED_LISTING` handler 写的 `provider.model`）**完全一致**：两个进程读同一份
   // `VISUAL_EMBEDDING_*`，而 `stub` 传输写的是包里的确定性模型名（不是空值）。取错名字不会报错，
   // 只会让语义通道永远过滤不到向量（表现成"召回总是空"），所以这里从同一个常量推导。
-  // 进程内延迟采样（#323 R6 §6.4）：**一个进程一个实例**，推荐 router 写、admin service 读。
+  // 进程内延迟采样（#323 R6）：**一个进程一个实例**，推荐 router 写、admin service 读。
   //
   // 刻意放在 `observability/` 而不是推荐模块里：admin 要读这些数字，但让 admin 去 import
   // 推荐模块的内部对象会把管理端与推荐域耦死。依赖方向保持"两个 domain 都依赖 observability"。
   // 采样只存在内存里，重启归零——这是 D5（零 schema 变更）的代价，契约里用 `processStartedAt`
   // 明示"自本进程启动以来"。
   const latencyRecorder = createDefaultLatencyRecorder()
-  // 进程内计数（#323 R6 §6.3）：与 latency 同一取舍（一个进程一个实例、写方是推荐模块、读方是 admin）。
+  // 进程内计数（#323 R6）：与 latency 同一取舍（一个进程一个实例、写方是推荐模块、读方是 admin）。
   // 传**读取函数**给 admin，见 `admin/module.ts` 的注释。
   const recommendationProcessMetrics = createRecommendationProcessMetrics()
-  // 限流阈值（#323 R6 §8.1）：默认值来自契约，env 只做覆盖（未配置 = null ⇒ 用默认值）。
+  // 限流阈值（#323 R6）：默认值来自契约，env 只做覆盖（未配置 = null ⇒ 用默认值）。
   // 两份桶分开建（埋点更严、Feed 更宽），桶表上限共用一份：它防的是"内存被主体数撑爆"，
   // 与"每个主体多少额度"无关。
   const rateLimitEnv = loadRecommendationRateLimitEnv()
@@ -461,7 +461,7 @@ export function createApp(
     // 长期画像重算的出队口：行为一落库就投 `REFRESH_USER_INTEREST`，由 worker 全量重算
     // （画像只给登录用户，匿名行为不投 job）。
     interest: createDbInterestRefreshQueue(db),
-    // 进程内计数（#323 R6 §6.3）：写失败 / 拒收原因分布，由 admin 端点读出。
+    // 进程内计数（#323 R6）：写失败 / 拒收原因分布，由 admin 端点读出。
     metrics: recommendationProcessMetrics,
   })
   const recommendationRecorder = createRecommendationDomainRecorder(recommendationService)
@@ -473,7 +473,7 @@ export function createApp(
       latency: latencyRecorder,
       rateLimit: recommendationRateLimit,
       processMetrics: recommendationProcessMetrics,
-      // 匿名限流键要带 IP（§2.3 fail-closed 共享桶），取值与 listings / 拍照搜图同一实现：
+      // 匿名限流键要带 IP（fail-closed 共享桶），取值与 listings / 拍照搜图同一实现：
       // 未配可信代理时 `trustedClientIp` 只要看到任何转发头就返回 null ⇒ 落进共享桶而不是伪造出的 IP。
       resolveClientIp: (c) =>
         trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
@@ -955,7 +955,7 @@ export function createApp(
   })
   app.route('/', ai.router)
 
-  // 管理后台（#73）：与普通用户页面 / 普通用户 API 路由隔离（设计 §2）。
+  // 管理后台（#73）：与普通用户页面 / 普通用户 API 路由隔离。
   // 挂载点为根级 `/admin`；requireAuth（401）与 requireAdmin（403）两道守卫在 admin
   // router 内部 `use('*')` 应用，覆盖全部 `/admin/*` 入口，普通用户无法靠改前端状态绕过。
   const admin = createAdminModule({
@@ -971,7 +971,7 @@ export function createApp(
     recommendationProcessMetrics: () => recommendationProcessMetrics.snapshot(),
     // 争议进展通知（#465）：payload 存裸 UUID，读侧（notifications/service.ts 的
     // projectPayload）转成公开 TypeID。写入用**争议状态变更的同一个事务**当执行器，
-    // 所以通知与结论要么一起成功、要么一起回滚（plan §2 冻结口径，不做 best-effort 旁路）。
+    // 所以通知与结论要么一起成功、要么一起回滚（冻结口径，不做 best-effort 旁路）。
     notifyDispute: (executor, input) =>
       writeNotification(executor, {
         userId: input.userId,

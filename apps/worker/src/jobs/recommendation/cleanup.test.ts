@@ -1,10 +1,10 @@
 /**
- * 保留期清理的集成测试（Issue #323 R6 / 设计 §7）。
+ * 保留期清理的集成测试（Issue #323 R6）。
  *
  * 纯逻辑没什么可测的（就是三条 `DELETE`），所以这里的价值全在**边界与规模**上：
  *   1. 截止时间是**严格早于**（`<`）：正好落在 90 天/180 天那一刻的行必须留下；
  *   2. **没有快照行的请求也要被删**——降级 Feed（`rec-v1-none` 直通游标）与"快照写入失败"的请求
- *      一行快照都没有，如果按文档 §7.2 第 2 步"复用第 1 步取到的 request_id 集合"，这些请求行
+ *      一行快照都没有，如果按"复用先取到的 request_id 集合"，这些请求行
  *      永远删不掉，保留期承诺直接失效。这条用例就是那个回归护栏；
  *   3. 批大小真的分批（`batches` 反映轮数），且重复运行幂等（第二轮全 0）。
  *
@@ -150,7 +150,7 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-describe('cleanupExpiredRecommendationData（#323 R6 §7）', () => {
+describe('cleanupExpiredRecommendationData（#323 R6）', () => {
   test('dryRun：只统计待删行数，一行都不写', async () => {
     const before = {
       requests: await countRows('requests'),

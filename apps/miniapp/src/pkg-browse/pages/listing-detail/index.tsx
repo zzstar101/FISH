@@ -474,7 +474,7 @@ export default function ListingDetail() {
   /**
    * 上一次上报过的轮播下标。
    *
-   * R1 §3.5 规定首屏自动展示第一张**不算**用户主动查看，所以 `IMAGE_VIEW` 只在「下标真的变过」
+   * R1 规定首屏自动展示第一张**不算**用户主动查看，所以 `IMAGE_VIEW` 只在「下标真的变过」
    * 时才发：初始化那次 `onChange`（如果宿主给了）的下标与它相等，于是被挡掉。
    */
   const slideRef = useRef(0)
@@ -581,7 +581,7 @@ export default function ListingDetail() {
   )
 
   /**
-   * DETAIL_VIEW 与 LONG_VIEW（R1 §3.5）。
+   * DETAIL_VIEW 与 LONG_VIEW（R1）。
    *
    * 传的是**已经加载出来**的商品 id：商品不存在（`notFound`）或还没加载完时传 `null`，
    * 那时不发事件 —— 发一条指向不存在的商品只会被服务端按 `listing_not_found` 拒收。
@@ -1525,7 +1525,7 @@ export default function ListingDetail() {
                     const index = event.detail.current
                     setSlide(index)
                     /*
-                      R1 §3.5：用户主动切图发 IMAGE_VIEW（含点圆点），首屏自动展示第一张不算。
+                      R1：用户主动切图发 IMAGE_VIEW（含点圆点），首屏自动展示第一张不算。
                       `slideRef` 是上一次上报过的下标，初始化那次下标与它相等，于是不发 ——
                       比时间窗更准（不需要猜视图层什么时候会补一次 onChange）。
                     */

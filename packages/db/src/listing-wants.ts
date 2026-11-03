@@ -4,7 +4,7 @@ import { conversations } from './schema/conversations'
 /**
  * 商品的「想要数」——**与该商品已建立会话的买家数**，全仓唯一的 SQL 定义。
  *
- * 口径由 #74 / #290 冻结（`docs/design/issue-74-watchers-definition.md`），并由
+ * 口径由 #74 / #290 冻结，并由
  * Owner 2026-10-04 拍板：商品卡上的「N 人想要」就取这个数，与卖家在「想要的人」页
  * 看到的名单 `total` 同源。收藏、关注卖家、Wish / Match 一律**不计入**。
  *

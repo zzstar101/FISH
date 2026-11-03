@@ -1,11 +1,11 @@
 /**
- * 行为事件的唯一入口（Issue #323 R1 §3.5 / §3.6）。
+ * 行为事件的唯一入口（Issue #323 R1）。
  *
  * 所有字段在这里一次定型，调用方只描述「发生了什么」：
  * - `eventId` 在这里生成，入队后不再改写 —— 重试靠它幂等；
  * - `anonymousSessionId` 同样**入队时固化**：队列里的事件可能在换会话之后才发出去，
  *   用发送时刻的会话 id 会与服务端那条推荐请求行的归属对不上（`identity_mismatch` 被拒）；
- * - `source` 客户端**不传**：R1 只有单通道，服务端按 requestId 补 `fresh`（规格 §1）。
+ * - `source` 客户端**不传**：R1 只有单通道，服务端按 requestId 补 `fresh`。
  */
 import type {
   RecommendationEventInput,

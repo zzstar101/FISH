@@ -14,7 +14,7 @@ import { listings } from './listings'
 import { users } from './users'
 
 /**
- * 行为事件类型（#323 §统一行为事件 的 12 类一期全集）。
+ * 行为事件类型（#323 的 12 类一期全集）。
  *
  * 用 pgEnum 而不是 text：事件类型是**闭集合**，线上多出一个没在契约里定义的类型
  * 只会让下游统计静默漏算；新增取值必须走一次迁移，让"扩集合"成为显式动作。
@@ -53,7 +53,7 @@ export const recommendationSourceEnum = pgEnum('recommendation_source', [
 ])
 
 /**
- * 行为事件（#323 §M0）。只追加，不更新、不删除（删除是 R6 的保留期任务）。
+ * 行为事件（#323 M0）。只追加，不更新、不删除（删除是 R6 的保留期任务）。
  *
  * 幂等：`event_id` 是**客户端生成**的 UUIDv4（重试必须复用同一个 id），
  * `unique(event_id)` + `ON CONFLICT DO NOTHING` 让"重发同一批"变成 no-op，

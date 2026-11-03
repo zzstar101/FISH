@@ -9,17 +9,17 @@ import {
  * AI 润色 Domain Contract（Issue #141，2026-09-21）。
  *
  * 端点的入参与出参**不存在**价格/成色/分类/0 元送的写回路径：候选只是文本草稿，结构化事实
- * 一律由用户在发布页自行确认（设计 §1）。协议细节见 `docs/design/issue-75-ai-polish.md`。
+ * 一律由用户在发布页自行确认。
  */
 
-/** 单次返回 1~3 条；"换一条"由客户端轮播，不重新请求上游（设计 §12-3）。 */
+/** 单次返回 1~3 条；"换一条"由客户端从已返回的候选里轮播，不重新请求上游。 */
 export const AI_POLISH_CANDIDATE_MIN = 1
 export const AI_POLISH_CANDIDATE_MAX = 3
 
 /**
  * `title` / `description` 复用商品域契约（长度上限只在契约定义，DB 侧是裸 `text`）。
  * `category` 只收枚举值——中文标签由服务端解析，不接受客户端传标签文本，
- * 堵住"伪造上下文诱导模型"的口子（设计 §4.1）。
+ * 堵住"伪造上下文诱导模型"的口子。
  */
 export const AiPolishCandidatesRequestSchema = z.strictObject({
   title: ListingTitleSchema,
@@ -34,7 +34,7 @@ export const AiPolishCandidateSchema = z.object({ id: z.string(), text: z.string
 
 export type AiPolishCandidate = z.infer<typeof AiPolishCandidateSchema>
 
-/** 上游真伪：`stub` 时客户端必须显示"演示文案"角标（设计 §8.2）。 */
+/** 上游真伪：`stub` 时客户端必须显示"演示文案"角标。 */
 export const AiPolishProviderSchema = z.enum(['stub', 'live'])
 
 export type AiPolishProvider = z.infer<typeof AiPolishProviderSchema>
@@ -53,13 +53,13 @@ export type AiPolishCandidatesResponse = z.infer<typeof AiPolishCandidatesRespon
 
 /**
  * 本模块的失败码。401 的 `UNAUTHENTICATED` 与 422 的 `VALIDATION_FAILED` 复用全仓既有码，
- * 不在这里重复定义（设计 §4.2）。
+ * 不在这里重复定义。
  */
 export const AiPolishErrorCodeSchema = z.enum([
   /**
    * 429：触发三种配额之一——最小间隔（5s）、滚动 24h 正常额度（30 次）、滚动 24h `EMPTY`
-   * 桶（60 次，设计 §5.2 / #173）。带 `retryAfterSeconds`，不复用 `RATE_LIMITED`。
-   * 命中 `EMPTY` 桶时 `retryAfterSeconds` 可达上万秒（要等窗口滚动），客户端文案见设计 §10.2。
+   * 桶（60 次，#173）。带 `retryAfterSeconds`，不复用 `RATE_LIMITED`。
+   * 命中 `EMPTY` 桶时 `retryAfterSeconds` 可达上万秒（要等窗口滚动）。
    */
   'AI_POLISH_QUOTA',
   /** 503：`transport=live` 但配置不全（运行期兜底，正常应在启动即失败）。 */

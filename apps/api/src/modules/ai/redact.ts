@@ -1,5 +1,5 @@
 /**
- * 送上游前的脱敏（设计 §6.1）与回填（设计 §5.7）。
+ * 送上游前的脱敏与回填。
  *
  * 三条边界：中文姓名不做（正则不可靠，误伤正文的收益为负）；不反向修改 `EXTERNAL_CONTACT`
  * 审核规则（那是审核语义，动它要升 `MODERATION_RULE_VERSION` 并影响 #74 的既有结果）；
@@ -13,7 +13,7 @@ export type RedactKind = 'id' | 'card' | 'phone' | 'mail' | 'contact' | 'addr' |
 /**
  * 回填失败时的类型化提示语。**注意它并不比标记长**（`phone` 标记 `[fish-phone-1]` 14 字、
  * 提示语 12 字），所以"回填后文本变长"不是提示语造成的——真正的来源是**还原出的原文比标记长**
- * （如 39 字邮箱换掉 13 字 `[fish-mail-1]`）。这就是回填后仍要再测一次长度的原因（设计 §5.7）。
+ * （如 39 字邮箱换掉 13 字 `[fish-mail-1]`）。这就是回填后仍要再测一次长度的原因。
  */
 const LOST_PROMPTS: Record<RedactKind, string> = {
   id: '（你的证件号已被移除）',
@@ -77,7 +77,7 @@ const MARKER_PATTERN = /\[fish-([a-z]+)-(\d+)\]/g
 /**
  * 形状像标记、但严格匹配不上的（模型把 `[fish-phone-1]` 写成 `[fish-phone- 1]`、全角数字，或
  * 漏了括号写成 `fish-phone-1`）。检测与清理共用它：这类半成品既不能当"找回"（内容可能被改过），
- * 也不能原样留在候选里被用户采用（设计 §5.7 要求标记位必须换成提示语）。比对前先剥掉不可见字符
+ * 也不能原样留在候选里被用户采用（标记位必须换成提示语）。比对前先剥掉不可见字符
  * （`stripInvisible`）——所以**插了零宽/软连字符的标记会先归一成标准形态，仍算"找回"**
  * 并按原样还原，而不是被当成半成品降级（那才是用户想要的：拿回自己的内容）。
  *
@@ -118,7 +118,7 @@ const LOOSE_MARKER_PATTERN = new RegExp(
  *
  * 别再退回手枚举几个码位：`138<U+00AD>12345678`、`138<U+200E>12345678`、`138<U+3164>12345678`
  * 都能整段绕过手机号规则、把号码原样送上游（#141 三次审查发现）。已知残留：emoji ZWJ 序列
- * （U+200D 属 `\p{Cf}`）会被拆开——本文件改动前就是这样，登记在设计 §11-R10。
+ * （U+200D 属 `\p{Cf}`）会被拆开——本文件改动前就是这样。
  */
 const INVISIBLE_CHARS = /\p{Cf}|\u034F|\u115F|\u1160|\u3164|\uFFA0/gu
 
@@ -154,7 +154,7 @@ function stripInvisible(text: string): string {
  * 标记里的序号是我们自己的计数，不是模型新增的数字；只摘标准形态会让改写后的标记把序号泄漏
  * 成"新增事实"，候选在过滤层就被丢弃，永远走不到 `restore` 的整条降级（#141 审查发现）。
  *
- * 与 `restore` 共用同一套模式——"标记长什么样"只有这一处定义（设计 §6.3）。
+ * 与 `restore` 共用同一套模式——"标记长什么样"只有这一处定义。
  */
 export function stripMarkerLiterals(text: string): string {
   return stripInvisible(text).replace(MARKER_PATTERN, '').replace(LOOSE_MARKER_PATTERN, '')
@@ -180,7 +180,7 @@ export type Redactor = {
   /** 脱敏一段文本。同一实例内计数与映射跨字段共享（title 与 description 一起送上游）。 */
   redact(text: string): Redaction
   /**
-   * 回填。整条降级而非逐标记混合（设计 §5.7）：`redaction.markers` 里任一标记没原样回来，
+   * 回填。整条降级而非逐标记混合：`redaction.markers` 里任一标记没原样回来，
    * 或出现本实例没发出过的标记（模型自造）、形状被改写过的标记，该条全部标记位都换成类型化
    * 提示语——绝不按顺序猜，猜错等于把 A 的电话接到 B 的位置。
    *

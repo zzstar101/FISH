@@ -1,5 +1,5 @@
 /**
- * Admin / 治理列表的游标编码 / 解码（设计 §4.2：`createdAt DESC, id DESC` 游标分页）。
+ * Admin / 治理列表的游标编码 / 解码（`createdAt DESC, id DESC` 游标分页）。
  *
  * 契约对游标的承诺是**不透明字符串**（与 #6 feed 一致，不自造 `hasMore` / `total`）：
  * 前端只该把上一页的 `nextCursor` 原样回传。编码格式 `{createdAtIso}|{id}` + base64url，

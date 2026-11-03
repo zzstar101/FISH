@@ -4,28 +4,11 @@
 | --- | --- |
 | [architecture.md](architecture.md) | 系统形态、技术基线、运行时拓扑、HTTP / WebSocket / 异步链路、端口与环境变量、所有权与 Contract 流程 |
 | [../apps/web-pc/README.md](../apps/web-pc/README.md) | PC 浏览器 Web 站的开发、构建与 `/pc/` 生产部署约定 |
-| [design/issue-89-web-pc-roadmap.md](design/issue-89-web-pc-roadmap.md) | PC Web 剩余任务路线图与依赖顺序 |
-| [design/issue-89-web-pc-t3-auth-scope.md](design/issue-89-web-pc-t3-auth-scope.md) | PC Web T3：登录态与账号作用域缓存隔离 |
-| [design/issue-89-web-pc-t4-messages.md](design/issue-89-web-pc-t4-messages.md) | PC Web T4：消息中心 |
-| [design/issue-89-web-pc-t5-detail-interactions.md](design/issue-89-web-pc-t5-detail-interactions.md) | PC Web T5：商品详情互动 |
-| [design/issue-89-web-pc-t6-publish.md](design/issue-89-web-pc-t6-publish.md) | PC Web T6：发布闲置 |
-| [design/issue-89-web-pc-t7-notifications.md](design/issue-89-web-pc-t7-notifications.md) | PC Web T7：通知中心 |
-| [design/issue-89-web-pc-t8-profile-orders.md](design/issue-89-web-pc-t8-profile-orders.md) | PC Web T8：我的、在售与订单 |
-| [design/issue-89-web-pc-t9-wish-match.md](design/issue-89-web-pc-t9-wish-match.md) | PC Web T9：许愿墙与匹配 |
-| [design/issue-89-web-pc-t10-release-hardening.md](design/issue-89-web-pc-t10-release-hardening.md) | PC Web T10：发布收口与运行验收 |
-| [design/issue-89-web-pc-t10-id-inventory.md](design/issue-89-web-pc-t10-id-inventory.md) | PC Web T10：#217 ID 边界冻结检查表 |
-| [design/issue-391-web-pc-auth-wechat-only.md](design/issue-391-web-pc-auth-wechat-only.md) | #391 PC Web 登录改为仅微信扫码：移除账号密码登录与注册页 |
 | [deployment.md](deployment.md) | 生产部署手册（Ubuntu + Bun 直跑，不用 Docker）：依赖安装、环境变量、systemd、反代与 HTTPS、发布/回滚、备份与硬约束 |
 | [dev-db-isolation.md](dev-db-isolation.md) | 并行 worktree 独立开发数据库：`scripts/dev-db.ts`（`db:dev up/url/drop/list`）的库命名规则、建库/迁移/清理三步、独立容器指向与三条禁令 |
-| [testing.md](testing.md) | 测试与验证口径：验证顺序、命令与前置条件、`--isolate` 语义、Bun 版本口径、CI 门禁结构与 `.env.example` 逐键核对结论 |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | 文件所有权、分支与提交规范、PR 要求、Contract 流程、DB CHANGE REQUEST |
 | [../AGENTS.md](../AGENTS.md) | 给 AI agent 的命令、编码铁律、范围与实现纪律、对抗性审查流程 |
 | [../README.md](../README.md) | 最小启动路径与常用命令 |
-| [design/issue-147-transaction-invariants.md](design/issue-147-transaction-invariants.md) | #147 交易 / 面交剩余项设计方案（两个 PR 的切分、不变量清单、验证门禁） |
-| [design/issue-323-r1-event-tracking.md](design/issue-323-r1-event-tracking.md) | #323 R1 行为埋点与推荐归因契约（事件/表/索引、接口、幂等与拒收口径、隐私与保留策略、R1 的验证） |
-| [design/issue-323-r6-evaluation-observability.md](design/issue-323-r6-evaluation-observability.md) | #323 R6 评估与可观测性设计（离线评估 CLI、线上漏斗 / guardrail 端点、保留期清理与埋点限流的口径与验证；已由 PR #436 / #458 落地） |
-| [design/issue-217-id-system-design.md](design/issue-217-id-system-design.md) | #217 上线前统一 ID 体系设计存档（UUIDv7 内部键 + TypeID 公开 ID + 商品人工编号的边界、发号与两阶段迁移；已由 PR #280 落地） |
-| [design/issue-74-watchers-definition.md](design/issue-74-watchers-definition.md) | #74「谁想要」（Watchers）来源定义冻结：来源 / 去重 / 权限 / 隐私 / 与 Wish·Match·收藏·关注的关系 / 计数口径，及与现有实现的核对记录 |
 
 ## 关于文档职责
 

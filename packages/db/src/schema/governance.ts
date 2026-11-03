@@ -30,7 +30,7 @@ export const userRestrictionStatusEnum = pgEnum('user_restriction_status', ['ACT
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
 
 /**
- * 用户限制（#73 治理半场 PR3，设计 §6）。
+ * 用户限制（#73 治理半场 PR3）。
  *
  * 限制状态为什么住独立表而不是 `users` 加列、也不是从审计日志反推：
  * - **写请求每次都要读**，需要索引（`user_restrictions_user_type_status_idx`）；

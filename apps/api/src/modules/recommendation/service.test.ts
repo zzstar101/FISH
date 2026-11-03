@@ -1,5 +1,5 @@
 /**
- * 推荐服务的事件拒收分桶（Issue #323 R6 §10.1「拒绝原因计数」/ §6.3 的 7→5 映射）。
+ * 推荐服务的事件拒收分桶（Issue #323 R6「拒绝原因计数」的 7→5 映射）。
  *
  * 为什么需要这个文件：`apps/api/src/observability/recommendation-metrics.test.ts` 只证明
  * **计数器本身**能用（5 键齐全、逐桶累加、snapshot 是副本），而 `REJECTION_REASON_METRIC`
@@ -113,7 +113,7 @@ function createService(options: {
   return { ingest: service.ingest, metrics, attempts: () => attempts }
 }
 
-describe('ingest 的拒收原因分桶（#323 R6 §6.3 的 7→5 映射）', () => {
+describe('ingest 的拒收原因分桶（#323 R6 的 7→5 映射）', () => {
   test('服务端确证类事件（PURCHASE/CHAT_START 等）→ serverConfirmedEventType', async () => {
     const item = listing()
     const { ingest, metrics } = createService({ existingListingIds: [item.id] })

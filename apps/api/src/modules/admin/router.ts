@@ -64,7 +64,7 @@ export type AdminRouterOptions = {
   feedbackService: FeedbackService
   /**
    * 认证守卫（`auth` 模块提供）：所有 `/admin/*` 先过它（401 `UNAUTHENTICATED`）。
-   * 在 router 内 `use('*')` 应用，配合 `requireAdmin` 组成设计 §3.2 的双层守卫——
+   * 在 router 内 `use('*')` 应用，配合 `requireAdmin` 组成双层守卫——
    * 普通用户被拦在 `FORBIDDEN`，不能靠修改前端状态绕过后台。
    */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
@@ -217,7 +217,7 @@ function validatedTargetId(
 /**
  * Admin router。挂载点在 `apps/api/src/app.ts` 的 `/admin`（根级），router 内部用 `/me` 等。
  *
- * `router.use('*')` 两道守卫覆盖**全部** `/admin/*` 入口（设计 §3.2：“每个 Admin API 入口
+ * `router.use('*')` 两道守卫覆盖**全部** `/admin/*` 入口（“每个 Admin API 入口
  * 额外执行 requireAdmin”），新加端点不会忘挂。
  */
 export function createAdminRouter(options: AdminRouterOptions) {
@@ -642,7 +642,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
     }
   })
 
-  // 未匹配的 `/admin/*` 也走契约错误信封（设计 §8）：Hono 默认返回 `text/plain` 的
+  // 未匹配的 `/admin/*` 也走契约错误信封：Hono 默认返回 `text/plain` 的
   // `404 Not Found`，web 的 api-client 会把它归一成 `INTERNAL_ERROR`，客户端拿不到稳定错误码。
   //
   // 不用 `router.notFound(...)`：子应用的 notFound 不会经 `app.route('/admin', router)` 生效

@@ -13,7 +13,7 @@ import {
 } from './api'
 
 /**
- * 通知轮询间隔。T7 §7 明确实时推送为非目标，P0 允许轮询；这里用有限轮询让顶栏角标和
+ * 通知轮询间隔。实时推送为非目标，P0 允许轮询；这里用有限轮询让顶栏角标和
  * 通知列表保持新鲜。窗口失焦时 TanStack 默认暂停 interval，只在用户正在使用页面时轮询。
  */
 export const NOTIFICATION_POLL_INTERVAL_MS = 30_000

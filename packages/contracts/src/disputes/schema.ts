@@ -14,7 +14,7 @@ import { transactionStatusSchema } from '../transactions/schema'
  * Disputes Domain Contract（#465）。
  *
  * 交易争议：从**本人订单**发起、关联真实交易、带受限图片附件与聊天证据，由管理端处理
- * 并给出结论；用户能查询本人进度与结果。设计见 `.grill465/plan.md`（本单 grill 结论）。
+ * 并给出结论；用户能查询本人进度与结果。
  *
  * 与 `reports` 的关系：**两个域，不共用表**。举报处理的是"内容/账号违规"，争议处理的是
  * "这笔交易出了什么问题"。共享的只有"处理结果 + 原因 + 审计"这一形状，枚举、状态机、
@@ -114,7 +114,7 @@ export type DisputeTransactionSummary = z.infer<typeof DisputeTransactionSummary
  *   `confirm` 对同一键幂等（重复确认返回既有行）。唯一键**不足以**保证字节不变 ——
  *   预签名 PUT 在有效期内仍可对同一 key 二次 PUT，所以 `confirm` 把确认时刻实读字节的
  *   sha256 写进 `content_digest`，读代理下发前重算比对，不一致即 404；
- * - **写入方只有发起人**（plan §3/§4 冻结）：被诉方能看全部材料与结论，但不能补材料 ——
+ * - **写入方只有发起人**：被诉方能看全部材料与结论，但不能补材料 ——
  *   否则被诉方可以占用双方共享的 6 张额度；
  * - 对象写入的删除点只有 `confirm` 的失败回滚（校验失败或插行失败即删对象，不留无台账
  *   引用的孤儿字节；幂等命中既有行时不删）。另外 `presign` 会数一次

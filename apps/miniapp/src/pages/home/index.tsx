@@ -577,7 +577,7 @@ export default function Home() {
                   listing={item}
                   seller={item.seller}
                   imageHeight={RATIO_HEIGHT[item.ratio]}
-                  // 推荐归因随卡片带进详情页（R1 §3.5）；分类列表里为 null
+                  // 推荐归因随卡片带进详情页（R1）；分类列表里为 null
                   attribution={attributionOf(item.id)}
                   // 点开前先记下「这张卡被点开过」：快速划过的判定要求「未点开」
                   onOpen={() => impressions.markOpened(item.id)}

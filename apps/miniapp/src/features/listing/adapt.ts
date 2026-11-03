@@ -97,9 +97,8 @@ export function toMockCardSeller(card: ListingCard): MockUser | null {
  * 无图商品的兜底色块由 `resolveCover` 之外的调用方处理：这里保持 `coverUrl` 原样
  * （契约允许 `null`），页面已有 `null` 处理路径。
  *
- * `wants` 直接取契约的 `card.wants`：全站**一个口径** —— 该商品已建立会话的买家数
- * （`docs/design/issue-74-watchers-definition.md`），与卖家在「想要的人」页看到的
- * `total` 同源。契约里没有第二个「想要数」，所以这里也不留覆盖参数：
+ * `wants` 直接取契约的 `card.wants`：全站**一个口径** —— 该商品已建立会话的买家数，
+ * 与卖家在「想要的人」页看到的 `total` 同源。契约里没有第二个「想要数」，所以这里也不留覆盖参数：
  * 识图结果项外层那个 `favoriteCount` 是**收藏数**（服务端算 `popularityScore` 用），
  * 与「想要」是两个量，页面不拿它冒充（曾经这样画过，会让同一个标签在两个页面
  * 表示两件事）。

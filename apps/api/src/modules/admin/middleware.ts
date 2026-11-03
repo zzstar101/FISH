@@ -4,7 +4,7 @@ import type { AuthVariables } from '../auth/middleware'
 import type { AdminStore } from './store'
 
 /**
- * `requireAdmin`（设计 §3.2）：`requireAuth` 之后的第二道守卫。
+ * `requireAdmin`：`requireAuth` 之后的第二道守卫。
  *
  * - 只从**服务端会话解析出的 userId**（`requireAuth` 写入 context）查角色，
  *   禁止信任请求头、URL 参数、前端状态或可伪造的 Cookie 字段。
@@ -13,7 +13,7 @@ import type { AdminStore } from './store'
  *
  * 挂载方式：`apps/api/src/app.ts` 只把 admin router 挂到 `/admin`，两道守卫都在
  * `router.ts` 内用 `router.use('*')` 应用（先 `requireAuth`，再本中间件），覆盖全部
- * `/admin/*`（设计 §3.2：“每个 Admin API 入口额外执行 requireAdmin”）。
+ * `/admin/*`（“每个 Admin API 入口额外执行 requireAdmin”）。
  */
 export function createRequireAdmin(options: {
   store: Pick<AdminStore, 'isAdmin'>

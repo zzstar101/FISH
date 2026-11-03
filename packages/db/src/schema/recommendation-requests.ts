@@ -4,7 +4,7 @@ import { primaryKey, timestamptz } from './common'
 import { users } from './users'
 
 /**
- * 推荐请求上下文（#323 §M0）。
+ * 推荐请求上下文（#323 M0）。
  *
  * 每次个性化 Feed 请求落一行，`id` 就是响应里的 `recommendationRequestId`：客户端把它带在
  * 曝光 / 详情事件上，服务端据此校验"这条事件确实来自那次推荐"。
@@ -12,7 +12,7 @@ import { users } from './users'
  * 为什么落表而不是签一个自包含 token：
  * - 归属校验需要**服务端真值**。token 里的身份是客户端声明 + 服务端签名，而这里存的是当时解析出的
  *   `user_id` / `anonymous_session_id`，切号后旧请求一眼能看出不属于当前身份；
- * - #323 §M8 的指标（feed empty rate、重复率、单 seller 曝光占比）都要按"一次请求"聚合，
+ * - #323 M8 的指标（feed empty rate、重复率、单 seller 曝光占比）都要按"一次请求"聚合，
  *   请求级上下文迟早要有地方落；
  * - 翻页复用同一个 requestId（同一 session 连续滚动 = 同一次推荐请求），一行对应整段滚动。
  *

@@ -16,7 +16,7 @@ import {
  * `tsc` 当场报错，而不是线上渲染出一个空胶囊。
  *
  * 小程序侧有一份同口径的文案（`apps/miniapp/src/features/reports/meta.ts`）。
- * 按 roadmap §4.5「页面实现只放 `apps/web-pc`，共享契约从 `@fish/contracts` 读取」，
+ * 按「页面实现只放 `apps/web-pc`，共享契约从 `@fish/contracts` 读取」，
  * PC 自带一份而不是跨端 import 小程序的模块；两端文案若要强一致，应另起 Issue
  * 把 **copy**（不是枚举）抽到共享包，本 Issue 不做。
  */

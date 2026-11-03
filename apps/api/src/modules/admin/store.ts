@@ -139,7 +139,7 @@ export interface ModerationRecordRow {
   matchedRules: string[]
   matchedTermsMasked: string[]
   ruleVersion: string
-  /** #228 §6 的上游可追溯字段；#228 之前的历史行为 null。 */
+  /** #228 的上游可追溯字段；#228 之前的历史行为 null。 */
   provider: string | null
   providerRequestId: string | null
   suggestion: string | null
@@ -225,7 +225,7 @@ export interface OverviewRow {
  * 推荐指标（#323 R6）的**原始计数**行：一个窗口内的所有数据库侧计数。
  *
  * 这里只出计数、不出比率：比率的分母口径（0/0 → `null`）是契约层的事，放在 service 里算，
- * SQL 保持"数数"这一件事。所有计数的窗口口径见设计 §6.2 / §6.3。
+ * SQL 保持"数数"这一件事。
  */
 export interface RecommendationMetricsRow {
   /** `recommendation_requests.requested_at ∈ 窗口` 的请求数（请求轴）。 */
@@ -412,7 +412,7 @@ export interface ActiveRestrictionSummaryRow {
 }
 
 function userSearchCondition(alias: string, q: string): SQL {
-  // 学号精确匹配或昵称前缀搜索（设计 §4.2）。LIKE 通配符 `% _ \` 先转义，
+  // 学号精确匹配或昵称前缀搜索。LIKE 通配符 `% _ \` 先转义，
   // 否则昵称里的 `_` 会被当成单字符通配（与 #6 的 ILIKE 同一取舍）。
   const escaped = q.replace(/[\\%_]/g, '\\$&')
   return sql`(${sql.raw(`${alias}.student_no`)} = ${q} OR ${sql.raw(`${alias}.nickname`)} ILIKE ${`${escaped}%`})`

@@ -5,7 +5,7 @@
  * 小程序没有代理层，用绝对地址拼根级路由（`apps/miniapp/src/lib/api-base.ts`）。
  *
  * 与 `LISTING_ROUTES` **刻意分开**：`GET /listings` 是确定性商品查询，推荐 Feed 是
- * 用户相关、策略版本相关、游标语义也不同的接口（Issue #323 §M7）。
+ * 用户相关、策略版本相关、游标语义也不同的接口（Issue #323 M7）。
  */
 export const RECOMMENDATION_ROUTES = {
   /** 推荐 Feed（R1：透传 newest，带 requestId / strategyVersion）。 */

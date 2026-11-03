@@ -60,7 +60,7 @@ test('首次请求放行，并写下 outcome 还是 NULL 的占位行', async ()
 
     const rows = await rowsOf(userId)
     expect(rows).toHaveLength(1)
-    // 占位行先落库：上游失败也扣配额由这一步保证（设计 §5.2）。
+    // 占位行先落库：上游失败也扣配额由这一步保证。
     expect(rows[0]?.outcome).toBeNull()
     expect(rows[0]?.inputChars).toBe(RESERVE_INPUT.inputChars)
     expect(rows[0]?.promptVersion).toBe(RESERVE_INPUT.promptVersion)
@@ -168,7 +168,7 @@ test('未回写的 NULL 占位行不计入 EMPTY 桶（59 条 EMPTY + 1 条在�
       createdAt: new Date(Date.now() - 10 * 60 * 1000),
     }))
     await db.insert(aiPolishRequests).values(rows)
-    // 另插一条 outcome 仍为 NULL 的占位行：它计入正常日桶，但不该计入 EMPTY 桶（设计 §5.2 的口径表）。
+    // 另插一条 outcome 仍为 NULL 的占位行：它计入正常日桶，但不该计入 EMPTY 桶。
     await db.insert(aiPolishRequests).values({
       userId,
       inputChars: 10,

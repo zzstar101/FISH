@@ -13,7 +13,7 @@ import { recommendationSourceEnum } from './recommendation-events'
 import { recommendationRequests } from './recommendation-requests'
 
 /**
- * 一次推荐请求的**服务端快照**（#323 §M7 / R4-R5 D6）。
+ * 一次推荐请求的**服务端快照**（#323 M7 / R4-R5 D6）。
  *
  * 每次个性化 Feed 请求把**最终返回的有序商品序列**按位次落库。存在的理由是"翻页与归因都
  * 需要一个不可变真值"：

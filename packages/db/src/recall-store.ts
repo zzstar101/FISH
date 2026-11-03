@@ -240,7 +240,7 @@ export type WishRecallCandidate = { listingId: string; wishScore: number }
  *
  * 不在这里实时算 pgvector：`matches` 已经是"愿望 × 商品"的匹配结论（含语义分），重算等于把
  * #322 的匹配引擎在召回路径上再实现一遍，还会给出与商品详情页不一致的结果。代价是新鲜度取决于
- * #322 匹配 job 的调度节奏（已知边界，见设计文档）。
+ * #322 匹配 job 的调度节奏（已知边界）。
  *
  * 同一商品被我的多个愿望命中时只保留**最高分**那一行（Issue #323 M2：同一 listing 多 Wish 命中
  * 只保留一个 candidate）：`max(score)` + 按 listing 分组，source 记 `wish`。

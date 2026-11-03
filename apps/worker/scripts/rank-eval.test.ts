@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { parseArgs } from './rank-eval'
 
-// CLI 的两个承诺必须被测试锁住（设计 §10.1「CLI 参数与输出」）：
+// CLI 的两个承诺必须被测试锁住：
 // 1. `--fixture` 完全不碰数据库（CI 的 unit-tests 作业没有 DB）；
 // 2. 参数错误要报错退出，而不是静默用默认窗口跑出一份"看起来正常"的指标。
 const scriptPath = Bun.fileURLToPath(new URL('./rank-eval.ts', import.meta.url))

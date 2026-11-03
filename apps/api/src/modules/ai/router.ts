@@ -49,7 +49,7 @@ export function createAiPolishRouter(options: AiPolishRouterOptions) {
 
   router.post(AI_ROUTES.polishCandidates, options.requireAuth, options.guard.write, async (c) => {
     // title / description / category 全走契约的 strictObject：多字段、空描述、超 500、非法分类
-    // 都在这里变成 422（设计 §5.1）。服务端独立成立，不依赖客户端本地校验。
+    // 都在这里变成 422。服务端独立成立，不依赖客户端本地校验。
     const parsed = AiPolishCandidatesRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       return c.json(

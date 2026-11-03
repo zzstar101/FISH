@@ -147,7 +147,7 @@ export function auditTargetTypeOptions(): ReadonlyArray<{
 }
 
 /**
- * 审核记录上游来源（#228 §6）。含义随 provider 变化（契约注释），端上只负责标注来源：
+ * 审核记录上游来源（#228）。含义随 provider 变化（契约注释），端上只负责标注来源：
  * LOCAL=本地词表、TENCENT_*=腾讯云、MANUAL=人工改判、null=#228 之前的历史行。
  */
 export const MODERATION_PROVIDER_META: Record<

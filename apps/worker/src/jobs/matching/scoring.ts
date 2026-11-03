@@ -63,7 +63,7 @@ export type ScoringParams = {
 /**
  * M4 重标定后的生产参数（2026-09-26，57 条冻结标注对上 53/57 一致，M3 旧参数 39/57）。
  *
- * 三处改动的证据都在 `bun run embed:eval`（§calibration 冻结标签一致度 + §fit 网格搜索）：
+ * 三处改动的证据都在 `bun run embed:eval`（calibration 冻结标签一致度 + fit 网格搜索）：
  *   1. 锚点 `0.42 / 0.70`（契约常量，理由见那里的注释）；
  *   2. `nullCategoryMode: 'satisfied'`：修掉 v2 相对 v1 的**回退**——不限分类的愿望在
  *      `renormalize` 下被摊薄，`cal-unlimited-phone`（关键词"手机"精确命中 + 预算内）v1 = 100
@@ -83,7 +83,7 @@ export const DEFAULT_SCORING_PARAMS = {
 } as const satisfies ScoringParams
 
 /**
- * M3 的权重对照组（`bun run rank:compare` 可复算，设计文档 §权重冻结有排名表）。
+ * M3 的权重对照组（`bun run rank:compare` 可复算）。
  *
  * S1/S2/S3 是 grilling 时先定的三组候选；跑完人工标注 fixture（12 条，覆盖 Issue 点名的
  * 九类样本）后三组都无法同时满足硬约束，于是按同样的约束补算了 S4 并冻结它：
@@ -99,8 +99,8 @@ export const DEFAULT_SCORING_PARAMS = {
  *     过阈值）；同分类 + 无关键词命中的对 cos >= 0.725 即可召回（生产尺度，Issue 点名的
  *     AirPods 场景），不限分类的对需要 cos >= 0.87；分类不符 + 语义满分仍 < 70。
  *
- * 候选组留在代码里是为了让"为什么冻结这一组"可复算：改权重必须重跑 `rank:compare`、
- * `ranking.test.ts`，并更新设计文档的排名表。
+ * 候选组留在代码里是为了让"为什么冻结这一组"可复算：改权重必须重跑 `rank:compare`，
+ * 并同步更新 `ranking.test.ts` 的对照表与期望排名。
  */
 export const SEMANTIC_WEIGHT_CANDIDATES = {
   S1: { semantic: 0.3, category: 0.25, keyword: 0.25, price: 0.2 },
@@ -110,9 +110,9 @@ export const SEMANTIC_WEIGHT_CANDIDATES = {
 } as const satisfies Record<string, RankingWeights>
 
 /**
- * M3 **冻结**的 v2 权重：S4（fixture 12/12 与人工判断一致，见设计文档 §权重冻结）。
+ * M3 **冻结**的 v2 权重：S4（fixture 12/12 与人工判断一致，见 `ranking.test.ts` 的冻结用例）。
  *
- * 改这个常量 = 改线上排序，必须同时更新设计文档的对照表与 `ranking.test.ts` 的期望排名。
+ * 改这个常量 = 改线上排序，必须同时更新 `ranking.test.ts` 的对照表与期望排名。
  */
 export const WEIGHTS_V2: RankingWeights = SEMANTIC_WEIGHT_CANDIDATES.S4
 
@@ -238,7 +238,7 @@ export function normalizeSimilarity(
  * 结构上有真实支撑（默认口径 `keyword-only` = 关键词命中 > 0；M3 的 `keyword-or-category`
  * 把"分类精确命中"也算支撑）时才让语义分项参与；否则这一对的语义分记 0
  * ——注意是"记 0"而不是"剔掉语义项再归一化"：后者会让同一对在两种状态下用两套权重，
- * 分数不可比（见设计文档 §acceptSimilar）。
+ * 分数不可比。
  *
  * M4 收紧到 `keyword-only` 的理由：分类等值在"同分类但不同产品"时恒成立（校园二手场景里
  * DIGITAL 下既有键盘也有耳机），把它当结构支撑等于让 `acceptSimilar = false` 形同虚设——

@@ -22,7 +22,7 @@ import { createAdminService, type RecommendationProcessMetrics } from './service
 import { createSqlAdminStore } from './store'
 
 /**
- * Admin 模块装配入口（#73，设计 §2 / §6）：`app.ts` 只负责 `app.route('/admin', admin.router)`。
+ * Admin 模块装配入口（#73）：`app.ts` 只负责 `app.route('/admin', admin.router)`。
  *
  * - 与普通 API 同进程、同数据库；代码按模块隔离，`apps/api/src/modules/admin/**` 只依赖
  *   公开的 auth 上下文（requireAuth）与共享 storage，不直接修改其他 Domain 的内部状态。
@@ -48,7 +48,7 @@ export function createAdminModule(options: {
   /**
    * 争议进展通知（#465）。**在争议状态变更的同一事务里**写入（执行器就是那个事务），
    * 不是 best-effort 旁路：结论提交后写通知失败会让当事人永久收不到结果，而库里没有
-   * outbox 可以补投（plan §2 冻结口径）。接线层决定「通知怎么写」，本模块只透传。
+   * outbox 可以补投（冻结口径）。接线层决定「通知怎么写」，本模块只透传。
    */
   notifyDispute?: DisputeNotificationWriter
 }) {

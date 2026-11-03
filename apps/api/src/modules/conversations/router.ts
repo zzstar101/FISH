@@ -15,7 +15,7 @@ import { type ConversationService, ConversationServiceError } from './service'
 export type ConversationsRouterOptions = {
   service: ConversationService
   /**
-   * #323 §M0：**新建**会话（`created === true`）是"想聊这件商品"的服务端确证信号，
+   * #323 M0：**新建**会话（`created === true`）是"想聊这件商品"的服务端确证信号，
    * 由服务端补一条 CHAT_START 事件；复用既有会话不算这次行为，不记。
    */
   recorder?: RecommendationDomainRecorder

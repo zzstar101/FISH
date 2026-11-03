@@ -148,7 +148,7 @@ describe('mergeRecallCandidates', () => {
     const candidate = candidates[0]
     if (!candidate) throw new Error('候选丢失')
     // "查询挂了"（未知）与"确实没曝光过"（0）必须在候选上就可区分：R4 的 repeatedExposure 靠它
-    // 决定是"不加惩罚"还是"按 0 参与打分"（R3 §9 待办①）。
+    // 决定是"不加惩罚"还是"按 0 参与打分"（R3 待办①）。
     expect(candidate.alreadySeenCount).toBeNull()
   })
 

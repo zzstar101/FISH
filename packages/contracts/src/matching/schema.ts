@@ -33,7 +33,7 @@ export const MATCH_SCORE_THRESHOLD = 70
  *
  * 取 50 的理由：`/matches` 默认只展示 10 条、上限 50（`MatchListQuerySchema`），召回池要显著
  * 大于展示量，M3 的 hybrid ranking 才有可排的材料；同时 50 与本阶段"不建 ANN、小数据量下
- * exact cosine scan 足够快"的取舍相容（见 `docs/design/issue-322-matching-v2-m2.md` §6）。
+ * exact cosine scan 足够快"的取舍相容。
  *
  * **不做 env 可配**：K 直接决定"哪些对会被评估"，让部署之间不一致会让线上匹配结果无法复现，
  * 也等于把召回策略藏进部署配置里。要调就改这个常量并走 fixture 对照（M3 冻结权重时一并做）。
@@ -71,8 +71,7 @@ export const RANKING_VERSION = 2
  *
  * 这两个数是**证据项**：改动它们等于改排序，必须带 `--sections=calibration`（冻结标签一致度）
  * 与 `--sections=fit`（网格搜索对照）的证据。`stub` provider 的余弦尺度与真实模型不可比
- * （实测 seed 相关对 0.33–0.49），所以 stub 环境下语义项通常为 0——见
- * `docs/design/issue-322-matching-v2-m4.md` §锚点重标定，不要为了 stub 调这两个数。
+ * （实测 seed 相关对 0.33–0.49），所以 stub 环境下语义项通常为 0——不要为了 stub 调这两个数。
  */
 export const SEMANTIC_SCORE_FLOOR = 0.42
 export const SEMANTIC_SCORE_CEILING = 0.7

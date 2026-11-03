@@ -25,7 +25,7 @@ import { ListingIdSchema as PublicListingIdSchema } from '../system/public-id'
 // 事件类型与阈值
 // ---------------------------------------------------------------------------
 
-/** Issue #323 §统一行为事件 的 12 类事件（一期全集）。 */
+/** Issue #323 的 12 类事件（一期全集）。 */
 export const RecommendationEventTypeSchema = z.enum([
   /** 商品真实进入可视区域（阈值见 RECOMMENDATION_THRESHOLDS）。 */
   'IMPRESSION',
@@ -111,15 +111,14 @@ export const RECOMMENDATION_FEED_ATTRIBUTED_EVENT_TYPES = ['IMPRESSION', 'QUICK_
  * - **开发预览流量 → v1 不作为独立流量源处理（明确接受的边界）。** 上面四道闸门**拦不住**它：
  *   预览若指向同一个后端、用的是真客户端 + 真 `lst_` 商品 id + 真 `requestId` + 真会话，
  *   它的 `IMPRESSION` / `DETAIL_VIEW` 是完全可归因的，会进漏斗与 guardrail。要把它摘出来只能由
- *   客户端自报一个流量头，而服务端没有可信判据（不落 UA / IP，见 R1 §6；拿 UA 当排除依据等于给
+ *   客户端自报一个流量头，而服务端没有可信判据（不落 UA / IP，见 R1；拿 UA 当排除依据等于给
  *   爬虫一个"声明自己是用户"的开关）。issue #323 的 M0 需求行是「明确 Bot / 开发预览 / fixture
  *   流量是否排除」，验收行是「fixture/dev 流量按规则隔离」，为一条自报头改事件写入路径属于超范围
  *   （AGENTS §3/§4）。⇒ v1 口径：开发预览请指向本地 / 独立后端；指向共享后端时与真实流量不可
  *   区分，这是明确接受的数据边界。
- * - **Bot 流量 → 不排除，只在 guardrail 上可见。** R1 不落 UA / IP、也不做 UA 判定
- *   （`docs/design/issue-323-r1-event-tracking.md` §6）——写入路径上加 Bot 判据需要设备指纹，
- *   与"不落私有资料"的红线相邻，v1 明确不做。可见性由限流提供：被拒的请求计入
- *   `rateLimitedRequests`（`apps/api/src/modules/recommendation/router.ts:96`，
+ * - **Bot 流量 → 不排除，只在 guardrail 上可见。** R1 不落 UA / IP、也不做 UA 判定——写入路径上
+ *   加 Bot 判据需要设备指纹，与"不落私有资料"的红线相邻，v1 明确不做。可见性由限流提供：被拒的
+ *   请求计入 `rateLimitedRequests`（`apps/api/src/modules/recommendation/router.ts:96`，
  *   `apps/api/src/app.ts` 已接线）。
  */
 
@@ -335,7 +334,7 @@ export const RECOMMENDATION_RATE_LIMITED = 'RECOMMENDATION_RATE_LIMITED'
 
 /**
  * 推荐 Feed 的查询参数。**不接受 `sort` / `q` / `category`**：推荐入口不是查询接口，
- * 参数一旦长成 `GET /listings` 的复制品，两者迟早被合并（Issue #323 §M7 明确不合并）。
+ * 参数一旦长成 `GET /listings` 的复制品，两者迟早被合并（Issue #323 M7 明确不合并）。
  */
 export const RecommendationFeedQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(20),
@@ -346,7 +345,7 @@ export const RecommendationFeedQuerySchema = z.strictObject({
 export type RecommendationFeedQuery = z.infer<typeof RecommendationFeedQuerySchema>
 
 /**
- * 推荐 Feed 响应（Issue #323 §M7 的形状）。
+ * 推荐 Feed 响应（Issue #323 M7 的形状）。
  *
  * - `requestId` 是本次推荐请求的 id，客户端必须原样带在曝光/详情事件上；
  * - `strategyVersion` 让线上结果可追溯到具体策略；

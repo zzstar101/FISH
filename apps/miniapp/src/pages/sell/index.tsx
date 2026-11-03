@@ -86,7 +86,7 @@ import './index.scss'
  *    页头提示条说明有几处要改；**前端不再保留任何敏感词表**，判定只在服务端。
  * 5. REVIEW：商品已受理但 `status = OFFLINE`、不在公开列表 —— 留在本页显示
  *    「已提交，正在审核」，不跳详情、不显示「发布成功」。
- * 6. AI 润色接真实接口（`POST /ai/polish-candidates`，#142 / 设计 §10）：状态机补失败态、
+ * 6. AI 润色接真实接口（`POST /ai/polish-candidates`，#142）：状态机补失败态、
  *    非 idle 不可点、429 按 `retryAfterSeconds` 倒计时、`provider='stub'` 显示演示角标、
  *    `redacted` 说明脱敏。判定全在 `./polish`（可测），页面只做接线。
  *

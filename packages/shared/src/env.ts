@@ -455,7 +455,7 @@ export function loadRecommendationEmbeddingModel(
 }
 
 /**
- * 埋点 / Feed 限流阈值的**可选覆盖**（#323 R6 §8.1）。
+ * 埋点 / Feed 限流阈值的**可选覆盖**（#323 R6）。
  *
  * 默认值不在这里：它属于契约（`RECOMMENDATION_EVENT_RATE_LIMIT` / `RECOMMENDATION_FEED_RATE_LIMIT`，
  * `packages/contracts/src/recommendation/observability.ts`），因为 worker、CLI 与文档都要读同一份数字。

@@ -2,7 +2,7 @@ import { RANK_NEGATIVE_FEEDBACK_EVENT_TYPES } from './rank'
 import type { RecommendationEventType } from './schema'
 
 /**
- * 离线评估契约（Issue #323 / R6 §3.1）。
+ * 离线评估契约（Issue #323 / R6）。
  *
  * 这里只放**没有 IO 的常量与纯计算**，与 `interest.ts` / `rank.ts` 的分工一致：
  * `apps/worker/src/jobs/recommendation/eval.ts` 拿这些常量做计算，`apps/worker/scripts/rank-eval.ts`
@@ -57,7 +57,7 @@ export type RankEvalK = (typeof RANK_EVAL_K_VALUES)[number]
  * 观察窗默认 7 天（决策 D7）。
  *
  * 上界受两个保留期限制：请求上下文 + 快照 90 天、事件 180 天。窗口越长，被保留期截断的
- * 请求越多（详见设计 §4.4），所以 CLI 必须把实际回放区间与截断提示一起打印出来。
+ * 请求越多，所以 CLI 必须把实际回放区间与截断提示一起打印出来。
  */
 export const RANK_EVAL_DEFAULT_WINDOW_DAYS = 7
 
@@ -70,7 +70,7 @@ export const RANK_EVAL_DEFAULT_WINDOW_DAYS = 7
 export const RANK_EVAL_FRESH_ITEM_DAYS = 7
 
 /**
- * 首次曝光归因窗 `W`（设计 §4.3）：事件只能归给「同一身份、快照含该商品、且发生在该请求之后
+ * 首次曝光归因窗 `W`：事件只能归给「同一身份、快照含该商品、且发生在该请求之后
  * `W` 之内」的请求，取其中最早的一次。
  *
  * 取 30 分钟：一次 Feed 页产生的曝光，其后续行为（点开、收藏、开聊）绝大多数发生在同一个会话内，

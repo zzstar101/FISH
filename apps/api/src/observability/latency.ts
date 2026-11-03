@@ -1,7 +1,7 @@
 import { RECOMMENDATION_LATENCY_SAMPLE_CAPACITY } from '@fish/contracts/recommendation/observability'
 
 /**
- * 进程内延迟采样（Issue #323 / R6 §6.4，决策 D5 / N2）。
+ * 进程内延迟采样（Issue #323 / R6，决策 D5 / N2）。
  *
  * 为什么不做成一个通用 metrics 模块 / 不引 Prometheus：R6 的明确约束是**零 schema 变更 + 不引依赖**，
  * 而需要延迟分位数的调用点只有三个（Feed、事件写入、pgvector 查询）。一个环形缓冲 + 读时排序就够，
