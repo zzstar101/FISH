@@ -309,7 +309,9 @@
 
 .uhome__stats {
   display: flex;
-  align-items: center;
+  /* 逐格都拉伸到同高（#581 复核 4）：两格有 min-height: 88px、好评率那格只有 ≈70px，
+     居中排列会让分隔线一长一短 */
+  align-items: stretch;
   margin-top: 36px;
   padding: 28px 0;
   border-radius: 36px;
@@ -325,6 +327,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 
@@ -350,10 +353,9 @@
  *
  * 仓库口径是「所有可点区域视觉高度 ≥ 44pt」，这里换算成设计值 `min-height: 88px`
  * （同一句换算见 `components/legal-doc/index.scss`）；`.uhome__stat` 原本只有
- * 40px 数字 + 22px 标签（≈ 70px），补上高度并把内容居中。
+ * 40px 数字 + 22px 标签（≈ 70px），这两格补上高度，内容由基类的 `justify-content: center` 居中。
  */
 .uhome__stat--link {
-  justify-content: center;
   min-height: 88px;
 }
 

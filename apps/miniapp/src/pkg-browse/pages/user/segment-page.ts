@@ -40,6 +40,30 @@ export const emptyPage = (): SegmentPage => ({
 })
 
 /**
+ * 首屏那一页数据从哪来（#581 复核 M8）。
+ *
+ * 「在售」的第一页与资料同一次请求回来（`loadPublicUserHome` 里是 `Promise.all`）；
+ * 「已售出」视图**不能**拿这份在售列表充当自己的首屏 —— 那会把 TA 正在卖的东西画在
+ * 「已售出」标题下面。抽成纯函数，是因为接线侧一个 `if (seg === 'ACTIVE')` 的变异
+ * （改成 `if (true)`）在只读源码的用例里根本抓不住；这里逐条钉住。
+ */
+export function firstPageOf<T extends { id: string }>(
+  seg: Segment,
+  home: { listings: T[]; nextCursor: string | null },
+): { items: T[]; nextCursor: string | null; loaded: boolean; loading: boolean; failed: boolean } {
+  if (seg !== 'ACTIVE') {
+    return { items: [], nextCursor: null, loaded: false, loading: false, failed: false }
+  }
+  return {
+    items: home.listings,
+    nextCursor: home.nextCursor,
+    loaded: true,
+    loading: false,
+    failed: false,
+  }
+}
+
+/**
  * 页面路由参数 `tab` → 列表口径（#581）。
  *
  * 只认 `'SOLD'` 一个字面量；缺省、`''`、大小写不符（`sold`）、以及任何别的值都回落到

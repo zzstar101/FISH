@@ -120,9 +120,10 @@ describe('user 页面接线', () => {
 
   test('列表是否有下一页取自读取层的游标结果，不靠条数猜', async () => {
     const code = await source
-    // #565：`PublicUserResult` 的下一页信号就是契约游标本身（`nextCursor`），
-    // 页面把它原样存进分段状态，不再有「hasMore 布尔」这一层转手
-    expect(code).toContain('result.nextCursor')
+    // #565：下一页信号就是读取层交回的契约游标本身，页面把它原样合并进分段状态，
+    // 不再有「hasMore 布尔」这一层转手（#581 起首屏那一页也由 `firstPageOf` 保管游标）
+    expect(code).toContain('mergeSegmentPage(prev, next, cursor)')
+    expect(code).toContain('page.nextCursor === null')
   })
 
   test('滚到底的重入靠同步 ref 闩互斥，合并交给纯函数（#565 复核 M2）', async () => {

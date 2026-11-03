@@ -28,8 +28,9 @@ import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
+import { toggleAnchor } from './scroll-anchor'
 import type { Segment, SegmentPage } from './segment-page'
-import { emptyPage, mergeSegmentPage, segmentOfTab, userHomeUrl } from './segment-page'
+import { emptyPage, firstPageOf, mergeSegmentPage, segmentOfTab, userHomeUrl } from './segment-page'
 import './index.scss'
 
 /**
@@ -144,20 +145,14 @@ export default function UserHome() {
     }
     setProfile(result.profile)
     /**
-     * 「在售」的第一页与资料同一次请求回来（`loadPublicUserHome` 里是 `Promise.all`）；
-     * 「已售出」口径用不上这份列表 —— 它由下面的 effect 按 `status=SOLD` 另拉一页。
+     * 首屏那一页由纯函数决定（`firstPageOf`，用例见 `tests/user-page-tabs.test.ts`）：
+     * 在售口径直接吃本次响应里的列表，已售出口径拿到的是空页、由下面的 effect 另拉一页
+     * —— 绝不把在售列表画到「已售出」标题底下。
      * 代价是已售出视图会多取一页用不上的在售列表：换掉它得把资料与列表拆成两次请求，
      * 会把 notFound / failed 的判定口径一分为二，不值得（#581）。
      */
-    if (seg === 'ACTIVE') {
-      setPage({
-        items: result.listings,
-        nextCursor: result.nextCursor,
-        loaded: true,
-        loading: false,
-        failed: false,
-      })
-    }
+    const first = firstPageOf(seg, result)
+    if (first.loaded) setPage(first)
     setLoadState('ok')
   }, [seg, userId])
 
@@ -299,8 +294,17 @@ export default function UserHome() {
   /** 回到顶部钮（共享组件）：滚过一屏浮现（onScroll 里置位） */
   const [showTop, setShowTop] = useState(false)
   const backToTop = () => {
-    setTopAnchor((prev) => (prev === 'uhome-top-a' ? 'uhome-top-b' : 'uhome-top-a'))
+    setTopAnchor((prev) => toggleAnchor(prev, 'uhome-top-a', 'uhome-top-b'))
   }
+
+  /**
+   * 滚到列表区。**必须和 `backToTop` 一样交替两个同位锚点**：`scrollIntoView` 的值不变
+   * 原生层就不重滚，写死一个 id 的话「在当前视图点『在售』→ 滚下去看 → 上滑回来再点」
+   * 第二次完全没反应（#581 复核必修 1）。
+   */
+  const scrollToBody = useCallback(() => {
+    setTopAnchor((prev) => toggleAnchor(prev, 'uhome-body-a', 'uhome-body-b'))
+  }, [])
 
   /**
    * 页头两格就是列表入口（#581）：「卖出 N」开一个只渲染已售出的新实例
@@ -312,15 +316,15 @@ export default function UserHome() {
    */
   const openSoldListings = useCallback(() => {
     if (seg === 'SOLD') {
-      setTopAnchor('uhome-body')
+      scrollToBody()
       return
     }
     void Taro.navigateTo({ url: userHomeUrl(userId, 'SOLD') })
-  }, [seg, userId])
+  }, [scrollToBody, seg, userId])
 
   const openActiveListings = useCallback(() => {
     if (seg === 'ACTIVE') {
-      setTopAnchor('uhome-body')
+      scrollToBody()
       return
     }
     void Taro.navigateBack({
@@ -330,7 +334,7 @@ export default function UserHome() {
         void Taro.redirectTo({ url: userHomeUrl(userId) })
       },
     })
-  }, [seg, userId])
+  }, [scrollToBody, seg, userId])
 
   /**
    * 量一次身份区底边，换算成**内容坐标**。
@@ -937,9 +941,11 @@ export default function UserHome() {
           </View>
 
           {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内）；
-              `uhome-body` 是页头两个数字点下来的落点（#581，见 openSoldListings /
-              openActiveListings 里那句 `setTopAnchor('uhome-body')`） */}
-          <View className="uhome__body" id="uhome-body">
+              上面两个空锚点是页头两个数字点下来的落点（#581，见 `scrollToBody`） */}
+          {/* 两个同位锚点交替指（见 scrollToBody）：`scrollIntoView` 同值不重滚 */}
+          <View id="uhome-body-a" />
+          <View id="uhome-body-b" />
+          <View className="uhome__body">
             <View className="uhome__sect">
               {/* 口径入口在页头（#581），这一行只报「在看哪一段 + 这一段有多少件」。
                   件数取该段的服务端真总数（在售 `activeCount` / 已售出 `soldCount`），
