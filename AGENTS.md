@@ -125,11 +125,11 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 
 ## 12. 相关文档
 
-| 文档 | 内容 |
-| --- | --- |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Issue 认领协议与 state label、分支/提交/PR、zzstar101 审核、Contract、DB 变更说明 |
-| [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) | 小程序目录内的端上门禁入口（指向 `docs/miniapp-dev-workflow.md`） |
-| [packages/db/AGENTS.md](packages/db/AGENTS.md) | 迁移与 seed 纪律：`drizzle-kit` 生成、tag = UTC+8 时间戳、不手改历史、`postgres` devDependency 例外 |
+| 文档                                                         | 内容                                                                                                                                              |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                           | Issue 认领协议与 state label、分支/提交/PR、zzstar101 审核、Contract、DB 变更说明                                                                 |
+| [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md)             | 小程序目录内的端上门禁入口（指向 `docs/miniapp-dev-workflow.md`）                                                                                 |
+| [packages/db/AGENTS.md](packages/db/AGENTS.md)               | 迁移与 seed 纪律：`drizzle-kit` 生成、tag = UTC+8 时间戳、不手改历史、`postgres` devDependency 例外                                               |
 | [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) | **小程序端上验证工作流**：一批页面一条分支一个 PR、**合并前**开发者工具逐页演示 + Owner 认可（**只约束 `apps/miniapp`**，不适用于 `apps/web-pc`） |
-| [docs/architecture.md](docs/architecture.md) | 系统形态、运行时拓扑、链路、端口 |
-| [README.md](README.md) | 最小启动路径与常用命令 |
+| [docs/architecture.md](docs/architecture.md)                 | 系统形态、运行时拓扑、链路、端口                                                                                                                  |
+| [README.md](README.md)                                       | 最小启动路径与常用命令                                                                                                                            |

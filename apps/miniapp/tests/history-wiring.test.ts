@@ -139,20 +139,30 @@ describe('历史浏览：接线', () => {
     expect(skip).toContain('if (!refreshRun) void Taro.stopPullDownRefresh()')
   })
 
-  test('缩略图：有真封面用真图，无封面才回落分类色块（三档同一口径）', async () => {
+  test('缩略图：真封面加载失败也回落分类色块，三列格与留言行同一口径', async () => {
     const code = await source()
     const cell = sliceFrom(code, 'const renderCell = (item: RecordCell', 'hist__price-cur')
-    // 三列格：`??` 的右边才是色块，左边必须是真封面
-    expect(cell).toContain('src={item.coverUrl ?? blockUrlOf(item.category)}')
-    // 有真图才加 `is-photo`（品类小字的胶囊底只在真图上垫，色块形态不变）
-    expect(cell).toContain("item.coverUrl === null ? '' : ' is-photo'")
+    // 三列格：封面交出去，回落由组件统一处理（`??` 只覆盖「本来就没有封面」这一半）
+    expect(cell).toContain('<RecordThumb')
+    expect(cell).toContain('coverUrl={item.coverUrl}')
+    expect(cell).toContain('category={item.category}')
 
     // 留言行（评价行没有分类 → 色块退 OTHER）
     const row = sliceFrom(code, 'className="hist__rows"', 'hist__rthumb-tag')
-    expect(row).toContain("src={item.coverUrl ?? blockUrlOf(item.category ?? 'OTHER')}")
-    expect(row).toContain("item.coverUrl === null ? '' : ' is-photo'")
+    expect(row).toContain('<RecordThumb')
+    expect(row).toContain('coverUrl={item.coverUrl}')
+    expect(row).toContain("category={item.category ?? 'OTHER'}")
 
-    // 不许再出现「无条件用色块」的写法（这正是本票修掉的 bug）
+    // 组件本身：真封面失败一次就退回色块并记住这张坏图（别每次都重拉一次坏 URL）；
+    // `is-photo` 跟着「当前是不是真图」走，色块形态不变
+    const thumb = sliceFrom(code, 'const RecordThumb = (', 'export default function History')
+    expect(thumb).toContain('useState<string | null>(null)')
+    expect(thumb).toContain('coverUrl !== failedUrl')
+    expect(thumb).toContain('setFailedUrl(coverUrl)')
+    expect(thumb).toContain('blockUrlOf(category)')
+
+    // 不许再出现「无条件用色块」或「绕开组件自己岔开 ??」的写法
     expect(code).not.toContain('src={blockUrlOf(')
+    expect(code).not.toContain('src={item.coverUrl ??')
   })
 })

@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 漂浮导航栏：只有返回钮/动作钮是实体，其余区域透明可穿透（pointer-events: none）。
@@ -21,9 +21,7 @@
      进出都要过渡，所以写在基类上（只写在 `.navfloat--glass` 里就只有「进入」会动、
      「退出」是硬切）。对本组件其余页面**是惰性的**：它们的底色/投影从头到尾不变，
      过渡没有可动的量。 */
-  transition:
-    background 0.22s,
-    box-shadow 0.22s;
+  transition: background 0.22s, box-shadow 0.22s;
 }
 
 /* 占位（back=false 时）与返回钮同尺寸：行内按胶囊高下发 */

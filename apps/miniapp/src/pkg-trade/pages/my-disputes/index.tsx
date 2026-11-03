@@ -194,7 +194,7 @@ export default function MyDisputes() {
             <EmptyState
               title="还没有交易争议"
               text="交易有问题时，可以在订单详情里发起争议，平台会介入处理。"
-              icon={ICONS.shieldLine}
+              icon={ICONS.shieldFg}
               // 不按角色分流（买家/卖家都可能在这里）：留一个中性的返回
               actionText="返回"
               onAction={goBackOrHome}

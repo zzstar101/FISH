@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 首页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -173,7 +173,7 @@
   }
 
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 50%;
     bottom: 6px;
@@ -217,9 +217,7 @@
     transform: translateY(0);
     opacity: 1;
     visibility: visible;
-    transition:
-      transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
-      opacity 0.2s ease;
+    transition: transform 0.28s cubic-bezier(0.33, 1, 0.68, 1), opacity 0.2s ease;
   }
 }
 
@@ -260,7 +258,7 @@
   }
 
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 50%;
     bottom: 0;

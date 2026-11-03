@@ -104,7 +104,7 @@ export default function MyFeedback() {
 
       <View className="mfb__head">
         <View className="mfb__kicker">
-          <Image className="mfb__kicker-ic" src={ICONS.editAccent} mode="aspectFit" />
+          <Image className="mfb__kicker-ic" src={ICONS.editBrand} mode="aspectFit" />
           <Text>Feedback · 我的反馈</Text>
         </View>
         <Text className="mfb__title">处理进度与回复</Text>

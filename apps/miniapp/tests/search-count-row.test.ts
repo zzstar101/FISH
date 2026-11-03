@@ -40,7 +40,9 @@ describe('搜索页：计数行常驻、不在 loading 期卸载（#564）', () 
     expect(code).not.toContain('loading || failed || isNumber ? null')
     // biome-ignore lint/suspicious/noTemplateCurlyInString: 要的是页面源码原文
     const metaTag = "<View className={`search__meta${loading || failed ? ' is-wait' : ''}`}>"
-    expect(code).toContain(metaTag)
+    expect(code.replace(/\s+/g, ' ')).toContain(
+      `{isNumber || (results.length === 0 && (loading || failed)) ? null : ( ${metaTag}`,
+    )
     // 计数数字仍是原来那一行（`tests/product-card-menu.test.ts` 也在钉它）
     expect(code).toContain('<Text className="search__meta-num num">{results.length}</Text>')
   })
@@ -62,6 +64,7 @@ describe('搜索页：计数行常驻、不在 loading 期卸载（#564）', () 
     const meta = sliceFrom(scss, '.search__meta {', '}')
     expect(meta).toContain('padding: 24px 0 28px')
     expect(meta).toContain('line-height: 1.4')
+    expect(meta).not.toMatch(/position:\s*(absolute|fixed)/)
   })
 })
 
@@ -69,6 +72,8 @@ describe('搜索页：切排序相等短路（#564）', () => {
   test('点当前已选 chip 直接返回，不发请求', async () => {
     const code = await pageSource()
     const changeSort = sliceFrom(code, 'const changeSort = (next: SearchFilter) => {', '}')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '')
     // 短路必须在 setSort / run 之前 —— 放在后面就成了「先重渲染再退回」
     const guard = changeSort.indexOf('if (next === sort) return')
     expect(guard).toBeGreaterThanOrEqual(0)

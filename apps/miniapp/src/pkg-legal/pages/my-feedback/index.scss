@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 我的反馈（#463）。尺寸 = 设计稿 pt × 2（见 DESIGN.md），与意见反馈页同一套令牌。
@@ -45,8 +45,8 @@
 }
 
 .mfb__kicker-ic {
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
 }
 
 .mfb__title {
@@ -164,7 +164,6 @@
 
 /* 正文：最多三行，长文不在列表里铺满屏 */
 .mfb__content {
-  display: block;
   margin-top: 20px;
   font-size: var(--fs-sm);
   line-height: 1.7;

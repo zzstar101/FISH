@@ -481,7 +481,7 @@ describe('多步上传链的逐步在途检查（#170 复查 #208）', () => {
 })
 
 describe('出物页接线（#170 判据 C）', () => {
-  test('换号清场块覆盖全部 18 个账号作用域 state，并让代次前进、清掉编辑模式与在途润色', async () => {
+  test('换号清场块覆盖全部账号作用域 state，并让代次前进、清掉编辑模式与在途润色', async () => {
     const block = await pageSlice(
       'if (ownerChanged(prevUserId, userId)) {',
       'const taskAlive = (task: SellTask)',
@@ -507,6 +507,8 @@ describe('出物页接线（#170 判据 C）', () => {
       'setPendingReviewId',
     ]
     for (const setter of setters) expect(block).toContain(`${setter}(cleared.`)
+    // 「发布成功」留下的商品 id 同样是账号作用域的：A 的 id 不能挂在 B 的页面上
+    expect(block).toContain('setPublishedId(null)')
     expect(block).toContain('epochRef.current += 1')
     expect(block).toContain('modeRef.current = null')
     expect(block).toContain('polishCancelRef.current?.()')
@@ -643,13 +645,54 @@ describe('发布 / 编辑成功 → 详情页的跳转方式（#562）', () => {
    * 这里只钉源码接线（不证明平台是否接受这条跳转 —— 那是端上门禁，
    * 见 `docs/miniapp-dev-workflow.md`）。
    */
-  test('goDetail 用 redirectTo 换栈，不再用 navigateTo 压栈', async () => {
-    const go = await pageSlice('const goDetail = (id: string) => {', '* 上传一张图')
+  test('goDetail 用 redirectTo 换栈，reLaunch 作退化，两条都接住 rejection', async () => {
+    const go = await pageSlice('const goDetail = (id: string, task: SellTask) => {', '* 上传一张图')
     expect(go).toContain('Taro.redirectTo({ url })')
     // 平台拒绝时退化到 reLaunch：目标 URL 与 redirectTo 同一份，别写成两处字面量
     expect(go).toContain('Taro.reLaunch({ url })')
-    // 先清表单再跳（原行为保留：不把填过的旧内容留给下一个进入本页的人）
-    expectBefore(go, 'resetForm()', 'Taro.redirectTo')
+    // 原实现是 `void Taro.redirectTo(...).catch(() => { void Taro.reLaunch({ url }) })`：
+    // reLaunch 自己的 rejection 没接，平台两条都拒绝时就是一个 unhandled rejection。
+    // 现在必须串成**一条**链，reLaunch 的失败落到最后一个 catch。
+    expect(go).toContain('if (!taskAlive(task)) return')
+    expectBefore(go, 'Taro.redirectTo({ url })', 'Taro.reLaunch({ url })')
+  })
+
+  test('跳转前不清表单：清空发生在跳转可能失败之后才安全', async () => {
+    // 回归用例：原实现 `resetForm()` 在 `Taro.redirectTo` 之前无条件执行。两条跳转都失败时
+    // 用户被留在本页，看到的是一张**空白发布页** —— 既看不出刚才发布成功，也丢了那件商品
+    // 唯一的入口，还会诱使他重填一遍再发一次（重复发布）。
+    const go = await pageSlice('const goDetail = (id: string, task: SellTask) => {', '* 上传一张图')
+    // 按「语句」判而不是按子串：注释里提一句 `resetForm()` 不算调用
+    expect(go).not.toMatch(/^\s+resetForm\(\)$/m)
+  })
+
+  test('两条跳转都失败 → 落地「发布成功」视图，留住这件商品的入口', async () => {
+    const go = await pageSlice('const goDetail = (id: string, task: SellTask) => {', '* 上传一张图')
+    // 链尾只在仍然是当前账号时才写 state（换号/卸载后不写别人的页面）
+    expect(go).toContain('setPublishedId(id)')
+    expectBefore(go, 'setPublishedId(id)', 'Taro.redirectTo({ url })')
+    // 结果视图：给出「查看商品」入口与「继续发布」出口，且不挂提交按钮 —— 表单没渲染，
+    // 结果视图本身就是「不会再发一次」的保证。
+    const view = await pageSlice('if (publishedId !== null) {', 'if (editing && editState')
+    expect(view).toContain('查看商品')
+    expect(view).toContain('openPublishedDetail')
+    expect(view).toContain('onClick={resetForm}')
+    expect(view).not.toMatch(/onClick=\{submit\}/)
+  })
+
+  test('结果视图里的「查看商品」同样接住 rejection，失败不把结果视图换掉', async () => {
+    const open = await pageSlice('const openPublishedDetail = () => {', '* 上传一张图')
+    expect(open).toContain('Taro.navigateTo(')
+    expect(open).toContain('.catch(')
+    expect(open).not.toContain('setPublishedId(null)')
+  })
+
+  test('resetForm 收掉结果视图；再次进页也收掉（别把上一次的成功页留给下一个人）', async () => {
+    const reset = await pageSlice('const resetForm = () => {', '/** 编辑态取回原商品')
+    expect(reset).toContain('setPublishedId(null)')
+    const sync = await pageSlice('const syncEditTarget = () => {', 'useDidShow(syncEditTarget)')
+    expect(sync).toContain('publishedId !== null')
+    expectBefore(sync, 'publishedId !== null', 'resetForm()')
   })
 
   // 不变式守卫，**不是**本缺陷的回归用例（改前也是绿的）：钉住「两条提交路径共用同一个跳转」，
@@ -668,8 +711,8 @@ describe('发布 / 编辑成功 → 详情页的跳转方式（#562）', () => {
     expect(submit).toContain('await createListing(')
     // 出现两处 `goDetail(` 就说明某条分支自己跳了（例如编辑分支被改成 navigateTo）
     expect(submit.match(/goDetail\(/g) ?? []).toHaveLength(1)
-    expectBefore(submit, 'await updateListing(editId', 'goDetail(detail.id)')
-    expectBefore(submit, 'await createListing(', 'goDetail(detail.id)')
+    expectBefore(submit, 'await updateListing(editId', 'goDetail(detail.id, task)')
+    expectBefore(submit, 'await createListing(', 'goDetail(detail.id, task)')
     // 正则要求带调用括号：将来注释里提一句 API 名字不会误伤
     expect(submit).not.toMatch(/Taro\.(?:navigateTo|redirectTo|reLaunch|switchTab)\s*\(/)
   })

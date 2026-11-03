@@ -485,7 +485,7 @@ export default function DisputeDetailPage() {
             <EmptyState
               title={notFound.title}
               text={notFound.text}
-              icon={ICONS.shieldLine}
+              icon={ICONS.shieldFg}
               actionText="返回"
               onAction={goBackOrHome}
             />

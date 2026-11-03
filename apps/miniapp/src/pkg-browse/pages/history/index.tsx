@@ -1,7 +1,8 @@
+import type { ListingCategory } from '@fish/contracts/listings/schema'
 import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -160,6 +161,42 @@ async function fetchAllPages<T>(
     cursor = response.nextCursor
   }
   return { items, truncated: true }
+}
+
+type RecordThumbProps = {
+  coverUrl: string | null
+  category: ListingCategory
+  wrapClassName: string
+  imgClassName: string
+  onClick?: () => void
+  children?: ReactNode
+}
+
+/**
+ * 记录缩略图（历史页三列格与留言 / 评价行共用）：真封面 → 分类色块。
+ *
+ * 「封面 URL 非空」不等于「能加载出来」：图被删、桶没开跨域、离线时 `<Image>` 只剩一个
+ * 裂图占位，而原来的 `?? blockUrlOf(...)` 只在 coverUrl 为 `null` 时生效，这类行是纯裂图。
+ * 这里把**加载失败过的那一个 URL** 记下来（记 URL 而不是布尔值：列表复用节点后换了新封面
+ * 照常尝试），失败一次就退回与「本来没图」完全同一个色块。
+ * `is-photo` 跟着「当前渲染的是不是真图」走 —— 品类小字的胶囊底只在真图上垫，色块形态不变。
+ */
+const RecordThumb = (props: RecordThumbProps) => {
+  const { coverUrl, category, wrapClassName, imgClassName, onClick, children } = props
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const photo = coverUrl !== null && coverUrl !== failedUrl
+  return (
+    <View className={`${wrapClassName}${photo ? ' is-photo' : ''}`} onClick={onClick}>
+      <Image
+        className={imgClassName}
+        src={photo ? coverUrl : blockUrlOf(category)}
+        mode="aspectFill"
+        lazyLoad
+        onError={() => setFailedUrl(coverUrl)}
+      />
+      {children}
+    </View>
+  )
 }
 
 export default function History() {
@@ -752,27 +789,22 @@ export default function History() {
 
   /**
    * 三列格（全部浏览 / 我收藏的共用）：方图 + 品类小字 + 失效遮罩 + 格下价格。
-   * 缩略图优先用商品真实封面（`item.coverUrl`），无图商品退回分类色块 ——
-   * 与 `features/listing/adapt.ts:124` 同口径（不留空串，否则 `<Image>` 是裂图）。
+   * 缩略图优先用商品真实封面（`item.coverUrl`），没有封面、或封面加载失败时退回分类色块
+   * （`RecordThumb`，与 `features/listing/adapt.ts:124` 同口径：不留空串，否则 `<Image>` 是裂图）。
    * 有真图时加 `is-photo`：小字改胶囊底压一层暗色，浅色商品图上才读得清（色块形态不变）。
    */
   const renderCell = (item: RecordCell, onOpen: (cell: RecordCell) => void) => (
     <View key={item.id} className="hist__cell">
-      <View
-        className={`hist__thumb${item.coverUrl === null ? '' : ' is-photo'}${
-          item.gone ? ' is-gone' : ''
-        }`}
+      <RecordThumb
+        coverUrl={item.coverUrl}
+        category={item.category}
+        wrapClassName={`hist__thumb${item.gone ? ' is-gone' : ''}`}
+        imgClassName="hist__thumb-img"
         onClick={() => onOpen(item)}
       >
-        <Image
-          className="hist__thumb-img"
-          src={item.coverUrl ?? blockUrlOf(item.category)}
-          mode="aspectFill"
-          lazyLoad
-        />
         <Text className="hist__ttag">{shortLabelOf(item.category)}</Text>
         {item.gone ? <Text className="hist__tgone">{item.gone}</Text> : null}
-      </View>
+      </RecordThumb>
       <Text className="hist__price num">
         <Text className="hist__price-cur">¥</Text>
         {formatAmount(item.priceCents)}
@@ -928,7 +960,7 @@ export default function History() {
             {tab === 'msgs' ? (
               /* 我留言的：整宽行 —— 缩略图 + 标题 + 类型胶囊 + 我那句话（2 行）+ 时间。
                  刻意**不显示价格**（稿决策④：这一档找的是「我当时说了什么」）。
-                 缩略图同上：有封面用真图，无图退色块（评价行没有品类 → 退 OTHER、
+                 缩略图同上：有封面用真图，无图或加载失败退色块（评价行没有品类 → 退 OTHER、
                  不画品类小字）。 */
               <View className="hist__rows">
                 {msgs.map((item) => (
@@ -937,17 +969,16 @@ export default function History() {
                     className="hist__row"
                     onClick={() => (realMsgs === null ? openDemoRecord() : openRealMsg(item))}
                   >
-                    <View className={`hist__rthumb${item.coverUrl === null ? '' : ' is-photo'}`}>
-                      <Image
-                        className="hist__rthumb-img"
-                        src={item.coverUrl ?? blockUrlOf(item.category ?? 'OTHER')}
-                        mode="aspectFill"
-                        lazyLoad
-                      />
+                    <RecordThumb
+                      coverUrl={item.coverUrl}
+                      category={item.category ?? 'OTHER'}
+                      wrapClassName="hist__rthumb"
+                      imgClassName="hist__rthumb-img"
+                    >
                       {item.category === null ? null : (
                         <Text className="hist__rthumb-tag">{shortLabelOf(item.category)}</Text>
                       )}
-                    </View>
+                    </RecordThumb>
                     <View className="hist__rmain">
                       <View className="hist__rtop">
                         <Text className="hist__rtitle">{item.title}</Text>

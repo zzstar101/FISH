@@ -1,6 +1,6 @@
-@use 'sass:list';
-@use 'sass:math';
-@use '@/styles/mixins' as *;
+@use "sass:list";
+@use "sass:math";
+@use "@/styles/mixins" as *;
 
 /**
  * A2 交易码 / 面交确认。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -69,8 +69,8 @@
 }
 
 .meetup__dispute-ic-img {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
 }
 
 .meetup__dispute-main {
@@ -645,8 +645,11 @@
    * color-mix），按 DESIGN.md §2 的要求在注释里写明它的来源与算式，避免被当成
    * 随手写的新色值：它是「深绿收口色」的半透明版，与 `--neon-2` 同色系。
    */
-  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.62), inset 0 -12px 24px -12px rgba(6, 140, 80, 0.35),
-    0 28px 68px -28px var(--neon-glow), 0 0 60px -4px var(--neon-glow);
+  box-shadow:
+    inset 0 3px 0 rgba(255, 255, 255, 0.62),
+    inset 0 -12px 24px -12px rgba(6, 140, 80, 0.35),
+    0 28px 68px -28px var(--neon-glow),
+    0 0 60px -4px var(--neon-glow);
 }
 
 /*
@@ -1165,12 +1168,7 @@
  * 每颗的算式与稿 `fxHTML()` 逐字对齐，尺寸 ×2（pt → rpx）。
  */
 $meetup-fx-colors: (
-  var(--neon),
-  var(--neon-soft),
-  var(--cyan),
-  var(--neon),
-  var(--brand),
-  var(--neon-2)
+  var(--neon), var(--neon-soft), var(--cyan), var(--neon), var(--brand), var(--neon-2)
 );
 
 @for $i from 1 through 26 {

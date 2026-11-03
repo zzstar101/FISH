@@ -941,7 +941,7 @@ export default function TransactionMeetup() {
             onClick={disputeEntryCopy.off ? undefined : openDispute}
           >
             <View className="meetup__dispute-ic">
-              <Image className="meetup__dispute-ic-img" src={ICONS.shieldLine} mode="aspectFit" />
+              <Image className="meetup__dispute-ic-img" src={ICONS.shieldFg} mode="aspectFit" />
             </View>
             <View className="meetup__dispute-main">
               <Text className="meetup__dispute-title">{disputeEntryCopy.title}</Text>

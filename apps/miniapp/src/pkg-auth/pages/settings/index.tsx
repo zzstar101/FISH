@@ -366,7 +366,7 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/blocked/index' })}
           >
             <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.shieldLine} mode="aspectFit" />
+              <Image className="st__ric-ic" src={ICONS.shieldFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">黑名单</Text>
             <View className="st__arrow" />

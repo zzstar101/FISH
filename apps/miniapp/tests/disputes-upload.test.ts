@@ -47,6 +47,8 @@ let presignSeq = 0
 type Call = { kind: 'presign' | 'put' | 'confirm'; key?: string }
 const calls: Call[] = []
 let putStatus = 200
+/** 模拟「字节已落桶、响应丢失」：PUT 直接以网络错误结束，客户端拿不到状态码 */
+let putLost = false
 let confirmImpl: (objectKey: string) => Promise<{ attachment: DisputeAttachment }>
 /** 当前登录用户：`PUT` 完成后由 `afterPutUser` 模拟「这一刻换号」 */
 let currentUser: string | null = 'usr_a'
@@ -57,6 +59,7 @@ mock.module('@tarojs/taro', () => ({
     request: async () => {
       calls.push({ kind: 'put' })
       currentUser = afterPutUser
+      if (putLost) throw new Error('request:fail timeout')
       return { statusCode: putStatus }
     },
   },
@@ -96,6 +99,7 @@ const confirmKeys = () => calls.filter((call) => call.kind === 'confirm').map((c
 beforeEach(() => {
   calls.length = 0
   putStatus = 200
+  putLost = false
   confirmImpl = async () => ({ attachment })
   currentUser = 'usr_a'
   afterPutUser = 'usr_a'
@@ -191,5 +195,45 @@ test('换另一张图：上一张的 key 直接作废，重新 presign + PUT，�
   expect(presignCount()).toBe(2)
   expect(calls.filter((call) => call.kind === 'put').length).toBe(2)
   // 只有最后一次 confirm，且用的是 B 自己 presign 出来的 key
+  expect(confirmKeys()).toEqual([presignKey(1), presignKey(2)])
+})
+
+test('PUT 响应丢失但字节已落桶：重试先幂等 confirm 已知 key，不重复 presign/PUT', async () => {
+  // 对象已经写进桶里，响应超时：客户端没有状态码，不能当作「没上传过」重走整条链
+  putLost = true
+  await expect(uploadDisputeAttachment('dsp_lost_put', photo)).rejects.toThrow(
+    'request:fail timeout',
+  )
+  expect(presignCount()).toBe(1)
+  expect(confirmKeys()).toEqual([])
+
+  putLost = false
+  const second = await uploadDisputeAttachment('dsp_lost_put', photo)
+  expect(second.id).toBe(attachment.id)
+  // 只补一次 confirm：没有第二次 presign，也就没有第二个白占配额的对象
+  expect(presignCount()).toBe(1)
+  expect(calls.filter((call) => call.kind === 'put').length).toBe(1)
+  expect(confirmKeys()).toEqual([presignKey(1)])
+})
+
+test('PUT 响应丢失且对象其实没落桶：confirm 回 422 后重新 presign 重传', async () => {
+  putLost = true
+  await expect(uploadDisputeAttachment('dsp_lost_missing', photo)).rejects.toThrow(
+    'request:fail timeout',
+  )
+
+  putLost = false
+  let attempts = 0
+  confirmImpl = async () => {
+    attempts += 1
+    // 服务端确认「图片尚未上传完成」：同一个 key 再试也一样，必须重传
+    if (attempts === 1) throw new ApiError('DISPUTE_ATTACHMENT_INVALID', 422)
+    return { attachment }
+  }
+
+  const second = await uploadDisputeAttachment('dsp_lost_missing', photo)
+  expect(second.id).toBe(attachment.id)
+  expect(presignCount()).toBe(2)
+  expect(calls.filter((call) => call.kind === 'put').length).toBe(2)
   expect(confirmKeys()).toEqual([presignKey(1), presignKey(2)])
 })

@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 订单列表（`pages/orders-buy` 与 `pages/orders-sell` 共用的 `components/order-list`）。
@@ -53,9 +53,7 @@
   box-sizing: border-box;
   border-radius: var(--r-pill);
   background: var(--surface);
-  box-shadow:
-    inset 0 0 0 2px var(--border),
-    var(--shadow-card);
+  box-shadow: inset 0 0 0 2px var(--border), var(--shadow-card);
 }
 
 .orders__pill {
@@ -118,8 +116,8 @@
 }
 
 .orders__dispute-ic {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
 }
 
 .orders__dispute-t {
@@ -129,8 +127,8 @@
 }
 
 .orders__dispute-chev {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
 }
 
 /* 列表不完整时的那句实话（翻页到上限 / 服务端游标没前进）：只在这一种情况下出现 */

@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 商品卡。尺寸换算见 apps/miniapp/DESIGN.md（SCSS 数值 = 设计稿 pt × 2）。
@@ -195,4 +195,3 @@
   height: 24px;
   flex: 0 0 auto;
 }
-

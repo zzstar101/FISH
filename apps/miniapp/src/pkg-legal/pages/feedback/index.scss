@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 意见反馈（稿 `小程序1版意见反馈.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -166,8 +166,8 @@
 }
 
 .fb__mine-ic {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
 }
 
@@ -191,8 +191,8 @@
 }
 
 .fb__mine-arrow {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 
@@ -269,10 +269,7 @@
   font-weight: 600;
   color: var(--muted-2);
   white-space: nowrap;
-  transition:
-    background 0.16s,
-    border-color 0.16s,
-    color 0.16s;
+  transition: background 0.16s, border-color 0.16s, color 0.16s;
 
   &:active {
     transform: translateY(2px);
@@ -317,9 +314,7 @@
   border-radius: 28px;
   border: 2px solid var(--border);
   background: var(--surface);
-  transition:
-    border-color 0.16s,
-    box-shadow 0.16s;
+  transition: border-color 0.16s, box-shadow 0.16s;
 
   &.is-focus {
     border-color: var(--brand);
@@ -381,9 +376,7 @@
   border-radius: 28px;
   border: 2px solid var(--border);
   background: var(--surface);
-  transition:
-    border-color 0.16s,
-    box-shadow 0.16s;
+  transition: border-color 0.16s, box-shadow 0.16s;
 
   &.is-focus {
     border-color: var(--brand);
@@ -451,8 +444,8 @@
 }
 
 .fb__submiterr-ic {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   margin-top: 2px;
 }
@@ -475,10 +468,7 @@
   font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
-  transition:
-    filter 0.16s,
-    background 0.16s,
-    box-shadow 0.16s;
+  transition: filter 0.16s, background 0.16s, box-shadow 0.16s;
 
   &:active {
     transform: translateY(2px);

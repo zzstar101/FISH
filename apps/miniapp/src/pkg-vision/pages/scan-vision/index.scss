@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 识图入口页（Owner 2026-09-29 按两张参考图定版）。
@@ -317,7 +317,7 @@
 
   /* 相册：一条山形折线 + 一个小圆（纯 CSS，仓库不引 SVG） */
   &--album::before {
-    content: '';
+    content: "";
     position: absolute;
     left: 8px;
     bottom: 8px;
@@ -329,7 +329,7 @@
   }
 
   &--album::after {
-    content: '';
+    content: "";
     position: absolute;
     right: 8px;
     top: 8px;
@@ -341,7 +341,7 @@
 
   /* 聊天记录：一个对话气泡（方框 + 左下角小尾巴） */
   &--chat::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 8px;
     bottom: -12px;

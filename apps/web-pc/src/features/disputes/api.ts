@@ -81,7 +81,8 @@ const STAGED_KEY_UNUSABLE_CODES = new Set<string>([
 ])
 
 /**
- * PUT 已成功但 confirm 响应丢失时，按争议暂存 objectKey（30 分钟内可幂等重试）。
+ * PUT 到对象存储的响应丢失（对象其实已落桶）、或 confirm 响应丢失时，按争议暂存
+ * objectKey（30 分钟内可幂等重试）。
  *
  * 用 `sessionStorage` 而不是模块级 Map：刷新页面后仍能续传，避免同一张图在
  * 6 张配额里留下孤儿对象。暂存项带**文件指纹**（name/size/lastModified/type）：
@@ -217,7 +218,8 @@ async function confirmDisputeAttachment(disputeId: string, objectKey: string): P
  * 所以：每次上传**先**看有没有「同一争议 + 同一文件指纹」的暂存 objectKey，
  * 有才做一次幂等 confirm；成功即清暂存直接返回；对象明确不可用（422/404/409）则丢弃重传。
  * 指纹不一致（用户改选了另一张图）时清掉旧 key，走完整上传 —— 绝不确认旧图。
- * PUT 成功后立刻暂存 key（含指纹，30 分钟），confirm 网络失败时保留给下次重试。
+ * presign 成功后立刻暂存 key（含指纹，30 分钟）：PUT 响应丢失或 confirm 网络失败都保留
+ * 给下次幂等 confirm，只有 PUT 拿到明确的非 2xx 才清掉。
  */
 export async function uploadDisputeAttachment(disputeId: string, file: File): Promise<void> {
   const staged = readStagedAttachment(disputeId)
@@ -263,6 +265,12 @@ export async function uploadDisputeAttachment(disputeId: string, file: File): Pr
     }),
   )
 
+  // presign 一成功就暂存 key：PUT 的字节可能已经落桶、响应却丢在超时/断网里，那种情况
+  // 端上拿不到状态码，这个 key 就是唯一能免掉「再花一次配额」的线索。下一次上传先拿它
+  // 幂等 confirm：对象确实在 → 直接登记；其实没上去 → 服务端 422
+  // （`DISPUTE_ATTACHMENT_INVALID`，见 `STAGED_KEY_UNUSABLE_CODES`），丢弃后重走整条链。
+  rememberStagedAttachment(disputeId, presign.objectKey, file)
+
   let uploaded: Response
   try {
     uploaded = await fetch(presign.uploadUrl, {
@@ -271,13 +279,15 @@ export async function uploadDisputeAttachment(disputeId: string, file: File): Pr
       method: 'PUT',
     })
   } catch {
+    // 响应丢失 ≠ 对象没落桶：保留暂存键，重试先做幂等 confirm。
     throw new Error('图片上传失败，请重试')
   }
-  if (!uploaded.ok) throw new Error('图片上传失败，请重试')
+  if (!uploaded.ok) {
+    // 拿到明确的非 2xx：对象没有落桶，这个 key 再 confirm 也只会 422。
+    forgetStagedAttachment(disputeId)
+    throw new Error('图片上传失败，请重试')
+  }
 
-  // PUT 成功即暂存：此后 confirm 若网络失败，下一次上传先用这个 key 幂等确认，
-  // 不会再 presign 第二个对象白占配额。
-  rememberStagedAttachment(disputeId, presign.objectKey, file)
   try {
     await confirmDisputeAttachment(disputeId, presign.objectKey)
     forgetStagedAttachment(disputeId)

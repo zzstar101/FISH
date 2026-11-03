@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 我的关注。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -76,7 +76,7 @@
   transition: color 0.18s;
 
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 24px;
     right: 24px;

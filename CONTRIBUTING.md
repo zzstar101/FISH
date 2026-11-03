@@ -26,11 +26,11 @@
 
 状态用 label 表达，不靠"谁说过要做"：
 
-| label | 含义 |
-| --- | --- |
-| `state: in progress` | 已被认领并在开发中 |
-| `state: blocked` | 被其它 Issue 或未决口径阻塞，未解除前不要开工 |
-| `state: has PR` | 已开 PR，等 zzstar101 审核 |
+| label                | 含义                                          |
+| -------------------- | --------------------------------------------- |
+| `state: in progress` | 已被认领并在开发中                            |
+| `state: blocked`     | 被其它 Issue 或未决口径阻塞，未解除前不要开工 |
+| `state: has PR`      | 已开 PR，等 zzstar101 审核                    |
 
 查当前可开工的（无人认领、无 PR、未阻塞）：
 

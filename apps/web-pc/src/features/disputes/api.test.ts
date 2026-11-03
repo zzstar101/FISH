@@ -365,6 +365,97 @@ describe('uploadDisputeAttachment', () => {
     uninstallSessionStorage()
   })
 
+  test('PUT 响应丢失但对象已落桶：重试先幂等确认已知 key，不再重复 presign', async () => {
+    installSessionStorage()
+    const LOST_PUT_DISPUTE_ID = 'dsp_01jc000000e00800000000000e'
+    try {
+      const first = mockFetchCalls((call) => {
+        if (call.url.endsWith('/attachments/presign')) {
+          return Response.json({
+            uploadUrl: 'https://storage.example/dispute-media/key.png',
+            objectKey: 'dispute-media/dsp/key.png',
+            headers: {},
+            expiresAt: '2026-10-02T00:10:00.000Z',
+          })
+        }
+        // 字节已经写进桶里，响应在回来的路上丢了（断网/超时）。
+        throw new TypeError('fetch failed')
+      })
+
+      const file = new File([new Uint8Array([1, 2, 3])], 'proof.png', { type: 'image/png' })
+      await uploadDisputeAttachment(LOST_PUT_DISPUTE_ID, file).catch((reason: unknown) => reason)
+      expect(first.map((call) => [call.url, call.method])).toEqual([
+        [`/api/disputes/${LOST_PUT_DISPUTE_ID}/attachments/presign`, 'POST'],
+        ['https://storage.example/dispute-media/key.png', 'PUT'],
+      ])
+
+      const second = mockFetchCalls((call) => {
+        expect(call.body).toEqual({ objectKey: 'dispute-media/dsp/key.png' })
+        return Response.json({ attachment, created: false })
+      })
+      await uploadDisputeAttachment(LOST_PUT_DISPUTE_ID, file)
+
+      // 只补一次 confirm：没有第二次 presign，也就没有第二个白占配额的对象。
+      expect(second.map((call) => [call.url, call.method])).toEqual([
+        [`/api/disputes/${LOST_PUT_DISPUTE_ID}/attachments`, 'POST'],
+      ])
+    } finally {
+      uninstallSessionStorage()
+    }
+  })
+
+  test('PUT 响应丢失且对象其实没落桶：confirm 回 422 后重新 presign 重传', async () => {
+    installSessionStorage()
+    const MISSING_DISPUTE_ID = 'dsp_01jc000000e00800000000000f'
+    try {
+      mockFetchCalls((call) => {
+        if (call.url.endsWith('/attachments/presign')) {
+          return Response.json({
+            uploadUrl: 'https://storage.example/dispute-media/key.png',
+            objectKey: 'dispute-media/dsp/key.png',
+            headers: {},
+            expiresAt: '2026-10-02T00:10:00.000Z',
+          })
+        }
+        throw new TypeError('fetch failed')
+      })
+      const file = new File([new Uint8Array([1, 2, 3])], 'proof.png', { type: 'image/png' })
+      await uploadDisputeAttachment(MISSING_DISPUTE_ID, file).catch((reason: unknown) => reason)
+
+      const calls = mockFetchCalls((call, index) => {
+        if (index === 0) {
+          // 对象确实没上去：服务端确认「图片尚未上传完成」。
+          return Response.json(
+            { error: { code: 'DISPUTE_ATTACHMENT_INVALID', message: '图片尚未上传完成' } },
+            { status: 422 },
+          )
+        }
+        if (call.url.endsWith('/attachments/presign')) {
+          // 旧的 key 作废后必须重新 presign 一个新对象。
+          return Response.json({
+            uploadUrl: 'https://storage.example/dispute-media/key-2.png',
+            objectKey: 'dispute-media/dsp/key-2.png',
+            headers: {},
+            expiresAt: '2026-10-02T00:10:00.000Z',
+          })
+        }
+        if (call.method === 'PUT') return new Response(null, { status: 200 })
+        return Response.json({ attachment, created: true }, { status: 201 })
+      })
+      await uploadDisputeAttachment(MISSING_DISPUTE_ID, file)
+
+      expect(calls.map((call) => [call.url, call.method])).toEqual([
+        [`/api/disputes/${MISSING_DISPUTE_ID}/attachments`, 'POST'],
+        [`/api/disputes/${MISSING_DISPUTE_ID}/attachments/presign`, 'POST'],
+        ['https://storage.example/dispute-media/key-2.png', 'PUT'],
+        [`/api/disputes/${MISSING_DISPUTE_ID}/attachments`, 'POST'],
+      ])
+      expect(calls[3]?.body).toEqual({ objectKey: 'dispute-media/dsp/key-2.png' })
+    } finally {
+      uninstallSessionStorage()
+    }
+  })
+
   test('本地预校验失败时不发任何请求', async () => {
     const calls = mockFetchCalls(() => Response.json({}))
     const file = new File([new Uint8Array([1])], 'notes.txt', { type: 'text/plain' })

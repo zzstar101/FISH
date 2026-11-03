@@ -68,11 +68,11 @@ $CLI upload --project "$PWD/apps/miniapp/dist" -v 0.0.1 -d "内部测试 0.0.1�
 上传后是「开发版本」：到 mp.weixin.qq.com → 管理 → 版本管理 里「选为体验版」，再在 成员管理 → 体验成员
 里加人。体验版同样校验服务器域名（开发管理 → 开发设置 → 服务器域名），需要配好：
 
-| 类型 | 域名 |
-| --- | --- |
-| request | `https://yuxiaoyingai.com`、`https://s3.yuxiaoyingai.com`、对象存储桶域名（预签名直传，见 `docs/deployment.md`） |
-| socket | `wss://yuxiaoyingai.com`（`/api/ws/chat` 由 API 地址推导） |
-| downloadFile | `https://yuxiaoyingai.com`、`https://s3.yuxiaoyingai.com` |
+| 类型         | 域名                                                                                                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| request      | `https://yuxiaoyingai.com`、`https://s3.yuxiaoyingai.com`、对象存储桶域名（预签名直传，见 `docs/deployment.md`） |
+| socket       | `wss://yuxiaoyingai.com`（`/api/ws/chat` 由 API 地址推导）                                                       |
+| downloadFile | `https://yuxiaoyingai.com`、`https://s3.yuxiaoyingai.com`                                                        |
 
 ## 接后端：API 地址怎么给
 

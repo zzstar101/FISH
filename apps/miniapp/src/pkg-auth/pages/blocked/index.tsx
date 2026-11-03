@@ -280,7 +280,7 @@ export default function BlockedPage() {
 
         {ready && ready.rows.length === 0 ? (
           <EmptyState
-            icon={ICONS.shieldLine}
+            icon={ICONS.shieldFg}
             title="黑名单是空的"
             text="在他人主页点「拉黑该用户」，对方会出现在这里"
           />

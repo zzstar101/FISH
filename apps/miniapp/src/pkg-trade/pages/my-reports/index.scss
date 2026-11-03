@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 我的举报（稿 `小程序1版我的举报.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -61,7 +61,7 @@
 
   /* 选中下划线：品牌渐变短棒（1版稿 ::after） */
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 24px;
     right: 24px;

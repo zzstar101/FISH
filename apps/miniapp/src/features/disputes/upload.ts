@@ -14,14 +14,16 @@
  *
  * ## confirm 失败与重试（审查发现：丢 key 会白耗配额）
  *
- * PUT 成功后对象已经在桶里、预算已经花了；若 confirm 撞上网络抖动，别把 `objectKey` 丢掉重走
- * 整条链（用户重试时又要选图、又要占一次 presign 配额）。这里在模块级记一份
+ * 预算在 presign + PUT 那一刻就花掉了；此后无论是 **PUT 的响应丢了**（字节已落桶、超时/断网）
+ * 还是 **confirm 撞上网络抖动**，都别把 `objectKey` 丢掉重走整条链（用户重试时又要选图、
+ * 又要占一次 presign 配额，桶里还多一个没人引用的对象）。这里在模块级记一份
  * `disputeId → objectKey`（10 分钟，和服务端附件签名 TTL 同量级）：
  * - 进入上传先尝试用记住的 key confirm（服务端 confirm 幂等，成功会清掉缓存），但**只认同一张图**
  *   （见 `fingerprintOf`：换图后旧 key 直接作废，重新 presign + PUT）；
- * - PUT 成功后立刻记住 key；confirm 成功后清除；
+ * - presign 成功后立刻记住 key（早于 PUT，才盖得住「响应丢失」这一种）；confirm 成功后清除；
  * - **明确不可用**的错误（422 附件失效 / 额度满、409 已非 PENDING、404 争议不在）清掉缓存，
- *   因为重试同一个 key 只会同样失败；网络/5xx 保留，用户再点一次就能续上。
+ *   因为重试同一个 key 只会同样失败；网络/5xx 保留，用户再点一次就能续上。PUT 拿到明确的
+ *   非 2xx 时同样清掉 —— 对象没落桶，confirm 只会回 422（「实际未上传」由这条路径恢复重传）。
  * - 换号/卸载导致中途放弃：不发 confirm（不产生台账行），缓存也清掉 —— 那条对象没有台账行，
  *   属于服务端清理能力缺口（无公开删除端点），PR 里如实写明并并入 #500 跟进。
  */
@@ -93,7 +95,7 @@ function assertSameUser(startedBy: string | null, context: DisputeUploadContext)
 /**
  * 上传一张争议附件，返回服务端台账行。
  *
- * 顺序：先续上次没 confirm 的 key（若有）→ presign → 读文件 → PUT → 记 key → confirm。
+ * 顺序：先续上次没登记的 key（若有）→ presign → 记 key → 读文件 → PUT → confirm。
  */
 export async function uploadDisputeAttachment(
   disputeId: string,
@@ -135,6 +137,16 @@ export async function uploadDisputeAttachment(
 
   assertUploadActive(isActive)
   assertSame()
+  // presign 已经发出去了，这个 key 是本次唯一的机会：PUT 的字节可能已经落桶、响应却丢在
+  // 超时/断网里，端上拿不到状态码，只有记住 key 才能免掉「再 presign 一次、再白占一个对象」。
+  // 下一次上传先拿它幂等 confirm：对象确实在 → 直接登记；其实没上去 → 服务端 422
+  // （`DISPUTE_ATTACHMENT_INVALID`），清掉后重走整条链。
+  pendingConfirms.set(disputeId, {
+    objectKey: presign.objectKey,
+    expiresAt: Date.now() + PENDING_CONFIRM_TTL_MS,
+    fingerprint: fingerprintOf(photo),
+  })
+
   const uploaded = await Taro.request({
     url: presign.uploadUrl,
     method: 'PUT',
@@ -143,13 +155,10 @@ export async function uploadDisputeAttachment(
     timeout: UPLOAD_TIMEOUT_MS,
   })
   if (uploaded.statusCode < 200 || uploaded.statusCode >= 300) {
+    // 拿到明确的非 2xx：对象没落桶，同一个 key 再 confirm 只会 422。
+    pendingConfirms.delete(disputeId)
     throw new Error('图片上传失败，请重试')
   }
-  pendingConfirms.set(disputeId, {
-    objectKey: presign.objectKey,
-    expiresAt: Date.now() + PENDING_CONFIRM_TTL_MS,
-    fingerprint: fingerprintOf(photo),
-  })
 
   // PUT 之后、confirm 之前再核一次归属：换号瞬间的极窄窗口里，confirm 会写到
   // 「上一个账号的争议」上（或直接 404），而桶里那条对象没人心疼 —— 不发 confirm，

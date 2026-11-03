@@ -83,6 +83,7 @@ function mapEvents(props: Record<string, unknown>): Record<string, unknown> {
 }
 
 function makeComponent(tag: string, extra?: (props: BaseProps) => Record<string, unknown>) {
+  // biome-ignore lint/correctness/noComponentHookFactories: module-scope calls only; component identities are stable across renders.
   const Component = (props: BaseProps) => {
     const { children, className, style, ...rest } = props
     const mapped = mapEvents(rest as Record<string, unknown>)

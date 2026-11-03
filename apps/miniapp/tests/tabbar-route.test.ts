@@ -68,6 +68,8 @@ describe('custom-tab-bar 显隐接线（#562）', () => {
     expect(end).toBeGreaterThan(start)
     const sync = source.slice(start, end)
     expect(sync).toContain('setRoute(currentRoute())')
+    // 额外更新点会重新引入渲染期读页面栈的竞态。
+    expect(source.match(/\bsetRoute\s*\(/g)).toHaveLength(1)
     expect(sync).toContain('setActive(currentTabKey())')
     // 状态初值取挂载时的栈顶（首帧有可用的判据，不必等广播）
     expect(source).toContain('useState<string>(() => currentRoute())')

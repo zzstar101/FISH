@@ -328,7 +328,7 @@ export default function OrderList({
             void Taro.navigateTo({ url: '/pkg-trade/pages/my-disputes/index' })
           }}
         >
-          <Image className="orders__dispute-ic" src={ICONS.shieldLine} mode="aspectFit" />
+          <Image className="orders__dispute-ic" src={ICONS.shieldFg} mode="aspectFit" />
           <Text className="orders__dispute-t">交易争议</Text>
           <Image className="orders__dispute-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
         </View>
