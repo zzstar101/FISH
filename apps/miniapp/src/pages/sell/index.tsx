@@ -474,7 +474,9 @@ export default function Sell() {
   const goDetail = (id: string) => {
     const url = `/pkg-browse/pages/listing-detail/index?id=${id}`
     resetForm()
-    void Taro.redirectTo({ url }).catch(() => Taro.reLaunch({ url }))
+    void Taro.redirectTo({ url }).catch(() => {
+      void Taro.reLaunch({ url })
+    })
   }
 
   /**
@@ -958,7 +960,7 @@ export default function Sell() {
   return (
     <View className="sell">
       <View className="sell__hero-bg" />
-      {/* 本页不渲染底栏（见 custom-tab-bar 的 HIDDEN_ROUTE），返回钮是唯一出口 */}
+      {/* 本页不渲染底栏（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），返回钮是唯一出口 */}
       {/* 页名大字跟其它页面顶栏同款：前段黑 + 尾段品牌蓝，跟在返回钮右边不居中 */}
       <TopBar back variant="glass" spacer title={editing ? '编' : '发'} titleEm="闲置" />
 

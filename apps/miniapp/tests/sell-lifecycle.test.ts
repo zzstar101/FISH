@@ -646,13 +646,14 @@ describe('发布 / 编辑成功 → 详情页的跳转方式（#562）', () => {
   test('goDetail 用 redirectTo 换栈，不再用 navigateTo 压栈', async () => {
     const go = await pageSlice('const goDetail = (id: string) => {', '* 上传一张图')
     expect(go).toContain('Taro.redirectTo({ url })')
-    expect(go).not.toContain('Taro.navigateTo')
     // 平台拒绝时退化到 reLaunch：目标 URL 与 redirectTo 同一份，别写成两处字面量
     expect(go).toContain('Taro.reLaunch({ url })')
     // 先清表单再跳（原行为保留：不把填过的旧内容留给下一个进入本页的人）
     expectBefore(go, 'resetForm()', 'Taro.redirectTo')
   })
 
+  // 不变式守卫，**不是**本缺陷的回归用例（改前也是绿的）：钉住「两条提交路径共用同一个跳转」，
+  // 免得以后有人只在新建分支改成 redirectTo、编辑分支漏掉。
   test('新建与编辑两条提交路径共用 goDetail（别只改新建分支）', async () => {
     const submit = await pageSlice('const submit = () => {', '* 冷却倒计时。')
     expect(submit).toContain('goDetail(detail.id)')

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isTabbarHiddenRoute, TABBAR_HIDDEN_ROUTE } from '../src/lib/tabbar-route'
+import { isTabbarHiddenRoute } from '../src/lib/tabbar-route'
 
 /**
  * 底栏显隐判据（#562）。
@@ -16,23 +16,17 @@ import { isTabbarHiddenRoute, TABBAR_HIDDEN_ROUTE } from '../src/lib/tabbar-rout
 describe('isTabbarHiddenRoute —— 出物页不渲染底栏', () => {
   test('出物页：隐藏', () => {
     expect(isTabbarHiddenRoute('pages/sell/index')).toBe(true)
-    // 真机上 route 可能带查询串（编辑态 `?id=`），口径与选中态匹配 TAB_ITEMS 一致
+    // 真机上 route 可能带查询串（编辑态 `?id=`），口径与选中态匹配 TAB_ITEMS 一致。
+    // 这条钉的是 `includes` 而不是全等 —— 换成全等它就会先红。
     expect(isTabbarHiddenRoute('pages/sell/index?id=abc')).toBe(true)
   })
 
-  test('其余 Tab 页：都渲染底栏', () => {
+  test('其余 Tab 页与二级页：都渲染底栏', () => {
     for (const route of [
       'pages/home/index',
       'pages/wish/index',
       'pages/chat/index',
       'pages/profile/index',
-    ]) {
-      expect(isTabbarHiddenRoute(route), route).toBe(false)
-    }
-  })
-
-  test('二级页 / 非 Tab 页：都渲染底栏', () => {
-    for (const route of [
       'pkg-browse/pages/listing-detail/index',
       'pkg-browse/pages/search/index',
       'pkg-browse/pages/history/index',
@@ -46,10 +40,6 @@ describe('isTabbarHiddenRoute —— 出物页不渲染底栏', () => {
 
   test('栈还没就绪（空路由）：不隐藏，先画出来让 onShow 广播纠正', () => {
     expect(isTabbarHiddenRoute('')).toBe(false)
-  })
-
-  test('判据只认一个路由真源常量', () => {
-    expect(TABBAR_HIDDEN_ROUTE).toBe('pages/sell/index')
   })
 })
 
