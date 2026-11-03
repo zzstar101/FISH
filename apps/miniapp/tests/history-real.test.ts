@@ -198,7 +198,15 @@ describe('recordCellOf —— 契约行 → 三列格', () => {
       title: '小米 12',
       priceCents: 89000,
       gone: '已下架',
+      coverUrl: null,
     })
+  })
+
+  test('有封面：透传契约的 coverUrl（不再落回分类色块）', () => {
+    const cell = recordCellOf(
+      item('2026-09-12T03:00:00.000Z', { coverUrl: 'https://cdn.example.com/phone.jpg' }),
+    )
+    expect(cell.coverUrl).toBe('https://cdn.example.com/phone.jpg')
   })
 })
 
@@ -297,6 +305,7 @@ describe('favoriteCell —— 收藏行 → 三列格', () => {
       title: '罗技鼠标',
       priceCents: 12800,
       gone: '已卖掉',
+      coverUrl: null,
     })
   })
 })
@@ -314,7 +323,11 @@ describe('messageRow —— 留言 / 评价行 → 整宽行', () => {
           content: '还在吗',
           createdAt: at(2026, 11, 2, 10),
         },
-        listing: card({ title: '九成新山地车', category: 'SPORTS' }),
+        listing: card({
+          title: '九成新山地车',
+          category: 'SPORTS',
+          coverUrl: 'https://cdn.example.com/bike.jpg',
+        }),
       },
       now,
     )
@@ -326,6 +339,7 @@ describe('messageRow —— 留言 / 评价行 → 整宽行', () => {
       kind: 'comment',
       text: '还在吗',
       timeLabel: '今天',
+      coverUrl: 'https://cdn.example.com/bike.jpg',
       target: { kind: 'listing', id: LISTING_ID },
     })
   })
@@ -376,6 +390,8 @@ describe('messageRow —— 留言 / 评价行 → 整宽行', () => {
     )
 
     expect(row.category).toBeNull()
+    // 交易内嵌的商品摘要没有封面时同样透传 null → 页面回落色块（退 OTHER），不留空串
+    expect(row.coverUrl).toBeNull()
     expect(row.title).toBe('九成新山地车')
     expect(row.kind).toBe('review')
     expect(row.text).toBe('')
