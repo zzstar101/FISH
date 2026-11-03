@@ -144,6 +144,13 @@ describe('页面接线', () => {
     expect(buyerBranch).not.toContain('chatWithSeller')
     // 但已收藏的人要能取消收藏（DELETE 不判商品状态），心形必须**只在已收藏时**出现：
     // POST 收藏对非 ACTIVE 商品必失败，所以未收藏时不给
+    // 同理「存在」不够：在 `{faved ? (` **之前**再插一颗同款心（未收藏者也会拿到），
+    // 只断言存在就是假绿 —— 实测该变异全绿过。所以钉「支体里最多一颗」+「闸之前的片段没有」。
+    const favAt = buyerBranch.indexOf('{faved ? (')
+    expect(favAt).toBeGreaterThanOrEqual(0)
+    // 数的是容器那一枚（`detail__fav is-on`）：`detail__fav-img` 是它里面的图标，不算第二颗
+    expect((buyerBranch.match(/detail__fav is-on/g) ?? []).length).toBe(1)
+    expect(buyerBranch.slice(0, favAt)).not.toContain('detail__fav is-on')
     const favGate = sliceOf(buyerBranch, '{faved ? (', ') : null}')
     expect(favGate).toContain('detail__fav is-on')
     expect(favGate).toContain('onClick={toggleFavorite}')
@@ -161,8 +168,15 @@ describe('页面接线', () => {
 
   test('PC 详情页与小程序说同一句（跨端无共享模块，靠这条钉住不许漂）', async () => {
     const pc = await Bun.file(PC_PAGE).text()
-    // PC 站不能 import 小程序的 `status-mark`，字面量只能照抄 —— 于是用一致性用例把两份钉在一起
-    expect(pc).toContain(`'${BUYER_SOLD_NOTE}'`)
-    expect(pc).toContain("item.status === 'SOLD'")
+    // PC 站不能 import 小程序的 `status-mark`，字面量只能照抄 —— 于是用一致性用例把两份钉在一起。
+    // 两条各自 `toContain` 是**两条独立存在性断言**，不是配对：只要字面量与判据在文件里各出现
+    // 一次就绿，真漂移（判据旁边换了一句别的话）照样假绿。改成以判据为左锚切到下一个 `:`，
+    // 只认那一支里的字面量 —— 即「`SOLD` 这一支说的就是这句」。
+    const soldAnchor = "item.status === 'SOLD'"
+    const soldAt = pc.indexOf(soldAnchor)
+    expect(soldAt).toBeGreaterThanOrEqual(0)
+    const soldColon = pc.indexOf(':', soldAt + soldAnchor.length)
+    expect(soldColon).toBeGreaterThan(soldAt)
+    expect(pc.slice(soldAt + soldAnchor.length, soldColon)).toContain(`'${BUYER_SOLD_NOTE}'`)
   })
 })
