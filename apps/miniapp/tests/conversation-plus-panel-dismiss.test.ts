@@ -54,8 +54,11 @@ describe('会话页「+」面板点外部收起（#541）', () => {
     expect(mask).toContain('onClick={dismissPanel}')
     // 顶边取导航行底边：返回钮不被遮住
     expect(mask).toMatch(/top: `\$\{metrics\.totalHeight\}px`/)
-    // 收起只改 panelOpen：不碰已输入文字、不 blur 输入框、不动滚动位置
-    expect(squash(source)).toContain('const dismissPanel = () => setPanelOpen(false)')
+    // 收起只收面板：不碰已输入文字、不 blur 输入框；滚动位置交给与「再点 +」同一个贴底
+    // 守卫决定（面板一走消息流就变高，贴底的仍贴底、翻历史的原地不动 —— #561）
+    const dismiss = squash(source).slice(squash(source).indexOf('const dismissPanel = () => {'))
+    expect(dismiss.slice(0, dismiss.indexOf('}'))).toContain('setPanelOpen(false)')
+    expect(dismiss.slice(0, dismiss.indexOf('}'))).not.toContain('setInputValue')
   })
 
   test('导航行与状态栏带在遮罩之上，点它们也收面板', async () => {

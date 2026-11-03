@@ -77,6 +77,17 @@ describe('贴底判据（#561）', () => {
   test('视口还没量到按贴底处理：宁可多滚一次到底，也不把偏移丢掉', () => {
     expect(isNearBottom({ scrollTop: 0, scrollHeight: 2000, viewportHeight: 0 })).toBe(true)
   })
+
+  test('本页自己造成的视口缩量按 slack 临时放宽：多行输入后仍算贴底', () => {
+    // 输入框从 1 行长到 4 行，视口矮 54pt：滚动事件可能还是「旧 scrollTop + 新 scrollHeight」
+    const shrunk = { scrollTop: 400 - 54, scrollHeight: 1000, viewportHeight: 600 }
+    // 只有常驻基线（24）时会被判成「翻历史」—— 正是 #560 说的「多行输入后再切更明显」
+    expect(isNearBottom(shrunk)).toBe(false)
+    // 把本次缩量算进容差后仍算贴底，重锚不会被守卫挡掉
+    expect(isNearBottom(shrunk, 54)).toBe(true)
+    // 真往上翻了一大段时，再大的 slack 也不能算贴底（否则会把翻历史的人拽回底部）
+    expect(isNearBottom({ ...shrunk, scrollTop: 0 }, 54)).toBe(false)
+  })
 })
 
 describe('键盘高度是单一真源（#560）', () => {
@@ -109,20 +120,38 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(textarea).toContain('cursorSpacing={0}')
   })
 
-  test('切语音态时在点击当下同步收键盘、真源归零，不等隐私授权查询回来', async () => {
+  test('两态同盒模型：语音态用实测输入行高度顶到同一高度，切态消息流不跳', async () => {
+    const source = squash(await pageSource())
+    // 输入框每多一行就往回报一次实测高度（设备 px），比在渲染期猜行数准。
+    // `tag()` 会在 `onLineChange` 里的 `>` 处截断，切到下一个属性为止
+    const textarea = slice(source, '<Textarea', 'onFocus=')
+    expect(textarea).toContain('onLineChange=')
+    expect(textarea).toContain('setInputRowPx(height)')
+    // 「按住说话」拿同一个值当 `minHeight`：不然多行输入后切语音，消息流会突然长高一大截
+    // （`tag()` 同样会在 `inputRowPx > 0` 的 `>` 处截断，切到下一个事件绑定为止）
+    const hold = slice(source, '<View className={`conv__hold', 'onTouchStart={startVoice}')
+    expect(hold).toContain('minHeight: `$' + '{inputRowPx}px`')
+    expect(hold).toContain('inputRowPx > 0')
+    // 量不到值时退回 scss 的 68（首帧 / 老基础库不报 onLineChange）
+    expect(await styleSource()).toContain('height: 68px')
+  })
+
+  test('切语音态：点击当下收键盘，真源归零与切态同批落地（分两帧就是先上提再回落）', async () => {
     const body = slice(
       squash(await pageSource()),
       'const toggleVoiceMode = async',
       'setVoiceMode(true)',
     )
     const hideAt = body.indexOf('Taro.hideKeyboard()')
-    const zeroAt = body.indexOf('setKeyboardHeight(0)')
     const gateAt = body.indexOf('getPrivacyAuthorizationState()')
     expect(hideAt).toBeGreaterThan(-1)
-    expect(zeroAt).toBeGreaterThan(-1)
-    // 收键盘、归零都在 await 之前：状态切换不许落在键盘收起的动画窗口里
+    // 收键盘是纯原生动作，不碰本页布局：点击当拍就发，不等授权那趟 await
     expect(hideAt).toBeLessThan(gateAt)
-    expect(zeroAt).toBeLessThan(gateAt)
+    // 真源归零是**布局变化**，必须排在 await 之后，与切态那批一起落地（末次归零才是那次）
+    const zeroAt = body.lastIndexOf('setKeyboardHeight(0)')
+    expect(zeroAt).toBeGreaterThan(gateAt)
+    expect(body.indexOf('setPanelOpen(false)', zeroAt)).toBeGreaterThan(zeroAt)
+    expect(body.indexOf('keepTailAnchored()')).toBeGreaterThan(-1)
     // 隐私授权的判据本身不变（仍由 canEnterVoiceMode 决定是否落地语音态）
     expect(body).toContain(
       'canEnterVoiceMode(state, seq, voiceGateSeqRef.current, aliveRef.current)',
@@ -145,23 +174,38 @@ describe('「+」面板与贴底（#561）', () => {
     expect(anchorAt).toBeGreaterThan(zeroAt)
   })
 
-  test('贴底才重指尾行，翻历史时不许动滚动位置', async () => {
-    const body = slice(
-      squash(await pageSource()),
-      'const keepTailAnchored = useCallback',
-      'setTailAnchorFlip',
-    )
-    expect(body).toContain('if (!stickBottomRef.current) return')
+  test('贴底才重指尾行；换锚后直接认定贴底，不等一条可能永远不来的滚动事件', async () => {
+    const body = slice(squash(await pageSource()), 'const keepTailAnchored = useCallback', '}, [])')
+    // 翻历史时不动位置（守卫仍在）
+    expect(body).toContain('if (stickBottomRef.current) {')
+    expect(body).toContain('setTailAnchorFlip((prev) => !prev)')
+    // 换锚之后贴底就是已知事实：`onScroll` 不一定会因程序化滚动而回吐事件
+    expect(body).toContain('stickBottomRef.current = true')
+  })
+
+  test('几何变化后回读偏移：原生层把偏移丢了就补回来，没丢什么都不做', async () => {
+    const body = slice(squash(await pageSource()), 'const keepTailAnchored = useCallback', '}, [])')
+    // 用几何变化前的 last-known scrollTop 做比对
+    expect(body).toContain('const prevTop = scrollTopRef.current')
+    expect(body).toContain("select('.conv__scroll')")
+    expect(body).toContain('scrollOffset()')
+    // 只认「原本不在顶部、现在掉到顶部」这一种（其余下掉是原生层按新几何的正常截断）
+    expect(body).toContain('prevTop <= BOTTOM_SLACK_PX || top > BOTTOM_SLACK_PX')
+    // 贴底 → 再指一次尾行；翻历史 → 把原偏移写回去
+    expect(body).toContain('setScrollRestore(')
   })
 
   test('消息流有 onScroll，并把 scrollTop/scrollHeight/视口高度喂给贴底判据', async () => {
     const source = squash(await pageSource())
     expect(tag(source, '<ScrollView')).toContain('onScroll={onScroll}')
-    const body = slice(source, 'const onScroll = useCallback', '[]')
-    expect(body).toContain('scrollTop')
+    const body = slice(source, 'const onScroll = useCallback', '}, [])')
+    expect(body).toContain('scrollTopRef.current = scrollTop')
     expect(body).toContain('scrollHeight')
     expect(body).toContain('viewportHeight: scrollViewportRef.current')
     expect(body).toContain('isNearBottom(')
+    // 本页自己造成的视口缩量算进容差；真到底了归零，免得长期放宽
+    expect(body).toContain('Math.max(BOTTOM_SLACK_PX, bottomGapAllowanceRef.current)')
+    expect(body).toContain('bottomGapAllowanceRef.current = 0')
   })
 
   test('尾行锚点带 keyId 且能交替：内容追加与几何变化都能重新滚到底', async () => {
@@ -177,5 +221,19 @@ describe('「+」面板与贴底（#561）', () => {
     )
     // 锚点挂在 ScrollView 里、消息流最末（零尺寸，滚到它就是滚到底）
     expect(source).toContain('{tailAnchorId ? <View id={tailAnchorId} /> : null}')
+  })
+
+  test('两条收面板的路径走同一个重锚守卫，且都不碰输入文字 / 不 blur（#541 契约）', async () => {
+    const body = slice(squash(await pageSource()), 'const dismissPanel = () => {', '}')
+    expect(body).toContain('keepTailAnchored()')
+    expect(body).toContain('setPanelOpen(false)')
+    expect(body).not.toContain('setInputValue')
+  })
+
+  test('偏移复位只走 scrollTop 属性，靠 0.5px 交替让「同一个位置」也再下发一次', async () => {
+    const source = squash(await pageSource())
+    expect(tag(source, '<ScrollView')).toContain('scrollTop={restoreScrollTop}')
+    expect(source).toContain('restoreScrollTop = scrollRestore')
+    expect(source).toContain('scrollRestore.tick % 2 === 0 ? 0 : 0.5')
   })
 })
