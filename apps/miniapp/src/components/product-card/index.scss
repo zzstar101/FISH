@@ -46,6 +46,42 @@
   line-height: 42px;
 }
 
+/* 已售 / 已下架（#566）：50% 黑罩 + 状态角标 + 文字置灰。
+   罩子是 `position: absolute` 的叠层、挂在与图片同一个占位里，图片高度由 JS 传入的 rpx 决定，
+   所以加罩不会改变高度（改高度等于让整个瀑布流重排）。 */
+.pcard__shade {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+/* 状态角标与 `.pcard__badge` 同尺寸、同位置，只是换成深底白字（`--ink` / `--surface` 两个既有令牌）：
+   底就是被压暗的图片，浅底徽标在暗图上会糊成一片。 */
+.pcard__mark {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  color: var(--surface);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 42px;
+}
+
+/* 文字置灰：标题 / 成色印章 / 价格 / 想要数 / 卖家名统一走 `--muted`（在售卡不受影响） */
+.pcard--out .pcard__title,
+.pcard--out .pcard__cond,
+.pcard--out .pcard__price,
+.pcard--out .pcard__want,
+.pcard--out .pcard__who {
+  color: var(--muted);
+}
+
 .pcard__body {
   display: flex;
   flex-direction: column;

@@ -16,6 +16,7 @@ import {
   MOCK_FALLBACK_ENABLED,
 } from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
+import { outOfMarketLabel } from '@/features/listing/status-mark'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { signatureFirstLine } from '@/features/profile/signature-text'
@@ -352,44 +353,56 @@ export default function UserHome() {
     void load()
   })
 
-  const card = (item: MockListing) => (
-    <View
-      key={item.id}
-      className="uhome__card"
-      onClick={() =>
-        void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${item.id}` })
-      }
-    >
-      <View className="uhome__img">
-        <Image className="uhome__img-real" src={item.coverUrl} mode="aspectFill" lazyLoad />
-        {item.free ? (
-          <Text className="uhome__corner uhome__corner--free">0 元送</Text>
-        ) : item.urgent ? (
-          <Text className="uhome__corner uhome__corner--hot">急出</Text>
-        ) : null}
-      </View>
-      <View className="uhome__pbody">
-        <Text className="uhome__ptitle">{item.title}</Text>
-        <View className="uhome__pmeta">
-          <Text className="uhome__pprice num">¥{formatAmount(item.priceCents)}</Text>
-          {item.originalPriceCents ? (
-            <Text className="uhome__porig num">¥{formatAmount(item.originalPriceCents)}</Text>
+  const card = (item: MockListing) => {
+    /**
+     * 已售 / 已下架（#566）：「已售出」段里的卡按共享卡片同一套形态处理 ——
+     * 图片压 50% 黑罩、左上角状态角标压过「0 元送 / 急出」、文字置灰。
+     * 图片高度由 `.uhome__img` 定死，灰罩是叠层，不参与布局。
+     */
+    const outLabel = outOfMarketLabel(item.status)
+
+    return (
+      <View
+        key={item.id}
+        className={outLabel === null ? 'uhome__card' : 'uhome__card uhome__card--out'}
+        onClick={() =>
+          void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${item.id}` })
+        }
+      >
+        <View className="uhome__img">
+          <Image className="uhome__img-real" src={item.coverUrl} mode="aspectFill" lazyLoad />
+          {outLabel === null ? null : <View className="uhome__shade" />}
+          {outLabel !== null ? (
+            <Text className="uhome__corner uhome__corner--out">{outLabel}</Text>
+          ) : item.free ? (
+            <Text className="uhome__corner uhome__corner--free">0 元送</Text>
+          ) : item.urgent ? (
+            <Text className="uhome__corner uhome__corner--hot">急出</Text>
           ) : null}
         </View>
-        <View className="uhome__pfoot">
-          {/* 想要数来自契约 `ListingCardSchema.wants`（已建会话的买家数）；字段缺席（老 mock 记录）
-              时连分隔点一起不画，避免出现孤立的分隔符 */}
-          {item.wants === null ? null : (
-            <>
-              <Text className="uhome__pwant num">想要 {item.wants}</Text>
-              <View className="uhome__dot" />
-            </>
-          )}
-          <Text className="uhome__ptime">{`${Math.floor(item.createdHoursAgo / 24)} 天前`}</Text>
+        <View className="uhome__pbody">
+          <Text className="uhome__ptitle">{item.title}</Text>
+          <View className="uhome__pmeta">
+            <Text className="uhome__pprice num">¥{formatAmount(item.priceCents)}</Text>
+            {item.originalPriceCents ? (
+              <Text className="uhome__porig num">¥{formatAmount(item.originalPriceCents)}</Text>
+            ) : null}
+          </View>
+          <View className="uhome__pfoot">
+            {/* 想要数来自契约 `ListingCardSchema.wants`（已建会话的买家数）；字段缺席（老 mock 记录）
+                时连分隔点一起不画，避免出现孤立的分隔符 */}
+            {item.wants === null ? null : (
+              <>
+                <Text className="uhome__pwant num">想要 {item.wants}</Text>
+                <View className="uhome__dot" />
+              </>
+            )}
+            <Text className="uhome__ptime">{`${Math.floor(item.createdHoursAgo / 24)} 天前`}</Text>
+          </View>
         </View>
       </View>
-    </View>
-  )
+    )
+  }
 
   const verified = profile?.authStatus === 'VERIFIED'
 

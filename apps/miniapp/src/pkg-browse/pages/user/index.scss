@@ -461,6 +461,28 @@
   color: #fff;
 }
 
+/* 已售 / 已下架（#566）：与共享卡片同一套形态 —— 50% 黑罩 + 深底白字状态角标 + 文字置灰。
+   罩子是与图片同占位的叠层，`.uhome__img` 的 300px 高度一个像素都不动。 */
+.uhome__shade {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.uhome__corner--out {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.uhome__card--out .uhome__ptitle,
+.uhome__card--out .uhome__pprice,
+.uhome__card--out .uhome__porig,
+.uhome__card--out .uhome__pwant,
+.uhome__card--out .uhome__ptime {
+  color: var(--muted);
+}
+
 .uhome__pbody {
   padding: 18px 20px 20px;
 }
