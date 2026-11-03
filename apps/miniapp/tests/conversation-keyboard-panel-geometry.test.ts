@@ -543,6 +543,22 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
     ).toBe(0)
   })
 
+  test('丢弃帧的候选值取「最高的那一次」，不是最后一帧（抖动序列里末帧更低）', () => {
+    // 已经抬高的 200 上连着报 250、240：两帧都属于「等第二帧」的丢弃帧，候选必须留 250
+    const run = feed([250, 240], { inset: 200, closing: true, closingFrom: 336 })
+    expect(run.insets).toEqual([200, 200])
+    expect(run.state.pending).toBe(250)
+  })
+
+  test('尾巴窗口的边界恰好含 400ms（401ms 才是窗口外）', () => {
+    // 收到 0 那一帧 closedAt = 1000，400ms 后（1400）补报 100 仍算动画尾巴
+    const inside = feed([0, 100], { inset: 336, now: [1000, 1400] })
+    expect(inside.insets).toEqual([0, 0])
+    // 401ms 就是窗口外：同一把 100 的键盘要照收
+    const outside = feed([0, 100], { inset: 336, now: [1000, 1401] })
+    expect(outside.insets).toEqual([0, 100])
+  })
+
   test('非有限值一律不动，交给下一次事件', () => {
     const idle = nextKeyboardInset({
       prev: 336,
@@ -628,7 +644,7 @@ describe('活性哨兵的结论：只看「报过的最高值」与焦点（#560
     expect(plan.inset).toBe(0)
   })
 
-  test('候选取值参与兜底：终值只报过一次时落在候选值上（G）', () => {
+  test('候选取值参与兜底：终值只报过一次时落在候选值上（G），且不许退回当前高度', () => {
     const plan = resolveSentinel({
       closing: true,
       seen: 200,
@@ -638,6 +654,18 @@ describe('活性哨兵的结论：只看「报过的最高值」与焦点（#560
       rearms: 0,
     })
     expect(plan.inset).toBe(340)
+    // 没报满（平台只报过 100，页面当前高度还是 336）：落 100。
+    // 退回 336 = 输入栏先被抬回上一轮的高度、还要挂到下一次事件才纠正（正是 #560 的观感）。
+    expect(
+      resolveSentinel({
+        closing: true,
+        seen: 100,
+        pending: 0,
+        height: 336,
+        focused: true,
+        rearms: 0,
+      }),
+    ).toEqual({ releaseLatch: true, inset: 100, rearms: 0 })
   })
 
   test('既没上报过、又仍聚焦：这一拍不下结论，重发一次再判（第二个周期）', () => {
@@ -750,13 +778,43 @@ describe('键盘高度是单一真源（#560）', () => {
     // 键盘本来就没开就不武装（否则 500ms 后白做一次重锚）
     expect(body).toContain('if (!(from > 0)) return')
     expect(body).toContain('armKeyboardSentinel()')
+    /**
+     * 页面新发起的一次收起要把重新武装**预算归零并抢在武装之前**：预算若留着上一轮的值
+     * （或在武装之后才清），「哨兵 → 重发 → 哨兵」的链条就少一道闸，退化成无限重发。
+     */
+    expect(body).toContain('keyboardSentinelRearmsRef.current = 0')
+    expect(body.indexOf('keyboardSentinelRearmsRef.current = 0')).toBeLessThan(
+      body.indexOf('armKeyboardSentinel()'),
+    )
+    // 抖动计数必须在起点重算，否则上一轮收起动画里的越界帧会把这一轮的「连两帧」提前点亮
+    expect(body).toContain('keyboardAboveFromRef.current = 0')
     // 两个调用点共用这一处，改一处不会漏另一处
     const voice = slice(source, 'const toggleVoiceMode = async', 'const onLongPressMessage')
     expect(voice).toContain('collapseKeyboard()')
     expect(voice).not.toContain('Taro.hideKeyboard(')
+    // 收键盘必须与隐私授权查询**并行发起**（先收再 await 就是 #560 的时序 bug）
+    expect(voice.indexOf('collapseKeyboard()')).toBeLessThan(
+      voice.indexOf('if (privacyPendingRef.current) return'),
+    )
     const panel = slice(source, 'const togglePanel = () => {', 'setPanelOpen(!panelOpen)')
     expect(panel).toContain('collapseKeyboard()')
     expect(panel).not.toContain('Taro.hideKeyboard(')
+  })
+
+  test('「页面主动收键盘」全页只有一条路径：hideKeyboard 只出现在收键盘处与重新武装处', async () => {
+    const source = squash(await pageSource())
+    /**
+     * 这是**文件级**判据，不认位置：新增第三条绕过 `collapseKeyboard()` 直接调
+     * `Taro.hideKeyboard()` 的路径（例如只在 `toggleVoiceMode` 里补一句）就会多出第三处 ——
+     * 那条路径不会置意图闩、不会武装哨兵，等于把本轮修好的兜底绕开。
+     */
+    expect(source.split('Taro.hideKeyboard(').length - 1).toBe(2)
+    expect(
+      slice(source, 'const collapseKeyboard = useCallback', '}, [armKeyboardSentinel])'),
+    ).toContain('Taro.hideKeyboard(')
+    expect(
+      slice(source, 'const armKeyboardSentinel = useCallback', '}, [clearKeyboardSentinel'),
+    ).toContain('Taro.hideKeyboard(')
   })
 
   test('活性哨兵：到点先解闩，结论交给 resolveSentinel（平台不报 0 的卡死兜底，R2/B1）', async () => {
