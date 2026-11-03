@@ -933,9 +933,12 @@ export default function UserHome() {
 
           {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内）。
               两个同位空锚点是页头两格的落点（#581，见 `scrollToBody`）：锚点顶到滚区 y=0 时，
-              列表标题还得落在绝对定位的导航条下方，所以整块用负 margin 向上让出导航条高度
-              （不留白；`navTotalHeight` 与页头让位同一口径，行内 px 不经 pxtransform） */}
-          <View style={{ marginTop: `-${navTotalHeight}px` }}>
+              列表标题还得落在绝对定位的导航条下方，所以锚点要比列表上沿高出导航条那么多。
+              **负 margin 必须配等高的 `height`**：只有负 margin 的话，这块高度为 0 的锚点区
+              会把后面整个列表区永久上移 `navTotalHeight`（页头与列表之间的留白远没有那么大，
+              列表标题会压到统计卡上）；配上 `height` 后净位移为 0，锚点则正好高出列表上沿
+              `navTotalHeight`（`navTotalHeight` 与页头让位同一口径，行内 px 不经 pxtransform） */}
+          <View style={{ marginTop: `-${navTotalHeight}px`, height: `${navTotalHeight}px` }}>
             <View id="uhome-body-a" />
             <View id="uhome-body-b" />
           </View>

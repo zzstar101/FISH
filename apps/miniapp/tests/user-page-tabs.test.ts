@@ -60,6 +60,7 @@ function slice(code: string, from: string, to: string, nth = 0): string {
     if (at < 0) throw new Error(`切片起点缺失：${from}`)
   }
   const end = code.indexOf(to, at + from.length)
+  if (end < 0) throw new Error(`切片终点缺失：${to}（起点：${from}）`)
   if (end < 0) throw new Error(`切片终点缺失：${to}`)
   return code.slice(at, end)
 }
@@ -190,7 +191,11 @@ describe('他人主页接线（#581）', () => {
     // 锚点必须贴在列表上沿：搬到页顶也「两个 id 都在」，落点却跑到页头去了
     expect(flat).toContain('<View id="uhome-body-b" /> </View> <View className="uhome__body">')
     // 落点顶到滚区 y=0 后，列表标题还要落在绝对定位的导航条下方，所以整块向上让出导航条高度
-    expect(flat).toMatch(/style=\{\{ marginTop: `-\$\{navTotalHeight\}px` \}\}/)
+    // 负 margin 必须有等高的 `height` 兜住（净位移 0）：只有负 margin 的话，这块高度为 0 的
+    // 锚点区会把后面整个列表区永久上移一整个导航条，列表标题会压到统计卡上
+    expect(flat).toMatch(
+      /style=\{\{ marginTop: `-\$\{navTotalHeight\}px`, height: `\$\{navTotalHeight\}px` \}\}/,
+    )
     // 写死一个 id 的话连点第二次没有任何反应（scrollIntoView 同值不重滚）
     const body = slice(code, 'const scrollToBody = useCallback(', '}, [])')
     expect(body).toContain("'uhome-body-a'")
@@ -207,6 +212,17 @@ describe('他人主页接线（#581）', () => {
     // 按压反馈那条规则与分段标题都得在（删了规则，端上就只剩抖动没有反馈）
     expect(scss).toContain('.uhome__stat--tap {')
     expect(scss).toContain('.uhome__sect-title {')
+  })
+
+  test('请求带的是当前段：段参数写死的话「已售出」永远显示在售商品', async () => {
+    const code = await page
+    const body = slice(code, 'const loadSegment = useCallback(', 'const items = page.items')
+    expect(body).toContain('loadPublicUserListingsPage(userId, seg, cursor)')
+  })
+
+  test('骨架分支要认失败态，否则首屏失败会永远停在骨架屏', async () => {
+    const flat = (await page).replace(/\s+/g, ' ')
+    expect(flat).toContain("loadState === 'loading' || (!page.loaded && !page.failed) ?")
   })
 
   test('开拉与失败都把三态写全，不留旧值', async () => {
