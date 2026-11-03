@@ -15,10 +15,14 @@ export const USER_ROUTES = {
    */
   publicProfile: (userId: string) => `/users/${userId}/public`,
   /**
-   * GET 某个用户的**在售**商品（`status = 'ACTIVE'`，时间倒序，游标分页）。
+   * GET 某个用户的商品（时间倒序，游标分页）。
    *
-   * 已下架 / 已售的商品不在本列表中。不存在的 userId 同样是 404 `USER_NOT_FOUND`，
-   * **不返回空列表**——否则端上会把「用户不存在」渲染成「TA 暂无在售商品」。
+   * 用可选查询参数 `status` 选口径（#565）：缺省 / `ACTIVE` = **在售**（`status = 'ACTIVE'`
+   * 且审核通过）；`SOLD` = **已售出**。已下架（OFFLINE，含审核中 / 不过审 / 平台下架）与
+   * 已预定（RESERVED）不属于公开读模型，传进来一律 422。
+   *
+   * 不存在的 userId 同样是 404 `USER_NOT_FOUND`，**不返回空列表**——否则端上会把
+   * 「用户不存在」渲染成「TA 暂无在售商品」。
    */
   activeListings: (userId: string) => `/users/${userId}/listings`,
 } as const

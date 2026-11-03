@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 我的关注。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -76,7 +76,7 @@
   transition: color 0.18s;
 
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 24px;
     right: 24px;
@@ -253,10 +253,11 @@
   @include ellipsis;
 }
 
-/* 认证勾（13pt）：未认证时整块不渲染，不留占位 */
+/* 认证徽章（#563）：设计稿「认证」3D 整图 275×108 按比例显示（同详情卖家行），
+   未认证时整块不渲染、不留占位 */
 .fw__tick {
   flex: 0 0 auto;
-  width: 24px;
+  width: 61px;
   height: 24px;
 }
 

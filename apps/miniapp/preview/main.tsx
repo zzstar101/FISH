@@ -34,6 +34,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-auth/pages/login/index': () => import('@/pkg-auth/pages/login/index'),
   '/pkg-auth/pages/login-confirm/index': () => import('@/pkg-auth/pages/login-confirm/index'),
   '/pkg-auth/pages/settings/index': () => import('@/pkg-auth/pages/settings/index'),
+  '/pkg-auth/pages/blocked/index': () => import('@/pkg-auth/pages/blocked/index'),
   '/pkg-auth/pages/verify/index': () => import('@/pkg-auth/pages/verify/index'),
   '/pkg-browse/pages/user/index': () => import('@/pkg-browse/pages/user/index'),
   '/pkg-browse/pages/match/index': () => import('@/pkg-browse/pages/match/index'),
@@ -50,6 +51,9 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-trade/pages/report-listing/index': () => import('@/pkg-trade/pages/report-listing/index'),
   '/pkg-trade/pages/report-user/index': () => import('@/pkg-trade/pages/report-user/index'),
   '/pkg-trade/pages/my-reports/index': () => import('@/pkg-trade/pages/my-reports/index'),
+  '/pkg-trade/pages/my-disputes/index': () => import('@/pkg-trade/pages/my-disputes/index'),
+  '/pkg-trade/pages/dispute-detail/index': () => import('@/pkg-trade/pages/dispute-detail/index'),
+  '/pkg-trade/pages/dispute-create/index': () => import('@/pkg-trade/pages/dispute-create/index'),
   // 静态法务与帮助页（未定内容页面，实际内容由 zzstar 决策）
   '/pkg-legal/pages/about/index': () => import('@/pkg-legal/pages/about/index'),
   '/pkg-legal/pages/terms/index': () => import('@/pkg-legal/pages/terms/index'),
@@ -60,6 +64,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-legal/pages/community-guidelines/index': () =>
     import('@/pkg-legal/pages/community-guidelines/index'),
   '/pkg-legal/pages/feedback/index': () => import('@/pkg-legal/pages/feedback/index'),
+  '/pkg-legal/pages/my-feedback/index': () => import('@/pkg-legal/pages/my-feedback/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */

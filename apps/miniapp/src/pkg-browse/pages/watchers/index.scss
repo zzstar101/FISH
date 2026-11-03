@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /* C5 想要的人：沿用原页面冰蓝页头、商品摘要与列表卡片；行上只保留会话口径有据可依的字段
    （昵称 / 头像 / 认证态 / 发起聊天时间），动作钮是「打开这条会话」的视觉提示。 */
@@ -221,23 +221,12 @@
   @include ellipsis;
 }
 
-.wt__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  height: 40px;
-  padding: 0 16px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  border: 2px solid var(--accent-mid);
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  color: var(--brand-deep-2);
-}
-
+/* 认证徽章（#563）：设计稿「认证」3D 整图（275×108，按比例 61×24），昵称右侧内联。
+   「胶囊 + 勾 + 文案」外壳为何撤掉，说明放在 `index.tsx` 的徽章节点注释里（只留一份，
+   免得两处漂移）；那边有否定断言钉住，别把胶囊加回来。 */
 .wt__badge-ic {
-  width: 24px;
+  flex: 0 0 auto;
+  width: 61px;
   height: 24px;
 }
 

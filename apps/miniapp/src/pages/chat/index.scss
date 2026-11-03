@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 消息（Tab 页），按 1版稿 messages.html 落地。尺寸 = 设计稿 pt × 2。
@@ -62,7 +62,7 @@
 
   /* 选中下划线：品牌渐变短棒（1版稿 ::after） */
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 24px;
     right: 24px;
@@ -142,7 +142,7 @@
   /* 行间细分隔线：每行一条底线 + 首行一条顶线（1版稿 .conv::after / :first-child::before），
      左侧从头像之后开始（left 71pt） */
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 142px;
     right: 16px;
@@ -152,7 +152,7 @@
   }
 
   &:first-child::before {
-    content: '';
+    content: "";
     position: absolute;
     left: 142px;
     right: 16px;

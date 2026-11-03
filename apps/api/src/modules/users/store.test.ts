@@ -27,6 +27,8 @@ type ListingSpec = {
   status?: ListingStatus
   moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
   createdAt?: Date
+  /** 平台治理下架时刻（#565）：与 `status` 正交，核销路径会把这类商品置成 SOLD。 */
+  governanceDelistedAt?: Date
   /** 传入即插 `sort_order = 0` 的封面；`extraImageOrder` 用于验证"只有 0 才是封面"。 */
   coverObjectKey?: string
   extraImageObjectKey?: string
@@ -81,6 +83,7 @@ async function withSeller(
           condition: 'GOOD',
           ...(spec.status ? { status: spec.status } : {}),
           ...(spec.moderationStatus ? { moderationStatus: spec.moderationStatus } : {}),
+          ...(spec.governanceDelistedAt ? { governanceDelistedAt: spec.governanceDelistedAt } : {}),
           ...(spec.createdAt ? { createdAt: spec.createdAt } : {}),
         })
         .returning({ id: listings.id })
@@ -164,7 +167,7 @@ test('已注销账号在公开读模型里与"不存在"同义：只有 DELETED 
   })
 })
 
-test('stats：在售只算 ACTIVE + APPROVED，卖出只算 COMPLETED', async () => {
+test('stats：在售只算 ACTIVE + APPROVED，已售出与列表同源（SOLD 且未治理下架）', async () => {
   const base = new Date('2026-09-01T00:00:00.000Z')
   await withSeller(
     [
@@ -174,42 +177,28 @@ test('stats：在售只算 ACTIVE + APPROVED，卖出只算 COMPLETED', async ()
       // 审核未通过的 ACTIVE 商品不能算进"在售"（公开可见性的第二道闸）。
       { status: 'ACTIVE', moderationStatus: 'REVIEW' },
       { status: 'ACTIVE' },
+      // 平台已下架之后才被核销的商品：库里 `status = 'SOLD'`，但公开列表不返回它
+      // （核销路径无条件置 SOLD，只留 `governance_delisted_at` 痕迹）。计数必须一起筛掉，
+      // 否则段头写「已售出 2 件」而点进去只有 1 件 —— #565 复核 M1。
+      {
+        status: 'SOLD',
+        moderationStatus: 'BLOCKED',
+        governanceDelistedAt: base,
+      },
     ],
-    async ({ sellerId, buyerId, listingIds }) => {
-      const sold = listingIds[0] as string
-      const reserved = listingIds[1] as string
-      const cancelled = listingIds[2] as string
+    async ({ sellerId }) => {
+      const soldRows = await store.listListings(sellerId, 'SOLD', 20, null)
+      const stats = await store.stats(sellerId)
 
-      await db.insert(transactions).values([
-        {
-          listingId: sold,
-          buyerId,
-          sellerId,
-          amountCents: 1200,
-          status: 'COMPLETED',
-          completedAt: base,
-          buyerConfirmedAt: base,
-          sellerConfirmedAt: base,
-        },
-        // 进行中不算成交。
-        { listingId: reserved, buyerId, sellerId, amountCents: 1300 },
-        // 已取消不算成交（`completed_at` 与 `cancelled_at` 由 check 约束绑定状态）。
-        {
-          listingId: cancelled,
-          buyerId,
-          sellerId,
-          amountCents: 1400,
-          status: 'CANCELLED',
-          cancelledAt: base,
-        },
-      ])
-
-      expect(await store.stats(sellerId)).toEqual({ activeListings: 2, soldCount: 1 })
+      expect(stats.activeListings).toBe(2)
+      // 段头数与段内条数必须相等：两个数据源（transactions / listings）就会在这里崩。
+      expect(stats.soldCount).toBe(soldRows.length)
+      expect(stats.soldCount).toBe(1)
     },
   )
 })
 
-test('listActiveListings 只出 ACTIVE + APPROVED，时间倒序，且与 stats 的在售数一致', async () => {
+test("listListings(…, 'ACTIVE', …) 只出 ACTIVE + APPROVED，时间倒序，且与 stats 的在售数一致", async () => {
   await withSeller(
     [
       { status: 'SOLD', createdAt: new Date('2026-09-09T00:00:00.000Z') },
@@ -223,7 +212,7 @@ test('listActiveListings 只出 ACTIVE + APPROVED，时间倒序，且与 stats 
       { status: 'ACTIVE', createdAt: new Date('2026-09-05T00:00:00.000Z') },
     ],
     async ({ sellerId, buyerId, listingIds }) => {
-      const rows = await store.listActiveListings(sellerId, 20, null)
+      const rows = await store.listListings(sellerId, 'ACTIVE', 20, null)
 
       expect(rows.map((row) => row.id)).toEqual([listingIds[3] as string, listingIds[4] as string])
       expect(rows.every((row) => row.status === 'ACTIVE')).toBe(true)
@@ -257,10 +246,59 @@ test('listActiveListings 只出 ACTIVE + APPROVED，时间倒序，且与 stats 
           occurredAt: new Date(),
         },
       ])
-      const after = await store.listActiveListings(sellerId, 20, null)
+      const after = await store.listListings(sellerId, 'ACTIVE', 20, null)
       const viewsOf = (id: string) => after.find((row) => row.id === id)?.views
       expect(viewsOf(viewed)).toBe(2)
       expect(viewsOf(untouched)).toBe(0)
+    },
+  )
+})
+
+test("listListings(…, 'SOLD', …) 只出 SOLD，筛掉平台已下架，且不叠加 moderationStatus（#565）", async () => {
+  await withSeller(
+    [
+      { status: 'SOLD', createdAt: new Date('2026-09-09T00:00:00.000Z') },
+      // 平台已下架之后才被核销：`status` 是 SOLD、`governance_delisted_at` 非空。
+      // 这类商品对非本人详情一律 404，绝不能进公开列表 —— 匿名访客会拿到它的
+      // 标题 / 价格 / 封面，点进去却是 404（#565 复核 H1）。
+      {
+        status: 'SOLD',
+        moderationStatus: 'BLOCKED',
+        governanceDelistedAt: new Date('2026-09-08T12:00:00.000Z'),
+        createdAt: new Date('2026-09-08T00:00:00.000Z'),
+      },
+      { status: 'OFFLINE', createdAt: new Date('2026-09-07T00:00:00.000Z') },
+      { status: 'RESERVED', createdAt: new Date('2026-09-06T00:00:00.000Z') },
+      { status: 'ACTIVE', createdAt: new Date('2026-09-05T00:00:00.000Z') },
+    ],
+    async ({ sellerId, listingIds }) => {
+      const rows = await store.listListings(sellerId, 'SOLD', 20, null)
+
+      // 已售出段**永不**返回 OFFLINE / RESERVED / ACTIVE，也不返回平台已下架的 SOLD（#565 验收）。
+      expect(rows.map((row) => row.id)).toEqual([listingIds[0] as string])
+      // 段内条数与段头计数同源同条件：被筛掉的那件不能还写在段头。
+      expect(await store.stats(sellerId)).toEqual({ activeListings: 1, soldCount: 1 })
+    },
+  )
+})
+
+test("listListings(…, 'SOLD', …) 不叠加审核列（防御性：该组合生产上不可达）", async () => {
+  await withSeller(
+    [
+      // **防御性用例**：`status = 'SOLD'` 且 `moderation_status != 'APPROVED'` 这个组合在生产上
+      // 不可达 —— 新建商品只有送审才写 OFFLINE + REVIEW（`listings/store.ts:582`）、编辑送审
+      // 同理（`listings/service.ts:845`）、发起交易只认 ACTIVE（`transactions/store.ts:402`）、
+      // 治理下架只从 APPROVED 下架（`governance/service.ts:296`）且恢复时 `moderation_status`
+      // 取 delist 审计里的 before 值（`:387` / `:565-574`）。
+      // 留在这里是防未来变化：已售出段若哪天开始叠加审核列，审核/治理期间的成交会凭空消失在
+      // 他人的「已售出」里，而页头的「卖出 N」还算着它。
+      { status: 'SOLD', moderationStatus: 'BLOCKED' },
+    ],
+    async ({ sellerId, listingIds }) => {
+      const rows = await store.listListings(sellerId, 'SOLD', 20, null)
+
+      expect(rows.map((row) => row.id)).toEqual([listingIds[0] as string])
+      expect(await store.stats(sellerId)).toEqual({ activeListings: 0, soldCount: 1 })
     },
   )
 })
@@ -274,13 +312,13 @@ test('游标翻页不重不漏：nextCursor 落在最后一条已返回的行上
     ],
     async ({ sellerId, listingIds }) => {
       // store 约定多取一行：limit=2 时返回 3 行，由 service 判断还有没有下一页。
-      const firstFetch = await store.listActiveListings(sellerId, 2, null)
+      const firstFetch = await store.listListings(sellerId, 'ACTIVE', 2, null)
       expect(firstFetch).toHaveLength(3)
 
       const lastReturned = firstFetch[1]
       if (!lastReturned) throw new Error('第一页应当有第二行')
 
-      const secondPage = await store.listActiveListings(sellerId, 2, {
+      const secondPage = await store.listListings(sellerId, 'ACTIVE', 2, {
         createdAt: lastReturned.createdAtCursor,
         id: lastReturned.id,
       })
@@ -297,7 +335,7 @@ test('封面只认 sort_order = 0，取不到就是 null（不用序号更大的
       { extraImageObjectKey: 'listings/only-second.jpg' },
     ],
     async ({ sellerId, listingIds }) => {
-      const rows = await store.listActiveListings(sellerId, 20, null)
+      const rows = await store.listListings(sellerId, 'ACTIVE', 20, null)
       const byId = new Map(rows.map((row) => [row.id, row]))
 
       expect(byId.get(listingIds[0] as string)?.coverObjectKey).toBe('listings/cover.jpg')

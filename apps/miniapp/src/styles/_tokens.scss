@@ -8,14 +8,20 @@
  * 注意：`page` 上的自定义属性**只能继承到 page 内部的节点**。挂在 `<page>` 之外的
  * 节点（如自定义 TabBar）必须自己 `@include vars` —— 见 `_token-vars.scss` 文件头。
  */
-@use './token-vars' as *;
+@use "./token-vars" as *;
 
+/* biome-ignore lint/correctness/noUnknownTypeSelector: WeChat miniapp page is a native selector. */
 page {
   @include vars;
 
   background-color: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei',
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Noto Sans SC",
+    "Microsoft YaHei",
     sans-serif;
   font-size: var(--fs-body);
   line-height: 1.45;

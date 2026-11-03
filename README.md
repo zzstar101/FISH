@@ -34,34 +34,34 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 
 ## 核心功能
 
-| 模块 | 能力 |
-| --- | --- |
-| **校园身份** | 学号即账号（12 位数字）、注册 / 登录（httpOnly 会话 Cookie）、校园认证徽章；未认证用户有明确展示口径 |
-| **闲置交易** | 多图发布（presign → 直传到 S3 兼容存储）、首页 Feed、关键词搜索 / 分类 / 排序（最新 · 价格升降）、商品详情与「我想要」 |
-| **许愿墙** | 发布与关闭愿望（关键词、分类、预算区间、是否接受相似商品）；「愿望成真」直接展示命中的在售商品；**k-匿名需求池**聚合热门关键词与预算中位数 |
-| **双向匹配** | 商品 ↔ 愿望互配：Worker 异步按分类 / 关键词 / 价格加权打分，命中后写匹配表并发站内通知；商品编辑、上下架会重算 |
-| **实时聊天** | 会话列表、历史消息、WebSocket 实时推送（心跳 + 指数退避重连）、已读回执；从商品详情「聊一聊」一键建会话 |
-| **面交交易** | 提案 → 接受 / 拒绝 → 待面交 → 确认 → 完成 / 取消 的状态机；接单时**原子锁定**商品，防止一物二卖 |
-| **个人中心** | 在售 / 愿望 / 买入 / 卖出 四格统计、我的商品、我的订单、他人主页 |
-| **站内通知** | 匹配结果通知、未读角标、点击跳转到对应商品 |
+| 模块         | 能力                                                                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **校园身份** | 学号即账号（12 位数字）、注册 / 登录（httpOnly 会话 Cookie）、校园认证徽章；未认证用户有明确展示口径                                       |
+| **闲置交易** | 多图发布（presign → 直传到 S3 兼容存储）、首页 Feed、关键词搜索 / 分类 / 排序（最新 · 价格升降）、商品详情与「我想要」                     |
+| **许愿墙**   | 发布与关闭愿望（关键词、分类、预算区间、是否接受相似商品）；「愿望成真」直接展示命中的在售商品；**k-匿名需求池**聚合热门关键词与预算中位数 |
+| **双向匹配** | 商品 ↔ 愿望互配：Worker 异步按分类 / 关键词 / 价格加权打分，命中后写匹配表并发站内通知；商品编辑、上下架会重算                             |
+| **实时聊天** | 会话列表、历史消息、WebSocket 实时推送（心跳 + 指数退避重连）、已读回执；从商品详情「聊一聊」一键建会话                                    |
+| **面交交易** | 提案 → 接受 / 拒绝 → 待面交 → 确认 → 完成 / 取消 的状态机；接单时**原子锁定**商品，防止一物二卖                                            |
+| **个人中心** | 在售 / 愿望 / 买入 / 卖出 四格统计、我的商品、我的订单、他人主页                                                                           |
+| **站内通知** | 匹配结果通知、未读角标、点击跳转到对应商品                                                                                                 |
 
 > 匹配链路是异步的：**不启动 Worker 就看不到「愿望成真」与匹配通知**，见下方 [快速开始](#快速开始)。
 
 ## 技术栈
 
-| 层 | 选型 |
-| --- | --- |
-| Runtime / 包管理 | **Bun**（`packageManager: bun@1.4.4`，`engines.bun >= 1.4.4`） |
-| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React 19 + Vite + TypeScript，`apps/web-pc`） |
-| 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
-| UI | Tailwind CSS v4 + 自有 `@fish/ui` 组件 |
-| 后端 | **Hono on Bun**（`Bun.serve`） |
-| 校验 | Zod（Web 与 API 共用 `@fish/contracts`） |
-| 数据库 | PostgreSQL 18 + pgvector + Drizzle ORM（运行时走 `drizzle-orm/bun-sql`） |
-| 异步 | PostgreSQL `jobs` 表 + 独立 Bun Worker 轮询 |
-| 实时 | Hono / Bun 原生 WebSocket |
-| 对象存储 | S3 兼容（本地 MinIO） |
-| 质量 | Biome（lint + format）· TypeScript 7 · Bun 内置 `bun check` 类型检查（对齐 tsc 7）· `bun test` · GitHub Actions |
+| 层                | 选型                                                                                                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- |
+| Runtime / 包管理  | **Bun**（`packageManager: bun@1.4.4`，`engines.bun >= 1.4.4`）                                                  |
+| 前端              | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React 19 + Vite + TypeScript，`apps/web-pc`）       |
+| 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query                                                                   |
+| UI                | Tailwind CSS v4 + 自有 `@fish/ui` 组件                                                                          |
+| 后端              | **Hono on Bun**（`Bun.serve`）                                                                                  |
+| 校验              | Zod（Web 与 API 共用 `@fish/contracts`）                                                                        |
+| 数据库            | PostgreSQL 18 + pgvector + Drizzle ORM（运行时走 `drizzle-orm/bun-sql`）                                        |
+| 异步              | PostgreSQL `jobs` 表 + 独立 Bun Worker 轮询                                                                     |
+| 实时              | Hono / Bun 原生 WebSocket                                                                                       |
+| 对象存储          | S3 兼容（本地 MinIO）                                                                                           |
+| 质量              | Biome（lint + format）· TypeScript 7 · Bun 内置 `bun check` 类型检查（对齐 tsc 7）· `bun test` · GitHub Actions |
 
 **V1 明确不引入**：Redis、Kafka、OpenSearch、K8s、微服务、平台支付、物流、购物车、结构化报价 / 反价、地图。
 
@@ -144,11 +144,11 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 `bun run db:seed` 会写入三个可登录账号，密码统一 `fish123456`（**仅本地演示，禁止用于生产**）：
 
-| 学号 | 昵称 | 校区 | 认证状态 |
-| --- | --- | --- | --- |
-| `202101000001` | 阿岚 | 肇庆 | 未认证 |
-| `202101000002` | 小北 | 肇庆 | 未认证 |
-| `202101000003` | 橙子 | 广州 | 未认证 |
+| 学号           | 昵称 | 校区 | 认证状态 |
+| -------------- | ---- | ---- | -------- |
+| `202101000001` | 阿岚 | 肇庆 | 未认证   |
+| `202101000002` | 小北 | 肇庆 | 未认证   |
+| `202101000003` | 橙子 | 广州 | 未认证   |
 
 关于 seed 数据，有两点要提前知道：
 
@@ -157,31 +157,31 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 ## 常用命令
 
-| 命令 | 说明 |
-| --- | --- |
-| `bun run dev` | 并行启动各应用（API / Worker / PC Web） |
-| `bun run dev:web-pc` · `dev:api` · `dev:worker` · `dev:miniapp` | 分别启动对应应用（小程序走 Taro dev:weapp） |
-| `bun run typecheck` | 全仓 TypeScript 类型检查 |
-| `bun run lint` / `bun run format` | Biome 检查 / 格式化 |
-| `bun test --isolate` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表） |
-| `bun run build` / `build:web-pc` / `build:miniapp` | 全仓构建 / 仅构建 PC Web / 仅构建小程序 |
-| `bun run ws:smoke` | WebSocket 连通性冒烟 |
-| `bun run core:smoke` | 核心主链端到端冒烟（`-- --runs=5` 连跑 5 轮；失败默认保留 scratch 库与 MinIO 对象供事后查证，`-- --clean` 改为失败也清理） |
-| `bun run rank:compare` | 推荐排序离线对比脚本（#322 M3：v1 / semantic-only / hybrid 权重组评估，不改生产行为） |
-| `bun run db:up` / `db:down` | 启动 / 停止本地依赖 |
-| `bun run db:generate` / `db:migrate` / `db:studio` | Drizzle 迁移与调试 |
-| `bun run db:promote` | 受控管理员提升（按显式学号提升为 `ADMIN` 并写审计；#73） |
-| `bun run db:seed` | 写入演示数据（**会先清空业务表**，仅允许本地数据库） |
+| 命令                                                            | 说明                                                                                                                       |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `bun run dev`                                                   | 并行启动各应用（API / Worker / PC Web）                                                                                    |
+| `bun run dev:web-pc` · `dev:api` · `dev:worker` · `dev:miniapp` | 分别启动对应应用（小程序走 Taro dev:weapp）                                                                                |
+| `bun run typecheck`                                             | 全仓 TypeScript 类型检查                                                                                                   |
+| `bun run lint` / `bun run format`                               | Biome 检查 / 格式化                                                                                                        |
+| `bun test --isolate`                                            | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表）  |
+| `bun run build` / `build:web-pc` / `build:miniapp`              | 全仓构建 / 仅构建 PC Web / 仅构建小程序                                                                                    |
+| `bun run ws:smoke`                                              | WebSocket 连通性冒烟                                                                                                       |
+| `bun run core:smoke`                                            | 核心主链端到端冒烟（`-- --runs=5` 连跑 5 轮；失败默认保留 scratch 库与 MinIO 对象供事后查证，`-- --clean` 改为失败也清理） |
+| `bun run rank:compare`                                          | 推荐排序离线对比脚本（#322 M3：v1 / semantic-only / hybrid 权重组评估，不改生产行为）                                      |
+| `bun run db:up` / `db:down`                                     | 启动 / 停止本地依赖                                                                                                        |
+| `bun run db:generate` / `db:migrate` / `db:studio`              | Drizzle 迁移与调试                                                                                                         |
+| `bun run db:promote`                                            | 受控管理员提升（按显式学号提升为 `ADMIN` 并写审计；#73）                                                                   |
+| `bun run db:seed`                                               | 写入演示数据（**会先清空业务表**，仅允许本地数据库）                                                                       |
 
 ### 端口
 
-| 服务 | 端口 |
-| --- | --- |
-| web-pc | 5174（页面 basepath `/pc/`） |
-| api | 3000 |
-| worker | 不监听端口 |
-| MinIO API / Console | 9000 / 9001 |
-| PostgreSQL | 5432 |
+| 服务                | 端口                         |
+| ------------------- | ---------------------------- |
+| web-pc              | 5174（页面 basepath `/pc/`） |
+| api                 | 3000                         |
+| worker              | 不监听端口                   |
+| MinIO API / Console | 9000 / 9001                  |
+| PostgreSQL          | 5432                         |
 
 ## 目录结构
 
@@ -212,13 +212,13 @@ FISH/
 
 ## 文档
 
-| 文档 | 内容 |
-| --- | --- |
-| [docs/architecture.md](docs/architecture.md) | 系统形态、技术基线、运行时拓扑、HTTP / WebSocket / 异步链路、端口与环境变量 |
-| [docs/deployment.md](docs/deployment.md) | 生产部署手册（Ubuntu + Bun 直跑）：依赖、环境变量、systemd、反代与 HTTPS、发布 / 回滚、备份 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 文件所有权、分支 / 提交 / PR 规范、Contract 流程、DB CHANGE REQUEST |
-| [AGENTS.md](AGENTS.md) | 给 AI agent 的操作规程与实现纪律 |
-| [docs/README.md](docs/README.md) | 文档索引 |
+| 文档                                         | 内容                                                                                        |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [docs/architecture.md](docs/architecture.md) | 系统形态、技术基线、运行时拓扑、HTTP / WebSocket / 异步链路、端口与环境变量                 |
+| [docs/deployment.md](docs/deployment.md)     | 生产部署手册（Ubuntu + Bun 直跑）：依赖、环境变量、systemd、反代与 HTTPS、发布 / 回滚、备份 |
+| [CONTRIBUTING.md](CONTRIBUTING.md)           | 文件所有权、分支 / 提交 / PR 规范、Contract 流程、DB CHANGE REQUEST                         |
+| [AGENTS.md](AGENTS.md)                       | 给 AI agent 的操作规程与实现纪律                                                            |
+| [docs/README.md](docs/README.md)             | 文档索引                                                                                    |
 
 ## License
 

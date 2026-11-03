@@ -5,7 +5,7 @@ import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
-import { and, desc, eq, inArray, lt, ne, or, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, lt, ne, or, type SQL, sql } from 'drizzle-orm'
 import type { ListingCardSeller } from '../listings/card'
 
 /**
@@ -39,13 +39,17 @@ export interface PublicUserRow {
 }
 
 export interface PublicUserStatsRow {
-  /** 在售数：口径必须与 `listActiveListings` 完全一致，否则页面会出现"写着 5 件、只列出 3 件"。 */
+  /** 在售数：口径必须与 `listListings(…, 'ACTIVE', …)` 完全一致，否则页面会出现"写着 5 件、只列出 3 件"。 */
   activeListings: number
-  /** 卖出数：已完成交易里 TA 是卖家的条数。 */
+  /**
+   * 已售出数：口径必须与 `listListings(…, 'SOLD', …)` 完全一致 —— 按 `listings` 表的
+   * `status = 'SOLD'` 且 `governance_delisted_at IS NULL` 计数（#565 复核订正：原先是
+   * `transactions` 里已完成交易的条数，与列表不同源，段头与列表会自相矛盾）。
+   */
   soldCount: number
 }
 
-/** 一行在售商品：字段恰好够 `toListingCard` 用（`ListingCardSource` 的结构类型）。 */
+/** 一行在售 / 已售出商品：字段恰好够 `toListingCard` 用（`ListingCardSource` 的结构类型）。 */
 export interface PublicListingRow {
   id: string
   listingNo: bigint
@@ -72,13 +76,25 @@ export interface PublicListingRow {
 /** 游标在 store 层是**已解码**结构；合法性由 service 校验后才走到这里。 */
 export type PublicListingCursor = { createdAt: string; id: string }
 
+/**
+ * 公开读模型允许的两种口径（#565）：`ACTIVE` = 在售、`SOLD` = 已售出。
+ *
+ * 与契约 `PublicUserListingsQuerySchema.status` 的值域**逐字相同**：契约已把
+ * OFFLINE / RESERVED 拒在 422，所以这里的类型就是这一层的完整值域，不需要再兜一层。
+ */
+export type PublicUserListingStatus = 'ACTIVE' | 'SOLD'
+
 export interface PublicUserStore {
   /** 按 id 取公开资料列；不存在或**已注销**（#464）返回 null（不区分"不存在"与"不可见"）。 */
   findPublicUser(userId: string): Promise<PublicUserRow | null>
   stats(userId: string): Promise<PublicUserStatsRow>
-  /** 取 TA 的在售商品，`created_at DESC, id DESC`，多取一行由调用方判断还有没有下一页。 */
-  listActiveListings(
+  /**
+   * 取 TA 的某一类商品（在售 / 已售出），`created_at DESC, id DESC`，
+   * 多取一行由调用方判断还有没有下一页。
+   */
+  listListings(
     userId: string,
+    status: PublicUserListingStatus,
     limit: number,
     cursor: PublicListingCursor | null,
   ): Promise<PublicListingRow[]>
@@ -131,17 +147,30 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
     },
 
     async stats(userId) {
-      // 两个计数合成一次往返。**在售数的过滤条件必须与 listActiveListings 逐字相同**
-      // （ACTIVE + APPROVED），否则页面顶部写「在售 5 件」而下面只列出 3 件。
+      // 两个计数合成一次往返。**两段计数的过滤条件必须与 listListings 对应分支逐字相同**
+      // （在售 = ACTIVE + APPROVED；已售出 = SOLD + 未治理下架），否则页头写「在售 5 件」
+      // 而下面只列出 3 件、或者「已售出 3 件」点进去只有 1 件。
       // `moderation_status = 'APPROVED'` 是公开可见性的第二道闸（与 listings feed 的
       // `includeUnapproved: false` 同口径）：只判 status 会把审核未通过的 ACTIVE 商品算进去。
+      //
+      // 已售出数（#565 复核订正）：口径是**可见的已售商品数**（listings 表），不再是
+      // 「成交笔数」（transactions 表）。原实现走 `transactions(status = 'COMPLETED')`，
+      // 与列表的 `listings.status = 'SOLD'` 是两个数据源，两边条数会打架：
+      //   · 治理下架（`governance_delisted_at != null`）商品成交时，`confirm` 路径把
+      //     `status` 保成 OFFLINE、核销路径才会无条件置 SOLD —— 同一笔成交在两个源里
+      //     一侧算、另一侧不算；
+      //   · 列表按 #565 的公开可见性口径要筛掉「平台已下架」的商品，计数不跟着筛就等于
+      //     把被筛掉的那几件还写在段头。
+      // 所以计数改成与 `listListings(…, 'SOLD', …)` 同源同条件：`status = 'SOLD'`
+      // 且 `governance_delisted_at IS NULL`。
       const result = await db.execute(sql`
         SELECT
           (SELECT count(*)::int FROM listings
             WHERE seller_id = ${userId} AND status = 'ACTIVE'
               AND moderation_status = 'APPROVED') AS active_listings,
-          (SELECT count(*)::int FROM transactions
-            WHERE seller_id = ${userId} AND status = 'COMPLETED') AS sold_count
+          (SELECT count(*)::int FROM listings
+            WHERE seller_id = ${userId} AND status = 'SOLD'
+              AND governance_delisted_at IS NULL) AS sold_count
       `)
       const row = firstRowOf(result)
       if (!row) throw new Error('公开用户统计查询未返回行')
@@ -151,13 +180,33 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
       }
     },
 
-    async listActiveListings(userId, limit, cursor) {
+    async listListings(userId, status, limit, cursor) {
       const conditions: SQL[] = [
         eq(listings.sellerId, userId),
-        // 公开在售列表：只出 ACTIVE。已售 / 已下架 / 已预定一律不在其中（#122 验收）。
-        eq(listings.status, 'ACTIVE'),
-        eq(listings.moderationStatus, 'APPROVED'),
+        // #565：口径由调用方给（在售 / 已售出）。已售出只认 `status = 'SOLD'`，
+        // 与在售一样是"公开可读"的：售出是成交事实，不是下架。
+        eq(listings.status, status),
       ]
+
+      // 公开可见性的第二道闸，**只在在售段生效**（与 listings feed 的
+      // `includeUnapproved: false` 同口径：只判 status 会把审核未通过的 ACTIVE 算进去）。
+      //
+      // 已售出段**不叠加** `moderationStatus = 'APPROVED'`（#565）：审核中 / 审核未通过
+      // （REVIEW / BLOCKED）的商品成交后应当照常出现在「已售出」里，叠加审核列就会凭空
+      // 少几件。（#565 复核订正：`confirm` 路径对**治理下架**商品是把 `status` 保成 OFFLINE
+      // 而不是 SOLD，所以「治理期间成交 → 仍是 SOLD」这个说法只对核销路径成立。）
+      //
+      // 但**必须**筛掉平台治理下架的商品（#565 复核 H1）：核销路径
+      // （`apps/api/src/modules/transactions/store.ts` 的核销 `UPDATE listings SET status = 'SOLD'`）
+      // 无条件置 SOLD，治理下架时只写 `governance_delisted_at` + `moderation_status = 'BLOCKED'`
+      // 且不取消在途交易 —— 于是存在 `status = 'SOLD'` 且 `governance_delisted_at != null` 的行。
+      // 这类商品对非本人详情一律 404（`apps/api/src/modules/listings/service.ts` 的非卖家
+      // OFFLINE 404 口径），若混进公开列表，匿名访客会拿到平台已下架商品的标题、价格、封面，
+      // 点进去却是 404。在售段本来就被 APPROVED 闸挡着，已售段不筛反而更松。
+      // 这里只认 `governance_delisted_at`（治理下架专用字段），不判 `moderation_status`。
+      if (status === 'ACTIVE') conditions.push(eq(listings.moderationStatus, 'APPROVED'))
+      else conditions.push(isNull(listings.governanceDelistedAt))
+
       if (cursor) conditions.push(cursorCondition(cursor))
 
       // innerJoin users（#191）：卡片要带卖家公开子集；`seller_id` 外键保证行存在，PK join 1:1。

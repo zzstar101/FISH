@@ -33,7 +33,7 @@ export type FollowingRow = {
   avatarUrl: string | null
   /** 演示占位色块（data URI）。真实行恒为空串（它与首字是两层，见 `demo.ts` 的说明）。 */
   placeholderBlock: string
-  /** 已认证：行内渲染认证勾，未认证整块不占位。 */
+  /** 已认证：行内渲染设计稿「认证」成品徽章（整图，非小图标），未认证整块不占位。 */
   verified: boolean
   /** 互相关注（双向关系）；服务端真值。 */
   mutual: boolean

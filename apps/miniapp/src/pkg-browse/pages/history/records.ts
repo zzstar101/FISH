@@ -73,6 +73,12 @@ export type RecordCell = {
   priceCents: number
   /** 非 null 时缩略图压遮罩、边框降级 */
   gone: GoneLabel | null
+  /**
+   * 商品封面（契约 `ListingCardSchema.coverUrl`，无图商品为 `null`）。
+   * `null` 时渲染退回分类色块（`blockUrlOf`），与 `features/listing/adapt.ts` 同口径 ——
+   * **不要**留空串：`<Image src="">` 会渲染成裂图。
+   */
+  coverUrl: string | null
 }
 
 /** 全部浏览：一天一组 */
@@ -98,6 +104,11 @@ export type MessageRecord = {
   /** 我写的那句话。评价行可能是空串（「只打分没写字」是契约明说的正常形态） */
   text: string
   timeLabel: string
+  /**
+   * 商品封面，口径同 `RecordCell['coverUrl']`：留言行走 `item.listing.coverUrl`，
+   * 评价行走 `item.transaction.listing.coverUrl`（交易内嵌的商品摘要也带这个字段）。
+   */
+  coverUrl: string | null
   /** 跳转目标（真实数据才有）：留言 → 商品详情；评价 → 面交 / 订单页 */
   target?: MessageTarget
 }
@@ -151,8 +162,8 @@ export function goneLabelOf(status: ListingStatus): GoneLabel | null {
 }
 
 /**
- * 契约的一行浏览记录 → 本页三列格。缩略图仍是分类色块（`blockUrlOf`，不引入真实封面，
- * 保持稿面版式）—— 契约的 `coverUrl` 留给后续换真封面时再接。
+ * 契约的一行浏览记录 → 本页三列格。缩略图取商品真实封面（`listing.coverUrl`，
+ * 无图商品为 `null`，渲染时退回分类色块，见 `index.tsx` 的 `renderCell`）。
  */
 export function recordCellOf(item: ViewHistoryItem): RecordCell {
   const { listing } = item
@@ -162,6 +173,7 @@ export function recordCellOf(item: ViewHistoryItem): RecordCell {
     title: listing.title,
     priceCents: listing.priceCents,
     gone: goneLabelOf(listing.status),
+    coverUrl: listing.coverUrl,
   }
 }
 
@@ -238,6 +250,7 @@ export function favoriteCell(item: FavoriteItem): RecordCell {
     title: item.listing.title,
     priceCents: item.listing.priceCents,
     gone: goneLabelOf(item.listing.status),
+    coverUrl: item.listing.coverUrl,
   }
 }
 
@@ -261,6 +274,7 @@ export function messageRow(
       kind: 'comment',
       text: item.comment.content,
       timeLabel: dayLabelOf(new Date(item.comment.createdAt), now),
+      coverUrl: item.listing.coverUrl,
       target: { kind: 'listing', id: item.comment.listingId },
     }
   }
@@ -271,6 +285,7 @@ export function messageRow(
     kind: 'review',
     text: item.review.body ?? '',
     timeLabel: dayLabelOf(new Date(item.review.createdAt), now),
+    coverUrl: item.transaction.listing.coverUrl,
     target: { kind: 'transaction', id: item.transaction.id },
   }
 }
@@ -440,6 +455,11 @@ export const DEMO_OPEN_TIP = '演示数据，暂不能打开商品详情'
 /* ---------------------------------------------------------------- 演示数据（照稿） */
 
 /**
+ * 演示档没有真实封面：三份数据的每一格都带 `coverUrl: null` —— 稿面的缩略图本来就是分类
+ * 色块，渲染时按「无图商品」那条兜底路径退回 `blockUrlOf`，与真实数据完全同一条分支。
+ */
+
+/**
  * 全部浏览：24 件 · 4 天（与「我的」页数字栏的足迹数 24 对齐），组内顺序 = 浏览顺序（最近的在前）。
  * 其中 2 件的「失效」是稿件本身的演示设定（商品在 catalog 里仍在售），见稿的同段说明。
  */
@@ -453,6 +473,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '索尼 WH-1000XM4 头戴降噪耳机',
         priceCents: 76000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-02',
@@ -460,6 +481,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '小米 12 8+128 全网通',
         priceCents: 89000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-03',
@@ -467,6 +489,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '捷安特 ATX 山地车 27.5 寸',
         priceCents: 42000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-04',
@@ -474,6 +497,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '雅马哈 F310 民谣吉他 41 寸',
         priceCents: 52000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-05',
@@ -481,6 +505,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '耐克 Air Force 1 白 42 码',
         priceCents: 26000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-06',
@@ -488,6 +513,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '兰蔻小黑瓶精华 50ml 全新未拆',
         priceCents: 52000,
         gone: null,
+        coverUrl: null,
       },
     ],
   },
@@ -500,6 +526,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '灌篮高手 完全版 1-24 全集',
         priceCents: 46000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-08',
@@ -507,6 +534,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '九号电动滑板车 续航 30km',
         priceCents: 115000,
         gone: '已下架',
+        coverUrl: null,
       },
       {
         id: 'h-09',
@@ -514,6 +542,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '斯伯丁篮球 7 号 室内外通用',
         priceCents: 8900,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-10',
@@ -521,6 +550,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '米家台灯 Pro 护眼版',
         priceCents: 12000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-11',
@@ -528,6 +558,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '东野圭吾小说合集 共 6 本',
         priceCents: 7800,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-12',
@@ -535,6 +566,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '双肩背包 大容量 通勤上课',
         priceCents: 8800,
         gone: null,
+        coverUrl: null,
       },
     ],
   },
@@ -547,6 +579,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '高等数学 同济第七版 上下册',
         priceCents: 4500,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-14',
@@ -554,6 +587,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '宿舍电热水壶 1.5L 保温款',
         priceCents: 5500,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-15',
@@ -561,6 +595,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '通勤单肩包 牛皮 米白色',
         priceCents: 16800,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-16',
@@ -568,6 +603,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '加厚瑜伽垫 10mm 防滑',
         priceCents: 3900,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-17',
@@ -575,6 +611,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '宜家小熊玩偶 60cm 干净',
         priceCents: 4500,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-18',
@@ -582,6 +619,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '彩妆套装 唇釉 / 眼影 九成新',
         priceCents: 9600,
         gone: null,
+        coverUrl: null,
       },
     ],
   },
@@ -594,6 +632,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '冲锋衣 男 L 码 三合一',
         priceCents: 32000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-20',
@@ -601,6 +640,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '祖玛珑蓝风铃 30ml 余量 80%',
         priceCents: 38000,
         gone: '已卖掉',
+        coverUrl: null,
       },
       {
         id: 'h-21',
@@ -608,6 +648,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '可调节哑铃 20kg 一对',
         priceCents: 18000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-22',
@@ -615,6 +656,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '联想 ThinkPad X280 轻薄本',
         priceCents: 158000,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-23',
@@ -622,6 +664,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '桌游 狼人杀 / 大富翁 组合出',
         priceCents: 6800,
         gone: null,
+        coverUrl: null,
       },
       {
         id: 'h-24',
@@ -629,6 +672,7 @@ export const DEMO_HISTORY: HistoryDay[] = [
         title: '电动车头盔 3C 认证 带护目镜',
         priceCents: 4500,
         gone: null,
+        coverUrl: null,
       },
     ],
   },
@@ -646,6 +690,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '索尼 WH-1000XM4 头戴降噪耳机',
     priceCents: 76000,
     gone: null,
+    coverUrl: null,
   },
   {
     id: 'f-02',
@@ -653,6 +698,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '东野圭吾小说合集 共 6 本',
     priceCents: 7800,
     gone: null,
+    coverUrl: null,
   },
   {
     id: 'f-03',
@@ -660,6 +706,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '捷安特 ATX 山地车 27.5 寸',
     priceCents: 42000,
     gone: null,
+    coverUrl: null,
   },
   {
     id: 'f-04',
@@ -667,6 +714,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '九号电动滑板车 续航 30km',
     priceCents: 115000,
     gone: '已下架',
+    coverUrl: null,
   },
   {
     id: 'f-05',
@@ -674,6 +722,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '斯伯丁篮球 7 号 室内外通用',
     priceCents: 8900,
     gone: null,
+    coverUrl: null,
   },
   {
     id: 'f-06',
@@ -681,6 +730,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '兰蔻小黑瓶精华 50ml 全新未拆',
     priceCents: 52000,
     gone: null,
+    coverUrl: null,
   },
   {
     id: 'f-07',
@@ -688,6 +738,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '祖玛珑蓝风铃 30ml 余量 80%',
     priceCents: 38000,
     gone: '已卖掉',
+    coverUrl: null,
   },
   {
     id: 'f-08',
@@ -695,6 +746,7 @@ export const DEMO_FAVS: RecordCell[] = [
     title: '雅马哈 F310 民谣吉他 41 寸',
     priceCents: 52000,
     gone: null,
+    coverUrl: null,
   },
 ]
 
@@ -711,6 +763,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'comment',
     text: '还在吗？我今晚下课顺路，能帮我留到八点吗',
     timeLabel: '2 小时前',
+    coverUrl: null,
   },
   {
     id: 'm-02',
@@ -719,6 +772,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'comment',
     text: '球是室内打过还是室外打的？气还足吗',
     timeLabel: '昨天 19:40',
+    coverUrl: null,
   },
   {
     id: 'm-03',
@@ -727,6 +781,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'comment',
     text: '车在哪栋楼？周末方便试骑一下吗',
     timeLabel: '3 天前',
+    coverUrl: null,
   },
   {
     id: 'm-04',
@@ -735,6 +790,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'comment',
     text: '色温有几档？宿舍桌面用会不会太亮',
     timeLabel: '上周',
+    coverUrl: null,
   },
   {
     id: 'm-05',
@@ -743,6 +799,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'review',
     text: '准时到了面交点，验完直接确认，很好沟通的一位同学。',
     timeLabel: '5 月 12 日',
+    coverUrl: null,
   },
   {
     id: 'm-06',
@@ -751,6 +808,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'review',
     text: '验货很仔细，但确认得很爽快，全程没有压价。',
     timeLabel: '5 月 6 日',
+    coverUrl: null,
   },
   {
     id: 'm-07',
@@ -759,6 +817,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'review',
     text: '书收到啦，包得很仔细，成色比描述的还好。',
     timeLabel: '5 月 20 日',
+    coverUrl: null,
   },
   {
     id: 'm-08',
@@ -767,6 +826,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
     kind: 'review',
     text: '瓶身完好、日期也新，就是见面时间来回改了两遍。',
     timeLabel: '4 月 28 日',
+    coverUrl: null,
   },
 ]
 

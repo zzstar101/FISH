@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 商品详情。尺寸 = 设计稿 pt × 2（见 apps/miniapp/DESIGN.md）。
@@ -162,7 +162,7 @@
   justify-content: center;
 
   &::before {
-    content: '';
+    content: "";
     display: block;
     width: 12px;
     height: 12px;

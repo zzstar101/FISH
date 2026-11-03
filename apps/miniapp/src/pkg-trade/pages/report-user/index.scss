@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 举报用户（稿 `小程序1版举报用户.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -246,10 +246,7 @@
   color: var(--muted-2);
   white-space: nowrap;
   padding: 0 8px;
-  transition:
-    background 0.16s,
-    border-color 0.16s,
-    color 0.16s;
+  transition: background 0.16s, border-color 0.16s, color 0.16s;
 
   &:active {
     transform: translateY(2px);
@@ -277,9 +274,7 @@
   border-radius: 28px;
   border: 2px solid var(--border);
   background: var(--surface);
-  transition:
-    border-color 0.16s,
-    box-shadow 0.16s;
+  transition: border-color 0.16s, box-shadow 0.16s;
 
   &.is-focus {
     border-color: var(--brand);
@@ -351,9 +346,7 @@
   font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
-  transition:
-    filter 0.16s,
-    background 0.16s;
+  transition: filter 0.16s, background 0.16s;
 
   &:active {
     transform: translateY(2px);

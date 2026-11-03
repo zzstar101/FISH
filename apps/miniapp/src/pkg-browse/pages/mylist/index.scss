@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * C4 我的发布（1版稿 `小程序1版mylist.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -114,9 +114,7 @@
   box-sizing: border-box;
   border-radius: var(--r-pill);
   background: var(--surface);
-  box-shadow:
-    inset 0 0 0 2px var(--border),
-    var(--shadow-card);
+  box-shadow: inset 0 0 0 2px var(--border), var(--shadow-card);
 }
 
 .ml__seg-item {
@@ -423,7 +421,7 @@
   border-radius: 4px;
 
   &::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 50%;
     top: -12px;

@@ -13,20 +13,20 @@
 
 ## 2. 技术基线
 
-| 层 | 选型 |
-| --- | --- |
-| Runtime / 包管理 | Bun（`packageManager: bun@1.4.4`，`engines.bun >= 1.4.4`） |
-| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React + Vite + TypeScript，`apps/web-pc`） |
-| 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
-| UI | Tailwind CSS v4（shadcn/ui 由前端 Owner 接入） |
-| 后端 | Hono on Bun（`Bun.serve`） |
-| 校验 | Zod |
-| 数据库 | PostgreSQL 18 + pgvector + Drizzle ORM（运行时 `drizzle-orm/bun-sql`，走 Bun 内置 `bun:sql`） |
-| 异步 | PostgreSQL jobs 表 + 独立 Bun Worker 轮询 |
-| 实时 | Hono / Bun 原生 WebSocket |
-| 对象存储 | S3 兼容（本地 MinIO） |
-| 搜索（V1） | PostgreSQL FTS / `pg_trgm` |
-| 代码质量 | Biome（lint + format）· TypeScript 7 · Bun 内置 `bun check` 类型检查（对齐 tsc 7）· `bun test` |
+| 层                | 选型                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| Runtime / 包管理  | Bun（`packageManager: bun@1.4.4`，`engines.bun >= 1.4.4`）                                             |
+| 前端              | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React + Vite + TypeScript，`apps/web-pc`） |
+| 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query                                                          |
+| UI                | Tailwind CSS v4（shadcn/ui 由前端 Owner 接入）                                                         |
+| 后端              | Hono on Bun（`Bun.serve`）                                                                             |
+| 校验              | Zod                                                                                                    |
+| 数据库            | PostgreSQL 18 + pgvector + Drizzle ORM（运行时 `drizzle-orm/bun-sql`，走 Bun 内置 `bun:sql`）          |
+| 异步              | PostgreSQL jobs 表 + 独立 Bun Worker 轮询                                                              |
+| 实时              | Hono / Bun 原生 WebSocket                                                                              |
+| 对象存储          | S3 兼容（本地 MinIO）                                                                                  |
+| 搜索（V1）        | PostgreSQL FTS / `pg_trgm`                                                                             |
+| 代码质量          | Biome（lint + format）· TypeScript 7 · Bun 内置 `bun check` 类型检查（对齐 tsc 7）· `bun test`         |
 
 **V1 明确不引入**：Redis、Kafka、OpenSearch、K8s、微服务、平台支付、物流、购物车、结构化报价/反价、复杂推荐与信用、地图、无关 AI Chatbot。
 
@@ -156,26 +156,26 @@ sequenceDiagram
 
 ### 端口
 
-| 服务 | 端口 |
-| --- | --- |
-| web-pc（Vite dev，PC Web，basepath `/pc/`） | 5174 |
-| api（Hono / Bun.serve） | 3000 |
-| worker | 不监听端口 |
-| MinIO API / Console | 9000 / 9001 |
-| PostgreSQL | 5432 |
+| 服务                                        | 端口        |
+| ------------------------------------------- | ----------- |
+| web-pc（Vite dev，PC Web，basepath `/pc/`） | 5174        |
+| api（Hono / Bun.serve）                     | 3000        |
+| worker                                      | 不监听端口  |
+| MinIO API / Console                         | 9000 / 9001 |
+| PostgreSQL                                  | 5432        |
 
 ### 环境变量
 
 统一维护在 [`.env.example`](../.env.example)，本地复制为 `.env` 使用：
 
-| 变量 | 用途 |
-| --- | --- |
-| `DATABASE_URL` | PostgreSQL 连接串 |
-| `API_PORT` | API 监听端口 |
-| `WEB_ORIGIN` | CORS 白名单 |
-| `S3_ENDPOINT` / `S3_REGION` | S3 兼容存储端点与区域 |
+| 变量                                        | 用途                                         |
+| ------------------------------------------- | -------------------------------------------- |
+| `DATABASE_URL`                              | PostgreSQL 连接串                            |
+| `API_PORT`                                  | API 监听端口                                 |
+| `WEB_ORIGIN`                                | CORS 白名单                                  |
+| `S3_ENDPOINT` / `S3_REGION`                 | S3 兼容存储端点与区域                        |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | 存储凭证（**本地占位值，禁止提交真实密钥**） |
-| `S3_BUCKET` / `S3_PUBLIC_URL` | bucket 与公开访问前缀 |
+| `S3_BUCKET` / `S3_PUBLIC_URL`               | bucket 与公开访问前缀                        |
 
 服务端（api / worker）启动时用 `@fish/shared/env` 里的 Zod schema **统一校验**：缺项直接失败，而不是带病运行。
 

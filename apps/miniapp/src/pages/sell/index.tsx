@@ -191,6 +191,13 @@ export default function Sell() {
   const [submitting, setSubmitting] = useState(false)
   /** 审核中的商品 id：非 null 时整页换成结果视图 */
   const [pendingReviewId, setPendingReviewId] = useState<string | null>(null)
+  /**
+   * 已成功发布 / 保存、但跳详情页失败的那件商品 id：非 null 时整页换成「发布成功」结果视图。
+   *
+   * 只在**跳转失败**时落地（跳成功时本页被 `redirectTo` / `reLaunch` 换掉，这行 state 也不会再被看见）：
+   * 商品已经建出来了，入口不能跟着跳转一起消失，更不能让用户重填一遍再发一次（重复发布）。
+   */
+  const [publishedId, setPublishedId] = useState<string | null>(null)
   /** 发布前绑定手机号的 sheet（#514）；声明在换号清场之前，换号时一并关掉。 */
   const [phoneSheetOpen, setPhoneSheetOpen] = useState(false)
 
@@ -234,6 +241,8 @@ export default function Sell() {
     setBlockMessage(cleared.blockMessage)
     setSubmitting(cleared.submitting)
     setPendingReviewId(cleared.pendingReviewId)
+    // 「发布成功」留下的商品 id 同样是账号作用域的：A 的商品不能挂在 B 的页面上
+    setPublishedId(null)
   }
 
   /**
@@ -338,6 +347,7 @@ export default function Sell() {
     setFieldErrors({})
     setBlockMessage('')
     setPendingReviewId(null)
+    setPublishedId(null)
   }
 
   /** 编辑态取回原商品；404 / 非本人一律走「无法编辑」空态，不静默降级成一张空表单 */
@@ -388,9 +398,10 @@ export default function Sell() {
    * 若先看 `routeId`，从「我的发布」点「再次上架」会掉进**另一件商品的编辑态**，
    * 而且那份 prefill 草稿被静默丢掉。
    *
-   * **审核尾页只保留一次**：`pendingReviewId` 的整页「已提交，正在审核」只在提交后、
+   * **尾页只保留一次**：`pendingReviewId` 的整页「已提交，正在审核」与 `publishedId` 的
+   * 「发布成功」（只在跳详情页失败时出现）都只在提交后、
    * 用户没离开过本页的这段停留里可见；本页是隐藏 Tab 页且实例常驻，不清的话微信
-   * 热启动恢复栈顶后「从哪里打开都在尾页」。所以 onShow 先把它重置回初始表单
+   * 热启动恢复栈顶后「从哪里打开都在尾页」。所以 onShow 先把它们重置回初始表单
    * —— 放在 handoff 分支**之前**，同一次 show 里来了 prefill / edit 交接时，
    * 交接在重置后的表单上接管，「再次上架 / 编辑」的预填不受影响。
    * 已知例外：实例带 `?id=` 创建的演示兼容路径（生产导航不带参进出物页，见上），
@@ -398,7 +409,7 @@ export default function Sell() {
    * 口子得让 routeId 消费一次即弃，超出本次范围。
    */
   const syncEditTarget = () => {
-    if (pendingReviewId !== null) resetForm()
+    if (pendingReviewId !== null || publishedId !== null) resetForm()
 
     const handoff = takeSellHandoff()
 
@@ -460,14 +471,46 @@ export default function Sell() {
   }, [authStatus, userId])
 
   /**
-   * 发布成功 → 商品详情。
+   * 发布 / 编辑成功 → 商品详情。
    *
-   * 先 `resetForm()` 再 `navigateTo`：这样 back 回到发布页时是一张新表单，
-   * 而不是一份填过的旧内容（否则容易再点一次「发布」）。
+   * 用 `redirectTo`（而不是 `navigateTo`）把本页**从栈里换掉**（#562）：详情页成为栈底，
+   * 它的返回键走已有的「栈深 1 → 回首页」兜底（`lib/nav-back` 同口径），用户不会落回
+   * 一张被 `resetForm()` 清空、看不出刚才发生了什么的空表单。顺带根除底栏 bug：本页被
+   * 销毁，它那个常驻底栏实例不复存在，「底栏卡在本页上」无从发生。
+   *
+   * 平台对 `redirectTo` 的限制是**目标**页不能是 tabBar 页（不限制从 Tab 页跳走）；
+   * 万一某端拒绝这条跳转，退化到 `reLaunch`（栈同样只剩详情页，代价是整栈重开）。
+   * **两条都失败**时不再把用户丢在一张空表单上：记下这件商品的 id（`publishedId`），
+   * 由「发布成功」结果视图接住 —— 商品已经建出来了，它的入口不能跟着跳转一起消失；
+   * 也绝不能让用户以为没发出去而重填一遍再发一次。
+   *
+   * `resetForm()` **不在跳转之前**调：清空当下就生效，而跳转是不是真的离开本页要等回调；
+   * 失败分支若面对一张已经空掉、连商品名都想不起来的表单，用户根本无从判断刚才发生了什么。
+   * 清空改由结果视图的「继续发布」与下一次 onShow（上面的 `syncEditTarget`）负责。
    */
-  const goDetail = (id: string) => {
-    resetForm()
-    void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${id}` })
+  const goDetail = (id: string, task: SellTask) => {
+    if (!taskAlive(task)) return
+    // 保存已经成功；跳转等待期间也不能重新提交同一件商品。
+    setPublishedId(id)
+    const url = `/pkg-browse/pages/listing-detail/index?id=${id}`
+    void Taro.redirectTo({ url })
+      .catch(() => {
+        if (!taskAlive(task)) return
+        return Taro.reLaunch({ url })
+      })
+      .catch(() => {
+        if (taskAlive(task)) toast('已保存，可稍后查看商品')
+      })
+  }
+
+  /**
+   * 「发布成功」结果视图里的「查看商品」：普通进入详情页（不换栈，用户还能返回本页）。
+   * 失败只说一句，不把结果视图换掉 —— 商品入口要留在原地，别让一次失败的跳转把唯一的线索也弄丢。
+   */
+  const openPublishedDetail = () => {
+    if (publishedId === null) return
+    const url = `/pkg-browse/pages/listing-detail/index?id=${publishedId}`
+    void Taro.navigateTo({ url }).catch(() => toast('打不开商品详情，请稍后再试'))
   }
 
   /**
@@ -673,7 +716,7 @@ export default function Sell() {
           setPendingReviewId(detail.id)
           return
         }
-        goDetail(detail.id)
+        goDetail(detail.id, task)
       } catch (error) {
         // A 的字段级错误 / 提示条同样不能落到 B 的表单上
         if (!taskAlive(task)) return
@@ -915,6 +958,49 @@ export default function Sell() {
     )
   }
 
+  /**
+   * 发布 / 保存成功，但详情页没打开（`redirectTo` 与 `reLaunch` 都被平台拒绝）。
+   *
+   * 这时候商品**已经存在**：把这件事说出来，并守住它唯一的入口。本视图里没有任何提交按钮，
+   * 表单也没渲染 —— 用户不可能在「以为没发出去」的情况下再发一次。
+   */
+  if (publishedId !== null) {
+    return (
+      <View className="sell">
+        <View className="sell__hero-bg" />
+        <TopBar back variant="glass" spacer title={editing ? '编' : '发'} titleEm="闲置" />
+        <View className="sell__body">
+          <View className="sell__result">
+            <View className="sell__result-badge">
+              <Image className="sell__result-ic" src={ICONS.checkCircleBrand} mode="aspectFit" />
+            </View>
+            <Text className="sell__result-title">{editing ? '已保存' : '发布成功'}</Text>
+            <Text className="sell__result-text">
+              {editing
+                ? '这件闲置已经保存好了，只是详情页没能打开。'
+                : '这件闲置已经发布出去了，只是详情页没能打开。'}
+              可以去商品详情或「我的发布」里找到它，不用重新发布。
+            </Text>
+            <View className="sell__submit" onClick={openPublishedDetail}>
+              <Text className="sell__submit-text">查看商品</Text>
+            </View>
+            <View
+              className="sell__btn-line"
+              onClick={() => {
+                void Taro.navigateTo({ url: '/pkg-browse/pages/mylist/index' })
+              }}
+            >
+              <Text>去「我的发布」看看</Text>
+            </View>
+            <View className="sell__btn-line" onClick={resetForm}>
+              <Text>继续发布</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+    )
+  }
+
   if (editing && editState !== 'idle') {
     return (
       <View className="sell">
@@ -951,7 +1037,7 @@ export default function Sell() {
   return (
     <View className="sell">
       <View className="sell__hero-bg" />
-      {/* 本页不渲染底栏（见 custom-tab-bar 的 HIDDEN_ROUTE），返回钮是唯一出口 */}
+      {/* 本页不渲染底栏（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），返回钮是唯一出口 */}
       {/* 页名大字跟其它页面顶栏同款：前段黑 + 尾段品牌蓝，跟在返回钮右边不居中 */}
       <TopBar back variant="glass" spacer title={editing ? '编' : '发'} titleEm="闲置" />
 

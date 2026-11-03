@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { FavoriteItem as ContractFavoriteItem } from '@fish/contracts/favorites/schema'
 import type { ListingCard, ListingStatus } from '@fish/contracts/listings/schema'
+import type { TransactionReviewItem } from '@fish/contracts/transaction-reviews/schema'
 import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
@@ -198,7 +199,15 @@ describe('recordCellOf —— 契约行 → 三列格', () => {
       title: '小米 12',
       priceCents: 89000,
       gone: '已下架',
+      coverUrl: null,
     })
+  })
+
+  test('有封面：透传契约的 coverUrl（不再落回分类色块）', () => {
+    const cell = recordCellOf(
+      item('2026-09-12T03:00:00.000Z', { coverUrl: 'https://cdn.example.com/phone.jpg' }),
+    )
+    expect(cell.coverUrl).toBe('https://cdn.example.com/phone.jpg')
   })
 })
 
@@ -297,7 +306,17 @@ describe('favoriteCell —— 收藏行 → 三列格', () => {
       title: '罗技鼠标',
       priceCents: 12800,
       gone: '已卖掉',
+      coverUrl: null,
     })
+  })
+
+  test('封面色取自 item.listing.coverUrl（有图就透传真图）', () => {
+    const cell = favoriteCell({
+      listing: card({ coverUrl: 'https://cdn.example.com/mouse.jpg' }),
+      favoritedAt: '2026-09-20T02:00:00.000Z',
+    })
+    // 只喂 null 的话，适配层把它写死成 `coverUrl: null` 也全绿
+    expect(cell.coverUrl).toBe('https://cdn.example.com/mouse.jpg')
   })
 })
 
@@ -314,7 +333,11 @@ describe('messageRow —— 留言 / 评价行 → 整宽行', () => {
           content: '还在吗',
           createdAt: at(2026, 11, 2, 10),
         },
-        listing: card({ title: '九成新山地车', category: 'SPORTS' }),
+        listing: card({
+          title: '九成新山地车',
+          category: 'SPORTS',
+          coverUrl: 'https://cdn.example.com/bike.jpg',
+        }),
       },
       now,
     )
@@ -326,56 +349,86 @@ describe('messageRow —— 留言 / 评价行 → 整宽行', () => {
       kind: 'comment',
       text: '还在吗',
       timeLabel: '今天',
+      coverUrl: 'https://cdn.example.com/bike.jpg',
       target: { kind: 'listing', id: LISTING_ID },
+    })
+  })
+
+  /**
+   * 评价行夹具：`GET /me/comments?kind=all` 里「我收到的评价」那一支。
+   *
+   * 封面单独开参，因为两条分支都要钉住：`messageRow` 在评价行取的是
+   * `item.transaction.listing.coverUrl`（留言行取的是 `item.listing.coverUrl`），
+   * 只喂 null 的话把它写死成 `coverUrl: null` 也全绿。
+   */
+  function reviewItem(coverUrl: string | null): TransactionReviewItem {
+    const transactionId = encodePublicId(PUBLIC_ID_PREFIX.transaction, uuid(41))
+    return {
+      review: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.review, uuid(42)),
+        transactionId,
+        rating: 'POSITIVE',
+        // 「只打分没写字」是契约明说的正常形态（`body` 可空）
+        body: null,
+        images: [],
+        createdAt: at(2026, 11, 1, 9),
+      },
+      transaction: {
+        id: transactionId,
+        conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, uuid(43)),
+        listingId: LISTING_ID,
+        buyerId: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(44)),
+        sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(45)),
+        role: 'BUYER',
+        listing: {
+          id: LISTING_ID,
+          title: '九成新山地车',
+          priceCents: 38000,
+          status: 'SOLD',
+          coverUrl,
+        },
+        counterpart: {
+          id: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(45)),
+          nickname: '小林',
+          avatarUrl: null,
+        },
+        amountCents: 36000,
+        status: 'COMPLETED',
+        buyerConfirmedAt: null,
+        sellerConfirmedAt: null,
+        completedAt: at(2026, 11, 1, 8),
+        cancelledAt: null,
+        createdAt: at(2026, 10, 31, 8),
+        updatedAt: at(2026, 11, 1, 8),
+      },
+    }
+  }
+
+  test('评价行：封面色取自 transaction.listing.coverUrl（有图就透传真图）', () => {
+    const row = messageRow(reviewItem('https://cdn.example.com/bike.jpg'), now)
+
+    expect(row).toEqual({
+      id: encodePublicId(PUBLIC_ID_PREFIX.review, uuid(42)),
+      category: null,
+      title: '九成新山地车',
+      kind: 'review',
+      text: '',
+      timeLabel: '昨天',
+      coverUrl: 'https://cdn.example.com/bike.jpg',
+      target: {
+        kind: 'transaction',
+        id: encodePublicId(PUBLIC_ID_PREFIX.transaction, uuid(41)),
+      },
     })
   })
 
   test('评价行：交易内嵌的商品摘要没有分类 → category 为 null；跳转目标是那笔交易', () => {
     const transactionId = encodePublicId(PUBLIC_ID_PREFIX.transaction, uuid(41))
-    const row = messageRow(
-      {
-        review: {
-          id: encodePublicId(PUBLIC_ID_PREFIX.review, uuid(42)),
-          transactionId,
-          rating: 'POSITIVE',
-          // 「只打分没写字」是契约明说的正常形态（`body` 可空）
-          body: null,
-          images: [],
-          createdAt: at(2026, 11, 1, 9),
-        },
-        transaction: {
-          id: transactionId,
-          conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, uuid(43)),
-          listingId: LISTING_ID,
-          buyerId: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(44)),
-          sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(45)),
-          role: 'BUYER',
-          listing: {
-            id: LISTING_ID,
-            title: '九成新山地车',
-            priceCents: 38000,
-            status: 'SOLD',
-            coverUrl: null,
-          },
-          counterpart: {
-            id: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(45)),
-            nickname: '小林',
-            avatarUrl: null,
-          },
-          amountCents: 36000,
-          status: 'COMPLETED',
-          buyerConfirmedAt: null,
-          sellerConfirmedAt: null,
-          completedAt: at(2026, 11, 1, 8),
-          cancelledAt: null,
-          createdAt: at(2026, 10, 31, 8),
-          updatedAt: at(2026, 11, 1, 8),
-        },
-      },
-      now,
-    )
+    const row = messageRow(reviewItem(null), now)
 
     expect(row.category).toBeNull()
+    // 交易内嵌的商品摘要没有封面时同样透传 null → 页面回落色块（退 OTHER），不留空串
+    expect(row.coverUrl).toBeNull()
     expect(row.title).toBe('九成新山地车')
     expect(row.kind).toBe('review')
     expect(row.text).toBe('')

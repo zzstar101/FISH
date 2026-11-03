@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 我的收藏（稿 `小程序1版favorites.html`，模板 A）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -368,12 +368,15 @@
 .fav__nm {
   font-size: var(--fs-xs);
   color: var(--muted-2);
+  /* 右侧认证徽章换成 61px 宽的横向整图（#563），长昵称先省略再挤徽章 */
+  min-width: 0;
   @include ellipsis;
 }
 
+/* 认证徽章（#563）：设计稿「认证」3D 整图 275×108 按比例显示，尺寸同详情卖家行 */
 .fav__tick {
   flex: 0 0 auto;
-  width: 24px;
+  width: 61px;
   height: 24px;
 }
 
@@ -533,4 +536,3 @@
   color: var(--muted-2);
   white-space: nowrap;
 }
-

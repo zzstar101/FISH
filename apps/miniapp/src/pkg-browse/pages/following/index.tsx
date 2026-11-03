@@ -1,6 +1,7 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -439,9 +440,9 @@ export default function Following() {
                     <Text className="fw__name" onClick={() => openPerson(row)}>
                       {row.nickname}
                     </Text>
-                    {/* 认证勾：未认证时整块不占位 */}
+                    {/* 认证徽章（#563）：未认证时整块不占位 */}
                     {row.verified ? (
-                      <Image className="fw__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
+                      <Image className="fw__tick" src={BADGE.verified} mode="aspectFit" />
                     ) : null}
                   </View>
                   {/* 签名 / 最近活跃只有演示稿有数据源；真实行为空串，整行不渲染 */}

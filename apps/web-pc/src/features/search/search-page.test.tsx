@@ -34,6 +34,9 @@ const FREE_ACTIVE_TEXT = '只看免费送'
 function makeRouter(initial: string) {
   return createRouter({
     routeTree,
+    // 导航测试模拟客户端；新版 Router 在服务端会主动忽略 navigate。
+    isServer: false,
+    origin: 'http://localhost',
     basepath: '/pc',
     notFoundMode: 'root',
     history: createMemoryHistory({ initialEntries: [initial] }),

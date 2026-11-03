@@ -1260,3 +1260,363 @@ export function shouldDropReplyOnSendFailure(code: string | undefined): boolean 
 
 /** 摘掉引用后的提示文案（失败气泡留在原地，用户可以再点重试） */
 export const REPLY_DROPPED_TIP = '引用的消息已失效，已去掉引用'
+
+/**
+ * 「贴底」判定的容差（设备 px，与 `ScrollView.onScroll` 的刻度同口径）。
+ *
+ * 留一点余量：`autoHeight` 输入框长高、语音/键盘两态输入栏高度差、iOS 的取整都会让
+ * 底部差上几个 px，这一档必须仍算贴底 —— 否则用户明明看着最新一条，面板一开合却不跟着
+ * 重指尾行（#561 的「跳回顶部」）。
+ *
+ * **这只是常驻基线**：多行输入能造成几十 px 的视口缩量（≥ 本值），但那部分要由调用方按
+ * 「自己刚刚造成的几何变化」临时放宽（见 `isNearBottom` 的 `slack` 参数）。不能把基线
+ * 本身抬高 —— 抬高等于「翻历史翻到近底也算贴底」，会把人拽回底部。
+ */
+export const BOTTOM_SLACK_PX = 24
+
+/**
+ * 消息流此刻是不是贴着底部（#561）。
+ *
+ * `onScroll` 的 `detail` 只有 `scrollTop` / `scrollHeight`，**不含视口高度**，所以视口要
+ * 自己量一次再传进来；判据就是「视口下沿离内容下沿还差多少」。
+ *
+ * `slack` 由调用方给：几何刚变过（键盘升降、面板开合、输入框长高等）时，视口缩量还没和
+ * 滚动事件对齐，事件里可能读到「旧 scrollTop + 新 scrollHeight」这类中间态，底部差会临时
+ * 偏大 —— 那段偏差是本页自己造成的，必须容忍；否则一次多行切换就把「贴底」判成「翻历史」，
+ * 之后再也不会重锚（#560 说的「多行输入后再切更明显」）。
+ *
+ * 视口还没量到（`0`）时按贴底处理：页面本来就是打开即贴底，此时量测通常只差一帧；
+ * 而误判成「没贴底」的代价是把 #561 原样还回去（偏移丢了没人重指），误判成「贴底」
+ * 最多是多滚一次「本来就在底部」的底。取舍偏向后者。
+ */
+export function isNearBottom(
+  input: {
+    scrollTop: number
+    scrollHeight: number
+    viewportHeight: number
+  },
+  slack: number = BOTTOM_SLACK_PX,
+): boolean {
+  const { scrollTop, scrollHeight, viewportHeight } = input
+  if (viewportHeight <= 0) return true
+  // 内容不足一屏：没有可滚的，恒贴底
+  if (scrollHeight <= viewportHeight) return true
+  return scrollHeight - scrollTop - viewportHeight <= slack
+}
+
+/**
+ * `onScroll` 之后「用户是不是还贴着底」—— 与 `isNearBottom` 的结果**恒等**（#561）。
+ *
+ * 这层直白的转发是有意留下的：贴底标志决定「几何变化时要不要重指尾行」，取值反过来就是
+ * 把翻历史的人拽回底部、同时让贴底的人再也回不去 —— 两种错在端上都只表现为「有时候跳
+ * 一下」，审阅与演示都很难稳定复现。抽成具名纯函数后，「取反」这类改动必然踩红表驱动
+ * 单测，而不是安静地生效。
+ */
+export function stickAfterScroll(nearBottom: boolean): boolean {
+  return nearBottom
+}
+
+/**
+ * 几何变了、回读出来的偏移掉回了顶部：这一跳该怎么补（#561）。
+ *
+ * 返回的是**动作**而不是动作名：`restore` 要把哪个值写回去也在里面，页面只负责执行副作用
+ * —— 决策留在组件里，「算出来的值用错了」这类改动谁都看不见（`top` 与 `prevTop` 写反，
+ * 复位就变成一次空操作）。
+ *
+ * - `none`：偏移没丢（或丢的那次是原生层按**新**几何做的正常截断）→ 什么都不做；
+ * - `anchor`：贴底态 → 换一个同位锚点再指一次尾行；
+ * - `restore`：翻历史态 → 把几何变化前的 `scrollTop` 原值写回去。
+ *
+ * 只有「原本不在顶部、现在掉到顶部」算丢失：视口变矮 / 内容变短都会让 `scrollTop` 变小，
+ * 那是原生层的正常截断，硬写回旧值反而会把页面按到越界位置。
+ *
+ * `prevTop <= 容差` 但**贴底**时仍按丢失处理：进页面就停在底部、一次没手动滚过的用户，
+ * `scrollTopRef` 一直是初值 0，若按「原本在顶部」放过，回读补偿对这些人一次都不执行 ——
+ * 而他们恰恰是「跟着最新消息」的常态用户。翻历史的人必然滚过，`prevTop` 不会停在 0。
+ */
+export type ScrollFix = { kind: 'none' } | { kind: 'anchor' } | { kind: 'restore'; top: number }
+
+export function planScrollFix(input: { prevTop: number; top: number; stick: boolean }): ScrollFix {
+  const { prevTop, top, stick } = input
+  // 量不到就是 `undefined`，但也可能是 `NaN`（`typeof NaN === 'number'`，光判类型挡不住）
+  if (!Number.isFinite(top)) return { kind: 'none' }
+  // 偏移还在顶部之外：没丢
+  if (top > BOTTOM_SLACK_PX) return { kind: 'none' }
+  // 原本在中部 / 底部、现在掉到顶部 = 原生层把偏移丢了
+  if (prevTop > BOTTOM_SLACK_PX) {
+    return stick ? { kind: 'anchor' } : { kind: 'restore', top: prevTop }
+  }
+  // 观测量不可用（进页面就在底部 / 刚翻完锚点还没回写）：贴底态掉回顶部只可能是丢了
+  return stick ? { kind: 'anchor' } : { kind: 'none' }
+}
+
+/**
+ * 输入行变高时该给贴底判据留多少余量（#560/#561）。
+ *
+ * **累加**，不覆盖：原生层那次截断滚动反映的是相对**单行基线**的累计缩量，而打字是一行
+ * 一行涨的（每行只报 30 来 px）。只留最后一次增量的话，两行以上就被判成「用户在翻历史」
+ * —— 之后切态 / 开面板的重锚全被贴底守卫挡掉，最新一条压在视口外回不来（#561 原症状）。
+ *
+ * 缩回去（删行、`autoHeight` 回落）要**收**：余量只增不减就再也降不下来，用户上翻的距离
+ * 不到余量那么多时仍被判成贴底，随后的重锚会把他从历史里拽回底部（#561 验收第一条）。
+ * 收到 0 为止；`prevInputPx <= 0` 表示还没量到或刚清空，此时的 `nextInputPx` 是单行基线，
+ * 不是让出的高度，不动。
+ */
+export function growBottomAllowance(input: {
+  allowance: number
+  prevInputPx: number
+  nextInputPx: number
+}): number {
+  const { allowance, prevInputPx, nextInputPx } = input
+  if (!(prevInputPx > 0) || !(nextInputPx > 0)) return allowance
+  const grownBy = nextInputPx - prevInputPx
+  if (grownBy === 0) return allowance
+  return Math.max(0, allowance + grownBy)
+}
+
+/**
+ * 把几何量测到的视口缩量并进余量（#560/#561）：**取大**，不覆盖。
+ *
+ * 与 `growBottomAllowance` 的累加互补 —— 量测是事后的一帧，布局没落定时可能报 0；
+ * 直接覆盖会把 `onLineChange` 刚记下的增量清零，而原生那次滚动事件正好在这之后到达。
+ * 首次量测（`prevViewport <= 0`）没有可比对象，算出来会是整个视口高，等于一次放到最松。
+ */
+export function mergeViewportShrink(input: {
+  allowance: number
+  prevViewport: number
+  nextViewport: number
+}): number {
+  const { allowance, prevViewport, nextViewport } = input
+  if (!(prevViewport > 0) || !(nextViewport > 0)) return allowance
+  const shrunkBy = prevViewport - nextViewport
+  if (shrunkBy <= 0) return allowance
+  return Math.max(allowance, shrunkBy)
+}
+
+/**
+ * 收尾尾巴的迟滞窗口（ms，R3）：部分机型报完 `0` 之后还会补一帧动画尾巴（一个非 0 的小高度）。
+ * 零迟滞照收就是「先上提、再回落」原样复发，所以收完之后的短窗口内、比收完时更矮的值一律丢弃。
+ * 只在这个窗口内生效（不是永久忽略），窗口外照收 —— 用户真的又开键盘必须跟得上。
+ */
+export const KEYBOARD_TAIL_WINDOW_MS = 400
+
+/** 键盘高度阶梯的完整状态（`nextKeyboardInset` 的输入与输出同构，逐字段回写即可） */
+export type KeyboardInsetState = {
+  /** 已经落地的键盘高度（设备 px，0 = 收起） */
+  inset: number
+  /** 是否处在「本页要求收起、等平台收完」的过程中（意图闩） */
+  closing: boolean
+  /** 这次收起是从多高开始的（0 = 没记，判「键盘又被开回来」用） */
+  closingFrom: number
+  /** 上一次收完时的高度基准（0 = 没记，判收尾尾巴用） */
+  closedFrom: number
+  /** 上一次收完的时刻（ms，0 = 没记） */
+  closedAt: number
+  /** 收起途中连续有几帧报到了 `>= closingFrom`（要连两帧才认作「键盘真被开回来」） */
+  aboveFrom: number
+  /**
+   * 被丢弃但**值得留着**的候选高度（0 = 没有）。
+   *
+   * 两帧制会丢掉第一帧越过 `closingFrom` 的上报，而安卓上「终值只报一次」是常见形态
+   * （`[200, 340]` 之后平台就不再上报）：那一帧就是真高度，扔了就只能停在 200，而真键盘在
+   * 340 —— 输入栏被盖住 140px，且整个编辑会话都停在那儿（重开键盘不会重报同一高度）。
+   * 所以丢弃时把值记在 `pending` 里，下一次落地或哨兵兜底时取 `Math.max(pending, next)`。
+   */
+  pending: number
+  /** 这次上报是否要求页面落地新高度（false = 丢弃 / 无变化，页面既不改布局也不重指尾行） */
+  changed: boolean
+}
+
+/**
+ * 键盘高度阶梯：把平台报来的高度压成**单调向下**的一串（#560，安卓真机复验）。
+ *
+ * 输入栏是 100vh 弹性列的最后一个流内块，下内边距直接由键盘高度派生 —— 每写一次高度就是
+ * 一次布局变化。安卓上 `hideKeyboard()` 之后系统要动画收键盘，动画期间平台会连着报若干次
+ * 递减的中间值（收的过程中还可能再抬一下）。把中间值逐个当终值写进布局，等于用自己的布局
+ * 动作去和系统动画拼速度，真机上看到的就是「先上提、再回落」。
+ *
+ * 关键：**「在收」是意图，不是从高度符号反推的**。安卓上「键盘没关、只是变矮」是常态
+ * （切输入法、候选栏展开/收起、手写板），如果拿 `next < prev` 当「开始收起」，一次变矮就会
+ * 把闩置上、之后所有变高都被丢弃 —— 内边距停在小值、那把更高的键盘把输入栏整条盖住，且
+ * 只能靠彻底收键盘自愈。所以闩只在两个地方置位：页面调 `Taro.hideKeyboard()` 的地方
+ * （`closing = true` + 记下当时的 `closingFrom`）。
+ *
+ * 规则：
+ * - 非有限值（`NaN` 之类）：一律不动，交给下一次事件；
+ * - `next <= 0`：收完了 —— 唯一能把高度落到 0 的路径（切态、开面板都不许自己归零），闩释放
+ *   并记下尾巴窗口起点；
+ * - 没有意图闩：跟随平台（开键盘 / 换输入法 / 候选栏伸缩都在这儿），并清掉窗口状态；
+ *   唯一的例外是**收尾尾巴**：刚收完的短窗口内报来一个「只有动画残值量级」的值，丢弃；
+ * - 意图闩在、但高度 `>= closingFrom`：键盘又被开回来了 —— 要**连续两帧**都成立才认
+ *   （`aboveFrom`），单帧越过 `closingFrom` 还可能只是动画抖动；认下来之后闩失效、跟随；
+ * - 意图闩在、`next < prev`：跟随（贴着键盘走，只会往下）；
+ * - 意图闩在、`next >= prev`：丢弃 —— 同一个动画里不许「先变小又变大」。
+ *
+ * `changed` 单独给出来，页面用 `if (!step.changed) return` 决定要不要落地：判据在函数里、
+ * 页面只执行，就不存在「页面里换个比较对象把阶梯整个废掉」的改法。被丢弃的上报若比当前值
+ * 更高，值会留在 `pending` 里，等下一帧落地或哨兵兜底时取用 —— 丢弃的是「立刻落地这个动作」，
+ * 不是「这个高度」。
+ */
+export function nextKeyboardInset(input: {
+  prev: number
+  next: number
+  closing: boolean
+  closingFrom: number
+  closedFrom: number
+  closedAt: number
+  aboveFrom: number
+  pending: number
+  now: number
+  tailWindowMs?: number
+}): KeyboardInsetState {
+  const { prev, next, closing, closingFrom, closedFrom, closedAt, aboveFrom, pending, now } = input
+  const tailWindowMs = input.tailWindowMs ?? KEYBOARD_TAIL_WINDOW_MS
+  if (!Number.isFinite(next))
+    return {
+      inset: prev,
+      changed: false,
+      closing,
+      closingFrom,
+      closedFrom,
+      closedAt,
+      aboveFrom,
+      pending,
+    }
+  if (next <= 0) {
+    return {
+      inset: 0,
+      changed: prev !== 0,
+      closing: false,
+      closingFrom: 0,
+      // 收完时的高度基准：本页要求收起的那次用起点，用户自己收的（闩没置上）用上一帧
+      closedFrom: closing ? closingFrom : prev,
+      closedAt: now,
+      aboveFrom: 0,
+      pending: 0,
+    }
+  }
+  /**
+   * 收尾尾巴（R3，`223b6a68` + 本轮量级修正）：刚收完的短窗口内、报来一个比收完时更矮的值。
+   *
+   * 光比「更矮」不够 —— 用户收完键盘又点开一把**更矮**的键盘（切输入法、候选栏收起）也是
+   * 「更矮」，那是要跟随的真实高度，吞掉它输入栏就被那把键盘盖住。动画残值只可能是**量级上
+   * 差得远**的值（几百 px 的键盘只残值几十 px），所以再加一条 `next * 2 < closedFrom`。
+   */
+  if (!closing && closedAt > 0 && now - closedAt <= tailWindowMs && next * 2 < closedFrom) {
+    return {
+      inset: prev,
+      changed: false,
+      closing: false,
+      closingFrom: 0,
+      closedFrom,
+      closedAt,
+      aboveFrom: 0,
+      pending: 0,
+    }
+  }
+  if (!closing) {
+    const landed = Math.max(next, pending)
+    return {
+      inset: landed,
+      changed: landed !== prev,
+      closing: false,
+      closingFrom: 0,
+      closedFrom: 0,
+      closedAt: 0,
+      aboveFrom: 0,
+      pending: 0,
+    }
+  }
+  if (next >= closingFrom) {
+    /**
+     * 连两帧才认作「键盘真被开回来」（本轮修正）：真重开时平台会把同一高度连着报两次
+     * （336→336），端上无感；而收起动画里偶发一帧越过 `closingFrom` 的抖动过不去，
+     * 否则那一帧会让输入栏回抬一次。
+     *
+     * 丢掉的这一帧不扔值：记进 `pending`（见 `KeyboardInsetState.pending` 的注释）。
+     */
+    const bumped = aboveFrom + 1
+    if (bumped < 2) {
+      return {
+        inset: prev,
+        changed: false,
+        closing: true,
+        closingFrom,
+        closedFrom,
+        closedAt,
+        aboveFrom: bumped,
+        pending: Math.max(pending, next),
+      }
+    }
+    const landed = Math.max(pending, next)
+    return {
+      inset: landed,
+      changed: landed !== prev,
+      closing: false,
+      closingFrom: 0,
+      closedFrom: 0,
+      closedAt: 0,
+      aboveFrom: 0,
+      pending: 0,
+    }
+  }
+  if (next < prev)
+    return {
+      inset: next,
+      changed: true,
+      closing: true,
+      closingFrom,
+      closedFrom,
+      closedAt,
+      aboveFrom: 0,
+      pending: 0,
+    }
+  return {
+    inset: prev,
+    changed: false,
+    closing: true,
+    closingFrom,
+    closedFrom,
+    closedAt,
+    aboveFrom: 0,
+    pending: Math.max(pending, next),
+  }
+}
+
+/** 哨兵到点之后要做什么（`resolveSentinel` 的结论） */
+export type SentinelPlan = {
+  /** 是否要释放「正在收起」的意图闩（到点就无条件释放，闩不能烂在定时器里） */
+  releaseLatch: boolean
+  /** 要不要落地的键盘高度（= 当前高度表示不动） */
+  inset: number
+  /** 重新武装的次数（递增表示「这一拍不下结论，再来一个周期」） */
+  rearms: number
+}
+
+/**
+ * 活性哨兵的判定（#560）：`collapseKeyboard()` 之后平台可能一个事件都不给（安卓上收键盘被
+ * 打断、或系统根本不报），内边距就会停在键盘还开着的高度上、输入栏被顶到半空。
+ *
+ * 判据只用**事实 + 意图**，不猜方向：
+ * - `focused`（用户此刻仍在输入框里）说明键盘大概率是真开着的 —— 绝不写 0，宁可留个 gap
+ *   也不能把输入栏埋到键盘后面；落 `max(seen, pending)`＝平台这一轮报过的最高真实值；
+ * - `!focused` 说明用户已经离开输入框、键盘就该走 —— 才可以归零；
+ * - 既没上报过、又仍聚焦：这一拍下不了结论，让页面重发一次 `hideKeyboard()` 再一个周期
+ *   （`rearms`），最多一次，第二轮到点就接受现状（保持当前高度、释放闩）。
+ */
+export function resolveSentinel(input: {
+  closing: boolean
+  seen: number
+  pending: number
+  height: number
+  focused: boolean
+  rearms: number
+}): SentinelPlan {
+  const { closing, seen, pending, height, focused, rearms } = input
+  if (!closing) return { releaseLatch: false, inset: height, rearms }
+  if (!focused) return { releaseLatch: true, inset: 0, rearms: 0 }
+  const reported = Math.max(seen, pending, 0)
+  if (reported > 0) return { releaseLatch: true, inset: reported, rearms: 0 }
+  if (rearms < 1) return { releaseLatch: true, inset: height, rearms: rearms + 1 }
+  return { releaseLatch: true, inset: height, rearms }
+}

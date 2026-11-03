@@ -1,4 +1,4 @@
-@use '@/styles/mixins' as *;
+@use "@/styles/mixins" as *;
 
 /**
  * 他人主页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -117,7 +117,7 @@
  *
  * 绿点用系统成功色 `--ok`（认证徽章的描边同款），离线态压成中性灰 `--muted`：
  * 在线/离线只靠颜色区分（形状一致），文案已经把「多久没上线」说清楚了。
- * 字号比昵称小一档（21px = 稿 10.5pt），与 `.uhome__badge` 同一档。
+ * 字号比昵称小一档（21px = 稿 10.5pt），与认证徽章同处昵称块。
  */
 .uhome__presence {
   display: flex;
@@ -148,35 +148,23 @@
 }
 
 /*
- * 认证徽章（稿 `.badge`）：浅强调底 + 中强调描边 + 品牌深字，与 `watchers` 页的
- * 认证徽章同一套色值，也正是 `ICONS.verifiedBrand`（品牌蓝 `#4285ff`）的icon 需要的底。
- * 尺寸按稿 20pt / 10.5pt / 8pt·6pt → 40 / 21 / 16·12px。
+ * 认证徽章（#563）：设计稿「认证」3D 整图（275×108，按比例 61×24），昵称右侧内联。
+ *
+ * 原先这里是「浅强调胶囊 + 24×24 多边形勾 + 已认证」那套外壳（稿 `.badge`）—— 横向整图
+ * 自带「认证」字样，胶囊底 + 描边与图会叠成两层装饰，所以外壳整块撤掉，只留图本身
+ * （同订单卡 #534 那次「昵称行内联」的口径）。
  *
  * `--nav` 变体只补居中标题里的**左间距**（稿 `.mp-title` 的 `gap: 6pt` = 12px）：
  * 居中标题是 flex 行，徽章作为整体参与排布，间距给在外侧而不是父级 gap。
  */
-.uhome__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 16px 0 12px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  border: 2px solid var(--accent-mid);
-  color: var(--brand-deep);
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  flex: 0 0 auto;
-}
-
-.uhome__badge--nav {
-  margin-left: 12px;
-}
-
 .uhome__badge-ic {
-  width: 24px;
+  flex: 0 0 auto;
+  width: 61px;
   height: 24px;
+}
+
+.uhome__badge-ic--nav {
+  margin-left: 12px;
 }
 
 /*
@@ -299,7 +287,7 @@
 }
 
 /* 导航居中标题里的昵称：跟随 `.navfloat__title--center` 的 34px 字号，
-   只补 min-width 让省略号在徽章之前生效（徽章左间距见 `.uhome__badge--nav`）。 */
+   只补 min-width 让省略号在徽章之前生效（徽章左间距见 `.uhome__badge-ic--nav`）。 */
 .uhome__navname {
   min-width: 0;
   @include ellipsis;
@@ -309,7 +297,9 @@
 
 .uhome__stats {
   display: flex;
-  align-items: center;
+  /* 逐格都拉伸到同高（#581 复核 4）：两格有 min-height: 88px、好评率那格只有 ≈70px，
+     居中排列会让分隔线一长一短 */
+  align-items: stretch;
   margin-top: 36px;
   padding: 28px 0;
   border-radius: 36px;
@@ -325,6 +315,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 
@@ -345,6 +336,17 @@
   color: var(--muted-2);
 }
 
+/* 可点的两格（#581）：整格就是入口，触控高度按 44pt 换算成设计值 88px
+   （同一句换算见 `components/legal-doc/index.scss`）；内容由基类居中 */
+.uhome__stat--link {
+  min-height: 88px;
+}
+
+/* 按压反馈（`hoverClass`）：只挂在可点的两格上，「好评率」那格没有 */
+.uhome__stat--tap {
+  opacity: 0.6;
+}
+
 /* ---------------------------------------------------------------- 列表区 */
 
 .uhome__body {
@@ -362,6 +364,10 @@
   padding: 0 40px 20px;
 }
 
+/*
+ * 列表区标题（#581）：口径入口搬到页头那两格之后，这一行退回纯文字 ——
+ * 「TA 的在售 / TA 的已售出」，右侧跟该段的服务端真总数。
+ */
 .uhome__sect-title {
   font-size: var(--fs-h3);
   font-weight: 600;
@@ -434,6 +440,31 @@
 .uhome__corner--free {
   background: var(--brand-deep);
   color: #fff;
+}
+
+/* 已售 / 已下架（#566）：与共享卡片同一套形态 —— 50% 中性黑罩 + 深底白字状态角标 + 文字置灰。
+   压暗走 `--scrim-cover`（`styles/_token-vars.scss`）：票面要的是「50% 灰」这个中性压暗。
+   注意收藏页 / 浏览历史页压暗用的是另一档 `--scrim`（`rgba(23, 35, 61, 0.42)`，带蓝、42%），
+   那是「让白字可读」的语义，与这里的商品遮罩不是同一档。
+   罩子是与图片同占位的叠层，`.uhome__img` 的 300px 高度一个像素都不动。 */
+.uhome__shade {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-cover);
+  pointer-events: none;
+}
+
+.uhome__corner--out {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.uhome__card--out .uhome__ptitle,
+.uhome__card--out .uhome__pprice,
+.uhome__card--out .uhome__porig,
+.uhome__card--out .uhome__pwant,
+.uhome__card--out .uhome__ptime {
+  color: var(--muted);
 }
 
 .uhome__pbody {
@@ -631,4 +662,30 @@
 /* 位图图标尺寸随胶囊等高的钮等比缩放，由页面行内下发 */
 .uhome__navreport-ic {
   display: block;
+}
+
+/* ---------------------------------------------------------------- 拉黑入口
+   (#466 端上批次 / #473)：资料卡内、数据行下方的安静文字行。右对齐、
+   中性色（入口本身不是危险按钮，危险感交给确认弹窗）；已拉黑态换品牌深色
+   以示「有关系存在」，busy 半透明。 */
+
+.uhome__blockrow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+.uhome__block {
+  padding: 10px 24px;
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+
+  &.is-on {
+    color: var(--brand-deep);
+  }
+
+  &.is-busy {
+    opacity: 0.5;
+  }
 }

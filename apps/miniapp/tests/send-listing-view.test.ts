@@ -39,10 +39,12 @@ describe('发送商品选择页的幂等键', () => {
 })
 
 describe('发送失败文案分档', () => {
-  test('四类服务端结论各有说法，不一律「请重试」', () => {
+  test('五类服务端结论各有说法，不一律「请重试」', () => {
     expect(sendFailureText('LISTING_NOT_FOUND')).toBe('商品已下架或已售出')
     expect(sendFailureText('CONVERSATION_NOT_FOUND')).toBe('会话不存在或已结束')
     expect(sendFailureText('IDEMPOTENCY_KEY_REUSED')).toBe('发送内容有变化，请重新发送')
+    // 拉黑守卫（#466 / #473）：中性文案，不暴露谁拉黑了谁，也不说「请重试」
+    expect(sendFailureText('CONVERSATION_UNAVAILABLE')).toBe('会话当前不可用')
     expect(sendFailureText('VALIDATION_FAILED')).toBe('发送失败，请重试')
     expect(sendFailureText(null)).toBe('发送失败，请重试')
   })

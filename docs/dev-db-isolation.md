@@ -15,12 +15,12 @@ fish_dev_<slug>_<hash8>
 
 ## 命令
 
-| 命令 | 作用 |
-| --- | --- |
-| `bun run db:dev up` | 为当前 worktree 建独立库（如缺）并对**该库**跑 `drizzle-kit` 迁移 |
-| `bun run db:dev url` | 打印当前 worktree 的 `DATABASE_URL`（不连库） |
-| `bun run db:dev drop` | 删除当前 worktree 的独立库（`drop database ... with (force)`） |
-| `bun run db:dev list` | 列出本机全部 `fish_dev_*` 库及其归属 worktree |
+| 命令                  | 作用                                                              |
+| --------------------- | ----------------------------------------------------------------- |
+| `bun run db:dev up`   | 为当前 worktree 建独立库（如缺）并对**该库**跑 `drizzle-kit` 迁移 |
+| `bun run db:dev url`  | 打印当前 worktree 的 `DATABASE_URL`（不连库）                     |
+| `bun run db:dev drop` | 删除当前 worktree 的独立库（`drop database ... with (force)`）    |
+| `bun run db:dev list` | 列出本机全部 `fish_dev_*` 库及其归属 worktree                     |
 
 典型流程（新 worktree）：
 
@@ -65,10 +65,10 @@ bun run db:dev up --admin-url postgres://fish:fish@localhost:55432/postgres
 
 ## 既有先例对照（独立库命名，非 `fish_dev_*` 约定）
 
-| 库名模式 | 出处 |
-| --- | --- |
-| `fish_67_rt` | `.decomp/parallel-plan.md` 记录的 per-purpose 实测库 |
+| 库名模式                                    | 出处                                                         |
+| ------------------------------------------- | ------------------------------------------------------------ |
+| `fish_67_rt`                                | `.decomp/parallel-plan.md` 记录的 per-purpose 实测库         |
 | `fish_marketplace_flow_test_${process.pid}` | `apps/api/src/modules/transactions/marketplace-flow.test.ts` |
-| `fish_seed_test_${process.pid}` | `packages/db/src/seed.test.ts` |
+| `fish_seed_test_${process.pid}`             | `packages/db/src/seed.test.ts`                               |
 
 测试自建库沿用各自测试文件的约定；本脚本只管理开发期 `fish_dev_*` 独立库。

@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as BlockedRouteImport } from './routes/blocked'
 import { Route as CommentsRouteImport } from './routes/comments'
+import { Route as DisputesRouteImport } from './routes/disputes'
 import { Route as FavoritesRouteImport } from './routes/favorites'
 import { Route as FeedbackRouteImport } from './routes/feedback'
 import { Route as FollowingRouteImport } from './routes/following'
@@ -38,6 +39,8 @@ import { Route as AdminModerationRouteImport } from './routes/admin.moderation'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminTransactionsRouteImport } from './routes/admin.transactions'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
+import { Route as DisputesIndexRouteImport } from './routes/disputes.index'
+import { Route as DisputesDisputeIdRouteImport } from './routes/disputes.$disputeId'
 import { Route as ListingListingIdRouteImport } from './routes/listing.$listingId'
 import { Route as MessagesIndexRouteImport } from './routes/messages.index'
 import { Route as MessagesConversationIdRouteImport } from './routes/messages.$conversationId'
@@ -79,6 +82,11 @@ const BlockedRoute = BlockedRouteImport.update({
 const CommentsRoute = CommentsRouteImport.update({
   id: '/comments',
   path: '/comments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DisputesRoute = DisputesRouteImport.update({
+  id: '/disputes',
+  path: '/disputes',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FavoritesRoute = FavoritesRouteImport.update({
@@ -206,6 +214,16 @@ const AdminUsersRoute = AdminUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AdminRoute,
 } as any)
+const DisputesIndexRoute = DisputesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DisputesRoute,
+} as any)
+const DisputesDisputeIdRoute = DisputesDisputeIdRouteImport.update({
+  id: '/$disputeId',
+  path: '/$disputeId',
+  getParentRoute: () => DisputesRoute,
+} as any)
 const ListingListingIdRoute = ListingListingIdRouteImport.update({
   id: '/listing/$listingId',
   path: '/listing/$listingId',
@@ -322,6 +340,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRouteWithChildren
   '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
+  '/disputes': typeof DisputesRouteWithChildren
   '/favorites': typeof FavoritesRoute
   '/feedback': typeof FeedbackRoute
   '/following': typeof FollowingRoute
@@ -346,12 +365,14 @@ export interface FileRoutesByFullPath {
   '/admin/reports': typeof AdminReportsRouteWithChildren
   '/admin/transactions': typeof AdminTransactionsRouteWithChildren
   '/admin/users': typeof AdminUsersRouteWithChildren
+  '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/wish/$wishId': typeof WishWishIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/disputes/': typeof DisputesIndexRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
   '/wish/': typeof WishIndexRoute
@@ -387,12 +408,14 @@ export interface FileRoutesByTo {
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
   '/admin/metrics': typeof AdminMetricsRoute
+  '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/wish/$wishId': typeof WishWishIdRoute
   '/admin': typeof AdminIndexRoute
+  '/disputes': typeof DisputesIndexRoute
   '/messages': typeof MessagesIndexRoute
   '/orders': typeof OrdersIndexRoute
   '/wish': typeof WishIndexRoute
@@ -417,6 +440,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRouteWithChildren
   '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
+  '/disputes': typeof DisputesRouteWithChildren
   '/favorites': typeof FavoritesRoute
   '/feedback': typeof FeedbackRoute
   '/following': typeof FollowingRoute
@@ -441,12 +465,14 @@ export interface FileRoutesById {
   '/admin/reports': typeof AdminReportsRouteWithChildren
   '/admin/transactions': typeof AdminTransactionsRouteWithChildren
   '/admin/users': typeof AdminUsersRouteWithChildren
+  '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
   '/users/$userId': typeof UsersUserIdRoute
   '/wish/$wishId': typeof WishWishIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/disputes/': typeof DisputesIndexRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
   '/wish/': typeof WishIndexRoute
@@ -472,6 +498,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/blocked'
     | '/comments'
+    | '/disputes'
     | '/favorites'
     | '/feedback'
     | '/following'
@@ -496,12 +523,14 @@ export interface FileRouteTypes {
     | '/admin/reports'
     | '/admin/transactions'
     | '/admin/users'
+    | '/disputes/$disputeId'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
     | '/users/$userId'
     | '/wish/$wishId'
     | '/admin/'
+    | '/disputes/'
     | '/messages/'
     | '/orders/'
     | '/wish/'
@@ -537,12 +566,14 @@ export interface FileRouteTypes {
     | '/search'
     | '/verify'
     | '/admin/metrics'
+    | '/disputes/$disputeId'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
     | '/users/$userId'
     | '/wish/$wishId'
     | '/admin'
+    | '/disputes'
     | '/messages'
     | '/orders'
     | '/wish'
@@ -566,6 +597,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/blocked'
     | '/comments'
+    | '/disputes'
     | '/favorites'
     | '/feedback'
     | '/following'
@@ -590,12 +622,14 @@ export interface FileRouteTypes {
     | '/admin/reports'
     | '/admin/transactions'
     | '/admin/users'
+    | '/disputes/$disputeId'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
     | '/users/$userId'
     | '/wish/$wishId'
     | '/admin/'
+    | '/disputes/'
     | '/messages/'
     | '/orders/'
     | '/wish/'
@@ -620,6 +654,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   BlockedRoute: typeof BlockedRoute
   CommentsRoute: typeof CommentsRoute
+  DisputesRoute: typeof DisputesRouteWithChildren
   FavoritesRoute: typeof FavoritesRoute
   FeedbackRoute: typeof FeedbackRoute
   FollowingRoute: typeof FollowingRoute
@@ -667,6 +702,13 @@ declare module '@tanstack/react-router' {
       path: '/comments'
       fullPath: '/comments'
       preLoaderRoute: typeof CommentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/disputes': {
+      id: '/disputes'
+      path: '/disputes'
+      fullPath: '/disputes'
+      preLoaderRoute: typeof DisputesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/favorites': {
@@ -843,6 +885,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/users'
       preLoaderRoute: typeof AdminUsersRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/disputes/': {
+      id: '/disputes/'
+      path: '/'
+      fullPath: '/disputes/'
+      preLoaderRoute: typeof DisputesIndexRouteImport
+      parentRoute: typeof DisputesRoute
+    }
+    '/disputes/$disputeId': {
+      id: '/disputes/$disputeId'
+      path: '/$disputeId'
+      fullPath: '/disputes/$disputeId'
+      preLoaderRoute: typeof DisputesDisputeIdRouteImport
+      parentRoute: typeof DisputesRoute
     }
     '/listing/$listingId': {
       id: '/listing/$listingId'
@@ -1136,6 +1192,20 @@ const AdminRouteChildren: AdminRouteChildren = {
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
+interface DisputesRouteChildren {
+  DisputesDisputeIdRoute: typeof DisputesDisputeIdRoute
+  DisputesIndexRoute: typeof DisputesIndexRoute
+}
+
+const DisputesRouteChildren: DisputesRouteChildren = {
+  DisputesDisputeIdRoute: DisputesDisputeIdRoute,
+  DisputesIndexRoute: DisputesIndexRoute,
+}
+
+const DisputesRouteWithChildren = DisputesRoute._addFileChildren(
+  DisputesRouteChildren,
+)
+
 interface MessagesRouteChildren {
   MessagesConversationIdRoute: typeof MessagesConversationIdRoute
   MessagesIndexRoute: typeof MessagesIndexRoute
@@ -1180,6 +1250,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   BlockedRoute: BlockedRoute,
   CommentsRoute: CommentsRoute,
+  DisputesRoute: DisputesRouteWithChildren,
   FavoritesRoute: FavoritesRoute,
   FeedbackRoute: FeedbackRoute,
   FollowingRoute: FollowingRoute,

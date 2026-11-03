@@ -103,10 +103,8 @@ function toPublicProfile(
 
 export interface PublicUserService {
   getPublicProfile(userId: string): Promise<PublicUserProfile>
-  listActiveListings(
-    userId: string,
-    query: PublicUserListingsQuery,
-  ): Promise<PublicUserListingsResponse>
+  /** TA 的商品列表：`query.status` 缺省 = 在售（`ACTIVE`），`SOLD` = 已售出（#565）。 */
+  listListings(userId: string, query: PublicUserListingsQuery): Promise<PublicUserListingsResponse>
 }
 
 export function createPublicUserService(options: {
@@ -150,13 +148,17 @@ export function createPublicUserService(options: {
       )
     },
 
-    async listActiveListings(userId, query) {
+    async listListings(userId, query) {
       // **先确认用户存在**：对不存在的用户返回空列表，端上会把「用户不存在」渲染成
       // 「TA 暂无在售商品」——这正是 #122 要求"稳定错误语义"要防的事。
       if (!(await store.findPublicUser(userId))) throw userNotFound()
 
+      // 缺省 = 在售（#122 的原口径）。契约的值域已收成 ACTIVE / SOLD，这里不做第二次校验；
+      // `undefined` 落在 ACTIVE 上，既有的不传 status 的调用方（PC 他人主页等）因此不变。
+      const status = query.status ?? 'ACTIVE'
+
       const cursor = query.cursor === undefined ? null : decodeListingCursor(query.cursor)
-      const rows = await store.listActiveListings(userId, query.limit, cursor)
+      const rows = await store.listListings(userId, status, query.limit, cursor)
 
       // store 多取了一行用于判断还有没有下一页；这里丢掉它。
       const hasMore = rows.length > query.limit

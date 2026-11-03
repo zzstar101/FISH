@@ -35,6 +35,10 @@ export default defineAppConfig({
         'pages/send-listing/index',
         'pages/orders-buy/index',
         'pages/orders-sell/index',
+        // 交易争议（#497）：列表 / 详情 / 发起
+        'pages/my-disputes/index',
+        'pages/dispute-detail/index',
+        'pages/dispute-create/index',
       ],
     },
     {
@@ -49,6 +53,7 @@ export default defineAppConfig({
         'pages/third-party-sharing/index',
         'pages/community-guidelines/index',
         'pages/feedback/index',
+        'pages/my-feedback/index',
         'pages/about/index',
       ],
     },
@@ -61,6 +66,7 @@ export default defineAppConfig({
       pages: [
         'pages/verify/index',
         'pages/settings/index',
+        'pages/blocked/index',
         'pages/account-deletion/index',
         'pages/profile-edit/index',
         'pages/login-confirm/index',

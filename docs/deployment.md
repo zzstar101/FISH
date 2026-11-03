@@ -50,14 +50,14 @@
 
 ## 1. 前置条件
 
-| 项 | 要求 | 依据 |
-| --- | --- | --- |
-| 系统 | Ubuntu 24.04 LTS；安装 PostgreSQL 18 前按 [PGDG 官方指南](https://www.postgresql.org/download/linux/ubuntu/) 配置仓库 | Ubuntu 24.04 自带的旧版 PostgreSQL 不支持 `uuidv7()` |
-| PostgreSQL | **18 + pgvector**；应用迁移用 `uuidv7()` DB default；本期不提前创建向量表 | 本地 `pgvector/pgvector:pg18`（PostgreSQL 18.6、pgvector 0.8.6）实测 `uuidv7()` 与 `CREATE EXTENSION vector` 可用；宿主机部署仍需单独验证 |
-| Bun | `>= 1.4.4`（本手册钉 `1.4.4`） | 根 `package.json` 的 `engines.bun` / `packageManager` |
-| Node.js | **不需要**。`db:migrate` 由 Bun + Drizzle ORM migrator 执行 | `packages/db/src/migrate.ts` |
-| 域名 | 两个 A 记录：主域名 + 对象存储子域（`s3.<域名>`） | §6 的 SigV4 约束 |
-| 端口 | 只对外开放 80 / 443 | 下面 ufw 那一步（目标环境只给一个端口时见 §11） |
+| 项         | 要求                                                                                                                  | 依据                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 系统       | Ubuntu 24.04 LTS；安装 PostgreSQL 18 前按 [PGDG 官方指南](https://www.postgresql.org/download/linux/ubuntu/) 配置仓库 | Ubuntu 24.04 自带的旧版 PostgreSQL 不支持 `uuidv7()`                                                                                      |
+| PostgreSQL | **18 + pgvector**；应用迁移用 `uuidv7()` DB default；本期不提前创建向量表                                             | 本地 `pgvector/pgvector:pg18`（PostgreSQL 18.6、pgvector 0.8.6）实测 `uuidv7()` 与 `CREATE EXTENSION vector` 可用；宿主机部署仍需单独验证 |
+| Bun        | `>= 1.4.4`（本手册钉 `1.4.4`）                                                                                        | 根 `package.json` 的 `engines.bun` / `packageManager`                                                                                     |
+| Node.js    | **不需要**。`db:migrate` 由 Bun + Drizzle ORM migrator 执行                                                           | `packages/db/src/migrate.ts`                                                                                                              |
+| 域名       | 两个 A 记录：主域名 + 对象存储子域（`s3.<域名>`）                                                                     | §6 的 SigV4 约束                                                                                                                          |
+| 端口       | 只对外开放 80 / 443                                                                                                   | 下面 ufw 那一步（目标环境只给一个端口时见 §11）                                                                                           |
 
 一次装好：
 
@@ -1099,14 +1099,14 @@ journalctl -u fish-api -p err
 
 ### 常用排查
 
-| 现象 | 先看哪里 |
-| --- | --- |
+| 现象                                | 先看哪里                                                                                                                                                                                                                                               |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | api 起不来，日志 `环境变量校验失败` | 看冒号后半句判断是哪一份配置：`…（参考 .env.example）` = `/srv/fish/.env` 少项（worker 也需要 `S3_*` 与 `WEB_ORIGIN`）；`… MAIL_TRANSPORT …` / `… MEETUP_TOKEN_SECRET …` / `… AI_POLISH_TRANSPORT …` = `/etc/fish/api-mail.env` 少项或还是占位值（§4） |
-| 页面能开但接口 404 | 反代没剥 `/api` 前缀（§9 第 2 条） |
-| 图片 403 | bucket 没设匿名读（§3 的 `mc anonymous set download`） |
-| 图片地址不可达 / 上传失败 | `S3_ENDPOINT` / `S3_PUBLIC_URL` 写成了**只有服务器**能访问的地址（`127.0.0.1` / 容器名），见 §9 第 4 条 |
-| 登录后立刻变未登录 | `WEB_ORIGIN` 与真实地址不一致，或不是 `https://` |
-| 愿望一直不匹配 | 看 `journalctl -u fish-worker`；再确认只有这一个 worker 在跑 |
+| 页面能开但接口 404                  | 反代没剥 `/api` 前缀（§9 第 2 条）                                                                                                                                                                                                                     |
+| 图片 403                            | bucket 没设匿名读（§3 的 `mc anonymous set download`）                                                                                                                                                                                                 |
+| 图片地址不可达 / 上传失败           | `S3_ENDPOINT` / `S3_PUBLIC_URL` 写成了**只有服务器**能访问的地址（`127.0.0.1` / 容器名），见 §9 第 4 条                                                                                                                                                |
+| 登录后立刻变未登录                  | `WEB_ORIGIN` 与真实地址不一致，或不是 `https://`                                                                                                                                                                                                       |
+| 愿望一直不匹配                      | 看 `journalctl -u fish-worker`；再确认只有这一个 worker 在跑                                                                                                                                                                                           |
 
 ## 11. 附录：目标环境只给一个端口时（内网 / 已给定容器）
 
@@ -1115,13 +1115,13 @@ journalctl -u fish-api -p err
 
 ### 11.1 端口分配
 
-| 进程 | 容器内监听 | 对外 |
-| --- | --- | --- |
-| Caddy | `0.0.0.0:3000` | 宿主 `8101`（唯一暴露面） |
-| api | `3100`（`API_PORT`） | 不暴露 |
-| worker | 无端口 | — |
-| PostgreSQL | `127.0.0.1:5432` | 不暴露 |
-| MinIO | `127.0.0.1:9000` | 不暴露，经 Caddy 的 `/fish/*` 出去 |
+| 进程       | 容器内监听           | 对外                               |
+| ---------- | -------------------- | ---------------------------------- |
+| Caddy      | `0.0.0.0:3000`       | 宿主 `8101`（唯一暴露面）          |
+| api        | `3100`（`API_PORT`） | 不暴露                             |
+| worker     | 无端口               | —                                  |
+| PostgreSQL | `127.0.0.1:5432`     | 不暴露                             |
+| MinIO      | `127.0.0.1:9000`     | 不暴露，经 Caddy 的 `/fish/*` 出去 |
 
 Caddy 必须绑 `0.0.0.0:3000`：Docker 的端口映射转发到容器 eth0，绑回环收不到。
 
@@ -1130,11 +1130,11 @@ Caddy 必须绑 `0.0.0.0:3000`：Docker 的端口映射转发到容器 eth0，�
 想省一个端口，最自然的做法是把 MinIO 挂在 `http://<ip>:8101/s3`。**这条路走不通。**
 在本机用 Bun 1.4.0 + 真实 MinIO 逐项测过：
 
-| 预签名 `S3_ENDPOINT` | 直传 PUT | 说明 |
-| --- | --- | --- |
-| `http://host:19000`（无路径） | **200** | 基线 |
-| `http://host:19998/s3`，反代剥 `/s3` | **403** `SignatureDoesNotMatch` | Bun 把 `/s3` 也算进了 canonical URI |
-| `http://host:19997/s3`，反代不剥 | **400** `InvalidBucketName`（bucket=`s3`） | 签名已通过，是 MinIO 把路径第一段当桶名 |
+| 预签名 `S3_ENDPOINT`                 | 直传 PUT                                   | 说明                                    |
+| ------------------------------------ | ------------------------------------------ | --------------------------------------- |
+| `http://host:19000`（无路径）        | **200**                                    | 基线                                    |
+| `http://host:19998/s3`，反代剥 `/s3` | **403** `SignatureDoesNotMatch`            | Bun 把 `/s3` 也算进了 canonical URI     |
+| `http://host:19997/s3`，反代不剥     | **400** `InvalidBucketName`（bucket=`s3`） | 签名已通过，是 MinIO 把路径第一段当桶名 |
 
 正确的做法是**让桶名充当路径第一段**：`S3_ENDPOINT` 填**不带任何路径**的应用地址，于是
 `S3_BUCKET=fish` 天然的 URL 就是 `/fish/<key>`，反代把 `/fish/*` 原样转给 MinIO 即可。
