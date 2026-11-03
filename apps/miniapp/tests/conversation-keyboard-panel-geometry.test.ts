@@ -6,6 +6,7 @@ import {
   mergeViewportShrink,
   nextKeyboardInset,
   planScrollFix,
+  resolveSentinel,
   stickAfterScroll,
 } from '../src/pkg-social/pages/conversation/view'
 
@@ -206,6 +207,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
     closedFrom: number
     closedAt: number
     aboveFrom: number
+    pending: number
   }
   /** 一次事件里页面要回写的那几个字段（与 `nextKeyboardInset` 的输出同构） */
   const again = (step: ReturnType<typeof nextKeyboardInset>) => ({
@@ -215,6 +217,17 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
     closedFrom: step.closedFrom,
     closedAt: step.closedAt,
     aboveFrom: step.aboveFrom,
+    pending: step.pending,
+  })
+  /** `Partial<RunState>` → `nextKeyboardInset` 的入参（`inset` 在入参里叫 `prev`） */
+  const againState = (state: Partial<RunState>) => ({
+    prev: state.inset ?? 0,
+    closing: state.closing ?? false,
+    closingFrom: state.closingFrom ?? 0,
+    closedFrom: state.closedFrom ?? 0,
+    closedAt: state.closedAt ?? 0,
+    aboveFrom: state.aboveFrom ?? 0,
+    pending: state.pending ?? 0,
   })
   /** 按事件序列跑一遍阶梯 —— 页面 handler 做的就是把这几个字段原样回写 */
   const feed = (
@@ -228,6 +241,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
       closedFrom: start.closedFrom ?? 0,
       closedAt: start.closedAt ?? 0,
       aboveFrom: start.aboveFrom ?? 0,
+      pending: start.pending ?? 0,
     }
     const insets: number[] = []
     const changed: boolean[] = []
@@ -245,6 +259,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
         closedFrom: state.closedFrom,
         closedAt: state.closedAt,
         aboveFrom: state.aboveFrom,
+        pending: state.pending,
         next,
         now: start.now?.[index] ?? 1000 + index,
       })
@@ -255,6 +270,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
         closedFrom: step.closedFrom,
         closedAt: step.closedAt,
         aboveFrom: step.aboveFrom,
+        pending: step.pending,
       }
       insets.push(step.inset)
       changed.push(step.changed)
@@ -271,6 +287,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
       closedFrom,
       closedAt,
       aboveFrom: 0,
+      pending: 0,
     }) satisfies Partial<RunState>
 
   test('开键盘：一路跟着平台抬上去，每一档都要落地', () => {
@@ -378,6 +395,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
       closedFrom: 0,
       closedAt: 0,
       aboveFrom: 0,
+      pending: 0,
       now: 1000,
     })
     expect(closed.closedFrom).toBe(336)
@@ -415,17 +433,81 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
     expect(run.state.closedFrom).toBe(336)
   })
 
-  test('收起动画的中间高度不许被当成新起点（E）', () => {
-    // 连调两次「主动收键盘」时 `closingFrom` 只许取大值：第二次读到的 from 只是动画中间高度，
-    // 下修就会让尾部那一下 220 越过起点、把闩解开、输入栏回抬
-    const run = feed([300, 200, 220, 100, 0], {
-      inset: 336,
-      closing: true,
-      closingFrom: 336,
-      now: [1000, 1010, 1020, 1030, 1300],
+  test('收起起点只许原地保大：拿动画中间高度当起点，尾部的回抬就能提前解闩（E）', () => {
+    // 连调两次「主动收键盘」时，第二次读到的 `from` 只是收起动画里的**中间高度**（200）。
+    // 页面用 `Math.max(from, keyboardClosingFromRef.current)` 保住第一次的 336：
+    // 于是尾部那一下 220 仍然低于起点、照旧丢弃。
+    const kept = feed([220, 220], { inset: 200, closing: true, closingFrom: 336 })
+    expect(kept.insets).toEqual([200, 200])
+    expect(kept.closings).toEqual([true, true])
+    // 反证：起点一旦被下修成 200，同一串 220 就「越过起点」、连两帧后被认作键盘重开、闩被解开
+    const lowered = feed([220, 220], { inset: 200, closing: true, closingFrom: 200 })
+    expect(lowered.closings).toEqual([true, false])
+    expect(lowered.insets).toEqual([200, 220])
+  })
+
+  test('终值只上报一次：丢弃那一帧的高度必须留住，否则永久停在中间值（G）', () => {
+    // 安卓实测形态：`[200, 340]` 之后平台不再报 —— 340 只来一次，两帧制会丢掉它。
+    const run = feed([200, 340], { inset: 336, closing: true, closingFrom: 336 })
+    expect(run.insets).toEqual([200, 200])
+    expect(run.changed).toEqual([true, false])
+    // 丢弃的是「立刻落地这个动作」，不是「这一个高度」：候选值留在 `pending` 里
+    expect(run.state.pending).toBe(340)
+    // 页面到点兜底时落 `max(当前, 候选)`，才不会停在 200 被 340 的键盘盖住 140px
+    expect(Math.max(run.state.inset, run.state.pending)).toBe(340)
+  })
+
+  test('两帧制落地时取「候选值」与「本帧」的较大者', () => {
+    // 上一帧丢弃时记下 340，这一帧报 340 → 落地 340（不是把候选值丢掉再落地 340 之外的值）
+    const run = feed([340, 340], { inset: 200, closing: true, closingFrom: 336 })
+    expect(run.insets).toEqual([200, 340])
+    expect(run.changed).toEqual([false, true])
+    expect(run.state.pending).toBe(0)
+    expect(run.state.closing).toBe(false)
+    // 候选值比落地帧更高时取候选值：340 是平台报过的真高度，不许被后面的 336 覆盖成更矮
+    const higher = feed([340, 336], { inset: 200, closing: true, closingFrom: 336 })
+    expect(higher.insets).toEqual([200, 340])
+  })
+
+  test('无闩落地时同样取较大者，不让陈旧候选把高度落小', () => {
+    // 纯函数契约：任何「落地」帧都不许把值落到候选值以下（页面侧落地即清候选，这里直接喂）
+    const step = nextKeyboardInset({
+      prev: 200,
+      next: 180,
+      closing: false,
+      closingFrom: 0,
+      closedFrom: 0,
+      closedAt: 0,
+      aboveFrom: 0,
+      pending: 340,
+      now: 1000,
     })
-    expect(run.insets).toEqual([300, 200, 200, 100, 0])
-    expect(run.closings).toEqual([true, true, true, true, false])
+    expect(step.inset).toBe(340)
+    expect(step.changed).toBe(true)
+    expect(step.pending).toBe(0)
+  })
+
+  test('收尾尾巴的量级阈值两侧（`closedFrom = 336` 时 168 / 169）', () => {
+    const base = afterCollapse(336, 1000)
+    // 恰好一半（168 * 2 = 336，不小于 336 的一半）→ 不是残值量级，算是真高度
+    const half = nextKeyboardInset({ ...againState(base), next: 168, now: 1200 })
+    expect(half.inset).toBe(168)
+    expect(half.changed).toBe(true)
+    // 再高一档（169 * 2 = 338 > 336）同样是真高度
+    const above = nextKeyboardInset({ ...againState(base), next: 169, now: 1200 })
+    expect(above.inset).toBe(169)
+    // 更矮一档就落进残值量级（166 * 2 = 332 < 336）→ 丢弃
+    const below = nextKeyboardInset({ ...againState(base), next: 166, now: 1200 })
+    expect(below.inset).toBe(0)
+    expect(below.changed).toBe(false)
+  })
+
+  test('闩在时的尾巴基准取「收起起点」，不是最后一档高度（V1b）', () => {
+    // 起点 336、收到 180 之后再报 0：闭合基准必须是 336，否则窗口判据整体失效
+    const run = feed([180, 0], { inset: 336, closing: true, closingFrom: 336 })
+    expect(run.state.closedFrom).toBe(336)
+    // 反证：若基准取最后一档 180，随后一把 168 的残值就会被当真高度照收
+    expect(run.state.closedFrom).not.toBe(180)
   })
 
   test('非有限值一律不动，交给下一次事件', () => {
@@ -437,6 +519,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
       closedFrom: 0,
       closedAt: 0,
       aboveFrom: 0,
+      pending: 0,
       now: 1000,
     })
     expect(idle.inset).toBe(336)
@@ -449,6 +532,7 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
       closedFrom: 0,
       closedAt: 0,
       aboveFrom: 1,
+      pending: 0,
       now: 1000,
     })
     expect(closingIdle.inset).toBe(336)
@@ -456,6 +540,96 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
     expect(closingIdle.closing).toBe(true)
     // 抖动计数不能被一帧 NaN 清掉，否则「连两帧」的判据会被非有限值反复重置
     expect(closingIdle.aboveFrom).toBe(1)
+  })
+})
+
+describe('活性哨兵的结论：只看「报过的最高值」与焦点（#560 B1）', () => {
+  test('还在输入框里（聚焦）：绝不猜 0，落报过的最高真实值', () => {
+    // 平台报过与当前值相等的同一把键盘（切语音 336 → 500ms 内点回输入框还是 336）
+    const same = resolveSentinel({
+      closing: true,
+      seen: 336,
+      pending: 0,
+      height: 336,
+      focused: true,
+      rearms: 0,
+    })
+    expect(same.releaseLatch).toBe(true)
+    expect(same.inset).toBe(336)
+    // 报过中间值 300 然后静默、键盘其实还开着：落 300，绝不写 0
+    const mid = resolveSentinel({
+      closing: true,
+      seen: 300,
+      pending: 0,
+      height: 300,
+      focused: true,
+      rearms: 0,
+    })
+    expect(mid.inset).toBe(300)
+  })
+
+  test('已经失焦：键盘该走，归零', () => {
+    const plan = resolveSentinel({
+      closing: true,
+      seen: 300,
+      pending: 0,
+      height: 300,
+      focused: false,
+      rearms: 0,
+    })
+    expect(plan.releaseLatch).toBe(true)
+    expect(plan.inset).toBe(0)
+  })
+
+  test('候选取值参与兜底：终值只报过一次时落在候选值上（G）', () => {
+    const plan = resolveSentinel({
+      closing: true,
+      seen: 200,
+      pending: 340,
+      height: 200,
+      focused: true,
+      rearms: 0,
+    })
+    expect(plan.inset).toBe(340)
+  })
+
+  test('既没上报过、又仍聚焦：这一拍不下结论，重发一次再判（第二个周期）', () => {
+    const first = resolveSentinel({
+      closing: true,
+      seen: 0,
+      pending: 0,
+      height: 336,
+      focused: true,
+      rearms: 0,
+    })
+    expect(first.releaseLatch).toBe(true)
+    // 不许归零、也不许动高度；要求页面重新武装一次
+    expect(first.inset).toBe(336)
+    expect(first.rearms).toBe(1)
+    // 第二个周期到点还是什么都没有：接受现状（保持当前高度），不再无限重发
+    const second = resolveSentinel({
+      closing: true,
+      seen: 0,
+      pending: 0,
+      height: 336,
+      focused: true,
+      rearms: 1,
+    })
+    expect(second.inset).toBe(336)
+    expect(second.rearms).toBe(1)
+  })
+
+  test('闩本来就不在：什么都不做（不释放、不动高度）', () => {
+    const plan = resolveSentinel({
+      closing: false,
+      seen: 0,
+      pending: 0,
+      height: 336,
+      focused: false,
+      rearms: 0,
+    })
+    expect(plan.releaseLatch).toBe(false)
+    expect(plan.inset).toBe(336)
   })
 })
 
@@ -531,7 +705,7 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(panel).not.toContain('Taro.hideKeyboard(')
   })
 
-  test('活性哨兵：到点闩还在就强落 0 并重指尾行（平台不报 0 的卡死兜底，R2）', async () => {
+  test('活性哨兵：到点先解闩，结论交给 resolveSentinel（平台不报 0 的卡死兜底，R2/B1）', async () => {
     const source = squash(await pageSource())
     const body = slice(
       source,
@@ -542,36 +716,80 @@ describe('键盘高度是单一真源（#560）', () => {
       slice(source, 'const clearKeyboardSentinel = useCallback', 'const armKeyboardSentinel'),
     ).toContain('clearTimeout')
     expect(body).toContain('KEYBOARD_SENTINEL_MS')
-    // 条件触发：闩已经释放（平台正常报了 0）就什么都不做
-    expect(body).toContain('if (!keyboardClosingRef.current) return')
-    // 守卫必须**先判后写**：挪到归零之后就成了死代码（B3）
-    expect(body.indexOf('if (!keyboardClosingRef.current) return')).toBeLessThan(
-      body.indexOf('keyboardHeightRef.current = 0'),
+    /**
+     * 判据不在页面里：只有 `resolveSentinel()` 一份（表驱动单测在上一节）。页面里再写一条
+     * 「与快照比相等」之类比较链，就会退回到「报过且相等 → 猜 0 把输入栏埋掉」的死路。
+     */
+    expect(body).toContain('const plan = resolveSentinel({')
+    expect(body).toContain('closing: keyboardClosingRef.current')
+    expect(body).toContain('seen: keyboardSentinelMaxRef.current')
+    expect(body).toContain('pending: keyboardPendingRef.current')
+    expect(body).toContain('height: keyboardHeightRef.current')
+    expect(body).toContain('focused: inputFocusedRef.current')
+    expect(body).toContain('rearms: keyboardSentinelRearmsRef.current')
+    // 到点无条件解闩：闩不能烂在定时器里；落哪个高度由结论决定
+    expect(body).toContain('if (plan.releaseLatch) {')
+    expect(body.indexOf('if (plan.releaseLatch) {')).toBeLessThan(
+      body.indexOf('keyboardClosingRef.current = false'),
     )
-    // 武装时快照起点；到点先判「这一轮平台到底报过没有」（B1）
-    expect(body).toContain('keyboardSentinelFromRef.current = keyboardClosingFromRef.current')
-    expect(body).toContain(
-      'if (keyboardHeightRef.current !== keyboardSentinelFromRef.current) return',
-    )
-    expect(
-      body.indexOf('if (keyboardHeightRef.current !== keyboardSentinelFromRef.current) return'),
-    ).toBeLessThan(body.indexOf('keyboardHeightRef.current = 0'))
-    // 「报过」只解闩、不写 0：宁可停在最后一次真实上报值，也不能猜成 0 把输入栏埋进键盘
-    expect(
-      body.slice(
-        0,
-        body.indexOf('if (keyboardHeightRef.current !== keyboardSentinelFromRef.current) return'),
-      ),
-    ).toContain('keyboardClosingRef.current = false')
-    expect(body).toContain('keyboardHeightRef.current = 0')
-    expect(body).toContain('setKeyboardHeight(0)')
+    // 闩本来就不在：这一拍不下任何结论
+    expect(body).toContain('if (!plan.releaseLatch) return')
+    // 落地高度只允许走 `plan.inset`（不写死 0）
+    expect(body).toContain('setKeyboardHeight(plan.inset)')
+    expect(body).toContain('if (plan.inset !== keyboardHeightRef.current) {')
     expect(body).toContain('keepTailAnchored()')
-    // 页面被盖住也要收掉哨兵（R2 清理点之三）
+    // 重新武装一个周期（不无限重发）
+    expect(body).toContain('if (plan.rearms > keyboardSentinelRearmsRef.current) {')
+    expect(body).toContain('void Taro.hideKeyboard()')
+    // 账本跟着哨兵一起清，否则是下一轮的假阳性
     expect(
-      slice(squash(await pageSource()), 'useDidHide(() => {', 'detailPollRef.current?.stop'),
-    ).toContain('clearKeyboardSentinel()')
+      slice(source, 'const clearKeyboardSentinel = useCallback', 'const armKeyboardSentinel'),
+    ).toContain('keyboardSentinelMaxRef.current = 0')
+    expect(
+      slice(source, 'const clearKeyboardSentinel = useCallback', 'const armKeyboardSentinel'),
+    ).toContain('keyboardPendingRef.current = 0')
+    // 页面被盖住也要收掉哨兵，并把重新武装预算与焦点一起清（R2 清理点之三）
+    const hidden = slice(
+      squash(await pageSource()),
+      'useDidHide(() => {',
+      'detailPollRef.current?.stop',
+    )
+    expect(hidden).toContain('clearKeyboardSentinel()')
+    expect(hidden).toContain('inputFocusedRef.current = false')
+    expect(hidden).toContain('keyboardSentinelRearmsRef.current = 0')
     // 超时常量在位（收键盘动画通常 200~300ms，留余量）
     expect(source).toContain('const KEYBOARD_SENTINEL_MS = 500')
+  })
+
+  test('哨兵账本必须写在 `changed` 早退之前（B1）', async () => {
+    const source = squash(await pageSource())
+    const body = slice(source, 'const onHeightChange =', 'Taro.onKeyboardHeightChange')
+    // 被丢弃的那一帧恰恰是最需要记账的一帧（终值只报一次的形态全是丢弃帧）：
+    // 把这两句挪到 `if (!step.changed) return` 之后，哨兵就永远看不到平台上报过什么。
+    expect(body).toContain(
+      'keyboardSentinelMaxRef.current = Math.max(keyboardSentinelMaxRef.current, step.inset)',
+    )
+    expect(body).toContain('keyboardPendingRef.current = step.pending')
+    expect(body.indexOf('keyboardSentinelMaxRef.current = Math.max')).toBeLessThan(
+      body.indexOf('if (!step.changed) return'),
+    )
+    expect(body.indexOf('keyboardPendingRef.current = step.pending')).toBeLessThan(
+      body.indexOf('if (!step.changed) return'),
+    )
+    // 两帧制的计数同理：挪到早退之后 → 永远等不到第二帧，真重开永久被吞
+    expect(body.indexOf('keyboardAboveFromRef.current = step.aboveFrom')).toBeLessThan(
+      body.indexOf('if (!step.changed) return'),
+    )
+    // 候选值也要喂回纯函数，否则 `pending` 只进不出
+    expect(body).toContain('pending: keyboardPendingRef.current')
+  })
+
+  test('焦点是哨兵唯一可信的意图信号：onFocus 置真、onBlur 置假（B1）', async () => {
+    const source = squash(await pageSource())
+    const focus = slice(source, 'onFocus={() => {', 'onInput=')
+    expect(focus).toContain('inputFocusedRef.current = true')
+    expect(focus).toContain('onBlur={() => {')
+    expect(focus).toContain('inputFocusedRef.current = false')
   })
 
   test('用户点输入框＝明确要键盘：收尾尾巴窗口与意图闩立刻作废（B2）', async () => {
@@ -583,6 +801,10 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(focus).toContain('keyboardClosedAtRef.current = 0')
     expect(focus).toContain('keyboardClosingRef.current = false')
     expect(focus).toContain('keyboardClosingFromRef.current = 0')
+    // 焦点=true 是哨兵唯一可信的意图信号；账本也要一起清，否则到点按旧账判
+    expect(focus).toContain('inputFocusedRef.current = true')
+    expect(focus).toContain('keyboardSentinelMaxRef.current = 0')
+    expect(focus).toContain('keyboardPendingRef.current = 0')
   })
 
   test('重锚的异步回读按序号作废旧结论（收键盘期间会连着换锚，R5）', async () => {
@@ -604,9 +826,14 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('keyboardClosingRef.current = false')
     expect(body).toContain('keyboardClosingFromRef.current = 0')
     expect(body).toContain('keyboardClosedAtRef.current = 0')
+    // 两帧制的计数也要清：留着半截计数，回来第一次「越过起点」就会被当成键盘重开
+    expect(body).toContain('keyboardAboveFromRef.current = 0')
     expect(body).toContain('keyboardHeightRef.current = 0')
     expect(body).toContain('setKeyboardHeight(0)')
+    // 哨兵的账本 / 重新武装预算 / 焦点一起清（B1：脏账本是下一轮的假阳性）
     expect(body).toContain('clearKeyboardSentinel()')
+    expect(body).toContain('keyboardSentinelRearmsRef.current = 0')
+    expect(body).toContain('inputFocusedRef.current = false')
   })
 
   test('输入栏的下内边距由真源派生，收起时不内联（env 安全区照旧生效）', async () => {

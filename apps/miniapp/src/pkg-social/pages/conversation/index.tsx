@@ -123,6 +123,7 @@ import {
   recallFailureText,
   resetDeferredReload,
   resolveConvState,
+  resolveSentinel,
   settleSend,
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
@@ -469,15 +470,26 @@ export default function Conversation() {
   const keyboardAboveFromRef = useRef(0)
   /**
    * 「平台不报 0」的活性哨兵（#560 R2）：`hideKeyboard()` 之后平台若始终不报 `0`（或闩被误置），
-   * 内边距会永久停在抬高位置。到点若闩仍为真就强落 0 并重指尾行 —— 这是**卡死兜底**，不是
-   * 动画补偿：条件触发、`inset === 0` / 页面被盖住 / 卸载三处清理。
+   * 内边距会永久停在抬高位置。到点**先无条件解闩**，再按 `resolveSentinel()` 的结论决定落哪个
+   * 高度 —— 这是**卡死兜底**，不是动画补偿：条件触发、`inset === 0` / 页面被盖住 / 卸载三处清理。
    */
   const keyboardSentinelRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
-   * 武装哨兵那一刻的高度快照（#560）：到点用它判断「这一轮平台到底报过没有」—— 报过就不是
-   * 卡死，宁可停在最后一次真实上报值，也不能猜成 0 把输入栏埋进键盘。
+   * 这一轮哨兵期内平台报过的最高高度（#560）：到点用它算「报过多少」，而不是拿「值有没有变」猜。
+   * 拿「与快照是否相等」判断在原理上无解 —— 「报过且等于快照」（切回同一把键盘，最常见）会被
+   * 判成「没报过」→ 强落 0 把输入栏埋进键盘；「报了中间值然后静默」（真该归零的兜底场景）会被
+   * 判成「报过」→ 永久停在中间值。
    */
-  const keyboardSentinelFromRef = useRef(0)
+  const keyboardSentinelMaxRef = useRef(0)
+  /** 阶梯里被丢弃的候选高度镜像（#560：终值只报一次时，哨兵兜底要优先落它，见 `pending`） */
+  const keyboardPendingRef = useRef(0)
+  /** 哨兵重新武装的次数（#560：这一拍下不了结论时最多再给一个周期，不无限重发 `hideKeyboard()`） */
+  const keyboardSentinelRearmsRef = useRef(0)
+  /**
+   * 输入框此刻是否聚焦（#560）：哨兵到点唯一可信的**意图**信号 —— 还在输入框里就说明键盘大概
+   * 率真开着，绝不猜 0；失焦才说明键盘该走。
+   */
+  const inputFocusedRef = useRef(false)
   /**
    * 重锚并发序号（#560 R5）：收键盘期间每接受一档高度都会 `keepTailAnchored()`，异步回读
    * 可能乱序落地 —— 旧那道的 `restore` 分支会把过期 `top` 写回去（`scrollWithAnimation`
@@ -937,6 +949,9 @@ export default function Conversation() {
     keyboardClosedAtRef.current = 0
     keyboardAboveFromRef.current = 0
     keyboardHeightRef.current = 0
+    // 页面被盖住，输入框必然失焦；重新武装的预算也一起作废（R2 清理点之三）
+    inputFocusedRef.current = false
+    keyboardSentinelRearmsRef.current = 0
     // 哨兵也收掉（R2 清理点之三）：页面都被盖住了，500ms 后再跑一次重锚没有意义
     clearKeyboardSentinel()
     setKeyboardHeight(0)
@@ -2318,36 +2333,73 @@ export default function Conversation() {
   /** 收掉活性哨兵（#560 R2）：`inset === 0` / 页面被盖住 / 卸载 / 重新武装四处调用 */
   const clearKeyboardSentinel = useCallback(() => {
     const timer = keyboardSentinelRef.current
-    if (timer === null) return
-    clearTimeout(timer)
-    keyboardSentinelRef.current = null
+    if (timer !== null) {
+      clearTimeout(timer)
+      keyboardSentinelRef.current = null
+    }
+    // 账本跟着哨兵一起清：留着就是下一轮哨兵的假阳性（#560 B1）
+    keyboardSentinelMaxRef.current = 0
+    keyboardPendingRef.current = 0
   }, [])
 
   /**
-   * 武装活性哨兵（#560 R2）：页面刚叫过 `Taro.hideKeyboard()`，等平台把高度收到 0。
+   * 武装活性哨兵（#560 R2/B1）：页面刚叫过 `Taro.hideKeyboard()`，等平台把高度收到 0。
    *
-   * 到点闩还在，才轮到判「平台到底报过没有」：
-   * - 一帧都没动过（`keyboardHeightRef` 还是武装时的快照）→ 平台没报，强落 0 并重指尾行；
-   * - 报过（高度变了）→ 不是卡死，只是没收到 0（例如收起动画被打断、键盘又开了一把**更矮**
-   *   的回来，`>= closingFrom` 永远不成立）。**宁可停在最后一次真实上报值**，只解闩，
-   *   绝不猜成 0 —— `adjustPosition={false}` 下没有别的补偿，猜 0 就是把输入栏埋进键盘。
+   * 到点**先无条件解闩**（闩不能烂在定时器里），再按 `resolveSentinel()` 的结论决定落哪个高度：
+   * - 用户已离开输入框（`inputFocusedRef` 为假）→ 键盘该走，归零并重指尾行；
+   * - 还在输入框里 → 键盘大概率真开着，**绝不猜 0**（`adjustPosition={false}` 下没有别的补偿，
+   *   猜 0 就是把输入栏埋进键盘），落「这一轮报过的最高真实值」—— 没有报过就一个周期后再判。
+   *
+   * 判据只用事实（报过的最大值）与意图（焦点），不猜方向：拿「高度与武装时的快照是否相等」判断
+   * 在原理上无解 —— 「报过且等于快照」（切回同一把键盘，最常见）会被判成「没报过」而强落 0；
+   * 「报了中间值然后静默」（真该归零的兜底场景）会被判成「报过」而永久停在中间值。
    *
    * 这是**条件触发的卡死兜底**，不是给收键盘动画做补偿（不参与任何动画时序）。
    */
   const armKeyboardSentinel = useCallback(() => {
     clearKeyboardSentinel()
-    keyboardSentinelFromRef.current = keyboardClosingFromRef.current
     keyboardSentinelRef.current = setTimeout(() => {
       keyboardSentinelRef.current = null
       if (!aliveRef.current) return
-      if (!keyboardClosingRef.current) return
-      keyboardClosingRef.current = false
-      keyboardClosingFromRef.current = 0
-      keyboardAboveFromRef.current = 0
-      if (keyboardHeightRef.current !== keyboardSentinelFromRef.current) return
-      keyboardHeightRef.current = 0
-      setKeyboardHeight(0)
+      const plan = resolveSentinel({
+        closing: keyboardClosingRef.current,
+        seen: keyboardSentinelMaxRef.current,
+        pending: keyboardPendingRef.current,
+        height: keyboardHeightRef.current,
+        focused: inputFocusedRef.current,
+        rearms: keyboardSentinelRearmsRef.current,
+      })
+      if (plan.releaseLatch) {
+        keyboardClosingRef.current = false
+        keyboardClosingFromRef.current = 0
+        keyboardAboveFromRef.current = 0
+      }
+      // 闩本来就不在：这一拍什么都不用下结论（`clearKeyboardSentinel` 已经清过账本）
+      if (!plan.releaseLatch) return
+      if (plan.inset !== keyboardHeightRef.current) {
+        keyboardHeightRef.current = plan.inset
+        setKeyboardHeight(plan.inset)
+      }
       keepTailAnchored()
+      keyboardSentinelMaxRef.current = 0
+      keyboardPendingRef.current = 0
+      if (plan.rearms > keyboardSentinelRearmsRef.current) {
+        /**
+         * 这一拍下不了结论（平台一个事件都没给、可用户还在输入框里）：重发一次收键盘、再给一个
+         * 周期，不在第一个 500ms 就拍死。**不复用 `collapseKeyboard()`** —— 它会重置重新武装的
+         * 预算，就成了无限循环。
+         */
+        keyboardSentinelRearmsRef.current = plan.rearms
+        void Taro.hideKeyboard()
+        const from = keyboardHeightRef.current
+        if (from > 0) {
+          keyboardClosingRef.current = true
+          keyboardClosingFromRef.current = Math.max(from, keyboardClosingFromRef.current)
+          armKeyboardSentinel()
+        }
+        return
+      }
+      keyboardSentinelRearmsRef.current = 0
     }, KEYBOARD_SENTINEL_MS)
   }, [clearKeyboardSentinel, keepTailAnchored])
 
@@ -2361,6 +2413,8 @@ export default function Conversation() {
    */
   const collapseKeyboard = useCallback(() => {
     void Taro.hideKeyboard()
+    // 页面新发起的一次收起：重新给满重新武装的预算（哨兵自己重发时不走这里，见上）
+    keyboardSentinelRearmsRef.current = 0
     const from = keyboardHeightRef.current
     // 键盘本来就没开：没有要收的，也不必武装哨兵（否则 500ms 后会白做一次重锚）
     if (!(from > 0)) return
@@ -3013,6 +3067,7 @@ export default function Conversation() {
         closedFrom: keyboardClosedFromRef.current,
         closedAt: keyboardClosedAtRef.current,
         aboveFrom: keyboardAboveFromRef.current,
+        pending: keyboardPendingRef.current,
         now: Date.now(),
       })
       /**
@@ -3024,6 +3079,13 @@ export default function Conversation() {
       keyboardClosedFromRef.current = step.closedFrom
       keyboardClosedAtRef.current = step.closedAt
       keyboardAboveFromRef.current = step.aboveFrom
+      /**
+       * 哨兵账本（#560 B1）：`seen` 记「这一轮哨兵期内平台报过的最高值」，`pending` 接住被阶梯
+       * 丢弃但值得留的候选值 —— 到点判「平台报过没有」只能看这个。**必须写在 `changed` 早退
+       * 之前**：被丢弃的那一帧恰恰是最需要记账的一帧（终值只报一次的形态全是丢弃帧）。
+       */
+      keyboardSentinelMaxRef.current = Math.max(keyboardSentinelMaxRef.current, step.inset)
+      keyboardPendingRef.current = step.pending
       // 收到 0：平台把键盘收干净了，活性哨兵不用再兜底（R2 的三个清理点之一）
       if (step.inset === 0) clearKeyboardSentinel()
       if (!step.changed) return
@@ -3955,15 +4017,25 @@ export default function Conversation() {
               onFocus={() => {
                 setPanelOpen(false)
                 /**
-                 * 用户点输入框 = 明确要键盘（#560）：收尾尾巴窗口与意图闩立刻作废。
+                 * 用户点输入框 = 明确要键盘（#560）：收尾尾巴窗口、意图闩、哨兵账本立刻作废。
                  *
                  * 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」（切输入法、候选栏收起）
                  * 会被当成动画残值吞掉，输入栏停在上一次那把键盘的高度、被更矮的新键盘盖住。
+                 *
+                 * `inputFocusedRef` 是活性哨兵唯一可信的**意图**信号：还在输入框里就说明键盘
+                 * 大概率真开着，到点绝不猜 0（见 `armKeyboardSentinel`）。
                  */
+                inputFocusedRef.current = true
                 keyboardClosedAtRef.current = 0
                 keyboardClosingRef.current = false
                 keyboardClosingFromRef.current = 0
                 keyboardAboveFromRef.current = 0
+                keyboardSentinelMaxRef.current = 0
+                keyboardPendingRef.current = 0
+              }}
+              onBlur={() => {
+                // 失焦 = 用户离开输入框 → 键盘该走了，哨兵到点可以放心归零（#560 B1）
+                inputFocusedRef.current = false
               }}
               onInput={(event) => setInputValue(event.detail.value)}
             />

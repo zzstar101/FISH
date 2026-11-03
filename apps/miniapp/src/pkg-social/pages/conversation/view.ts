@@ -1414,6 +1414,15 @@ export type KeyboardInsetState = {
   closedAt: number
   /** 收起途中连续有几帧报到了 `>= closingFrom`（要连两帧才认作「键盘真被开回来」） */
   aboveFrom: number
+  /**
+   * 被丢弃但**值得留着**的候选高度（0 = 没有）。
+   *
+   * 两帧制会丢掉第一帧越过 `closingFrom` 的上报，而安卓上「终值只报一次」是常见形态
+   * （`[200, 340]` 之后平台就不再上报）：那一帧就是真高度，扔了就只能停在 200，而真键盘在
+   * 340 —— 输入栏被盖住 140px，且整个编辑会话都停在那儿（重开键盘不会重报同一高度）。
+   * 所以丢弃时把值记在 `pending` 里，下一次落地或哨兵兜底时取 `Math.max(pending, next)`。
+   */
+  pending: number
   /** 这次上报是否要求页面落地新高度（false = 丢弃 / 无变化，页面既不改布局也不重指尾行） */
   changed: boolean
 }
@@ -1444,7 +1453,9 @@ export type KeyboardInsetState = {
  * - 意图闩在、`next >= prev`：丢弃 —— 同一个动画里不许「先变小又变大」。
  *
  * `changed` 单独给出来，页面用 `if (!step.changed) return` 决定要不要落地：判据在函数里、
- * 页面只执行，就不存在「页面里换个比较对象把阶梯整个废掉」的改法。
+ * 页面只执行，就不存在「页面里换个比较对象把阶梯整个废掉」的改法。被丢弃的上报若比当前值
+ * 更高，值会留在 `pending` 里，等下一帧落地或哨兵兜底时取用 —— 丢弃的是「立刻落地这个动作」，
+ * 不是「这个高度」。
  */
 export function nextKeyboardInset(input: {
   prev: number
@@ -1454,13 +1465,23 @@ export function nextKeyboardInset(input: {
   closedFrom: number
   closedAt: number
   aboveFrom: number
+  pending: number
   now: number
   tailWindowMs?: number
 }): KeyboardInsetState {
-  const { prev, next, closing, closingFrom, closedFrom, closedAt, aboveFrom, now } = input
+  const { prev, next, closing, closingFrom, closedFrom, closedAt, aboveFrom, pending, now } = input
   const tailWindowMs = input.tailWindowMs ?? KEYBOARD_TAIL_WINDOW_MS
   if (!Number.isFinite(next))
-    return { inset: prev, changed: false, closing, closingFrom, closedFrom, closedAt, aboveFrom }
+    return {
+      inset: prev,
+      changed: false,
+      closing,
+      closingFrom,
+      closedFrom,
+      closedAt,
+      aboveFrom,
+      pending,
+    }
   if (next <= 0) {
     return {
       inset: 0,
@@ -1471,6 +1492,7 @@ export function nextKeyboardInset(input: {
       closedFrom: closing ? closingFrom : prev,
       closedAt: now,
       aboveFrom: 0,
+      pending: 0,
     }
   }
   /**
@@ -1489,17 +1511,20 @@ export function nextKeyboardInset(input: {
       closedFrom,
       closedAt,
       aboveFrom: 0,
+      pending: 0,
     }
   }
   if (!closing) {
+    const landed = Math.max(next, pending)
     return {
-      inset: next,
-      changed: next !== prev,
+      inset: landed,
+      changed: landed !== prev,
       closing: false,
       closingFrom: 0,
       closedFrom: 0,
       closedAt: 0,
       aboveFrom: 0,
+      pending: 0,
     }
   }
   if (next >= closingFrom) {
@@ -1507,6 +1532,8 @@ export function nextKeyboardInset(input: {
      * 连两帧才认作「键盘真被开回来」（本轮修正）：真重开时平台会把同一高度连着报两次
      * （336→336），端上无感；而收起动画里偶发一帧越过 `closingFrom` 的抖动过不去，
      * 否则那一帧会让输入栏回抬一次。
+     *
+     * 丢掉的这一帧不扔值：记进 `pending`（见 `KeyboardInsetState.pending` 的注释）。
      */
     const bumped = aboveFrom + 1
     if (bumped < 2) {
@@ -1518,16 +1545,19 @@ export function nextKeyboardInset(input: {
         closedFrom,
         closedAt,
         aboveFrom: bumped,
+        pending: Math.max(pending, next),
       }
     }
+    const landed = Math.max(pending, next)
     return {
-      inset: next,
-      changed: next !== prev,
+      inset: landed,
+      changed: landed !== prev,
       closing: false,
       closingFrom: 0,
       closedFrom: 0,
       closedAt: 0,
       aboveFrom: 0,
+      pending: 0,
     }
   }
   if (next < prev)
@@ -1539,6 +1569,7 @@ export function nextKeyboardInset(input: {
       closedFrom,
       closedAt,
       aboveFrom: 0,
+      pending: 0,
     }
   return {
     inset: prev,
@@ -1548,5 +1579,44 @@ export function nextKeyboardInset(input: {
     closedFrom,
     closedAt,
     aboveFrom: 0,
+    pending: Math.max(pending, next),
   }
+}
+
+/** 哨兵到点之后要做什么（`resolveSentinel` 的结论） */
+export type SentinelPlan = {
+  /** 是否要释放「正在收起」的意图闩（到点就无条件释放，闩不能烂在定时器里） */
+  releaseLatch: boolean
+  /** 要不要落地的键盘高度（= 当前高度表示不动） */
+  inset: number
+  /** 重新武装的次数（递增表示「这一拍不下结论，再来一个周期」） */
+  rearms: number
+}
+
+/**
+ * 活性哨兵的判定（#560）：`collapseKeyboard()` 之后平台可能一个事件都不给（安卓上收键盘被
+ * 打断、或系统根本不报），内边距就会停在键盘还开着的高度上、输入栏被顶到半空。
+ *
+ * 判据只用**事实 + 意图**，不猜方向：
+ * - `focused`（用户此刻仍在输入框里）说明键盘大概率是真开着的 —— 绝不写 0，宁可留个 gap
+ *   也不能把输入栏埋到键盘后面；落 `max(seen, pending)`＝平台这一轮报过的最高真实值；
+ * - `!focused` 说明用户已经离开输入框、键盘就该走 —— 才可以归零；
+ * - 既没上报过、又仍聚焦：这一拍下不了结论，让页面重发一次 `hideKeyboard()` 再一个周期
+ *   （`rearms`），最多一次，第二轮到点就接受现状（保持当前高度、释放闩）。
+ */
+export function resolveSentinel(input: {
+  closing: boolean
+  seen: number
+  pending: number
+  height: number
+  focused: boolean
+  rearms: number
+}): SentinelPlan {
+  const { closing, seen, pending, height, focused, rearms } = input
+  if (!closing) return { releaseLatch: false, inset: height, rearms }
+  if (!focused) return { releaseLatch: true, inset: 0, rearms: 0 }
+  const reported = Math.max(seen, pending, 0)
+  if (reported > 0) return { releaseLatch: true, inset: reported, rearms: 0 }
+  if (rearms < 1) return { releaseLatch: true, inset: height, rearms: rearms + 1 }
+  return { releaseLatch: true, inset: height, rearms }
 }
