@@ -1392,3 +1392,30 @@ export function mergeViewportShrink(input: {
   if (shrunkBy <= 0) return allowance
   return Math.max(allowance, shrunkBy)
 }
+
+/**
+ * 键盘高度阶梯：把平台报来的高度压成**单调**的一串（#560，安卓真机复验）。
+ *
+ * 输入栏是 100vh 弹性列的最后一个流内块，下内边距直接由键盘高度派生 —— 每写一次高度就是
+ * 一次布局变化。安卓上 `hideKeyboard()` 之后系统要动画收键盘，动画期间平台会连着报若干次
+ * 递减的中间值（收的过程中还可能再抬一下）。把中间值逐个当终值写进布局，等于用自己的布局
+ * 动作去和系统动画拼速度，真机上看到的就是「先上提、再回落」。
+ *
+ * 所以只维护一条规则：**收起一旦开始，就只认更小的值，直到平台报 0 才算收完**。
+ * - `next <= 0`：收完了。这是唯一能把高度落到 0 的路径（切态、开面板都不许自己归零）；
+ * - 不在收起态：跟随平台（开键盘、微调都算），并按「比上一帧小」判定收起开始；
+ * - 收起态：`next < prev` 跟随 —— 一路贴着键盘走、只会往下；`next >= prev` 丢弃 —— 同一个
+ *   动画里不许出现「先变小又变大」，否则那条被抬高的内边距会把输入栏再顶上去一次。
+ *
+ * 非有限值（`NaN`、`undefined` 之类）一律不动，交给下一次事件。
+ */
+export function nextKeyboardInset(input: { prev: number; next: number; closing: boolean }): {
+  inset: number
+  closing: boolean
+} {
+  const { prev, next, closing } = input
+  if (!Number.isFinite(next)) return { inset: prev, closing }
+  if (next <= 0) return { inset: 0, closing: false }
+  if (!closing) return { inset: next, closing: next < prev }
+  return next < prev ? { inset: next, closing: true } : { inset: prev, closing: true }
+}

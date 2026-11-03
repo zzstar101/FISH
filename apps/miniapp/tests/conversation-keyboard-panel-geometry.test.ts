@@ -4,6 +4,7 @@ import {
   growBottomAllowance,
   isNearBottom,
   mergeViewportShrink,
+  nextKeyboardInset,
   planScrollFix,
   stickAfterScroll,
 } from '../src/pkg-social/pages/conversation/view'
@@ -197,17 +198,127 @@ describe('贴底容差的记账口径（#560/#561，纯函数表驱动）', () =
   })
 })
 
+describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 安卓真机）', () => {
+  test('开键盘：一路跟着平台抬上去', () => {
+    let prev = 0
+    let closing = false
+    const seen: number[] = []
+    for (const next of [120, 260, 336]) {
+      const step = nextKeyboardInset({ prev, next, closing })
+      prev = step.inset
+      closing = step.closing
+      seen.push(step.inset)
+    }
+    expect(seen).toEqual([120, 260, 336])
+    expect(closing).toBe(false)
+  })
+
+  test('收键盘：只认更小的值，一路向下走到 0', () => {
+    let prev = 336
+    let closing = false
+    const seen: number[] = []
+    for (const next of [300, 180, 60, 0]) {
+      const step = nextKeyboardInset({ prev, next, closing })
+      prev = step.inset
+      closing = step.closing
+      seen.push(step.inset)
+    }
+    expect(seen).toEqual([300, 180, 60, 0])
+    // 收到 0 才算收完，闩跟着释放
+    expect(closing).toBe(false)
+  })
+
+  test('收起途中被抬一下：丢弃，不许出现「先变小又变大」', () => {
+    // 第一次变小 = 收起开始
+    expect(nextKeyboardInset({ prev: 336, next: 180, closing: false })).toEqual({
+      inset: 180,
+      closing: true,
+    })
+    // 动画抖动把高度报回 300：保持 180，绝不跟着抬回去（否则输入栏被顶上来一次）
+    expect(nextKeyboardInset({ prev: 180, next: 300, closing: true })).toEqual({
+      inset: 180,
+      closing: true,
+    })
+    // 原地重复上报同样不产生布局变化
+    expect(nextKeyboardInset({ prev: 180, next: 180, closing: true })).toEqual({
+      inset: 180,
+      closing: true,
+    })
+    // 继续变小才跟随
+    expect(nextKeyboardInset({ prev: 180, next: 90, closing: true })).toEqual({
+      inset: 90,
+      closing: true,
+    })
+  })
+
+  test('0 是唯一的终点：只有报 0（或负数）才归零', () => {
+    expect(nextKeyboardInset({ prev: 336, next: 0, closing: false })).toEqual({
+      inset: 0,
+      closing: false,
+    })
+    expect(nextKeyboardInset({ prev: 336, next: 0, closing: true })).toEqual({
+      inset: 0,
+      closing: false,
+    })
+    expect(nextKeyboardInset({ prev: 336, next: -12, closing: true })).toEqual({
+      inset: 0,
+      closing: false,
+    })
+  })
+
+  test('收完之后再开键盘：闩已释放，正常跟随', () => {
+    const closed = nextKeyboardInset({ prev: 60, next: 0, closing: true })
+    expect(closed).toEqual({ inset: 0, closing: false })
+    expect(nextKeyboardInset({ prev: closed.inset, next: 336, closing: closed.closing })).toEqual({
+      inset: 336,
+      closing: false,
+    })
+  })
+
+  test('非有限值一律不动，交给下一次事件', () => {
+    expect(nextKeyboardInset({ prev: 336, next: Number.NaN, closing: false })).toEqual({
+      inset: 336,
+      closing: false,
+    })
+    expect(nextKeyboardInset({ prev: 336, next: Number.NaN, closing: true })).toEqual({
+      inset: 336,
+      closing: true,
+    })
+  })
+})
+
 describe('键盘高度是单一真源（#560）', () => {
-  test('页面订阅设备级键盘高度事件，并在卸载时收回', async () => {
+  test('页面订阅设备级键盘高度事件，压成阶梯后再写，并在卸载时收回', async () => {
     const source = squash(await pageSource())
     const body = slice(source, 'const onHeightChange =', 'Taro.onKeyboardHeightChange')
-    expect(body).toContain('setKeyboardHeight(res.height > 0 ? res.height : 0)')
+    // 平台报来的原始值不能直接进布局：先过 `nextKeyboardInset`（判据本体在 view.ts 的表驱动单测里）
+    expect(body).not.toContain('setKeyboardHeight(res.height')
+    expect(body).toContain('const step = nextKeyboardInset({')
+    expect(body).toContain('prev: keyboardHeightRef.current')
+    expect(body).toContain('next: res.height')
+    expect(body).toContain('closing: keyboardClosingRef.current')
+    expect(body).toContain('keyboardClosingRef.current = step.closing')
+    expect(body).toContain('setKeyboardHeight(step.inset)')
+    // 阶梯算出来的值和当前一致（重复上报 / 被丢弃的回抬）→ 没有布局变化，不必重指尾行
+    expect(body).toContain('if (step.inset === keyboardHeightRef.current) return')
+    expect(body).toContain('keepTailAnchored()')
     expect(source).toContain('Taro.onKeyboardHeightChange(onHeightChange)')
     expect(source).toContain('Taro.offKeyboardHeightChange(onHeightChange)')
     // 基础库 < 2.7.0 没有这个 API：裸调会在挂载时抛 TypeError，整页白屏
     expect(source).toContain(
       "if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined",
     )
+  })
+
+  test('页面被盖住时连同步镜像与「正在收起」闩一起清，回来才跟得上', async () => {
+    const body = slice(
+      squash(await pageSource()),
+      'useDidHide(() => {',
+      'detailPollRef.current?.stop',
+    )
+    expect(body).toContain('keyboardClosingRef.current = false')
+    expect(body).toContain('keyboardHeightRef.current = 0')
+    expect(body).toContain('setKeyboardHeight(0)')
   })
 
   test('输入栏的下内边距由真源派生，收起时不内联（env 安全区照旧生效）', async () => {
@@ -279,22 +390,26 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('bottomGapAllowanceRef.current = 0')
   })
 
-  test('切语音态：点击当下收键盘，真源归零与切态同批落地（分两帧就是先上提再回落）', async () => {
+  test('切语音态：点击当拍收键盘，高度真源交给平台事件收回（自己归零就是拿布局抢时序）', async () => {
     const body = slice(
       squash(await pageSource()),
       'const toggleVoiceMode = async',
-      'setVoiceMode(true)',
+      'const onLongPressMessage',
     )
     const hideAt = body.indexOf('Taro.hideKeyboard()')
     const gateAt = body.indexOf('getPrivacyAuthorizationState()')
     expect(hideAt).toBeGreaterThan(-1)
     // 收键盘是纯原生动作，不碰本页布局：点击当拍就发，不等授权那趟 await
     expect(hideAt).toBeLessThan(gateAt)
-    // 真源归零是**布局变化**，必须排在 await 之后，与切态那批一起落地（末次归零才是那次）
-    const zeroAt = body.lastIndexOf('setKeyboardHeight(0)')
-    expect(zeroAt).toBeGreaterThan(gateAt)
-    expect(body.indexOf('setPanelOpen(false)', zeroAt)).toBeGreaterThan(zeroAt)
-    expect(body.indexOf('keepTailAnchored()')).toBeGreaterThan(-1)
+    /**
+     * 整条切态路径一次都不许写高度真源：写了就是拿本页布局去和系统收键盘的动画抢时序 ——
+     * 安卓真机上的「先上提、再回落」正是这么拼出来的。高度只由 `onKeyboardHeightChange` 收。
+     */
+    expect(body).not.toContain('setKeyboardHeight')
+    // 切态那一批仍然是这三样，一起落地
+    expect(body).toContain('keepTailAnchored()')
+    expect(body).toContain('setPanelOpen(false)')
+    expect(body).toContain('setVoiceMode(true)')
     // 隐私授权的判据本身不变（仍由 canEnterVoiceMode 决定是否落地语音态）
     expect(body).toContain(
       'canEnterVoiceMode(state, seq, voiceGateSeqRef.current, aliveRef.current)',
@@ -303,18 +418,18 @@ describe('键盘高度是单一真源（#560）', () => {
 })
 
 describe('「+」面板与贴底（#561）', () => {
-  test('开面板前先收键盘，且收键盘 / 归零 / 重指尾行 / 开面板同批落地', async () => {
+  test('开面板前先收键盘，重指尾行与开面板同批落地；高度同样交给平台事件', async () => {
     const body = slice(
       squash(await pageSource()),
       'const togglePanel = () => {',
       'setPanelOpen(!panelOpen)',
     )
     const hideAt = body.indexOf('Taro.hideKeyboard()')
-    const zeroAt = body.indexOf('setKeyboardHeight(0)')
     const anchorAt = body.indexOf('keepTailAnchored()')
     expect(hideAt).toBeGreaterThan(-1)
-    expect(zeroAt).toBeGreaterThan(hideAt)
-    expect(anchorAt).toBeGreaterThan(zeroAt)
+    expect(anchorAt).toBeGreaterThan(hideAt)
+    // 与切语音态同一口径：面板这条路径也不许自己归零高度真源
+    expect(body).not.toContain('setKeyboardHeight')
   })
 
   test('贴底才重指尾行；换锚后直接认定贴底，不等一条可能永远不来的滚动事件', async () => {

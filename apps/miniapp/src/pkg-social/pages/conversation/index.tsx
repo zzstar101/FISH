@@ -111,6 +111,7 @@ import {
   mergeViewportShrink,
   messageActions,
   messageReadLabel,
+  nextKeyboardInset,
   type PendingMedia,
   type PendingMediaDraft,
   type PendingMessage,
@@ -292,8 +293,12 @@ export default function Conversation() {
   const [voiceMode, setVoiceMode] = useState(false)
   /**
    * 键盘占据的**设备 px**（0 = 收起），全页唯一的键盘高度真源（#560/#561）：
-   * 输入栏的下内边距、消息流还剩多高都从它派生。不再让平台按 `adjustPosition` 推页面
-   * —— 两套补偿叠加正是「先上提、再回落」的来源。
+   * 输入栏的下内边距、消息流还剩多高都从它派生；平台不再按 `adjustPosition` 推页面。
+   *
+   * **只有 `onKeyboardHeightChange` 那一处写它**，且写进去的是 `nextKeyboardInset` 压出来
+   * 的单调阶梯：安卓收键盘动画期间平台会连报若干递减中间值，逐帧跟着写就等于用自己的布局
+   * 去和系统动画拼速度（真机上的「先上提、再回落」）。切态 / 开面板那些路径一律只
+   * `Taro.hideKeyboard()`，高度由平台事件收到 0，本页不自己归零。
    */
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   /**
@@ -437,6 +442,12 @@ export default function Conversation() {
    * 等一轮渲染再读 state 就已经晚了（原生层的截断滚动事件可能先到）。
    */
   const inputRowPxRef = useRef(0)
+  /**
+   * `keyboardHeight` 的同步镜像与「正在收起」闩（#560）：键盘事件是常驻订阅，回调里读 state
+   * 只会拿到订阅那一刻的旧值，阶梯判定必须看上一帧真正落地的高度（见 `nextKeyboardInset`）。
+   */
+  const keyboardHeightRef = useRef(0)
+  const keyboardClosingRef = useRef(false)
   /**
    * 当前消息流的 id 快照来源（#186 P2-1）：silent 刷新发起时记下当时的 id 集合，
    * 落地时据此把「刷新期间才确认落地」的消息补回来。`load` 的 `useCallback` 依赖
@@ -878,7 +889,14 @@ export default function Conversation() {
   })
   useDidHide(() => {
     visibleRef.current = false
-    // 页面被盖住，键盘也随之收起：真源跟着归零，回来时输入栏不会挂在原来的键盘高度上
+    /**
+     * 页面被盖住，键盘也随之收起：真源跟着归零，回来时输入栏不会挂在原来的键盘高度上。
+     *
+     * 同步镜像和「正在收起」闩要一起清 —— 否则下一次事件的高度等于镜像里的旧值，阶梯会
+     * 判定「没变化」直接丢掉，输入栏就一直贴在那条看不见的键盘高度上。
+     */
+    keyboardClosingRef.current = false
+    keyboardHeightRef.current = 0
     setKeyboardHeight(0)
     // 页面被盖住：在线态已经不显示了，把轮询停掉（不再让定时器在后台空转每一跳）
     detailPollRef.current?.stop()
@@ -2266,19 +2284,13 @@ export default function Conversation() {
     /**
      * 进语音态前**同步**收键盘（#560）：点击当拍就发，不等隐私授权那趟 await。
      *
-     * 输入栏是 100vh 弹性列的最后一个流内块，键盘高度一变它整条就平移一次；只要「收键盘」
-     * 比「切态」晚落地一帧，用户看到的就是「先上提、再回落」。
-     *
-     * 但**真源归零不在这里**：归零是一次布局变化，必须与末尾切态那批状态一起落地，否则同样
-     * 是两帧两次位移。收键盘这个动作本身不碰本页布局（`adjustPosition={false}`），放在点击
-     * 当拍只是为了让原生键盘尽早开始收起。
+     * 这里只叫平台收键盘，**不自己把高度真源归零** —— 高度只由 `onKeyboardHeightChange`
+     * 那一处改写（见 `./view` 的 `nextKeyboardInset`）。自己归零等于拿本页布局去和系统收
+     * 键盘的动画抢时序：安卓真机复验里，切态当拍撤掉内边距、系统的位移回落还在动画途中，
+     * 输入栏就是「先上提、再回落」。交给平台事件，高度一路单调走到 0。
      */
     void Taro.hideKeyboard()
-    if (privacyPendingRef.current) {
-      // 键盘已经收走，高度真源得跟上，否则输入栏底下留一条看不见的键盘高度
-      setKeyboardHeight(0)
-      return
-    }
+    if (privacyPendingRef.current) return
     privacyPendingRef.current = true
     const seq = ++voiceGateSeqRef.current
     let state: Awaited<ReturnType<typeof getPrivacyAuthorizationState>>
@@ -2289,8 +2301,6 @@ export default function Conversation() {
     }
     // await 期间用户可能点了「+」、离开页面，或又切回了键盘态；旧结果不许覆盖新状态。
     if (!canEnterVoiceMode(state, seq, voiceGateSeqRef.current, aliveRef.current)) {
-      // 同上：键盘已经收走，真源跟着归零（这一支没有别的布局变化，单独一批也不会抽搐）
-      setKeyboardHeight(0)
       if (seq !== voiceGateSeqRef.current || !aliveRef.current) return
       // 查询失败/超时与用户明确拒绝要分开提示：前者按「去同意」操作也不会恢复。
       void Taro.showToast({
@@ -2303,12 +2313,13 @@ export default function Conversation() {
       return
     }
     /**
-     * 切态这一批（#560）：键盘真源归零 + 收面板 + 切语音态 + 重指尾行，**同一批**落地。
-     * 输入框（`autoHeight`，可能多行）换成「按住说话」是一次高度变化，键盘腾出空间是另一次；
-     * 分两批就是两次位移，合起来才只有一次。
+     * 切态这一批（#560）：收面板 + 切语音态 + 重指尾行，**同一批**落地。
+     *
+     * 键盘高度不在这批里 —— 它由平台事件单调收到 0，和本批没有时序耦合。输入行两态同盒
+     * （`inputRowPx` 顶住 `minHeight`），这一批本身不改变输入栏高度，用户看到的是「按住
+     * 说话」原地换上去；键盘按自己的动画滑走。
      */
     keepTailAnchored()
-    setKeyboardHeight(0)
     setPanelOpen(false)
     setVoiceMode(true)
   }
@@ -2465,11 +2476,13 @@ export default function Conversation() {
      * 面板是输入栏里的**流内**块（#561）：一展开，消息流就矮一截；键盘还开着时更狠。
      * 「先收键盘」与「再长面板」若分两帧落地，消息流会连着变矮两次，原生层把越界的滚动
      * 偏移截断/归零后没有任何指令把它推回底部 —— 看起来就是「跳回顶部 + 错位抽搐」。
-     * 这里把收键盘、真源归零、重指尾行、开面板压进同一批状态：面板一次性出现在最终位置，
-     * 页面上推量也只归零一次。
+     * 所以收键盘、重指尾行、开面板压进同一批：面板一次性出现在最终位置。
+     *
+     * 键盘高度**同样不在这批里归零**：它是平台事件的产物（`nextKeyboardInset`），自己归零
+     * 就是拿本页布局去和系统收键盘动画抢时序 —— #560 电的正是这一下。面板长高的那一下仍是
+     * 同批一次到位。
      */
     void Taro.hideKeyboard()
-    setKeyboardHeight(0)
     keepTailAnchored()
     setPanelOpen(!panelOpen)
   }
@@ -2876,17 +2889,28 @@ export default function Conversation() {
   }, [])
 
   /**
-   * 键盘高度订阅（#561/#560）：`onKeyboardHeightChange` 是设备级的，键盘升、降各报一次，
-   * 页面拿它当唯一真源。
+   * 键盘高度订阅（#560/#561）：`onKeyboardHeightChange` 是设备级的，**只有这里能改写高度
+   * 真源**。切态 / 开面板那些路径一律只 `Taro.hideKeyboard()`，高度交给平台事件收回 0。
    *
-   * 收到新高度时若用户正贴底就把尾行锚点换一个：键盘一升消息流就矮一截，原生层会把越界
-   * 的滚动偏移截掉，不重新下一道「滚到底」的指令就回不来。
+   * 平台报来的高度先过 `nextKeyboardInset` 压成单调阶梯：安卓收键盘动画期间会连报若干递减
+   * 中间值，逐帧写进布局就成了用自己的布局动作去和系统动画拼速度（「先上提、再回落」）。
+   *
+   * 高度**真的变了**才重指尾行：键盘一升消息流就矮一截，原生层会把越界的滚动偏移截掉，
+   * 不重新下一道「滚到底」的指令就回不来；同一高度的重复上报没有布局变化，不必再指一次。
    */
   useEffect(() => {
     // 基础库 < 2.7.0 没有这个 API（`undefined`）：直接调会在挂载时抛 TypeError，整页白屏
     if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined
     const onHeightChange = (res: { height: number }) => {
-      setKeyboardHeight(res.height > 0 ? res.height : 0)
+      const step = nextKeyboardInset({
+        prev: keyboardHeightRef.current,
+        next: res.height,
+        closing: keyboardClosingRef.current,
+      })
+      keyboardClosingRef.current = step.closing
+      if (step.inset === keyboardHeightRef.current) return
+      keyboardHeightRef.current = step.inset
+      setKeyboardHeight(step.inset)
       keepTailAnchored()
     }
     Taro.onKeyboardHeightChange(onHeightChange)
@@ -3704,6 +3728,10 @@ export default function Conversation() {
         （先例 `components/back-top/index.tsx:26-36` 的「请直接传 rpx 字符串」），
         所以键盘占位直接写 px、本栏自己的 16pt 内边距按设计稿写 rpx。键盘收起时既不留
         任何内联值，`.conv__bar` 的 `env(safe-area-inset-bottom)` 照旧生效。
+
+        这个值只会**一路变小**（`nextKeyboardInset` 的单调阶梯）：收键盘动画期间平台连报的
+        中间值被压成一条向下的序列，输入栏不会在中途被顶回去一下（#560 安卓真机的「先上提、
+        再回落」）。
       */}
       <View
         className="conv__bar"
