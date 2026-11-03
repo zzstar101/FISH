@@ -92,7 +92,9 @@ describe('会话页「+」面板点外部收起（#541）', () => {
   test('既有的两条收起路径与语音互斥不变', async () => {
     const source = squash(await pageSource())
     expect(source).toContain('const togglePanel = () => {')
-    expect(source).toContain('onFocus={() => setPanelOpen(false)}')
+    // 聚焦输入框仍然收起面板；`onFocus` 现在是块体（顺带作废收尾尾巴窗口与意图闩，#560）
+    expect(source).toContain('onFocus={() => {')
+    expect(source).toContain('setPanelOpen(false)')
     // 开面板退回键盘态的互斥规则（abortRecording + setVoiceMode(false)）仍在 togglePanel 里
     const toggleAt = source.indexOf('const togglePanel = () => {')
     const setterAt = source.indexOf('setPanelOpen(!panelOpen)', toggleAt)

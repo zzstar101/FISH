@@ -1412,6 +1412,8 @@ export type KeyboardInsetState = {
   closedFrom: number
   /** 上一次收完的时刻（ms，0 = 没记） */
   closedAt: number
+  /** 收起途中连续有几帧报到了 `>= closingFrom`（要连两帧才认作「键盘真被开回来」） */
+  aboveFrom: number
   /** 这次上报是否要求页面落地新高度（false = 丢弃 / 无变化，页面既不改布局也不重指尾行） */
   changed: boolean
 }
@@ -1435,7 +1437,9 @@ export type KeyboardInsetState = {
  * - `next <= 0`：收完了 —— 唯一能把高度落到 0 的路径（切态、开面板都不许自己归零），闩释放
  *   并记下尾巴窗口起点；
  * - 没有意图闩：跟随平台（开键盘 / 换输入法 / 候选栏伸缩都在这儿），并清掉窗口状态；
- * - 意图闩在、但高度 `>= closingFrom`：键盘又被开回来了，闩失效，跟随；
+ *   唯一的例外是**收尾尾巴**：刚收完的短窗口内报来一个「只有动画残值量级」的值，丢弃；
+ * - 意图闩在、但高度 `>= closingFrom`：键盘又被开回来了 —— 要**连续两帧**都成立才认
+ *   （`aboveFrom`），单帧越过 `closingFrom` 还可能只是动画抖动；认下来之后闩失效、跟随；
  * - 意图闩在、`next < prev`：跟随（贴着键盘走，只会往下）；
  * - 意图闩在、`next >= prev`：丢弃 —— 同一个动画里不许「先变小又变大」。
  *
@@ -1449,13 +1453,14 @@ export function nextKeyboardInset(input: {
   closingFrom: number
   closedFrom: number
   closedAt: number
+  aboveFrom: number
   now: number
   tailWindowMs?: number
 }): KeyboardInsetState {
-  const { prev, next, closing, closingFrom, closedFrom, closedAt, now } = input
+  const { prev, next, closing, closingFrom, closedFrom, closedAt, aboveFrom, now } = input
   const tailWindowMs = input.tailWindowMs ?? KEYBOARD_TAIL_WINDOW_MS
   if (!Number.isFinite(next))
-    return { inset: prev, changed: false, closing, closingFrom, closedFrom, closedAt }
+    return { inset: prev, changed: false, closing, closingFrom, closedFrom, closedAt, aboveFrom }
   if (next <= 0) {
     return {
       inset: 0,
@@ -1465,11 +1470,26 @@ export function nextKeyboardInset(input: {
       // 收完时的高度基准：本页要求收起的那次用起点，用户自己收的（闩没置上）用上一帧
       closedFrom: closing ? closingFrom : prev,
       closedAt: now,
+      aboveFrom: 0,
     }
   }
-  // 收尾尾巴（R3）：刚收完的短窗口内、又报一个比收完时更矮的值 —— 那是动画尾巴，丢弃
-  if (!closing && closedAt > 0 && now - closedAt <= tailWindowMs && next < closedFrom) {
-    return { inset: prev, changed: false, closing: false, closingFrom: 0, closedFrom, closedAt }
+  /**
+   * 收尾尾巴（R3，`223b6a68` + 本轮量级修正）：刚收完的短窗口内、报来一个比收完时更矮的值。
+   *
+   * 光比「更矮」不够 —— 用户收完键盘又点开一把**更矮**的键盘（切输入法、候选栏收起）也是
+   * 「更矮」，那是要跟随的真实高度，吞掉它输入栏就被那把键盘盖住。动画残值只可能是**量级上
+   * 差得远**的值（几百 px 的键盘只残值几十 px），所以再加一条 `next * 2 < closedFrom`。
+   */
+  if (!closing && closedAt > 0 && now - closedAt <= tailWindowMs && next * 2 < closedFrom) {
+    return {
+      inset: prev,
+      changed: false,
+      closing: false,
+      closingFrom: 0,
+      closedFrom,
+      closedAt,
+      aboveFrom: 0,
+    }
   }
   if (!closing) {
     return {
@@ -1479,9 +1499,27 @@ export function nextKeyboardInset(input: {
       closingFrom: 0,
       closedFrom: 0,
       closedAt: 0,
+      aboveFrom: 0,
     }
   }
   if (next >= closingFrom) {
+    /**
+     * 连两帧才认作「键盘真被开回来」（本轮修正）：真重开时平台会把同一高度连着报两次
+     * （336→336），端上无感；而收起动画里偶发一帧越过 `closingFrom` 的抖动过不去，
+     * 否则那一帧会让输入栏回抬一次。
+     */
+    const bumped = aboveFrom + 1
+    if (bumped < 2) {
+      return {
+        inset: prev,
+        changed: false,
+        closing: true,
+        closingFrom,
+        closedFrom,
+        closedAt,
+        aboveFrom: bumped,
+      }
+    }
     return {
       inset: next,
       changed: next !== prev,
@@ -1489,9 +1527,26 @@ export function nextKeyboardInset(input: {
       closingFrom: 0,
       closedFrom: 0,
       closedAt: 0,
+      aboveFrom: 0,
     }
   }
   if (next < prev)
-    return { inset: next, changed: true, closing: true, closingFrom, closedFrom, closedAt }
-  return { inset: prev, changed: false, closing: true, closingFrom, closedFrom, closedAt }
+    return {
+      inset: next,
+      changed: true,
+      closing: true,
+      closingFrom,
+      closedFrom,
+      closedAt,
+      aboveFrom: 0,
+    }
+  return {
+    inset: prev,
+    changed: false,
+    closing: true,
+    closingFrom,
+    closedFrom,
+    closedAt,
+    aboveFrom: 0,
+  }
 }

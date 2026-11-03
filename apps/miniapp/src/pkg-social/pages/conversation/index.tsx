@@ -465,12 +465,19 @@ export default function Conversation() {
   const keyboardClosingFromRef = useRef(0)
   const keyboardClosedFromRef = useRef(0)
   const keyboardClosedAtRef = useRef(0)
+  /** 收起途中连续报到 `>= closingFrom` 的帧数（#560：连两帧才认作「键盘真被开回来」） */
+  const keyboardAboveFromRef = useRef(0)
   /**
    * 「平台不报 0」的活性哨兵（#560 R2）：`hideKeyboard()` 之后平台若始终不报 `0`（或闩被误置），
    * 内边距会永久停在抬高位置。到点若闩仍为真就强落 0 并重指尾行 —— 这是**卡死兜底**，不是
    * 动画补偿：条件触发、`inset === 0` / 页面被盖住 / 卸载三处清理。
    */
   const keyboardSentinelRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 武装哨兵那一刻的高度快照（#560）：到点用它判断「这一轮平台到底报过没有」—— 报过就不是
+   * 卡死，宁可停在最后一次真实上报值，也不能猜成 0 把输入栏埋进键盘。
+   */
+  const keyboardSentinelFromRef = useRef(0)
   /**
    * 重锚并发序号（#560 R5）：收键盘期间每接受一档高度都会 `keepTailAnchored()`，异步回读
    * 可能乱序落地 —— 旧那道的 `restore` 分支会把过期 `top` 写回去（`scrollWithAnimation`
@@ -928,6 +935,7 @@ export default function Conversation() {
     keyboardClosingFromRef.current = 0
     keyboardClosedFromRef.current = 0
     keyboardClosedAtRef.current = 0
+    keyboardAboveFromRef.current = 0
     keyboardHeightRef.current = 0
     // 哨兵也收掉（R2 清理点之三）：页面都被盖住了，500ms 后再跑一次重锚没有意义
     clearKeyboardSentinel()
@@ -2318,17 +2326,25 @@ export default function Conversation() {
   /**
    * 武装活性哨兵（#560 R2）：页面刚叫过 `Taro.hideKeyboard()`，等平台把高度收到 0。
    *
-   * 到点闩还在，说明平台没报 0（或闩被误置）—— 强落 0 并重指尾行，否则内边距会永久停在
-   * 抬高位置。这是**条件触发的卡死兜底**，不是给收键盘动画做补偿（不参与任何动画时序）。
+   * 到点闩还在，才轮到判「平台到底报过没有」：
+   * - 一帧都没动过（`keyboardHeightRef` 还是武装时的快照）→ 平台没报，强落 0 并重指尾行；
+   * - 报过（高度变了）→ 不是卡死，只是没收到 0（例如收起动画被打断、键盘又开了一把**更矮**
+   *   的回来，`>= closingFrom` 永远不成立）。**宁可停在最后一次真实上报值**，只解闩，
+   *   绝不猜成 0 —— `adjustPosition={false}` 下没有别的补偿，猜 0 就是把输入栏埋进键盘。
+   *
+   * 这是**条件触发的卡死兜底**，不是给收键盘动画做补偿（不参与任何动画时序）。
    */
   const armKeyboardSentinel = useCallback(() => {
     clearKeyboardSentinel()
+    keyboardSentinelFromRef.current = keyboardClosingFromRef.current
     keyboardSentinelRef.current = setTimeout(() => {
       keyboardSentinelRef.current = null
       if (!aliveRef.current) return
       if (!keyboardClosingRef.current) return
       keyboardClosingRef.current = false
       keyboardClosingFromRef.current = 0
+      keyboardAboveFromRef.current = 0
+      if (keyboardHeightRef.current !== keyboardSentinelFromRef.current) return
       keyboardHeightRef.current = 0
       setKeyboardHeight(0)
       keepTailAnchored()
@@ -2349,7 +2365,10 @@ export default function Conversation() {
     // 键盘本来就没开：没有要收的，也不必武装哨兵（否则 500ms 后会白做一次重锚）
     if (!(from > 0)) return
     keyboardClosingRef.current = true
-    keyboardClosingFromRef.current = from
+    // 连着调两次（切态又开面板）时，第二次读到的 `from` 只是收起动画里的**中间高度**，
+    // 直接覆盖会把起点下修 → 动画尾部的回抬就能越过它、提前解闩。闩已置时保大值。
+    keyboardClosingFromRef.current = Math.max(from, keyboardClosingFromRef.current)
+    keyboardAboveFromRef.current = 0
     armKeyboardSentinel()
   }, [armKeyboardSentinel])
 
@@ -2993,6 +3012,7 @@ export default function Conversation() {
         closingFrom: keyboardClosingFromRef.current,
         closedFrom: keyboardClosedFromRef.current,
         closedAt: keyboardClosedAtRef.current,
+        aboveFrom: keyboardAboveFromRef.current,
         now: Date.now(),
       })
       /**
@@ -3003,6 +3023,7 @@ export default function Conversation() {
       keyboardClosingFromRef.current = step.closingFrom
       keyboardClosedFromRef.current = step.closedFrom
       keyboardClosedAtRef.current = step.closedAt
+      keyboardAboveFromRef.current = step.aboveFrom
       // 收到 0：平台把键盘收干净了，活性哨兵不用再兜底（R2 的三个清理点之一）
       if (step.inset === 0) clearKeyboardSentinel()
       if (!step.changed) return
@@ -3931,7 +3952,19 @@ export default function Conversation() {
                 })
                 writeInputRowPx(height)
               }}
-              onFocus={() => setPanelOpen(false)}
+              onFocus={() => {
+                setPanelOpen(false)
+                /**
+                 * 用户点输入框 = 明确要键盘（#560）：收尾尾巴窗口与意图闩立刻作废。
+                 *
+                 * 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」（切输入法、候选栏收起）
+                 * 会被当成动画残值吞掉，输入栏停在上一次那把键盘的高度、被更矮的新键盘盖住。
+                 */
+                keyboardClosedAtRef.current = 0
+                keyboardClosingRef.current = false
+                keyboardClosingFromRef.current = 0
+                keyboardAboveFromRef.current = 0
+              }}
               onInput={(event) => setInputValue(event.detail.value)}
             />
           )}
