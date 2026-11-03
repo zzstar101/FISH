@@ -27,7 +27,7 @@ export type FollowingPerson = {
    * 首字不能再压上去。字段名分开，接端点的人就必须显式决定这件事。
    */
   placeholderBlock: string
-  /** 已认证：行内渲染认证勾，未认证整块不占位 */
+  /** 已认证：行内渲染「认证」成品徽章（`BADGE.verified`），未认证整块不占位 */
   verified: boolean
   /** 个性签名（稿里单行省略；真实口径只展示首行） */
   bio: string

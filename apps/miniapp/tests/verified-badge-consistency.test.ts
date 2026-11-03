@@ -340,6 +340,43 @@ describe('认证标识形态契约（#563 起：列表 / 卡片一律大徽章�
     expect(await consumersOf('ICONS.verifiedBrand')).toEqual(['pkg-auth/pages/settings/index.tsx'])
   })
 
+  test('胶囊外壳与白写字不许回流（watchers / TA 主页）：成品图自带「认证」字样，再叠一层就是两层装饰', async () => {
+    // 光靠「`BADGE.verified` 出现次数 + 尺寸比例」挡不住结构性回退：把「胶囊 + 小勾 + 已认证」
+    // 外壳**加回去**并不会改动徽章节点本身，数量与尺寸都不变（对抗性审查变异 M7 实测：加回外壳
+    // 后 11 pass / 3 fail，与干净基线完全一致，零转红）。所以这里立否定断言，钉死外壳类名与
+    // 白写文案都不许再出现 —— 与 #534 对订单卡「不许再有手绘圆勾」用的是同一套写法。
+    const shells = [
+      {
+        tsx: 'pkg-browse/pages/watchers/index.tsx',
+        scss: 'pkg-browse/pages/watchers/index.scss',
+        shell: 'wt__badge',
+      },
+      {
+        tsx: 'pkg-browse/pages/user/index.tsx',
+        scss: 'pkg-browse/pages/user/index.scss',
+        shell: 'uhome__badge',
+      },
+    ] as const
+    for (const { tsx, scss, shell } of shells) {
+      const text = await source(tsx)
+      const classes = [...text.matchAll(/className="([^"]*)"/g)]
+        .flatMap((m) => (m[1] ?? '').split(/\s+/))
+        .filter(Boolean)
+      // `<外壳>-ic`（成品图节点）是合法的；非法的是裸外壳类名与它的 `--nav` 修饰符
+      expect({
+        tsx,
+        shells: classes.filter((c) => c === shell || c.startsWith(`${shell}--`)),
+      }).toEqual({ tsx, shells: [] })
+      expect({ tsx, label: text.includes('已认证') }).toEqual({ tsx, label: false })
+      // 样式侧同理：外壳规则整块删掉，不留死样式给下一个人「复活」用
+      const style = await source(scss)
+      expect({
+        scss,
+        dead: [`.${shell} {`, `.${shell}--`].filter((needle) => style.includes(needle)),
+      }).toEqual({ scss, dead: [] })
+    }
+  })
+
   test('checkMuted（灰勾）已无消费点，也不再由生成器产出', async () => {
     expect(await consumersOf('ICONS.checkMuted')).toEqual([])
     expect(Object.keys(ICONS)).not.toContain('checkMuted')
