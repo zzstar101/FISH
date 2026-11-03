@@ -654,11 +654,23 @@ describe('发布 / 编辑成功 → 详情页的跳转方式（#562）', () => {
 
   // 不变式守卫，**不是**本缺陷的回归用例（改前也是绿的）：钉住「两条提交路径共用同一个跳转」，
   // 免得以后有人只在新建分支改成 redirectTo、编辑分支漏掉。
-  test('新建与编辑两条提交路径共用 goDetail（别只改新建分支）', async () => {
+  //
+  // `submit` 里编辑 / 新建不是两条各自跳转的分支，而是同一个三元表达式：
+  // `const detail = editing && editId !== null ? await updateListing(...) : await createListing(...)`，
+  // 之后只有一处 `goDetail(detail.id)`。所以「编辑分支是否也走 goDetail」只能这样钉：
+  // ① 两条分支都把结果绑给同一个 `detail`；② `goDetail(` 在 submit 里**有且只有一处**，
+  // 且排在两条分支之后；③ submit 里不存在任何绕过它的直接跳转调用（否则编辑分支能自己跳走）。
+  test('新建与编辑两条提交路径都汇到唯一的 goDetail（别只改新建分支）', async () => {
     const submit = await pageSlice('const submit = () => {', '* 冷却倒计时。')
-    expect(submit).toContain('goDetail(detail.id)')
+    expect(submit).toContain('editing && editId !== null')
     // 编辑走 PATCH、新建走 POST，都汇到同一个 `detail` 再跳
     expect(submit).toContain('await updateListing(editId')
     expect(submit).toContain('await createListing(')
+    // 出现两处 `goDetail(` 就说明某条分支自己跳了（例如编辑分支被改成 navigateTo）
+    expect(submit.match(/goDetail\(/g) ?? []).toHaveLength(1)
+    expectBefore(submit, 'await updateListing(editId', 'goDetail(detail.id)')
+    expectBefore(submit, 'await createListing(', 'goDetail(detail.id)')
+    // 正则要求带调用括号：将来注释里提一句 API 名字不会误伤
+    expect(submit).not.toMatch(/Taro\.(?:navigateTo|redirectTo|reLaunch|switchTab)\s*\(/)
   })
 })
