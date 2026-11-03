@@ -264,7 +264,7 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('inputRowPxRef.current = 0')
   })
 
-  test('换身份也把输入行高度真源清掉（下一个身份不该继承上一份草稿的多行高度）', async () => {
+  test('换身份也把输入行高度真源与滚动状态清掉（下一个身份不该继承上一份草稿与偏移）', async () => {
     const body = slice(
       squash(await pageSource()),
       'deferredRef.current = resetDeferredReload(epoch.current)',
@@ -273,6 +273,10 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain("setInputValue('')")
     expect(body).toContain('setInputRowPx(0)')
     expect(body).toContain('inputRowPxRef.current = 0')
+    // 复位指令用过不撤，是本页唯一不再自动回落的滚动状态：不清就会被下一个身份沿用
+    expect(body).toContain('setScrollRestore(null)')
+    expect(body).toContain('scrollTopRef.current = 0')
+    expect(body).toContain('bottomGapAllowanceRef.current = 0')
   })
 
   test('切语音态：点击当下收键盘，真源归零与切态同批落地（分两帧就是先上提再回落）', async () => {
@@ -353,8 +357,9 @@ describe('「+」面板与贴底（#561）', () => {
       "if (fix.kind === 'restore') { setScrollRestore((prev) => ({ top: fix.top, " +
         'tick: (prev?.tick ?? 0) + 1 }))',
     )
-    // 复位指令**用后不撤**：撤掉等于让属性回到默认的 0，正是本票要修的「偏移掉成 0」形态
-    expect(source).not.toContain('setScrollRestore(null)')
+    // 复位指令**用后不撤**：撤掉等于让属性回到默认的 0，正是本票要修的「偏移掉成 0」形态。
+    // 只扫 `keepTailAnchored` 体内 —— 换身份清场（另一条用例）确实要清掉残留的复位值
+    expect(body).not.toContain('setScrollRestore(null)')
   })
 
   test('消息流有 onScroll，并把 scrollTop/scrollHeight/视口高度喂给贴底判据', async () => {

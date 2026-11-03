@@ -314,11 +314,14 @@ export default function Conversation() {
    */
   const [inputRowPx, setInputRowPx] = useState(0)
   /**
-   * 「把滚动偏移写回去」的一次性指令（#561）。
+   * 「把滚动偏移写回去」的复位指令（#561）。
    *
    * 原生层在几何突变时可能把滚动偏移整个丢掉（复现里就是掉成 0），而 `scrollTop` 属性只
    * 认「值有变化」——所以带一个自增 `tick`，让同一位置也能再下发一次（`0.5px` 的交替在端上
    * 看不出来，但足以让属性真的变一次）。只在**非贴底**时才用：贴底态直接重指尾行锚点更稳。
+   *
+   * 值**用过不撤**：撤掉等于让属性回到默认的 0，那正是本票要修的「偏移掉成 0」形态；而属性
+   * 值不变时不会重新应用，所以长期绑着也不会压住后续滚动（换身份时才清场，见 `:580`）。
    */
   const [scrollRestore, setScrollRestore] = useState<{ top: number; tick: number } | null>(null)
   /**
@@ -551,6 +554,15 @@ export default function Conversation() {
     // 否则下一个身份首个「切语音」还用着上一个身份草稿的多行高度
     setInputRowPx(0)
     inputRowPxRef.current = 0
+    /*
+     * 滚动状态也属于上一个身份（第五轮复审 N4）：`scrollRestore` 用过不撤，是本页唯一不再
+     * 自动回落的滚动状态 —— 不清的话，新身份第一次复位会沿用上个账号的偏移；`scrollTopRef`
+     * 是回读判据的基准，`bottomGapAllowanceRef` 是上个身份的容差余量，一并归位。
+     */
+    scrollTopRef.current = 0
+    stickBottomRef.current = true
+    bottomGapAllowanceRef.current = 0
+    setScrollRestore(null)
     setPending([])
     setPanelOpen(false)
     setVoiceMode(false)
@@ -3396,7 +3408,9 @@ export default function Conversation() {
       ) : null}
 
       {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条。
-          `scrollTop` 平时不传（让 `scrollIntoView` 说了算），只有原生层丢过偏移时才下发一次复位 */}
+          `scrollTop` 只在原生层丢过偏移（非贴底复位）之后才有值，且**用过不撤** ——
+          靠 `tick % 2` 的 0.5px 交替保证同一位置也能再下发，属性值不变则不会重新应用，
+          所以它长期在场也不会盖住 `scrollIntoView` 的后续定位（两者并存的优先级只能端上验） */}
       <ScrollView
         className="conv__scroll"
         scrollY
