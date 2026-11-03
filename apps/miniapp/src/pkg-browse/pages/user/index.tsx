@@ -128,6 +128,8 @@ export default function UserHome() {
     // 先作废在途请求：上一轮还没回来的响应（含列表页）一个字段都不许写进新一轮
     generation.current += 1
     inFlight.current = false
+    // 段回到深链口径（`?tab=` 初值）。`load` 目前只在挂载与整页重试时调用，那时用户还没
+    // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
     setSeg(initial)
     setPage(emptyPage())
     // 顶栏两态也要跟着复位：失败态会把 `ScrollView` 整块卸载，重试时它是新挂载的，

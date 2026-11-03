@@ -61,7 +61,6 @@ function slice(code: string, from: string, to: string, nth = 0): string {
   }
   const end = code.indexOf(to, at + from.length)
   if (end < 0) throw new Error(`切片终点缺失：${to}（起点：${from}）`)
-  if (end < 0) throw new Error(`切片终点缺失：${to}`)
   return code.slice(at, end)
 }
 
@@ -148,6 +147,16 @@ describe('他人主页接线（#581）', () => {
     expect(body).toContain('if (sent === generation.current) inFlight.current = false')
     // 合并（覆盖 / 追尾 / 按 id 去重）交给纯函数，页面不手抄字段
     expect(body).toContain('...mergeSegmentPage(prev, next, cursor)')
+    // 代号要在**发请求之前**抓：抓在 await 之后等于永远「对得上」，旧段的响应照样写进新段
+    expect(body.indexOf('const sent = generation.current')).toBeLessThan(
+      body.indexOf('await loadPublicUserListingsPage'),
+    )
+    // 过期判定要在**写回之前**：挪到 `setPage(merge…)` 之后就拦不住旧段的响应了
+    expect(body.indexOf('if (sent !== generation.current) return')).toBeLessThan(
+      body.indexOf('mergeSegmentPage(prev, next, cursor)'),
+    )
+    // 用户在这一步消失了（读取层把 404 折成 null）：整页退到 notFound，而不是当成列表失败
+    expect(body).toContain("setLoadState('notFound')")
 
     // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据之前
     const reload = slice(code, 'const load = useCallback(', 'if (userId ===')
@@ -196,10 +205,11 @@ describe('他人主页接线（#581）', () => {
     expect(flat).toMatch(
       /style=\{\{ marginTop: `-\$\{navTotalHeight\}px`, height: `\$\{navTotalHeight\}px` \}\}/,
     )
-    // 写死一个 id 的话连点第二次没有任何反应（scrollIntoView 同值不重滚）
-    const body = slice(code, 'const scrollToBody = useCallback(', '}, [])')
-    expect(body).toContain("'uhome-body-a'")
-    expect(body).toContain("'uhome-body-b'")
+    // 写死一个 id、或三元两支指同一个 id，连点第二次都没有任何反应（scrollIntoView 同值不重滚）
+    const body = slice(code, 'const scrollToBody = useCallback(', '}, [])').replace(/\s+/g, ' ')
+    expect(body).toContain("prev === 'uhome-body-a' ? 'uhome-body-b' : 'uhome-body-a'")
+    const top = slice(code, 'const backToTop = () => {', '}').replace(/\s+/g, ' ')
+    expect(top).toContain("prev === 'uhome-top-a' ? 'uhome-top-b' : 'uhome-top-a'")
   })
 
   test('可点两格的触控高度按 44pt 换算成 88px，且只给可点的那两格', async () => {
