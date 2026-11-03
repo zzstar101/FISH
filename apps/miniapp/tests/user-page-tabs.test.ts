@@ -22,6 +22,9 @@ import {
   isCurrentRequest,
   makeSegmentLoader,
   segmentOfTab,
+  segTitleOf,
+  shouldRefetch,
+  totalOf,
 } from '../src/pkg-browse/pages/user/segment-page'
 
 /**
@@ -303,7 +306,8 @@ describe('他人主页接线（#581）', () => {
   test('首屏那一页走 firstPageOf，不在页面里手写「口径是否 ACTIVE」的分支', async () => {
     const code = await page
     expect(code).toContain('firstPageOf(segRef.current, result)')
-    expect(code).not.toContain("if (seg === 'ACTIVE') {\n      setPage(")
+    // 页面里不再有「按口径分支」的写法（口径的判定全在 `firstPageOf` / `totalOf` / `segTitleOf` 里）
+    expect(code).not.toContain('if (seg ===')
   })
 
   test('三格统计：在售 / 卖出各接自己那个入口，好评率那格什么都不接', async () => {
@@ -438,12 +442,10 @@ describe('他人主页接线（#581）', () => {
   test('空页就补拉第一页（切段后 / 深链进已售出都靠它），失败后不自动重试', async () => {
     const code = await page
     const effect = slice(code, '列表还没拉过时补第一页', '}, [loadSegment, loadState, page])')
+    // 守卫搬进纯函数 `shouldRefetch`（三态与加载态的样本在下面那组），页面只留一句判定：
+    // 只剩 `page.loaded` 的话，`failed` 之后每次渲染都会再打一次接口。
+    expect(effect).toContain('if (!shouldRefetch(loadState, page)) return')
     expect(effect).toContain('void loadSegment(null)')
-    expect(effect).toContain("if (loadState !== 'ok') return")
-    // 三态守卫缺一不可：只剩 `page.loaded` 的话，`failed` 之后每次渲染都会再打一次接口
-    expect(effect.replace(/\s+/g, ' ')).toContain(
-      'if (page.loaded || page.loading || page.failed) return',
-    )
   })
 
   test('列表失败的重试直接再拉这一页，不走整页 load()', async () => {
@@ -475,5 +477,94 @@ describe('他人主页接线（#581）', () => {
     expect(base).toContain('align-items: stretch;')
     const cell = slice(scss, '.uhome__stat {', '}')
     expect(cell).toContain('justify-content: center;')
+  })
+})
+
+describe('shouldRefetch / totalOf / segTitleOf —— 口径的单一来源（#582 首轮审查 M1 / M4 / 低-3）', () => {
+  const idle = { loaded: false, loading: false, failed: false }
+
+  test('补拉只看加载态与三态：不看口径，失败后不自动重试', () => {
+    expect(shouldRefetch('ok', idle)).toBe(true)
+    expect(shouldRefetch('loading', idle)).toBe(false)
+    expect(shouldRefetch('notFound', idle)).toBe(false)
+    expect(shouldRefetch('failed', idle)).toBe(false)
+    // 三态里任一为真都不该再打接口：已加载过、正在拉、刚失败
+    expect(shouldRefetch('ok', { ...idle, loaded: true })).toBe(false)
+    expect(shouldRefetch('ok', { ...idle, loading: true })).toBe(false)
+    expect(shouldRefetch('ok', { ...idle, failed: true })).toBe(false)
+  })
+
+  test('分段总数取服务端那个数：两段不许互换，也不拿已加载条数冒充', () => {
+    const profile = { activeCount: 7, soldCount: 3 }
+    expect(totalOf('ACTIVE', profile)).toBe(7)
+    expect(totalOf('SOLD', profile)).toBe(3)
+    // profile 还没到（加载中）：先报 0，列表尾注按 `userListEnd` 的 `none` 分支不提前下结论
+    expect(totalOf('ACTIVE', null)).toBe(0)
+    expect(totalOf('SOLD', null)).toBe(0)
+  })
+
+  test('分段名两段不许互换', () => {
+    expect(segTitleOf('ACTIVE')).toBe('在售')
+    expect(segTitleOf('SOLD')).toBe('已售出')
+  })
+})
+
+describe('他人主页口径接线（#582 首轮审查 M1–M6 / 低）', () => {
+  const page = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
+  const style = Bun.file(new URL('../src/pkg-browse/pages/user/index.scss', import.meta.url)).text()
+
+  test('补拉 effect 不看口径：判定交给 shouldRefetch，不是「只有 SOLD 才补」', async () => {
+    const code = await page
+    const effect = slice(
+      code,
+      '// 「该不该补拉」由纯函数决定',
+      '}, [loadSegment, loadState, page])',
+    )
+    expect(effect).toContain('if (!shouldRefetch(loadState, page)) return')
+    expect(effect).toContain('void loadSegment(null)')
+    // 写成「只有 SOLD 才补」会让切回在售的分段永远空着；拿渲染快照 `segRef` 会更糟
+    expect(effect).not.toContain("'SOLD'")
+    expect(effect).not.toContain('segRef')
+  })
+
+  test('下一页信号与列表终点都取游标 / 服务端总数，不拿条数猜', async () => {
+    const code = await page
+    expect(code).toContain('const hasMore = page.nextCursor !== null')
+    expect(code).toContain('const segTotal = totalOf(seg, profile)')
+    expect(code).toContain('userListEnd(items.length, segTotal, hasMore)')
+  })
+
+  test('整页重载的换代紧跟数据重置：清除、换代、放开闩是同一步', async () => {
+    const code = await page
+    const load = slice(code, 'const load = useCallback(async () => {', '}, [loader, userId])')
+    // 把换代挪到 `await loadPublicUserHome(...)` 之后，这一轮的首屏响应就会被自己作废
+    const order = ['setPage(emptyPage())', 'epoch.current += 1', 'loader.release()']
+    let at = -1
+    for (const step of order) {
+      const found = load.indexOf(step, at + 1)
+      expect(found).toBeGreaterThan(at)
+      at = found
+    }
+  })
+
+  test('起始 / 失败两条回调都把三态写全，不留旧值（loading 永真的话列表卡在「加载中」）', async () => {
+    const code = await page
+    // 整块 handlers 一起取，再按回调名切：`setPage` 那只调用会被 Biome 折成多行，
+    // 所以不能拿它的完整字面量当锚点。
+    const handlers = slice(code, 'await loader.load(cursor, {', 'const items = page.items')
+    const start = handlers.slice(0, handlers.indexOf('onPage:'))
+    const failed = handlers.slice(handlers.indexOf('onFailed: (_sent, error) =>'))
+    // 开拉：把上一轮的失败态清掉，否则失败后重试会一直停在错误提示上
+    expect(start).toContain('loading: true')
+    expect(start).toContain('failed: false')
+    // 失败：把 loading 落回 false，否则续页失败后列表永远卡在「加载中」
+    expect(failed).toContain('loading: false')
+    expect(failed).toContain('failed: true')
+  })
+
+  test('页头两格与分段标题的样式都在：可点态有按压反馈，标题规则没被连着胶囊一起删掉', async () => {
+    const scss = await style
+    expect(scss).toContain('.uhome__stat--tap {')
+    expect(scss).toContain('.uhome__sect-title {')
   })
 })

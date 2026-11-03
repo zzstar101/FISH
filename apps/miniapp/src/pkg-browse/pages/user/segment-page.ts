@@ -51,6 +51,35 @@ export type SegmentPageSnapshot<T extends { id: string }> = {
   nextCursor: string | null
 }
 
+/** 页面加载态（与 `index.tsx` 的 `loadState` 取值域一致）。 */
+export type UserHomeLoadState = 'loading' | 'ok' | 'notFound' | 'failed'
+
+/**
+ * 该不该为当前分段补拉第一页。
+ *
+ * 「任何一段只要是空页」都在这里补：切段后整份重置成 `emptyPage()`、以及深链直接进
+ * 「已售出」两种情形都走这条路 —— 所以**不许**在这里看口径（写成「只有 SOLD 才补」会
+ * 让切回在售的分段永远空着）。`failed` 也挡住自动补拉：失败后只认用户点「重试」，
+ * 否则每次重渲染都会再打一次接口。
+ */
+export const shouldRefetch = (
+  loadState: UserHomeLoadState,
+  page: { loaded: boolean; loading: boolean; failed: boolean },
+): boolean => loadState === 'ok' && !page.loaded && !page.loading && !page.failed
+
+/** 页头与列表共用的那两个数（服务端给的 `activeCount` / `soldCount`）。 */
+export type UserCounts = { activeCount: number; soldCount: number }
+
+/**
+ * 当前分段的**真总数**：在售段用 `activeCount`、已售出段用 `soldCount`。
+ * 列表是分页的，拿已加载条数冒充会在还没加载完时低报，所以页头计数与列表尾注都走它。
+ */
+export const totalOf = (seg: Segment, profile: UserCounts | null): number =>
+  seg === 'ACTIVE' ? (profile?.activeCount ?? 0) : (profile?.soldCount ?? 0)
+
+/** 分段名的唯一来源（分段标题、空态「TA 暂无…商品」、列表失败文案都用它）。 */
+export const segTitleOf = (seg: Segment): string => (seg === 'ACTIVE' ? '在售' : '已售出')
+
 /**
  * 深链参数决定首屏停在哪个分段。外部带进来的 `?tab=` 只做**初值**，
  * 页内点页头两格切段不再写 URL 参数；非法值一律回落在售。

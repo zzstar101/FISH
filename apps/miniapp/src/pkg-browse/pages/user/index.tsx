@@ -36,6 +36,9 @@ import {
   firstPageOf,
   makeSegmentLoader,
   segmentOfTab,
+  segTitleOf,
+  shouldRefetch,
+  totalOf,
 } from './segment-page'
 import './index.scss'
 
@@ -224,8 +227,9 @@ export default function UserHome() {
    * 都走这条路，不是只有 `?tab=SOLD` 进来的实例（#581 / #582）。
    */
   useEffect(() => {
-    if (loadState !== 'ok') return
-    if (page.loaded || page.loading || page.failed) return
+    // 「该不该补拉」由纯函数决定（样本见 `tests/user-page-tabs.test.ts`）：不看口径、
+    // 只看加载态与这段页面的三态，`failed` 一律不自动重试。
+    if (!shouldRefetch(loadState, page)) return
     void loadSegment(null)
   }, [loadSegment, loadState, page])
 
@@ -481,8 +485,8 @@ export default function UserHome() {
    * 数、与页头那两个同源。分段标题右侧的「N 件」也用它 —— 列表是分页的，用 `items.length`
    * 会在还没加载完时低报。
    */
-  const segTotal = seg === 'ACTIVE' ? (profile?.activeCount ?? 0) : (profile?.soldCount ?? 0)
-  const segTitle = seg === 'ACTIVE' ? '在售' : '已售出'
+  const segTotal = totalOf(seg, profile)
+  const segTitle = segTitleOf(seg)
 
   /**
    * 列表终点判定（纯函数，用例见 `tests/user-list-end.test.ts`）。
