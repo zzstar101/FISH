@@ -57,6 +57,19 @@ const emptyPage = (): SegmentPage => ({
 })
 
 /**
+ * 追加下一页时按 `id` 去重（#565 复核 M2）。
+ *
+ * 游标翻页本身不重不漏，但同一条游标可能被并发提交两次（见下面的 `inFlight` 闩），
+ * 迟到的那个响应会把同一页再追加一遍 —— 列表里就出现两张一模一样的卡。
+ * 去重按 `id`（商品主键）做，不按位置：时间线可能因为别人新上架而平移。
+ */
+function appendUnique(current: MockListing[], incoming: MockListing[]): MockListing[] {
+  if (incoming.length === 0) return current
+  const seen = new Set(current.map((item) => item.id))
+  return [...current, ...incoming.filter((item) => !seen.has(item.id))]
+}
+
+/**
  * 他人主页（设计稿 `D:\Downloads\1改\小程序1版user.html`）。
  *
  * **隐私硬规则**（沿用 C2 稿 04 帧的「公开信息边界」，1版稿注解 ⑤ 同口径）：公开页只展示
@@ -125,6 +138,15 @@ export default function UserHome() {
     ACTIVE: emptyPage(),
     SOLD: emptyPage(),
   })
+  /**
+   * 每段一个「在飞」闩：同步 ref，**不是** state（#565 复核 M2）。
+   *
+   * `pages[seg].loading` 是渲染快照，判定重入不可靠：同一帧里连点两次滚到底
+   * （`onScrollToLower` 会在内容不满屏时连发）、或者切段与滚底撞在同一帧，
+   * 两个回调读到的都是上一次渲染的 `loading: false`，会拿**同一条游标**并发打两次接口，
+   * 同一页被追加两遍。所以真正的互斥靠这里 compare-and-set：先同步置位，抢不到直接返回。
+   */
+  const inFlight = useRef<Record<Segment, boolean>>({ ACTIVE: false, SOLD: false })
 
   const load = useCallback(async () => {
     // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
@@ -132,6 +154,8 @@ export default function UserHome() {
     setProfile(null)
     setSeg('ACTIVE')
     setPages({ ACTIVE: emptyPage(), SOLD: emptyPage() })
+    // 上一轮还在飞的请求作废：它的响应回来时不该再往刚清空的段里追加。
+    inFlight.current = { ACTIVE: false, SOLD: false }
     /**
      * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
      * 重试时它是**新挂载**的、`scrollTop` 回到 0，而 `glassOn` / `titled` 是页面级
@@ -169,11 +193,14 @@ export default function UserHome() {
    * 拉某一段的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
    *
    * 两个入口（切段补首屏、滚到底补下一页）都可能并发进来，重入由**该段自己的**
-   * `loading` 挡住；追加时读 `prev` 里那一段已展示的条目，不读闭包里的快照 ——
-   * 否则两次快速滚动会拿同一份旧数组覆盖。
+   * `inFlight` 闩挡住 —— 同步 compare-and-set，抢不到直接返回（`loading` 是渲染快照，
+   * 同一帧里的两次调用读到的都是旧值）。追加时读 `prev` 里那一段已展示的条目、并按 `id`
+   * 去重，不读闭包里的快照 —— 否则两次快速滚动会拿同一份旧数组覆盖、或把同一页追加两遍。
    */
   const loadSegment = useCallback(
     async (which: Segment, cursor: string | null) => {
+      if (inFlight.current[which]) return
+      inFlight.current[which] = true
       setPages((prev) => ({ ...prev, [which]: { ...prev[which], loading: true, failed: false } }))
       try {
         const page = await loadPublicUserListingsPage(userId, which, cursor)
@@ -185,7 +212,7 @@ export default function UserHome() {
         setPages((prev) => ({
           ...prev,
           [which]: {
-            items: cursor === null ? page.listings : [...prev[which].items, ...page.listings],
+            items: cursor === null ? page.listings : appendUnique(prev[which].items, page.listings),
             nextCursor: page.nextCursor,
             loaded: true,
             loading: false,
@@ -196,6 +223,8 @@ export default function UserHome() {
         // 分段内的失败只降级这一段（页头、另一段、顶栏都还在），不把整页打成 failed。
         console.warn('[miniapp] 他人主页：分段列表加载失败', error)
         setPages((prev) => ({ ...prev, [which]: { ...prev[which], loading: false, failed: true } }))
+      } finally {
+        inFlight.current[which] = false
       }
     },
     [userId],

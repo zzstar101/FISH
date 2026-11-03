@@ -118,10 +118,15 @@ export const PublicUserProfileSchema = z.object({
   /** 在售商品数（`listings.status = 'ACTIVE'` 且 seller 是 TA）；服务端 COUNT。 */
   activeCount: z.number().int().nonnegative(),
   /**
-   * 卖出的件数（`transactions.status = 'COMPLETED'` 且 seller 是 TA）。
+   * 已售出件数：`listings.status = 'SOLD'` 且 `governance_delisted_at IS NULL`、seller 是 TA，服务端 COUNT。
    *
-   * 注意与 `profile` 域「我发布的商品」不是同一个数：那边是**历史发布总数**，
-   * 这里是**成交数**。页面上写「卖出」就该用这个。
+   * 口径与 `GET /users/:id/listings?status=SOLD` 那个列表**逐字同源同条件**（#565 复核订正）：
+   * 页头/分段头写「已售出 N 件」，点开必须正好是 N 件。原先取的是
+   * `transactions.status = 'COMPLETED'` 的成交条数——那是另一个数据源，平台治理下架的商品
+   * 成交后两个源各自一侧算、另一侧不算，段头与列表会自相矛盾。语义因此从「成交笔数」变成
+   * 「公开可见的已售商品数」（被平台下架的商品不计入，因为它在列表里也不出现）。
+   *
+   * 注意与 `profile` 域「我发布的商品」不是同一个数：那边是**历史发布总数**。
    */
   soldCount: z.number().int().nonnegative(),
   /**

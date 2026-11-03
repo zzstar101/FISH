@@ -27,6 +27,8 @@ type ListingSpec = {
   status?: ListingStatus
   moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
   createdAt?: Date
+  /** 平台治理下架时刻（#565）：与 `status` 正交，核销路径会把这类商品置成 SOLD。 */
+  governanceDelistedAt?: Date
   /** 传入即插 `sort_order = 0` 的封面；`extraImageOrder` 用于验证"只有 0 才是封面"。 */
   coverObjectKey?: string
   extraImageObjectKey?: string
@@ -81,6 +83,7 @@ async function withSeller(
           condition: 'GOOD',
           ...(spec.status ? { status: spec.status } : {}),
           ...(spec.moderationStatus ? { moderationStatus: spec.moderationStatus } : {}),
+          ...(spec.governanceDelistedAt ? { governanceDelistedAt: spec.governanceDelistedAt } : {}),
           ...(spec.createdAt ? { createdAt: spec.createdAt } : {}),
         })
         .returning({ id: listings.id })
@@ -164,7 +167,7 @@ test('已注销账号在公开读模型里与"不存在"同义：只有 DELETED 
   })
 })
 
-test('stats：在售只算 ACTIVE + APPROVED，卖出只算 COMPLETED', async () => {
+test('stats：在售只算 ACTIVE + APPROVED，已售出与列表同源（SOLD 且未治理下架）', async () => {
   const base = new Date('2026-09-01T00:00:00.000Z')
   await withSeller(
     [
@@ -174,37 +177,23 @@ test('stats：在售只算 ACTIVE + APPROVED，卖出只算 COMPLETED', async ()
       // 审核未通过的 ACTIVE 商品不能算进"在售"（公开可见性的第二道闸）。
       { status: 'ACTIVE', moderationStatus: 'REVIEW' },
       { status: 'ACTIVE' },
+      // 平台已下架之后才被核销的商品：库里 `status = 'SOLD'`，但公开列表不返回它
+      // （核销路径无条件置 SOLD，只留 `governance_delisted_at` 痕迹）。计数必须一起筛掉，
+      // 否则段头写「已售出 2 件」而点进去只有 1 件 —— #565 复核 M1。
+      {
+        status: 'SOLD',
+        moderationStatus: 'BLOCKED',
+        governanceDelistedAt: base,
+      },
     ],
-    async ({ sellerId, buyerId, listingIds }) => {
-      const sold = listingIds[0] as string
-      const reserved = listingIds[1] as string
-      const cancelled = listingIds[2] as string
+    async ({ sellerId }) => {
+      const soldRows = await store.listListings(sellerId, 'SOLD', 20, null)
+      const stats = await store.stats(sellerId)
 
-      await db.insert(transactions).values([
-        {
-          listingId: sold,
-          buyerId,
-          sellerId,
-          amountCents: 1200,
-          status: 'COMPLETED',
-          completedAt: base,
-          buyerConfirmedAt: base,
-          sellerConfirmedAt: base,
-        },
-        // 进行中不算成交。
-        { listingId: reserved, buyerId, sellerId, amountCents: 1300 },
-        // 已取消不算成交（`completed_at` 与 `cancelled_at` 由 check 约束绑定状态）。
-        {
-          listingId: cancelled,
-          buyerId,
-          sellerId,
-          amountCents: 1400,
-          status: 'CANCELLED',
-          cancelledAt: base,
-        },
-      ])
-
-      expect(await store.stats(sellerId)).toEqual({ activeListings: 2, soldCount: 1 })
+      expect(stats.activeListings).toBe(2)
+      // 段头数与段内条数必须相等：两个数据源（transactions / listings）就会在这里崩。
+      expect(stats.soldCount).toBe(soldRows.length)
+      expect(stats.soldCount).toBe(1)
     },
   )
 })
@@ -265,15 +254,17 @@ test("listListings(…, 'ACTIVE', …) 只出 ACTIVE + APPROVED，时间倒序�
   )
 })
 
-test("listListings(…, 'SOLD', …) 只出 SOLD，且不叠加 moderationStatus（#565）", async () => {
+test("listListings(…, 'SOLD', …) 只出 SOLD，筛掉平台已下架，且不叠加 moderationStatus（#565）", async () => {
   await withSeller(
     [
       { status: 'SOLD', createdAt: new Date('2026-09-09T00:00:00.000Z') },
-      // 治理期间成交（审核列不是 APPROVED）：仍必须出现在「已售出」里，否则页头的
-      // 「卖出 N」（来自 transactions，不含审核条件）与列表自相矛盾。
+      // 平台已下架之后才被核销：`status` 是 SOLD、`governance_delisted_at` 非空。
+      // 这类商品对非本人详情一律 404，绝不能进公开列表 —— 匿名访客会拿到它的
+      // 标题 / 价格 / 封面，点进去却是 404（#565 复核 H1）。
       {
         status: 'SOLD',
         moderationStatus: 'BLOCKED',
+        governanceDelistedAt: new Date('2026-09-08T12:00:00.000Z'),
         createdAt: new Date('2026-09-08T00:00:00.000Z'),
       },
       { status: 'OFFLINE', createdAt: new Date('2026-09-07T00:00:00.000Z') },
@@ -283,10 +274,26 @@ test("listListings(…, 'SOLD', …) 只出 SOLD，且不叠加 moderationStatus
     async ({ sellerId, listingIds }) => {
       const rows = await store.listListings(sellerId, 'SOLD', 20, null)
 
-      // 已售出段**永不**返回 OFFLINE / RESERVED / ACTIVE（#565 验收）。
-      expect(rows.map((row) => row.id)).toEqual([listingIds[0] as string, listingIds[1] as string])
-      expect(rows.every((row) => row.status === 'SOLD')).toBe(true)
-      expect(await store.stats(sellerId)).toEqual({ activeListings: 1, soldCount: 0 })
+      // 已售出段**永不**返回 OFFLINE / RESERVED / ACTIVE，也不返回平台已下架的 SOLD（#565 验收）。
+      expect(rows.map((row) => row.id)).toEqual([listingIds[0] as string])
+      // 段内条数与段头计数同源同条件：被筛掉的那件不能还写在段头。
+      expect(await store.stats(sellerId)).toEqual({ activeListings: 1, soldCount: 1 })
+    },
+  )
+})
+
+test("listListings(…, 'SOLD', …) 不叠加审核列：审核期间成交的商品照常返回", async () => {
+  await withSeller(
+    [
+      // 审核未通过期间成交（`moderation_status` 不是 APPROVED，且没有治理下架痕迹）。
+      // 已售出段刻意不判审核列，否则这类商品在页面上会凭空消失，而「卖出 N」还算着它。
+      { status: 'SOLD', moderationStatus: 'BLOCKED' },
+    ],
+    async ({ sellerId, listingIds }) => {
+      const rows = await store.listListings(sellerId, 'SOLD', 20, null)
+
+      expect(rows.map((row) => row.id)).toEqual([listingIds[0] as string])
+      expect(await store.stats(sellerId)).toEqual({ activeListings: 0, soldCount: 1 })
     },
   )
 })

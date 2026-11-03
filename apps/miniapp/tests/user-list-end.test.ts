@@ -74,4 +74,16 @@ describe('user 页面接线', () => {
     // 页面把它原样存进分段状态，不再有「hasMore 布尔」这一层转手
     expect(code).toContain('result.nextCursor')
   })
+
+  test('滚到底的重入靠同步 ref 闩互斥，迟到的同页响应按 id 去重（#565 复核 M2）', async () => {
+    const code = await source
+    // `pages[seg].loading` 是渲染快照：同一帧里连点两次滚到底（或切段与滚底撞在同一帧），
+    // 两次回调读到的都是上一次渲染的 `loading: false`，会拿同一条游标并发打两次接口。
+    // 互斥必须**先同步置位**（compare-and-set），不能靠读 state 决定要不要发。
+    expect(code).toContain('if (inFlight.current[which]) return')
+    expect(code).toContain('inFlight.current[which] = true')
+    expect(code).toContain('inFlight.current[which] = false')
+    // 抢输/迟到的那份响应仍可能回来：追加时按 id 去重，否则同一页会被追加两遍。
+    expect(code).toContain('appendUnique(')
+  })
 })
