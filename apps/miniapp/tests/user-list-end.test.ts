@@ -87,6 +87,17 @@ describe('mergeSegmentPage —— 分段列表的合并与去重', () => {
   })
 })
 
+/**
+ * 把源码里的换行与缩进压成单空格，便于对大括号块的**形状**做断言。
+ *
+ * 只看「`mergeSegmentPage(...)` 出现过」是不够的：在它后面接一句 `.items` 取值、
+ * 或把 `loaded: true` 删掉，字符串都还在，而页面已经坏掉（前者丢掉游标 → `hasMore`
+ * 恒真、滚到底反复拉同一页；后者让分段永远停在骨架屏）。
+ */
+function flatten(code: string): string {
+  return code.replace(/\s+/g, ' ')
+}
+
 describe('user 页面接线', () => {
   const source = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
 
@@ -124,5 +135,15 @@ describe('user 页面接线', () => {
     expect(code).toContain('inFlight.current[which] = false')
     // 合并（覆盖 / 追尾 / 按 id 去重）由 `mergeSegmentPage` 承担，行为在纯函数用例里钉住。
     expect(code).toContain('mergeSegmentPage(prev[which], page, cursor)')
+  })
+
+  test('合并结果整体展开进分段状态：游标与三态是同一次写回（#565 复核 M1）', async () => {
+    const code = flatten(await source)
+    // 只取 `.items`（`items: mergeSegmentPage(...).items`）会丢掉 `nextCursor`：
+    // `hasMore` 恒真 → 滚到底拿同一游标反复请求，去重又把条目全滤掉 → 列表静止、网络空转。
+    // 删掉 `loaded: true` 则分段永远停在骨架屏。整块形状一次钉住两条写回。
+    expect(code).toContain(
+      '[which]: { ...mergeSegmentPage(prev[which], page, cursor), loaded: true, loading: false, failed: false, }',
+    )
   })
 })
