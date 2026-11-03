@@ -258,9 +258,9 @@
 /* 有真封面时的品类小字（#568）：色块时代白字压纯色，一层极浅投影就够读；压到商品照片上
    会糊（尤其浅色 / 白底商品图），所以给这行小字垫一层胶囊底。色值取既有令牌 `--scrim`
    （与失效遮罩同一支），不新增色值。无图商品仍走色块，形态保持原样、不加底。
-   左侧内边距比右侧多 2px：末字的 `letter-spacing` 会多出 0.02em，不抵消会显得偏右。 */
+   左右内边距对称：文字在胶囊里居中，靠肉眼把一侧调大只会显得偏。 */
 .hist__thumb.is-photo .hist__ttag {
-  padding: 4px 12px 4px 14px;
+  padding: 4px 13px;
   border-radius: 20px;
   background: var(--scrim);
 }
@@ -350,9 +350,9 @@
   text-shadow: 0 2px 4px var(--ink-weak-3);
 }
 
-/* 有真封面时的胶囊底（#568），口径与 `.hist__thumb.is-photo .hist__ttag` 完全一致 */
+/* 有真封面时的胶囊底（#568），口径与 `.hist__thumb.is-photo .hist__ttag` 一致：左右对称 */
 .hist__rthumb.is-photo .hist__rthumb-tag {
-  padding: 3px 10px 3px 12px;
+  padding: 3px 11px;
   border-radius: 18px;
   background: var(--scrim);
 }

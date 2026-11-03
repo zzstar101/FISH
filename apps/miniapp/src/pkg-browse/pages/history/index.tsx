@@ -769,6 +769,7 @@ export default function History() {
           className="hist__thumb-img"
           src={item.coverUrl ?? blockUrlOf(item.category)}
           mode="aspectFill"
+          lazyLoad
         />
         <Text className="hist__ttag">{shortLabelOf(item.category)}</Text>
         {item.gone ? <Text className="hist__tgone">{item.gone}</Text> : null}
@@ -942,6 +943,7 @@ export default function History() {
                         className="hist__rthumb-img"
                         src={item.coverUrl ?? blockUrlOf(item.category ?? 'OTHER')}
                         mode="aspectFill"
+                        lazyLoad
                       />
                       {item.category === null ? null : (
                         <Text className="hist__rthumb-tag">{shortLabelOf(item.category)}</Text>
