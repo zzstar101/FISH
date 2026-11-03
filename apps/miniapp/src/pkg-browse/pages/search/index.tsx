@@ -212,7 +212,15 @@ export default function Search() {
     setLoading(false)
   }
 
+  /**
+   * 切排序口径。
+   *
+   * 相同排序直接短路（#564）：`toListingSort` 眼下把「综合 / 最新 / 成色」都映射成
+   * `newest`（`features/fetchers.ts`），所以连点两下同一个 chip 会发两条请求、走两遍
+   * `loading` —— 列表没变，却要陪着计数行闪一次。重复点当前档本来也没有语义。
+   */
   const changeSort = (next: SearchFilter) => {
+    if (next === sort) return
     setSort(next)
     if (submitted) void run(submitted, next)
   }
@@ -386,10 +394,13 @@ export default function Search() {
           )}
 
           {/* 结果计数不能早于结果本身：否则请求途中会先显示「为你找到 0 件」；
-              失败时也不显示，免得把「没加载出来」说成「一件都没有」 */}
+              失败时也不显示，免得把「没加载出来」说成「一件都没有」。
+              但它是**常驻盒子**（#564）：请求途中只加 `is-wait` 把它藏起来，绝不卸载 ——
+              整块卸载会让下方瀑布流上移 88rpx，结果回来再插回去，用户看到的就是
+              「切个排序，列表先上抽一下又弹回来」。藏起来时保留旧文案，连换行后的高度都一致。 */}
           {/* 计数报**搜索结果**（服务端给的条数），本机隐藏的另说一句 —— 两件事实都不含糊 */}
-          {loading || failed || isNumber ? null : (
-            <View className="search__meta">
+          {isNumber ? null : (
+            <View className={`search__meta${loading || failed ? ' is-wait' : ''}`}>
               <Text>为你找到</Text>
               <Text className="search__meta-num num">{results.length}</Text>
               <Text>

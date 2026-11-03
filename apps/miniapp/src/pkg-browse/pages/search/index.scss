@@ -338,6 +338,18 @@
   color: var(--fg);
 }
 
+/**
+ * 请求途中（`loading` / `failed`）把计数行**藏起来但留住盒子**（#564）。
+ *
+ * 用 `visibility: hidden` 而不是「卸载 / 换成空骨架」：这行的三小段文案（含关键词与
+ * 「已隐藏 N 件」）在窄屏上会折行，隐藏比另造骨架更省事，高度也永远等于原来那一行。
+ * 卸载会让下方瀑布流整块上移 24 + 26×1.4 + 28 ≈ 88px（行盒取最高的 `.search__meta-num`），
+ * 请求回来再插回 —— 切个排序列表就上抽一下，正是票里报的那个抖。
+ */
+.search__meta.is-wait {
+  visibility: hidden;
+}
+
 /* 搜索结果的瀑布流：与首页同一套 .waterfall / .waterfall__col */
 .waterfall {
   display: flex;
