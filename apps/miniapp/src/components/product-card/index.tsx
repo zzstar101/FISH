@@ -6,6 +6,11 @@
  * 字段缺席的老 mock 记录不渲染）。历史上曾有 `search` 变体
  * （价格深色、成色胶囊挪到价格同位），Owner 2026-09-28 拍板全部统一为首页版式，变体已收掉。
  *
+ * 已售 / 已下架卡（#566）：`listing.status` 为 `SOLD` / `OFFLINE` 时，图片压一层中性 50% 黑罩
+ * （`--scrim-cover`，`styles/_token-vars.scss`）、
+ * 左上角换成「卖掉了 / 下架了」角标（与「0 元送 / 急出」互斥，二选一）、文字走 `--muted`；
+ * 图片与卡片高度一律不变（灰罩是叠层）。
+ *
  * **长按菜单长在卡片身上**（收藏 / 不感兴趣）：三处调用方拿到的是同一套交互，页面不再各自
  * 传长按回调 —— 否则「搜索页和相似推荐位没有长按」这类缺口只能靠每个页面记得接一遍。
  * 页面只按需接两个钩子做自己才做得了的账：`hidden`（页面那份跨页的隐藏名单，决定这张卡还画不画）
@@ -21,6 +26,7 @@ import Taro from '@tarojs/taro'
 import { useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
+import { outOfMarketLabel } from '@/features/listing/status-mark'
 import { buildListingDetailUrl, type FeedAttribution } from '@/features/recommendation/attribution'
 import { hideListing, readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
@@ -235,10 +241,16 @@ export default function ProductCard({
   if (hidden || ownHidden) return null
 
   const wantsText = wantsLabel(listing.wants)
+  /**
+   * 已售 / 已下架（#566）：非空即「已出局」，图片压 50% 黑罩、左上角打状态角标、文字置灰。
+   * 三个形态各自独立于高度 —— 灰罩是叠层，`pcard__ph` 的 rpx 高度由调用方传入、一个像素都不动，
+   * 否则列表会跟着重排。
+   */
+  const outLabel = outOfMarketLabel(listing.status)
 
   return (
     <View
-      className="pcard"
+      className={outLabel === null ? 'pcard' : 'pcard pcard--out'}
       /*
         曝光观察器靠这两个属性把回调对回具体商品：`data-listing-id` 走 dataset，
         `id` 走回调的 `id` 字段。两条都写是因为宿主对 observeAll 回调的填充不完全一致，
@@ -251,7 +263,16 @@ export default function ProductCard({
     >
       <View className="pcard__ph" style={{ height: `${imageHeight}rpx` }}>
         <Image className="pcard__img" src={listing.coverUrl} mode="aspectFill" lazyLoad />
-        {listing.badge ? <Text className="pcard__badge">{listing.badge}</Text> : null}
+        {outLabel === null ? null : <View className="pcard__shade" />}
+        {/*
+          角标二选一（#566）：已出局就只交代状态 —— 「卖掉了 / 下架了」比「0 元送 / 急出」重要，
+          两个叠在同一角上会互相压字。在售卡仍然只有 `badge`（像素级零变化）。
+        */}
+        {outLabel !== null ? (
+          <Text className="pcard__mark">{outLabel}</Text>
+        ) : listing.badge ? (
+          <Text className="pcard__badge">{listing.badge}</Text>
+        ) : null}
       </View>
 
       <View className="pcard__body">

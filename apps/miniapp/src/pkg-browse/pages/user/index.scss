@@ -309,7 +309,9 @@
 
 .uhome__stats {
   display: flex;
-  align-items: center;
+  /* 逐格都拉伸到同高（#581 复核 4）：两格有 min-height: 88px、好评率那格只有 ≈70px，
+     居中排列会让分隔线一长一短 */
+  align-items: stretch;
   margin-top: 36px;
   padding: 28px 0;
   border-radius: 36px;
@@ -325,6 +327,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 
@@ -345,6 +348,17 @@
   color: var(--muted-2);
 }
 
+/* 可点的两格（#581）：整格就是入口，触控高度按 44pt 换算成设计值 88px
+   （同一句换算见 `components/legal-doc/index.scss`）；内容由基类居中 */
+.uhome__stat--link {
+  min-height: 88px;
+}
+
+/* 按压反馈（`hoverClass`）：只挂在可点的两格上，「好评率」那格没有 */
+.uhome__stat--tap {
+  opacity: 0.6;
+}
+
 /* ---------------------------------------------------------------- 列表区 */
 
 .uhome__body {
@@ -362,6 +376,10 @@
   padding: 0 40px 20px;
 }
 
+/*
+ * 列表区标题（#581）：口径入口搬到页头那两格之后，这一行退回纯文字 ——
+ * 「TA 的在售 / TA 的已售出」，右侧跟该段的服务端真总数。
+ */
 .uhome__sect-title {
   font-size: var(--fs-h3);
   font-weight: 600;
@@ -434,6 +452,31 @@
 .uhome__corner--free {
   background: var(--brand-deep);
   color: #fff;
+}
+
+/* 已售 / 已下架（#566）：与共享卡片同一套形态 —— 50% 中性黑罩 + 深底白字状态角标 + 文字置灰。
+   压暗走 `--scrim-cover`（`styles/_token-vars.scss`）：票面要的是「50% 灰」这个中性压暗。
+   注意收藏页 / 浏览历史页压暗用的是另一档 `--scrim`（`rgba(23, 35, 61, 0.42)`，带蓝、42%），
+   那是「让白字可读」的语义，与这里的商品遮罩不是同一档。
+   罩子是与图片同占位的叠层，`.uhome__img` 的 300px 高度一个像素都不动。 */
+.uhome__shade {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-cover);
+  pointer-events: none;
+}
+
+.uhome__corner--out {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.uhome__card--out .uhome__ptitle,
+.uhome__card--out .uhome__pprice,
+.uhome__card--out .uhome__porig,
+.uhome__card--out .uhome__pwant,
+.uhome__card--out .uhome__ptime {
+  color: var(--muted);
 }
 
 .uhome__pbody {

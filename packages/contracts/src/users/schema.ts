@@ -118,10 +118,15 @@ export const PublicUserProfileSchema = z.object({
   /** 在售商品数（`listings.status = 'ACTIVE'` 且 seller 是 TA）；服务端 COUNT。 */
   activeCount: z.number().int().nonnegative(),
   /**
-   * 卖出的件数（`transactions.status = 'COMPLETED'` 且 seller 是 TA）。
+   * 已售出件数：`listings.status = 'SOLD'` 且 `governance_delisted_at IS NULL`、seller 是 TA，服务端 COUNT。
    *
-   * 注意与 `profile` 域「我发布的商品」不是同一个数：那边是**历史发布总数**，
-   * 这里是**成交数**。页面上写「卖出」就该用这个。
+   * 口径与 `GET /users/:id/listings?status=SOLD` 那个列表**逐字同源同条件**（#565 复核订正）：
+   * 页头/分段头写「已售出 N 件」，点开必须正好是 N 件。原先取的是
+   * `transactions.status = 'COMPLETED'` 的成交条数——那是另一个数据源，平台治理下架的商品
+   * 成交后两个源各自一侧算、另一侧不算，段头与列表会自相矛盾。语义因此从「成交笔数」变成
+   * 「公开可见的已售商品数」（被平台下架的商品不计入，因为它在列表里也不出现）。
+   *
+   * 注意与 `profile` 域「我发布的商品」不是同一个数：那边是**历史发布总数**。
    */
   soldCount: z.number().int().nonnegative(),
   /**
@@ -138,9 +143,18 @@ export type PublicUserProfile = z.infer<typeof PublicUserProfileSchema>
 /**
  * `GET /users/:userId/listings` 的查询参数。
  *
- * 只接受 `limit` / `cursor`：`sellerId` 由路径参数蕴含，`status` 恒为 `ACTIVE`
- * （公开在售列表不允许出现 OFFLINE / RESERVED / SOLD），所以这两个参数**不允许**出现
- * ——`strictObject` 会把它们当非法参数报 422，而不是静默忽略后再悄悄放宽过滤。
+ * `sellerId` 由路径参数蕴含（**不允许**出现，`strictObject` 报 422）；除 `limit` / `cursor`
+ * 外只多一个可选 `status`（#565）：
+ *
+ * - **缺省或 `ACTIVE`**：在售列表（`status = 'ACTIVE'` 且审核通过），即 #122 的原口径；
+ * - **`SOLD`**：已售出列表，供他人主页的「已售出」分段使用。
+ *
+ * `OFFLINE` / `RESERVED` 一律 422。已下架（卖家自下架 / 审核中 / 不过审 / 平台下架）与
+ * 已预定的商品不属于公开读模型，值域枚举把"静默忽略后再悄悄放宽过滤"堵在契约层。
+ *
+ * `status` **刻意不给 `default('ACTIVE')`**：让「没传」与「显式传 ACTIVE」在解析结果里
+ * 可区分 —— 既有在售调用方（PC 他人主页、小程序首屏）不必改动，服务端把 `undefined`
+ * 当作 `ACTIVE` 处理（`apps/api/src/modules/users/service.ts`）。
  *
  * `limit` 的边界与公开 Feed（`ListingFeedQuerySchema`）逐字相同：默认 20、上限 50。
  */
@@ -148,6 +162,8 @@ export const PublicUserListingsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(20),
   /** 不透明字符串：服务端对 `(created_at, id)` 编码，前端禁止解析或构造，只原样回传。 */
   cursor: z.string().min(1).optional(),
+  /** 列表口径：缺省 = 在售；`SOLD` = 已售出。其余状态不存在于公开读模型。 */
+  status: z.enum(['ACTIVE', 'SOLD']).optional(),
 })
 
 export type PublicUserListingsQuery = z.infer<typeof PublicUserListingsQuerySchema>
@@ -158,7 +174,7 @@ export type PublicUserListingsQuery = z.infer<typeof PublicUserListingsQuerySche
  *
  * 复用而不是自建的理由：`ListingCard` 的字段（含封面 URL 的拼法）与 feed 必须完全一致，
  * 两份 schema 会漂移；游标语义（`nextCursor !== null` 即还有下一页）也必须同源。
- * 本域只负责"查谁 + 只查 ACTIVE"，投影与分页口径归 listings 域。
+ * 本域只负责"查谁 + 取哪一段（在售 / 已售出）"，投影与分页口径归 listings 域。
  */
 export const PublicUserListingsResponseSchema = ListingFeedResponseSchema
 

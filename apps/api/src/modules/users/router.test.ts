@@ -49,7 +49,7 @@ function fakeService(overrides: Partial<PublicUserService> = {}): PublicUserServ
     async getPublicProfile() {
       return profile
     },
-    async listActiveListings(userId, query) {
+    async listListings(userId, query) {
       listCalls.push({ userId, query })
       return { items: [card], nextCursor: null }
     },
@@ -106,7 +106,7 @@ describe('users router — 公开资料', () => {
   })
 })
 
-describe('users router — 在售列表', () => {
+describe('users router — 商品列表（在售 / 已售出）', () => {
   test('GET /users/:id/listings 无需登录，limit 缺省为 20', async () => {
     const service = fakeService()
     const res = await buildApp(service).request(`/users/${USER_ID}/listings`)
@@ -124,6 +124,23 @@ describe('users router — 在售列表', () => {
     expect(service.listCalls).toEqual([
       { userId: INTERNAL_USER_ID, query: { limit: 5, cursor: 'abc' } },
     ])
+  })
+
+  test('status=SOLD 透传给 service，其余状态被 422 拒在路由层（#565）', async () => {
+    const service = fakeService()
+    const ok = await buildApp(service).request(`/users/${USER_ID}/listings?status=SOLD`)
+    expect(ok.status).toBe(200)
+    expect(service.listCalls).toEqual([
+      { userId: INTERNAL_USER_ID, query: { limit: 20, status: 'SOLD' } },
+    ])
+
+    const soldOffline = await buildApp(service).request(`/users/${USER_ID}/listings?status=OFFLINE`)
+    expect(soldOffline.status).toBe(422)
+    const body = (await soldOffline.json()) as { error: { code: string; details?: unknown[] } }
+    expect(body.error.code).toBe('VALIDATION_FAILED')
+    expect(body.error.details).toEqual([{ field: 'status', message: expect.any(String) }])
+    // 被拒的请求不许打到 service：不能"忽略非法 status 后按默认口径查一遍"。
+    expect(service.listCalls).toHaveLength(1)
   })
 
   test('非法查询参数 → 422 VALIDATION_FAILED 并带字段级 details', async () => {
@@ -147,7 +164,7 @@ describe('users router — 在售列表', () => {
 
   test('service 的 422（非法游标）原样透出 details', async () => {
     const service = fakeService({
-      async listActiveListings() {
+      async listListings() {
         throw new PublicUserServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
           { field: 'cursor', message: 'cursor 无效' },
         ])

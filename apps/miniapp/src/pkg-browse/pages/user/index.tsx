@@ -10,8 +10,13 @@ import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
-import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+import {
+  loadPublicUserHome,
+  loadPublicUserListingsPage,
+  MOCK_FALLBACK_ENABLED,
+} from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
+import { outOfMarketLabel } from '@/features/listing/status-mark'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { signatureFirstLine } from '@/features/profile/signature-text'
@@ -23,6 +28,16 @@ import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
+import type { Segment, SegmentPage } from './segment-page'
+import {
+  emptyPage,
+  firstPageOf,
+  mergeSegmentPage,
+  segmentOfTab,
+  segTitleOf,
+  shouldRefetch,
+  totalOf,
+} from './segment-page'
 import './index.scss'
 
 /**
@@ -44,11 +59,15 @@ import './index.scss'
  * - **校区不渲染（#86 F：已从产品整体移除）**：2026-09-22 产品冻结「不采集、不公开校区」，
  *   `users.campus` 列与所有契约字段（`Me` / `ListingSeller` / `PublicUserProfile`）已删除，
  *   本页没有任何 campus 数据可读，也不会显示「XX校区」。
- * - **在售列表只有一页**（`PAGE_SIZE = 50`），终点提示按「服务端游标 + 真总数」判定，
- *   不能只看条数就说「已经到底了」（见 `./list-end.ts`）。
+ * - **列表按「在售 / 已售出」分段**（#565）：两段是同一个读端点
+ *   `GET /users/:userId/listings`，只差一个 `status`（`OFFLINE` / `RESERVED` 服务端
+ *   一律 422，故页面上也只有这两段）。每段按 `PAGE_SIZE = 50` 一页、滚到底按服务端
+ *   游标续拉；终点提示按「服务端游标 + 该段真总数」判定，不能只看条数就说
+ *   「已经到底了」（见 `./list-end.ts`）。
  * - **好评率不渲染**：仓库没有 reviews / ratings 表，没有真实口径 —— 恒显 `--`，
  *   不编一个百分比（稿里的 98% / 100% 是演示数据，不照抄）。
- * - **卖出数**用契约的 `soldCount`（已完成交易里 TA 是卖家的条数）。
+ * - **卖出数**用契约的 `soldCount`：**公开可见的已售商品数**，与「已售出」段列表同源
+ *   （被平台下架的商品不计入）。页头文案仍叫「卖出」，口径已从成交笔数换成商品数。
  * - **「加入 N 天」按稿不展示**（被签名行替换；签名缺字段时不额外补回）。
  *
  * **页面结构（1版稿取舍 ②）**：昵称区跟着内容滚走，导航条常驻但初始透明 ——
@@ -68,7 +87,7 @@ import './index.scss'
  * - **不做下拉刷新**（稿的 `.refresher` 不实现）。
  */
 export default function UserHome() {
-  const router = useRouter<{ id?: string }>()
+  const router = useRouter<{ id?: string; tab?: string }>()
   /**
    * 路径参数就是这个页面的唯一输入。**没有兜底值**：mock 时代那句
    * `?? 'u-lin'` 在真实接口下等于"随手挑一个真实用户给访客看"，
@@ -81,21 +100,40 @@ export default function UserHome() {
 
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
-  const [items, setItems] = useState<MockListing[]>([])
-  /** 服务端游标说还有下一页（契约 `nextCursor !== null`）；本页不翻页，但这决定终点怎么说 */
-  const [hasMore, setHasMore] = useState(false)
+  /**
+   * 列表口径（#581）：**页内切换**，不换页面实例 —— 不 `navigateTo`、不写 URL 参数、
+   * 没有转场动画。深链 `?tab=SOLD` 只作初值（非法值回落在售）；代价是返回键不再
+   * 「回在售视图」，而是直接退出这个页面（页内切换不产生历史记录）。
+   */
+  const tabParam = router.params.tab
+  const [seg, setSeg] = useState<Segment>(() => segmentOfTab(tabParam))
+  /** 当前视图的数据 + 游标。切段会整份重置（见 `switchSegment`）。 */
+  const [page, setPage] = useState<SegmentPage>(emptyPage())
+  /**
+   * 在途列表请求的代号：切段 / 整页重载都 `+1`。响应回来时对不上就整包丢掉 ——
+   * 既不许写进新段的视图，也不许替新段归还下面那把闩。
+   */
+  const generation = useRef(0)
+  /**
+   * 同步重入闩：`page.loading` 是渲染快照，同一帧里连点两次滚到底（`onScrollToLower`
+   * 在内容不满屏时会连发）读到的都是 `false`，会拿同一条游标并发打两次接口。
+   */
+  const inFlight = useRef(false)
 
   const load = useCallback(async () => {
-    // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
+    // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
     setLoadState('loading')
     setProfile(null)
-    setItems([])
-    setHasMore(false)
-    /**
-     * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
-     * 重试时它是**新挂载**的、`scrollTop` 回到 0，而 `glassOn` / `titled` 是页面级
-     * state、会留着上一轮的值 —— 不复位就会出现「停在页顶却顶着玻璃底和居中标题」。
-     */
+    const initial = segmentOfTab(tabParam)
+    // 先作废在途请求：上一轮还没回来的响应（含列表页）一个字段都不许写进新一轮
+    generation.current += 1
+    inFlight.current = false
+    // 段回到深链口径（`?tab=` 初值）。`load` 目前只在挂载与整页重试时调用，那时用户还没
+    // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
+    setSeg(initial)
+    setPage(emptyPage())
+    // 顶栏两态也要跟着复位：失败态会把 `ScrollView` 整块卸载，重试时它是新挂载的，
+    // 而这两个 page 级 state 会留着上一轮的值。
     setGlassOn(false)
     setTitled(false)
 
@@ -111,10 +149,79 @@ export default function UserHome() {
       return
     }
     setProfile(result.profile)
-    setItems(result.listings)
-    setHasMore(result.hasMore)
+    // 首屏那一页：「在售」段直接吃本次响应，「已售出」段拿到空页、由下面的 effect 补拉。
+    // 代价是已售出视图会多取一页用不上的在售列表（拆成两次请求会把 notFound / failed
+    // 的判定口径一分为二，不值得）。
+    setPage(firstPageOf(initial, result))
     setLoadState('ok')
-  }, [userId])
+  }, [tabParam, userId])
+
+  /**
+   * 拉当前口径的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
+   *
+   * 两个入口（空页补第一页、滚到底补下一页）都可能并发进来：重入靠同步闩挡，追加时读
+   * `prev` 里已展示的条目并按 id 去重（`mergeSegmentPage`），不读闭包里的快照。
+   */
+  const loadSegment = useCallback(
+    async (cursor: string | null) => {
+      if (inFlight.current) return
+      inFlight.current = true
+      const sent = generation.current
+      setPage((prev) => ({ ...prev, loading: true, failed: false }))
+      try {
+        const next = await loadPublicUserListingsPage(userId, seg, cursor)
+        // 切过段 / 重载过：这一份响应作废，一个字段都不写（连 `finally` 也不归还闩）
+        if (sent !== generation.current) return
+        if (next === null) {
+          // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
+          setLoadState('notFound')
+          return
+        }
+        setPage((prev) => ({
+          ...mergeSegmentPage(prev, next, cursor),
+          loaded: true,
+          loading: false,
+          failed: false,
+        }))
+      } catch (error) {
+        if (sent !== generation.current) return
+        // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
+        console.warn('[miniapp] 他人主页：列表加载失败', error)
+        setPage((prev) => ({ ...prev, loading: false, failed: true }))
+      } finally {
+        if (sent === generation.current) inFlight.current = false
+      }
+    },
+    [seg, userId],
+  )
+
+  const items = page.items
+  const hasMore = page.nextCursor !== null
+
+  /**
+   * 列表还没拉过时补第一页。
+   *
+   * `failed` 也挡住自动补拉：失败后只认用户点「重试」，否则每次重渲染都会再打一次接口。
+   * 谁需要这里补：`load` 只填「在售」的首屏（`firstPageOf`），所以**任何一段只要是空页**
+   * 都在这里补第一页 —— 切段后（整份重置成 `emptyPage()`）与深链直接进「已售出」两种情形
+   * 都走这条路，不是只有 `?tab=SOLD` 进来的实例（#581 / #582）。
+   */
+  useEffect(() => {
+    // 「该不该补拉」由纯函数决定（样本见 `tests/user-page-tabs.test.ts`）：不看口径，
+    // 只看加载态与这段页面的三态，`failed` 一律不自动重试。
+    if (!shouldRefetch(loadState, page)) return
+    void loadSegment(null)
+  }, [loadSegment, loadState, page])
+
+  /**
+   * 滚到底补下一页。`onScrollToLower` 在内容不满一屏时也会触发，
+   * 所以「没有下一页」与「正在拉」都必须先挡住，不能只靠事件本身。
+   */
+  const onScrollToLower = useCallback(() => {
+    if (loadState !== 'ok') return
+    if (page.loading || page.nextCursor === null) return
+    void loadSegment(page.nextCursor)
+  }, [loadSegment, loadState, page])
 
   const [left, right] = useMemo(() => {
     const l: MockListing[] = []
@@ -184,8 +291,8 @@ export default function UserHome() {
   /**
    * 「回到顶部」：本页滚动发生在**内滚 ScrollView** 里，`Taro.pageScrollTo` 够不到它；
    * 用会话页（`pages/conversation`）同款的 `scrollIntoView` 方案指向内容顶部的锚点。
-   * scrollIntoView 的值不变时原生层不会重滚，所以备两个同位的锚点交替指 —— 连点、
-   * 滚下去再点，每次都能真的回到顶部。
+   * scrollIntoView 的值不变时原生层不会重滚，所以每处落点都备两个同位的锚点交替指 ——
+   * 连点、滚下去再点，每次都能真的滚过去。
    */
   const [topAnchor, setTopAnchor] = useState('')
   /** 回到顶部钮（共享组件）：滚过一屏浮现（onScroll 里置位） */
@@ -193,6 +300,34 @@ export default function UserHome() {
   const backToTop = () => {
     setTopAnchor((prev) => (prev === 'uhome-top-a' ? 'uhome-top-b' : 'uhome-top-a'))
   }
+
+  /** 滚到列表区（页头两格的落点）：同上，写死一个 id 的话第二次点就没反应 */
+  const scrollToBody = useCallback(() => {
+    setTopAnchor((prev) => (prev === 'uhome-body-a' ? 'uhome-body-b' : 'uhome-body-a'))
+  }, [])
+
+  /**
+   * 切到另一段 —— **页内切换**：只动本页 state，不压栈、不 `navigateTo` / `redirectTo`、
+   * 也不回写 `?tab=`（回写会被路由当成一次跳转重入，看着又像切页）。
+   * 已经在当前段时只把列表滚进视野（两格离列表还有一屏页头，点了总得给点反应）。
+   */
+  const switchSegment = useCallback(
+    (next: Segment) => {
+      if (next === seg) {
+        scrollToBody()
+        return
+      }
+      generation.current += 1 // 在途的旧段响应就此作废
+      inFlight.current = false // 闩立刻放开给新段
+      setSeg(next)
+      setPage(emptyPage()) // 新段从第一页拉，不继承上一段的游标与失败态
+      scrollToBody()
+    },
+    [scrollToBody, seg],
+  )
+
+  const openSoldListings = useCallback(() => switchSegment('SOLD'), [switchSegment])
+  const openActiveListings = useCallback(() => switchSegment('ACTIVE'), [switchSegment])
 
   /**
    * 量一次身份区底边，换算成**内容坐标**。
@@ -247,44 +382,56 @@ export default function UserHome() {
     void load()
   })
 
-  const card = (item: MockListing) => (
-    <View
-      key={item.id}
-      className="uhome__card"
-      onClick={() =>
-        void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${item.id}` })
-      }
-    >
-      <View className="uhome__img">
-        <Image className="uhome__img-real" src={item.coverUrl} mode="aspectFill" lazyLoad />
-        {item.free ? (
-          <Text className="uhome__corner uhome__corner--free">0 元送</Text>
-        ) : item.urgent ? (
-          <Text className="uhome__corner uhome__corner--hot">急出</Text>
-        ) : null}
-      </View>
-      <View className="uhome__pbody">
-        <Text className="uhome__ptitle">{item.title}</Text>
-        <View className="uhome__pmeta">
-          <Text className="uhome__pprice num">¥{formatAmount(item.priceCents)}</Text>
-          {item.originalPriceCents ? (
-            <Text className="uhome__porig num">¥{formatAmount(item.originalPriceCents)}</Text>
+  const card = (item: MockListing) => {
+    /**
+     * 已售 / 已下架（#566）：「已售出」段里的卡按共享卡片同一套形态处理 ——
+     * 图片压 50% 黑罩、左上角状态角标压过「0 元送 / 急出」、文字置灰。
+     * 图片高度由 `.uhome__img` 定死，灰罩是叠层，不参与布局。
+     */
+    const outLabel = outOfMarketLabel(item.status)
+
+    return (
+      <View
+        key={item.id}
+        className={outLabel === null ? 'uhome__card' : 'uhome__card uhome__card--out'}
+        onClick={() =>
+          void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${item.id}` })
+        }
+      >
+        <View className="uhome__img">
+          <Image className="uhome__img-real" src={item.coverUrl} mode="aspectFill" lazyLoad />
+          {outLabel === null ? null : <View className="uhome__shade" />}
+          {outLabel !== null ? (
+            <Text className="uhome__corner uhome__corner--out">{outLabel}</Text>
+          ) : item.free ? (
+            <Text className="uhome__corner uhome__corner--free">0 元送</Text>
+          ) : item.urgent ? (
+            <Text className="uhome__corner uhome__corner--hot">急出</Text>
           ) : null}
         </View>
-        <View className="uhome__pfoot">
-          {/* 想要数来自契约 `ListingCardSchema.wants`（已建会话的买家数）；字段缺席（老 mock 记录）
-              时连分隔点一起不画，避免出现孤立的分隔符 */}
-          {item.wants === null ? null : (
-            <>
-              <Text className="uhome__pwant num">想要 {item.wants}</Text>
-              <View className="uhome__dot" />
-            </>
-          )}
-          <Text className="uhome__ptime">{`${Math.floor(item.createdHoursAgo / 24)} 天前`}</Text>
+        <View className="uhome__pbody">
+          <Text className="uhome__ptitle">{item.title}</Text>
+          <View className="uhome__pmeta">
+            <Text className="uhome__pprice num">¥{formatAmount(item.priceCents)}</Text>
+            {item.originalPriceCents ? (
+              <Text className="uhome__porig num">¥{formatAmount(item.originalPriceCents)}</Text>
+            ) : null}
+          </View>
+          <View className="uhome__pfoot">
+            {/* 想要数来自契约 `ListingCardSchema.wants`（已建会话的买家数）；字段缺席（老 mock 记录）
+                时连分隔点一起不画，避免出现孤立的分隔符 */}
+            {item.wants === null ? null : (
+              <>
+                <Text className="uhome__pwant num">想要 {item.wants}</Text>
+                <View className="uhome__dot" />
+              </>
+            )}
+            <Text className="uhome__ptime">{`${Math.floor(item.createdHoursAgo / 24)} 天前`}</Text>
+          </View>
         </View>
       </View>
-    </View>
-  )
+    )
+  }
 
   const verified = profile?.authStatus === 'VERIFIED'
 
@@ -303,14 +450,23 @@ export default function UserHome() {
   const presence = profile ? presenceView(profile.presence, presenceNow) : null
 
   /**
+   * 当前分段的**真总数**：在售段用 `activeCount`、已售出段用 `soldCount`，都是服务端给的
+   * 数、与页头那两个同源。分段标题右侧的「N 件」也用它 —— 列表是分页的，用 `items.length`
+   * 会在还没加载完时低报。
+   */
+  const segTotal = totalOf(seg, profile)
+  const segTitle = segTitleOf(seg)
+
+  /**
    * 列表终点判定（纯函数，用例见 `tests/user-list-end.test.ts`）。
    *
    * 「已经到底了」要两个信号同时点头：服务端游标说没有下一页，且这份列表条数不少于
-   * 服务端报的在售真总数 `activeCount`。任一条不成立就改说「仅显示最近 N 件」——
-   * 单看条数会在超过单页上限（50）时把「还有没展示的」说成「TA 就这些」。
-   * `profile` 还没到（加载中）时 `shown` 恒为 0，判定自然是 `none`，不提前下结论。
+   * 该段真总数（在售 `activeCount` / 已售出 `soldCount`）。任一条不成立就改说
+   * 「仅显示最近 N 件」—— 单看条数会在超过单页上限（50）时把「还有没展示的」
+   * 说成「TA 就这些」。`profile` 还没到（加载中）时 `shown` 恒为 0，判定自然是
+   * `none`，不提前下结论。
    */
-  const end = userListEnd(items.length, profile?.activeCount ?? 0, hasMore)
+  const end = userListEnd(items.length, segTotal, hasMore)
 
   /**
    * 演示内容的**唯一闸门**：演示构建 + 页主是演示账号（seed 三号之一，见
@@ -586,6 +742,10 @@ export default function UserHome() {
           showScrollbar={false}
           scrollIntoView={topAnchor}
           onScroll={onScroll}
+          // 滚到底自动补下一页（分段共用，见 onScrollToLower）；提前 120px 触发，
+          // 让下一页在手指松开前后就接上，避免滚到底再等一次网络
+          lowerThreshold={120}
+          onScrollToLower={onScrollToLower}
         >
           {/* 回到顶部的两个同位锚点：交替指（见 backToTop 的注释） */}
           <View id="uhome-top-a" />
@@ -705,17 +865,28 @@ export default function UserHome() {
                   </View>
                 ) : null}
 
+                {/* 两格就是列表入口（#581）：整格可点（`--link` 给足触控高度），
+                    计数取契约的 `activeCount` / `soldCount`，不用 `items.length`（分页会低报） */}
                 <View className="uhome__stats">
-                  <View className="uhome__stat">
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={openActiveListings}
+                  >
                     <Text className="uhome__stat-num num">{profile.activeCount}</Text>
                     <Text className="uhome__stat-label">在售</Text>
                   </View>
-                  <View className="uhome__stat">
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={openSoldListings}
+                  >
                     <Text className="uhome__stat-num num">{profile.soldCount}</Text>
                     <Text className="uhome__stat-label">卖出</Text>
                   </View>
                   <View className="uhome__stat">
-                    {/* 好评率：仓库没有评价表，没有真实口径 → 恒显 `--`，不编百分比 */}
+                    {/* 好评率：仓库没有评价表，没有真实口径 → 恒显 `--`，不编百分比。
+                        也没有对应列表可去，所以不接点击、无点击反馈（#581）。 */}
                     <Text className="uhome__stat-num num">--</Text>
                     <Text className="uhome__stat-label">好评率</Text>
                   </View>
@@ -762,18 +933,27 @@ export default function UserHome() {
             )}
           </View>
 
-          {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内） */}
+          {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内）。
+              两个同位空锚点是页头两格的落点（#581，见 `scrollToBody`）：锚点顶到滚区 y=0 时，
+              列表标题还得落在绝对定位的导航条下方，所以锚点要比列表上沿高出导航条那么多。
+              **负 margin 必须配等高的 `height`**：只有负 margin 的话，这块高度为 0 的锚点区
+              会把后面整个列表区永久上移 `navTotalHeight`（页头与列表之间的留白远没有那么大，
+              列表标题会压到统计卡上）；配上 `height` 后净位移为 0，锚点则正好高出列表上沿
+              `navTotalHeight`（`navTotalHeight` 与页头让位同一口径，行内 px 不经 pxtransform） */}
+          <View style={{ marginTop: `-${navTotalHeight}px`, height: `${navTotalHeight}px` }}>
+            <View id="uhome-body-a" />
+            <View id="uhome-body-b" />
+          </View>
           <View className="uhome__body">
             <View className="uhome__sect">
-              <Text className="uhome__sect-title">TA 的在售</Text>
-              {/* 计数用服务端的 activeCount（与上方「在售」同一口径），
-                  不用 items.length —— 列表有单页上限，用它会在超出上限时低报 */}
-              <Text className="uhome__sect-cnt num">
-                {profile ? `${profile.activeCount} 件` : '加载中'}
-              </Text>
+              {/* 口径入口在页头（#581），这一行只报「在看哪一段 + 这一段有多少件」。
+                  件数取该段的服务端真总数（在售 `activeCount` / 已售出 `soldCount`），
+                  不用 items.length —— 列表是分页的，用它会在还没加载完时低报。 */}
+              <Text className="uhome__sect-title">{`TA 的${segTitle}`}</Text>
+              <Text className="uhome__sect-cnt num">{profile ? `${segTotal} 件` : '加载中'}</Text>
             </View>
 
-            {loadState === 'loading' ? (
+            {loadState === 'loading' || (!page.loaded && !page.failed) ? (
               <View className="uhome__grid">
                 {[0, 1, 2, 3].map((i) => (
                   <View key={`sk-${i}`} className="uhome__skel">
@@ -785,13 +965,26 @@ export default function UserHome() {
                   </View>
                 ))}
               </View>
+            ) : page.failed && items.length === 0 ? (
+              /* 列表失败只降级列表：页头、顶栏都还在，所以不用整页 LoadError */
+              <EmptyState
+                title="列表加载失败"
+                text={`${segTitle}商品没拉到，其它内容不受影响`}
+                icon={ICONS.boxMuted}
+                actionText="重试"
+                onAction={() => void loadSegment(null)}
+              />
             ) : items.length === 0 ? (
               <View className="uhome__empty">
                 <View className="uhome__empty-disc">
                   <Image className="uhome__empty-ic" src={ICONS.boxMuted} mode="aspectFit" />
                 </View>
-                <Text className="uhome__empty-title">TA 暂无在售商品</Text>
-                <Text className="uhome__empty-text">TA 的东西都被抢光啦，有新上架会出现在这里</Text>
+                <Text className="uhome__empty-title">{`TA 暂无${segTitle}商品`}</Text>
+                <Text className="uhome__empty-text">
+                  {seg === 'ACTIVE'
+                    ? 'TA 的东西都被抢光啦，有新上架会出现在这里'
+                    : 'TA 成交的商品会出现在这里'}
+                </Text>
               </View>
             ) : (
               <View className="uhome__grid">
@@ -800,9 +993,20 @@ export default function UserHome() {
               </View>
             )}
 
+            {/* 加载更多（滚到底自动补一页，见 `onScrollToLower`）：只给一行小字，
+                不做整块遮罩 —— 已经在看的商品不该被挡住 */}
+            {page.loading && items.length > 0 ? (
+              <View className="uhome__list-end">
+                <View className="uhome__list-end-line" />
+                <Text className="uhome__list-end-txt num">加载中</Text>
+                <View className="uhome__list-end-line" />
+              </View>
+            ) : null}
+
             {/* 列表终点（稿 `.list-end`）：只有**确认这份列表就是全部**时才说「已经到底了」。
-                在售列表是单页读取（上限 50），超过时 `activeCount > items.length` —— 那种
-                情况改说「仅显示最近 N 件」，不能宣称 TA 就这些（判定见 `./list-end.ts`）。
+                每段都可能不止一页（`PAGE_SIZE = 50`，滚到底按游标续拉），游标说还有下一页、
+                或该段真总数大于已展示条数时改说「仅显示最近 N 件」，不能宣称 TA 就这些
+                （判定见 `./list-end.ts`）。
                 两条都**不带总数**：稿的 N 是列表长度，与服务端 COUNT 口径不同，带上会打架。 */}
             {end === 'end' ? (
               <View className="uhome__list-end">

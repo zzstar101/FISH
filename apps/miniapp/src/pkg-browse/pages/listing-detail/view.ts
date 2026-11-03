@@ -14,6 +14,8 @@
 import type { ListingModerationStatus, ListingStatus } from '@fish/contracts/listings/schema'
 // 只取类型：本模块是纯判据，`import type` 在编译期擦除，不会把 store 的运行时副作用带进来
 import type { AuthStatus } from '@/features/auth/store'
+// 卖家侧的「商品已售出」与买家侧的「此商品已售出」同源（#567），见该模块注释
+import { SELLER_SOLD_NOTE } from '@/features/listing/status-mark'
 
 /** 乐观占位的 id 前缀：只有它能在本地列表里认出「还没被服务端确认」的那几条 */
 export const PENDING_COMMENT_PREFIX = 'local-'
@@ -429,7 +431,7 @@ export function ownerStatusNote(
     if (moderationStatus === 'BLOCKED') return '商品审核未通过'
     return '商品已下架'
   }
-  if (status === 'SOLD') return '商品已售出'
+  if (status === 'SOLD') return SELLER_SOLD_NOTE
   if (status === 'RESERVED') return '已同意 · 等面交'
   return null
 }
