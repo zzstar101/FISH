@@ -168,13 +168,17 @@ test('PUT 之后换号：不发 confirm（不产生台账行），抛 UploadAbor
   expect(presignCount()).toBe(2)
 })
 
-test('PUT 非 2xx：给出可读文案，且不把坏对象记进缓存', async () => {
+test('PUT 5xx 结果不确定：重试先确认原对象，不重复上传', async () => {
   putStatus = 500
   await expect(uploadDisputeAttachment('dsp_putfail', photo)).rejects.toThrow(
     '图片上传失败，请重试',
   )
   expect(confirmKeys()).toEqual([])
   expect(presignCount()).toBe(1)
+  putStatus = 200
+  await uploadDisputeAttachment('dsp_putfail', photo)
+  expect(presignCount()).toBe(1)
+  expect(confirmKeys()).toEqual([presignKey(1)])
 })
 
 test('换另一张图：上一张的 key 直接作废，重新 presign + PUT，不得 confirm 旧 key', async () => {

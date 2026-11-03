@@ -365,44 +365,48 @@ describe('uploadDisputeAttachment', () => {
     uninstallSessionStorage()
   })
 
-  test('PUT 响应丢失但对象已落桶：重试先幂等确认已知 key，不再重复 presign', async () => {
-    installSessionStorage()
-    const LOST_PUT_DISPUTE_ID = 'dsp_01jc000000e00800000000000e'
-    try {
-      const first = mockFetchCalls((call) => {
-        if (call.url.endsWith('/attachments/presign')) {
-          return Response.json({
-            uploadUrl: 'https://storage.example/dispute-media/key.png',
-            objectKey: 'dispute-media/dsp/key.png',
-            headers: {},
-            expiresAt: '2026-10-02T00:10:00.000Z',
-          })
-        }
-        // 字节已经写进桶里，响应在回来的路上丢了（断网/超时）。
-        throw new TypeError('fetch failed')
-      })
+  test.each(['network', 'gateway'] as const)(
+    'PUT %s 结果不确定但对象已落桶：重试先确认已知 key',
+    async (failure) => {
+      installSessionStorage()
+      const LOST_PUT_DISPUTE_ID = 'dsp_01jc000000e00800000000000e'
+      try {
+        const first = mockFetchCalls((call) => {
+          if (call.url.endsWith('/attachments/presign')) {
+            return Response.json({
+              uploadUrl: 'https://storage.example/dispute-media/key.png',
+              objectKey: 'dispute-media/dsp/key.png',
+              headers: {},
+              expiresAt: '2026-10-02T00:10:00.000Z',
+            })
+          }
+          // 字节可能已写进桶，但响应丢失或被网关替换为 502。
+          if (failure === 'gateway') return new Response(null, { status: 502 })
+          throw new TypeError('fetch failed')
+        })
 
-      const file = new File([new Uint8Array([1, 2, 3])], 'proof.png', { type: 'image/png' })
-      await uploadDisputeAttachment(LOST_PUT_DISPUTE_ID, file).catch((reason: unknown) => reason)
-      expect(first.map((call) => [call.url, call.method])).toEqual([
-        [`/api/disputes/${LOST_PUT_DISPUTE_ID}/attachments/presign`, 'POST'],
-        ['https://storage.example/dispute-media/key.png', 'PUT'],
-      ])
+        const file = new File([new Uint8Array([1, 2, 3])], 'proof.png', { type: 'image/png' })
+        await uploadDisputeAttachment(LOST_PUT_DISPUTE_ID, file).catch((reason: unknown) => reason)
+        expect(first.map((call) => [call.url, call.method])).toEqual([
+          [`/api/disputes/${LOST_PUT_DISPUTE_ID}/attachments/presign`, 'POST'],
+          ['https://storage.example/dispute-media/key.png', 'PUT'],
+        ])
 
-      const second = mockFetchCalls((call) => {
-        expect(call.body).toEqual({ objectKey: 'dispute-media/dsp/key.png' })
-        return Response.json({ attachment, created: false })
-      })
-      await uploadDisputeAttachment(LOST_PUT_DISPUTE_ID, file)
+        const second = mockFetchCalls((call) => {
+          expect(call.body).toEqual({ objectKey: 'dispute-media/dsp/key.png' })
+          return Response.json({ attachment, created: false })
+        })
+        await uploadDisputeAttachment(LOST_PUT_DISPUTE_ID, file)
 
-      // 只补一次 confirm：没有第二次 presign，也就没有第二个白占配额的对象。
-      expect(second.map((call) => [call.url, call.method])).toEqual([
-        [`/api/disputes/${LOST_PUT_DISPUTE_ID}/attachments`, 'POST'],
-      ])
-    } finally {
-      uninstallSessionStorage()
-    }
-  })
+        // 只补一次 confirm：没有第二次 presign，也就没有第二个白占配额的对象。
+        expect(second.map((call) => [call.url, call.method])).toEqual([
+          [`/api/disputes/${LOST_PUT_DISPUTE_ID}/attachments`, 'POST'],
+        ])
+      } finally {
+        uninstallSessionStorage()
+      }
+    },
+  )
 
   test('PUT 响应丢失且对象其实没落桶：confirm 回 422 后重新 presign 重传', async () => {
     installSessionStorage()

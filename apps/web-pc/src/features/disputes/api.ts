@@ -219,7 +219,7 @@ async function confirmDisputeAttachment(disputeId: string, objectKey: string): P
  * 有才做一次幂等 confirm；成功即清暂存直接返回；对象明确不可用（422/404/409）则丢弃重传。
  * 指纹不一致（用户改选了另一张图）时清掉旧 key，走完整上传 —— 绝不确认旧图。
  * presign 成功后立刻暂存 key（含指纹，30 分钟）：PUT 响应丢失或 confirm 网络失败都保留
- * 给下次幂等 confirm，只有 PUT 拿到明确的非 2xx 才清掉。
+ * 给下次幂等 confirm；PUT 非 2xx 同样保留，由 confirm 判定对象是否实际存在。
  */
 export async function uploadDisputeAttachment(disputeId: string, file: File): Promise<void> {
   const staged = readStagedAttachment(disputeId)
@@ -283,8 +283,7 @@ export async function uploadDisputeAttachment(disputeId: string, file: File): Pr
     throw new Error('图片上传失败，请重试')
   }
   if (!uploaded.ok) {
-    // 拿到明确的非 2xx：对象没有落桶，这个 key 再 confirm 也只会 422。
-    forgetStagedAttachment(disputeId)
+    // 网关的非 2xx 不能证明对象未落桶；保留 key，让下次 confirm 核实。
     throw new Error('图片上传失败，请重试')
   }
 

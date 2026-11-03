@@ -22,8 +22,8 @@
  *   （见 `fingerprintOf`：换图后旧 key 直接作废，重新 presign + PUT）；
  * - presign 成功后立刻记住 key（早于 PUT，才盖得住「响应丢失」这一种）；confirm 成功后清除；
  * - **明确不可用**的错误（422 附件失效 / 额度满、409 已非 PENDING、404 争议不在）清掉缓存，
- *   因为重试同一个 key 只会同样失败；网络/5xx 保留，用户再点一次就能续上。PUT 拿到明确的
- *   非 2xx 时同样清掉 —— 对象没落桶，confirm 只会回 422（「实际未上传」由这条路径恢复重传）。
+ *   因为重试同一个 key 只会同样失败；网络/5xx 保留，用户再点一次就能续上。PUT 非 2xx
+ *   也可能来自网关，不能据此判定对象不存在；重试时由 confirm 核实，422 后再重新上传。
  * - 换号/卸载导致中途放弃：不发 confirm（不产生台账行），缓存也清掉 —— 那条对象没有台账行，
  *   属于服务端清理能力缺口（无公开删除端点），PR 里如实写明并并入 #500 跟进。
  */
@@ -155,8 +155,7 @@ export async function uploadDisputeAttachment(
     timeout: UPLOAD_TIMEOUT_MS,
   })
   if (uploaded.statusCode < 200 || uploaded.statusCode >= 300) {
-    // 拿到明确的非 2xx：对象没落桶，同一个 key 再 confirm 只会 422。
-    pendingConfirms.delete(disputeId)
+    // 网关的非 2xx 也不能证明对象未落桶；保留 key，让下次 confirm 核实。
     throw new Error('图片上传失败，请重试')
   }
 

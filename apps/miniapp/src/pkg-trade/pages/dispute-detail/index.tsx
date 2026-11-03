@@ -1,5 +1,5 @@
 import type { MessageDto } from '@fish/contracts/chat/schema'
-import type { DisputeDetail } from '@fish/contracts/disputes/schema'
+import type { DisputeDetail, DisputeStatus } from '@fish/contracts/disputes/schema'
 import { MAX_DISPUTE_ATTACHMENTS } from '@fish/contracts/disputes/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
@@ -90,6 +90,58 @@ type EvidenceState = 'idle' | 'loading' | 'ok' | 'failed'
  */
 const ATTACHMENT_URL_TTL_MS = 600_000
 
+/**
+ * 一次异步操作的**归属令牌**：发起那一刻的账号 + 争议 + 加载世代。
+ *
+ * 三样缺一不可。`alive` 只说明页面还挂着，而**换号时页面并不卸载** —— 只看 `alive`
+ * 的写法会把上一账号的响应写进新账号的界面（附件链更会带着新账号的会话去 confirm
+ * 上一账号的争议）。
+ */
+export type OpScope = {
+  /** 发起时的登录用户 */
+  userId: string | null
+  /** 发起时的争议 id（静默刷新后手上可能已经是另一条，或已清空） */
+  disputeId: string
+  /** 发起时的加载世代：`read()` 与换号都会 +1 */
+  epoch: number
+  /** 账号进入世代：静默刷新不改变，换号后不能复用旧忙位 */
+  ownerEpoch: number
+}
+
+/** 页面这一刻的身份快照 —— 令牌要逐项对齐的对象。 */
+export type PageIdentity = {
+  alive: boolean
+  epoch: number
+  /** 账号进入世代：静默刷新不改变，换号后不能复用旧忙位 */
+  ownerEpoch: number
+  userId: string | null
+  disputeId: string | null
+  status: DisputeStatus | null
+}
+
+/**
+ * 忙位收尾归同一次账号进入所有，不因静默刷新失效；换号再切回也不能复用旧令牌。
+ * 测试通过 mock Taro 导入这些纯判据，不代替端上交互验证。
+ */
+export function opOwnsBusyIn(op: OpScope, now: PageIdentity): boolean {
+  return now.alive && now.userId === op.userId && now.ownerEpoch === op.ownerEpoch
+}
+
+export function opAliveIn(op: OpScope, now: PageIdentity): boolean {
+  return opOwnsBusyIn(op, now) && now.epoch === op.epoch && now.disputeId === op.disputeId
+}
+
+/**
+ * 补材料还够不够格：在 `opAliveIn` 之上再要求争议仍是 `PENDING`。
+ *
+ * 上传链每一步（presign → PUT → confirm）都用它做在途判据：上传期间争议被撤回 / 处理完，
+ * 就不该再发 confirm。与 `canAddDisputeMaterial` 同一口径，只是判的是「发起时的那次操作」，
+ * 而不是当前渲染出来的按钮。
+ */
+export function opWritableIn(op: OpScope, now: PageIdentity): boolean {
+  return opAliveIn(op, now) && now.status === 'PENDING'
+}
+
 export default function DisputeDetailPage() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
@@ -115,6 +167,8 @@ export default function DisputeDetailPage() {
   const detailRef = useRef<DisputeDetail | null>(null)
   detailRef.current = detail
   const loadEpoch = useRef(0)
+  const ownerEpoch = useRef(0)
+  const withdrawConfirmingRef = useRef(false)
   /** 页面卸载 / 换号后不再发上传链的后半段（`assertUploadActive` 的判据之一） */
   const alive = useRef(true)
   /**
@@ -126,6 +180,32 @@ export default function DisputeDetailPage() {
   /** 当前 `detail` 里附件签名 URL 的签发时刻（判断是否过期，见 ATTACHMENT_URL_TTL_MS） */
   const lastLoadedAt = useRef(0)
   const evidenceLoadingRef = useRef(false)
+
+  /**
+   * 页面这一刻的身份（令牌对齐用）。全部取自 ref：`await` 回来时闭包里的 `detail` 早已过期。
+   */
+  const identityNow = (): PageIdentity => ({
+    alive: alive.current,
+    epoch: loadEpoch.current,
+    ownerEpoch: ownerEpoch.current,
+    userId: userIdRef.current,
+    disputeId: detailRef.current?.id ?? null,
+    status: detailRef.current?.status ?? null,
+  })
+  /** 记下发起时刻的身份；之后每个 await 回来都拿它核一次（见 `opAlive` / `opWritable`） */
+  const beginOp = (targetDisputeId: string): OpScope => ({
+    userId: userIdRef.current,
+    disputeId: targetDisputeId,
+    epoch: loadEpoch.current,
+    ownerEpoch: ownerEpoch.current,
+  })
+  const opAlive = (op: OpScope): boolean => opAliveIn(op, identityNow())
+  const opWritable = (op: OpScope): boolean => opWritableIn(op, identityNow())
+  /**
+   * 忙碌位收尾只判「还是同一账号的这次进入」：同号的静默刷新会推进世代，
+   * 若也用 `opAlive` 收尾，按钮会永久卡在「上传中… / 撤回中…」。
+   */
+  const opSameAccount = (op: OpScope): boolean => opOwnsBusyIn(op, identityNow())
 
   useEffect(() => {
     alive.current = true
@@ -142,8 +222,12 @@ export default function DisputeDetailPage() {
   if (prevUserId !== userId) {
     setPrevUserId(userId)
     loadEpoch.current += 1
+    ownerEpoch.current += 1
+    withdrawConfirmingRef.current = false
+    detailRef.current = null
     setDetail(null)
     setStale(false)
+    setWithdrawing(false)
     setUploading(false)
     setSheetOpen(false)
     setEvidenceState('idle')
@@ -151,6 +235,8 @@ export default function DisputeDetailPage() {
     setEvidenceCursor(null)
     setLoadingOlderEvidence(false)
     setAddingMessageId(null)
+    // 在途取数的闩锁也要放掉：旧链的 finally 会因账号不符而跳过，否则新账号永远读不出候选消息
+    evidenceLoadingRef.current = false
     setState('loading')
   }
 
@@ -209,13 +295,17 @@ export default function DisputeDetailPage() {
 
   const runWithdraw = async () => {
     if (detail === null) return
+    // 发起时刻的身份：await 回来后逐项核一次，换号 / 重载期间回来的响应一律丢弃
+    const op = beginOp(detail.id)
     setWithdrawing(true)
     try {
-      const next = await withdrawDispute(detail.id)
+      const next = await withdrawDispute(op.disputeId)
+      if (!opAlive(op)) return
       setDetail(next)
       setStale(false)
       void Taro.showToast({ title: '已撤回争议', icon: 'none' })
     } catch (error) {
+      if (!opAlive(op)) return
       resyncIfConflict(error)
       void Taro.showToast({
         title: isApiError(error)
@@ -224,17 +314,18 @@ export default function DisputeDetailPage() {
         icon: 'none',
       })
     } finally {
-      setWithdrawing(false)
+      if (opSameAccount(op)) setWithdrawing(false)
     }
   }
 
   /**
    * 撤回要二次确认：它是不可逆的（撤回后不能恢复，只能重新发起）。
    * `withdrawConfirmingRef` 挡住「弹窗还没关又点一次」—— 否则会叠出两个确认框。
+   * 弹窗本身是异步的：期间换号 / 重载就不该再撤回上一账号的争议（同账号仍须 `PENDING`）。
    */
-  const withdrawConfirmingRef = useRef(false)
   const onWithdraw = () => {
     if (detail === null || withdrawing || withdrawConfirmingRef.current) return
+    const op = beginOp(detail.id)
     withdrawConfirmingRef.current = true
     void Taro.showModal({
       title: '撤回这条争议？',
@@ -244,11 +335,11 @@ export default function DisputeDetailPage() {
       cancelText: '再想想',
     })
       .then((result) => {
-        if (result.confirm) void runWithdraw()
+        if (result.confirm && opWritable(op)) void runWithdraw()
       })
       .catch(() => {})
       .finally(() => {
-        withdrawConfirmingRef.current = false
+        if (opSameAccount(op)) withdrawConfirmingRef.current = false
       })
   }
 
@@ -259,6 +350,9 @@ export default function DisputeDetailPage() {
       void Taro.showToast({ title: '附件最多 6 张', icon: 'none' })
       return
     }
+    // 身份必须在**拉起相册之前**抓：`pickPhotos` 是异步的，换号可能发生在选图期间。
+    // 抓在它之后（旧写法）等于用新账号的世代去继续处理上一账号的争议。
+    const op = beginOp(detail.id)
     // 先置「上传中」：`pickPhotos` 是异步拉起相册的，连点时第二次点击会再拉一次；
     // 顺带让按钮立刻变成「上传中…」给出反馈。
     setUploading(true)
@@ -268,23 +362,26 @@ export default function DisputeDetailPage() {
         try {
           picked = await pickPhotos(slots)
         } catch (error) {
+          if (!opWritable(op)) return
           void Taro.showToast({
             title: error instanceof Error ? error.message : '无法选择图片，请稍后重试',
             icon: 'none',
           })
           return
         }
+        // 选图期间换号 / 重载 / 争议已不是待处理：这批图不属于当前页面，静默丢弃
+        if (!opWritable(op)) return
         if (picked.rejected !== null) {
           void Taro.showToast({ title: picked.rejected, icon: 'none' })
         }
         if (picked.photos.length === 0) return
 
-        const epoch = loadEpoch.current
-        const current = () => alive.current && epoch === loadEpoch.current
+        // 上传链每一步的前置判据：仍属同一次操作**且**争议仍可补材料（撤回 / 处理完就停手）
+        const current = () => opWritable(op)
         for (const photo of picked.photos) {
           if (!current()) break
           try {
-            const attachment = await uploadDisputeAttachment(detail.id, photo, {
+            const attachment = await uploadDisputeAttachment(op.disputeId, photo, {
               isActive: current,
               currentUserId: () => userIdRef.current,
             })
@@ -297,6 +394,7 @@ export default function DisputeDetailPage() {
             })
           } catch (error) {
             if (error instanceof UploadAbortedError) break
+            if (!opWritable(op)) break
             resyncIfConflict(error)
             void Taro.showToast({
               title: isApiError(error) ? disputeFailureText(error.code) : '图片上传失败，请重试',
@@ -307,45 +405,56 @@ export default function DisputeDetailPage() {
           }
         }
       } finally {
-        setUploading(false)
+        if (opSameAccount(op)) setUploading(false)
       }
     })()
   }
 
   const loadMessages = async () => {
     if (detail === null || evidenceLoadingRef.current) return
+    const op = beginOp(detail.id)
     evidenceLoadingRef.current = true
     setEvidenceState('loading')
+    /**
+     * 世代变了（同号的静默刷新）就收成可重试态 —— 否则 `evidenceState` 会永远停在 `loading`，
+     * 面板既不重读也不给重试；换号则什么都不写：新账号的页面自己会重新读。
+     */
+    const settleIfStale = (): boolean => {
+      if (opAlive(op)) return false
+      if (opSameAccount(op)) setEvidenceState('failed')
+      return true
+    }
     try {
       const conversationId = await loadDisputeConversationId(detail.transaction.id)
+      if (settleIfStale()) return
       if (conversationId === null) {
-        if (alive.current) setEvidenceState('failed')
+        setEvidenceState('failed')
         return
       }
       const result = await loadEvidenceCandidates(conversationId)
-      if (!alive.current) return
+      if (settleIfStale()) return
       setMessages(result.messages)
       setEvidenceCursor(result.nextCursor)
       setEvidenceState(result.failed ? 'failed' : 'ok')
     } finally {
-      evidenceLoadingRef.current = false
+      if (opSameAccount(op)) evidenceLoadingRef.current = false
     }
   }
 
   /** 往前翻一页更早的消息（契约的 `before` 游标原样回传，拼在已加载数组之前）。 */
   const loadOlderEvidence = async () => {
     if (detail === null || evidenceCursor === null || loadingOlderEvidence) return
+    const op = beginOp(detail.id)
     setLoadingOlderEvidence(true)
     try {
       const conversationId = await loadDisputeConversationId(detail.transaction.id)
+      if (!opAlive(op)) return
       if (conversationId === null) {
-        if (alive.current) {
-          void Taro.showToast({ title: '没读到这段会话，稍后再试', icon: 'none' })
-        }
+        void Taro.showToast({ title: '没读到这段会话，稍后再试', icon: 'none' })
         return
       }
       const result = await loadEvidenceCandidates(conversationId, evidenceCursor)
-      if (!alive.current) return
+      if (!opAlive(op)) return
       if (result.failed) {
         void Taro.showToast({ title: '更早的消息没读出来，再试一次', icon: 'none' })
         return
@@ -356,7 +465,7 @@ export default function DisputeDetailPage() {
       })
       setEvidenceCursor(result.nextCursor)
     } finally {
-      setLoadingOlderEvidence(false)
+      if (opSameAccount(op)) setLoadingOlderEvidence(false)
     }
   }
 
@@ -368,9 +477,11 @@ export default function DisputeDetailPage() {
 
   const addEvidence = async (messageId: string) => {
     if (detail === null || addingMessageId !== null) return
+    const op = beginOp(detail.id)
     setAddingMessageId(messageId)
     try {
-      const result = await addDisputeEvidence(detail.id, messageId)
+      const result = await addDisputeEvidence(op.disputeId, messageId)
+      if (!opAlive(op)) return
       setDetail((prev) => {
         if (prev === null) return prev
         if (prev.evidence.some((item) => item.message.id === result.evidence.message.id))
@@ -383,13 +494,14 @@ export default function DisputeDetailPage() {
         icon: 'none',
       })
     } catch (error) {
+      if (!opAlive(op)) return
       resyncIfConflict(error)
       void Taro.showToast({
         title: isApiError(error) ? disputeFailureText(error.code) : disputeFailureText(null),
         icon: 'none',
       })
     } finally {
-      setAddingMessageId(null)
+      if (opSameAccount(op)) setAddingMessageId(null)
     }
   }
 
@@ -400,6 +512,7 @@ export default function DisputeDetailPage() {
    */
   const previewAttachment = (index: number) => {
     if (detail === null || detail.attachments.length === 0) return
+    const op = beginOp(detail.id)
     const targets = detail.attachments
     const picked = targets[index]
     const openWith = (urls: string[], currentUrl: string | undefined) => {
@@ -413,8 +526,9 @@ export default function DisputeDetailPage() {
       return
     }
     void (async () => {
-      const result = await loadDisputeDetail(detail.id)
-      if (!alive.current) return
+      const result = await loadDisputeDetail(op.disputeId)
+      // 换号 / 重载期间读回来的旧签名既不该写回状态，也不该拿去弹大图（那是上一个账号的证据）
+      if (!opAlive(op)) return
       if (result.state !== 'ok') {
         openWith(
           targets.map((attachment) => attachment.url),
