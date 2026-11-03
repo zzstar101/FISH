@@ -510,6 +510,39 @@ describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 �
     expect(run.state.closedFrom).not.toBe(180)
   })
 
+  test('收到 0 必须把候选值一起清掉（否则下一次开键盘会被旧候选顶高）', () => {
+    // 336 时平台报 340（两帧制的丢弃帧）→ 候选 340；紧接着报 0（真收完了）
+    const run = feed([340, 0], { inset: 336, closing: true, closingFrom: 336 })
+    expect(run.insets).toEqual([336, 0])
+    expect(run.state.pending).toBe(0)
+    // 尾巴窗口早过（9999 - 1001），这一帧就是真高度：候选没清的话会被 max(100, 340) 顶成 340
+    const reopened = feed([100], { ...run.state, now: [9999] })
+    expect(reopened.insets).toEqual([100])
+  })
+
+  test('尾巴残值不许升格为候选值（收完的动画残值不是「平台报过的高度」）', () => {
+    // 336 收完报 0（closedAt = 1000），100ms 后补报 100 —— 量级差得远，是动画尾巴
+    const run = feed([0, 100], {
+      inset: 336,
+      closing: true,
+      closingFrom: 336,
+      now: [1000, 1100],
+    })
+    expect(run.insets).toEqual([0, 0])
+    expect(run.state.pending).toBe(0)
+    // 残值一旦进了候选，哨兵兜底时就会把这条动画尾巴当成「平台报过的真高度」落下去
+    expect(
+      resolveSentinel({
+        closing: false,
+        seen: 0,
+        pending: run.state.pending,
+        height: 0,
+        focused: true,
+        rearms: 0,
+      }).inset,
+    ).toBe(0)
+  })
+
   test('非有限值一律不动，交给下一次事件', () => {
     const idle = nextKeyboardInset({
       prev: 336,
@@ -566,6 +599,20 @@ describe('活性哨兵的结论：只看「报过的最高值」与焦点（#560
       rearms: 0,
     })
     expect(mid.inset).toBe(300)
+  })
+
+  test('报过但没报满：直接用报过的值，不许退回当前高度（否则先回抬一整个周期）', () => {
+    // 平台只报了 100 就静默，而页面当前高度还是 336（收起动画没走完就断了）
+    const plan = resolveSentinel({
+      closing: true,
+      seen: 100,
+      pending: 0,
+      height: 336,
+      focused: true,
+      rearms: 0,
+    })
+    // 退回到 336 = 输入栏被抬回上一轮的高度、并且要挂到下一次事件才纠正（正是 #560 的观感）
+    expect(plan).toEqual({ releaseLatch: true, inset: 100, rearms: 0 })
   })
 
   test('已经失焦：键盘该走，归零', () => {
@@ -687,6 +734,13 @@ describe('键盘高度是单一真源（#560）', () => {
     // 只叫平台收，不自己归零（自己归零就是拿本页布局和系统收键盘动画抢时序）
     expect(body).toContain('void Taro.hideKeyboard()')
     expect(body).not.toContain('setKeyboardHeight')
+    /**
+     * 页面主动收起＝用户离开输入框：哨兵的意图信号必须跟着置假。
+     * 切语音态会把 Textarea 卸载（React 卸载不合成 blur）、`hideKeyboard()` 本身也不 blur，
+     * `togglePanel` 更是明确不 blur 输入框 —— 不置假的话焦点永远停在「真」，哨兵会把收起动画的
+     * 中间值当终值落地，输入栏永久悬在空中。
+     */
+    expect(body).toContain('inputFocusedRef.current = false')
     // 意图闩只在这里置位：不从「高度变矮」反推（R1）
     expect(body).toContain('keyboardClosingRef.current = true')
     // 连调两次时第二次读到的 from 只是收起动画里的中间高度：只许取大，不许下修（E）
@@ -738,9 +792,15 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('setKeyboardHeight(plan.inset)')
     expect(body).toContain('if (plan.inset !== keyboardHeightRef.current) {')
     expect(body).toContain('keepTailAnchored()')
-    // 重新武装一个周期（不无限重发）
+    // 重新武装一个周期（不无限重发）：预算要落盘，且必须自己重发 hideKeyboard
     expect(body).toContain('if (plan.rearms > keyboardSentinelRearmsRef.current) {')
+    expect(body).toContain('keyboardSentinelRearmsRef.current = plan.rearms')
     expect(body).toContain('void Taro.hideKeyboard()')
+    /**
+     * 重发这一支**不许复用 `collapseKeyboard()`** —— 它会把重新武装预算重置成 0，于是
+     * 「哨兵 → 重发 → 哨兵」可以无限循环。`squash` 已剥掉注释，这里查的是真调用。
+     */
+    expect(body).not.toContain('collapseKeyboard')
     // 账本跟着哨兵一起清，否则是下一轮的假阳性
     expect(
       slice(source, 'const clearKeyboardSentinel = useCallback', 'const armKeyboardSentinel'),

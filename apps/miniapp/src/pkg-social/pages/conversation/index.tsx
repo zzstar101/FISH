@@ -2413,6 +2413,15 @@ export default function Conversation() {
    */
   const collapseKeyboard = useCallback(() => {
     void Taro.hideKeyboard()
+    /**
+     * 页面主动收起 = 用户离开输入框：哨兵的**意图信号**跟着置假（重新点输入框时 `onFocus` 会置回真）。
+     *
+     * 不置的话这条兜底就是空的 —— 切语音态会把 `Textarea` 卸载，而 React 卸载**不合成 blur**，
+     * 微信的 `hideKeyboard()` 本身也不 blur，`togglePanel` 更是明确「不 blur 输入框」。于是
+     * `inputFocusedRef` 一直停在「真」，哨兵到点按「用户还在编辑、绝不猜 0」把中间值（例如收起
+     * 动画里的 300）当终值落地 —— 输入栏悬在空中，又因为 `closedAt` 为 0 不会被尾巴纠正。
+     */
+    inputFocusedRef.current = false
     // 页面新发起的一次收起：重新给满重新武装的预算（哨兵自己重发时不走这里，见上）
     keyboardSentinelRearmsRef.current = 0
     const from = keyboardHeightRef.current
