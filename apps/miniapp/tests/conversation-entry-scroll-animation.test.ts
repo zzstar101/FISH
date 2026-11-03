@@ -49,8 +49,10 @@ describe('会话页进入即贴底（#540）', () => {
 
   test('跳转目标与动画判据同源，正常态仍指向最后一条消息', async () => {
     const source = squash(await pageSource())
+    // 非摘引态指向的是「尾行锚点」而不是尾行自己的 id：几何一变要换一个同位锚点重指
+    // （`scrollIntoView` 值不变时原生层不重滚，见 #561），锚点仍是最末一条消息之后。
     expect(source).toContain(
-      'const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailId',
+      'const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailAnchorId',
     )
     expect(source).toContain('scrollIntoView={scrollTarget}')
   })
