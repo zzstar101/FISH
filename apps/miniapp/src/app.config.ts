@@ -53,6 +53,7 @@ export default defineAppConfig({
         'pages/third-party-sharing/index',
         'pages/community-guidelines/index',
         'pages/feedback/index',
+        'pages/my-feedback/index',
         'pages/about/index',
       ],
     },

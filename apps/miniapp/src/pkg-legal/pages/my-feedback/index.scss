@@ -1,0 +1,269 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 我的反馈（#463）。尺寸 = 设计稿 pt × 2（见 DESIGN.md），与意见反馈页同一套令牌。
+ *
+ * 结构：NavBar glass（吸顶玻璃栏，居中标题，本页只补内容顶部的等高让位）
+ * → 渐变页头 → 演示说明带（演示构建才有）→ 反馈卡列表
+ * →「已经到底了」/「仅显示最近 100 条」。
+ *
+ * 卡片形态照「我的举报」：上排是类型胶囊 + 状态胶囊，正文最多三行，管理员回复单独一块
+ * （平台回复 + 回复正文），脚行是时间与短编号。与举报列表的差别是没有缩略图与跳转箭头
+ * —— 反馈没有对象摘要，也没有详情页（契约没有单条读取端点）。
+ *
+ * 根节点刻意**不写 `overflow`**：写了页面自身就成了滚动容器（见 `pages/favorites` 的说明）。
+ */
+
+.mfb {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+}
+
+/* ──────────────────────────────── 渐变页头 */
+
+.mfb__head {
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+  padding: 32px 40px 40px;
+  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+}
+
+.mfb__kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.1em;
+  color: var(--brand-deep);
+  text-transform: uppercase;
+}
+
+.mfb__kicker-ic {
+  width: 26px;
+  height: 26px;
+}
+
+.mfb__title {
+  display: block;
+  margin-top: 16px;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.mfb__sub {
+  display: block;
+  margin-top: 16px;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.mfb__strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* ──────────────────────────────── 演示说明带 */
+
+.mfb__demoband {
+  position: relative;
+  z-index: 1;
+  margin: 20px 40px 0;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ──────────────────────────────── 列表 */
+
+/* 抬到页头渐变之上（.mfb__head 不是绝对定位，这里只是与说明带保持同一层叠口径） */
+.mfb__body {
+  position: relative;
+  z-index: 1;
+}
+
+.mfb__list {
+  padding: 24px 40px 0;
+}
+
+.mfb__card {
+  margin-bottom: 20px;
+  padding: 28px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 32px;
+  box-shadow: var(--shadow-card);
+}
+
+.mfb__top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* 类型胶囊：品牌浅底（与举报卡的「原因」tag 同一形态） */
+.mfb__type {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--accent-weak);
+  border-radius: 999px;
+  padding: 6px 18px;
+}
+
+/* 状态胶囊：pending=处理中、replied=已回复、closed=已处理（带同色圆点） */
+.mfb__chip {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 600;
+  padding: 6px 18px;
+  border-radius: 999px;
+  border: 2px solid;
+  line-height: 1.2;
+
+  &.is-pending {
+    color: var(--warn-ink);
+    background: var(--warn-weak);
+    border-color: var(--warn-line);
+  }
+
+  &.is-replied {
+    color: var(--ok-ink);
+    background: var(--ok-weak);
+    border-color: var(--ok-line);
+  }
+
+  &.is-closed {
+    color: var(--muted-2);
+    background: var(--accent-faint);
+    border-color: var(--border);
+  }
+}
+
+.mfb__chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* 正文：最多三行，长文不在列表里铺满屏 */
+.mfb__content {
+  display: block;
+  margin-top: 20px;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--muted-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* 管理员回复：与正文区分开（浅底 + 左侧竖线） */
+.mfb__reply {
+  margin-top: 20px;
+  padding: 20px 24px;
+  border-radius: 24px;
+  background: var(--accent-weak);
+  border-left: 6px solid var(--brand);
+}
+
+.mfb__reply-k {
+  display: block;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  color: var(--brand-deep);
+}
+
+.mfb__reply-v {
+  display: block;
+  margin-top: 8px;
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+  color: var(--fg);
+}
+
+.mfb__foot {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  color: var(--muted);
+}
+
+.mfb__sep {
+  opacity: 0.55;
+}
+
+.mfb__id {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  @include ellipsis;
+}
+
+.mfb__more {
+  display: block;
+  padding: 12px 0 4px;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+/* ──────────────────────────────── 骨架屏 / 空态 */
+
+.mfb__skeleton {
+  padding: 28px 40px 0;
+}
+
+.mfb__skel {
+  margin-bottom: 20px;
+  padding: 28px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 32px;
+}
+
+.mfb__skel-bar {
+  height: 28px;
+  border-radius: var(--r-pill);
+  background: var(--ice);
+  margin-bottom: 16px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.mfb__skel-hint {
+  display: block;
+  text-align: center;
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.mfb__emptypad {
+  padding-top: 96px;
+}

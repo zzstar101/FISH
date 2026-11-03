@@ -17,8 +17,8 @@ import { FeedbackIdSchema, UserIdSchema } from '../system/public-id'
 // ---------------------------------------------------------------------------
 
 /**
- * 反馈类型。与小程序反馈页 `FEEDBACK_TYPE_KEYS`（`bug/ux/dispute/report/account/other`）一一对应；
- * 清单定稿归 #399。
+ * 反馈类型。小程序反馈页、PC 反馈页与数据库枚举都以此为准（`FEEDBACK_TYPE_LABEL` /
+ * `FEEDBACK_TYPE_COPY` 只补展示文案）；清单定稿归 #399。
  */
 export const FeedbackTypeSchema = z.enum(['BUG', 'UX', 'DISPUTE', 'REPORT', 'ACCOUNT', 'OTHER'])
 export type FeedbackType = z.infer<typeof FeedbackTypeSchema>
