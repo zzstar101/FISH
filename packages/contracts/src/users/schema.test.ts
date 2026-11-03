@@ -116,9 +116,23 @@ describe('PublicUserListingsQuerySchema', () => {
     expect(PublicUserListingsQuerySchema.safeParse({ limit: '51' }).success).toBe(false)
   })
 
-  test('rejects sellerId / status overrides instead of ignoring them', () => {
+  test('rejects a sellerId override instead of ignoring it', () => {
     expect(PublicUserListingsQuerySchema.safeParse({ sellerId: USER_ID }).success).toBe(false)
-    expect(PublicUserListingsQuerySchema.safeParse({ status: 'SOLD' }).success).toBe(false)
+  })
+
+  /**
+   * #565：他人主页要能看 TA 的已售出商品，`status` 从"禁止出现"变成"只允许两值"。
+   * 公开读模型里**没有** OFFLINE / RESERVED 这两种口径（已下架含审核中 / 不过审 / 平台下架，
+   * 已预定也不该对匿名访客可见），所以它们必须被值域拒掉，而不是被静默忽略。
+   */
+  test('accepts status ACTIVE / SOLD and rejects every other status', () => {
+    expect(PublicUserListingsQuerySchema.parse({ status: 'ACTIVE' }).status).toBe('ACTIVE')
+    expect(PublicUserListingsQuerySchema.parse({ status: 'SOLD' }).status).toBe('SOLD')
+    expect(PublicUserListingsQuerySchema.safeParse({ status: 'OFFLINE' }).success).toBe(false)
+    expect(PublicUserListingsQuerySchema.safeParse({ status: 'RESERVED' }).success).toBe(false)
+    expect(PublicUserListingsQuerySchema.safeParse({ status: 'sold' }).success).toBe(false)
+    // 缺省不落成 'ACTIVE'：服务端把 undefined 当在售，既有调用方因此一行都不用改。
+    expect('status' in PublicUserListingsQuerySchema.parse({})).toBe(false)
   })
 
   test('rejects an empty cursor', () => {

@@ -362,10 +362,35 @@
   padding: 0 40px 20px;
 }
 
-.uhome__sect-title {
-  font-size: var(--fs-h3);
+/*
+ * 分段（#565）：「在售 / 已售出」。
+ *
+ * 视觉沿用我的发布页的胶囊分段（`pkg-browse/pages/mylist` 的 `.ml__seg`：`--surface`
+ * 轨道 + inset 描边、选中态反色成 `--ink`），差别只在这里**内联定宽**而不是等分整行 ——
+ * 它要和右侧的件数待在同一行（`.uhome__sect` 是 `space-between`）。
+ */
+.uhome__segs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--border);
+}
+
+.uhome__seg {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 26px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-2xs);
   font-weight: 600;
-  color: var(--fg);
+  color: var(--muted-2);
+}
+
+.uhome__seg--on {
+  background: var(--ink);
+  color: var(--surface);
 }
 
 .uhome__sect-cnt {

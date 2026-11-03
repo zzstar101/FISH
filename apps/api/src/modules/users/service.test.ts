@@ -6,6 +6,7 @@ import { createPublicUserService, PublicUserServiceError } from './service'
 import type {
   PublicListingCursor,
   PublicListingRow,
+  PublicUserListingStatus,
   PublicUserRow,
   PublicUserStatsRow,
   PublicUserStore,
@@ -63,9 +64,19 @@ function fakeStore(
     listings?: PublicListingRow[]
   } = {},
 ): PublicUserStore & {
-  listCalls: { userId: string; limit: number; cursor: PublicListingCursor | null }[]
+  listCalls: {
+    userId: string
+    status: PublicUserListingStatus
+    limit: number
+    cursor: PublicListingCursor | null
+  }[]
 } {
-  const listCalls: { userId: string; limit: number; cursor: PublicListingCursor | null }[] = []
+  const listCalls: {
+    userId: string
+    status: PublicUserListingStatus
+    limit: number
+    cursor: PublicListingCursor | null
+  }[] = []
   const rows = options.listings ?? []
   const user = options.user === undefined ? userRow() : options.user
 
@@ -77,8 +88,8 @@ function fakeStore(
     async stats() {
       return { activeListings: 3, soldCount: 1, ...options.stats }
     },
-    async listActiveListings(userId, limit, cursor) {
-      listCalls.push({ userId, limit, cursor })
+    async listListings(userId, status, limit, cursor) {
+      listCalls.push({ userId, status, limit, cursor })
       // store 约定：多取一行让调用方判断 hasMore。
       return rows.slice(0, limit + 1)
     },
@@ -195,10 +206,10 @@ describe('公开资料', () => {
   })
 })
 
-describe('在售列表', () => {
+describe('商品列表（在售 / 已售出）', () => {
   test('把 limit 与解码后的游标交给 store', async () => {
     const store = fakeStore()
-    await service(store).listActiveListings(USER_ID, {
+    await service(store).listListings(USER_ID, {
       limit: 5,
       cursor: encodeCursor({ sortKey: '2026-09-10T02:00:00.000000Z', id: LISTING_A }),
     })
@@ -206,15 +217,29 @@ describe('在售列表', () => {
     expect(store.listCalls).toEqual([
       {
         userId: USER_ID,
+        // 契约的 status 是可选的：缺省必须落到「在售」，否则不传 status 的老调用方会变成查空。
+        status: 'ACTIVE',
         limit: 5,
         cursor: { createdAt: '2026-09-10T02:00:00.000000Z', id: LISTING_A },
       },
     ])
   })
 
+  test('status 原样交给 store（SOLD 查已售出，#565）', async () => {
+    const store = fakeStore({ listings: [listingRow({ status: 'SOLD' })] })
+
+    const page = await service(store).listListings(USER_ID, { limit: 20, status: 'SOLD' })
+
+    expect(store.listCalls).toEqual([{ userId: USER_ID, status: 'SOLD', limit: 20, cursor: null }])
+    expect(page.items[0]?.status).toBe('SOLD')
+    // 公开读模型不泄露审核态（#565 验收③）：他人视角这张卡的 `moderationStatus` 恒 null
+    // （`toListingCard` 的默认值，只有本人视角才由调用方传真实值）
+    expect(page.items[0]?.moderationStatus).toBeNull()
+  })
+
   test('不存在的用户 → 404，且**不查**列表（不能对不存在的人返回空列表）', async () => {
     const store = fakeStore()
-    await expect(service(store).listActiveListings(OTHER_ID, { limit: 20 })).rejects.toBeInstanceOf(
+    await expect(service(store).listListings(OTHER_ID, { limit: 20 })).rejects.toBeInstanceOf(
       PublicUserServiceError,
     )
 
@@ -224,7 +249,7 @@ describe('在售列表', () => {
   test('非法游标 → 422 VALIDATION_FAILED（details 指向 cursor），且不查列表', async () => {
     const store = fakeStore()
     try {
-      await service(store).listActiveListings(USER_ID, { limit: 20, cursor: 'not-a-cursor' })
+      await service(store).listListings(USER_ID, { limit: 20, cursor: 'not-a-cursor' })
       throw new Error('应当抛错')
     } catch (error) {
       const err = catchError(error)
@@ -241,7 +266,7 @@ describe('在售列表', () => {
     // 形状合法但值域非法：手写正则放得过，`::timestamptz` 会拒。
     const bad = encodeCursor({ sortKey: '2026-13-45T99:99:99.999999Z', id: LISTING_A })
     await expect(
-      service(store).listActiveListings(USER_ID, { limit: 20, cursor: bad }),
+      service(store).listListings(USER_ID, { limit: 20, cursor: bad }),
     ).rejects.toBeInstanceOf(PublicUserServiceError)
     expect(store.listCalls).toEqual([])
   })
@@ -255,7 +280,7 @@ describe('在售列表', () => {
       ],
     })
 
-    const page = await service(store).listActiveListings(USER_ID, { limit: 2 })
+    const page = await service(store).listListings(USER_ID, { limit: 2 })
 
     expect(page.items.map((item) => item.id)).toEqual(
       [LISTING_A, LISTING_B].map((id) => encodePublicId(PUBLIC_ID_PREFIX.listing, id)),
@@ -269,7 +294,7 @@ describe('在售列表', () => {
 
   test('最后一页的 nextCursor 是 null', async () => {
     const store = fakeStore({ listings: [listingRow()] })
-    const page = await service(store).listActiveListings(USER_ID, { limit: 2 })
+    const page = await service(store).listListings(USER_ID, { limit: 2 })
 
     expect(page.items).toHaveLength(1)
     expect(page.items[0]?.listingNo).toBe('123456789012')
@@ -284,7 +309,7 @@ describe('在售列表', () => {
       ],
     })
 
-    const page = await service(store).listActiveListings(USER_ID, { limit: 20 })
+    const page = await service(store).listListings(USER_ID, { limit: 20 })
 
     expect(page.items[0]?.coverUrl).toBe('https://cdn.test/listings/a.jpg')
     expect(page.items[1]?.coverUrl).toBeNull()

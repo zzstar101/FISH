@@ -5,8 +5,9 @@ import { userListEnd } from '../src/pkg-browse/pages/user/list-end'
  * 他人主页「列表终点提示」的判定（#178 审查收口）。
  *
  * 上一轮审查点名的缺陷：页面在 `items.length > 0` 时无条件渲染「已经到底了」，
- * 而在售列表有**单页上限**（`fetchPublicUserListings` 的 `PAGE_SIZE = 50`）。
- * `activeCount > items.length` 时还有商品没展示，那句提示就是错的。
+ * 而列表是**分页**读取的（`fetchPublicUserListings` 的 `PAGE_SIZE = 50`；#565 起滚到底
+ * 还会按游标续拉，所以「已展示条数」只是手上这一份，随时可能少于真总数）。
+ * `total > items.length` 时还有商品没展示，那句提示就是错的。
  *
  * 这里锁的是「什么时候不许说已经到底」：只要服务端游标说还有下一页、或真总数大于
  * 已展示条数，就必须退到 `partial`（页面渲染「仅显示最近 N 件」）。
@@ -69,6 +70,8 @@ describe('user 页面接线', () => {
 
   test('列表是否有下一页取自读取层的游标结果，不靠条数猜', async () => {
     const code = await source
-    expect(code).toContain('result.hasMore')
+    // #565：`PublicUserResult` 的下一页信号就是契约游标本身（`nextCursor`），
+    // 页面把它原样存进分段状态，不再有「hasMore 布尔」这一层转手
+    expect(code).toContain('result.nextCursor')
   })
 })

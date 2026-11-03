@@ -40,7 +40,8 @@ function toErrorResponse(c: Context, error: unknown): Response {
  * 路由 pattern 从契约常量派生：把参数名当占位 id 传进去（禁止在别处硬编码路径）。
  */
 const PUBLIC_PROFILE_PATH = USER_ROUTES.publicProfile(':userId')
-const ACTIVE_LISTINGS_PATH = USER_ROUTES.activeListings(':userId')
+/** 同一路径按可选 `status` 供在售 / 已售出两段（#565），因此常量名不限定 ACTIVE。 */
+const USER_LISTINGS_PATH = USER_ROUTES.activeListings(':userId')
 
 /**
  * 公开用户主页 router（Issue #122）。
@@ -66,7 +67,7 @@ export function createUsersRouter(options: UsersRouterOptions) {
     }
   })
 
-  router.get(ACTIVE_LISTINGS_PATH, async (c) => {
+  router.get(USER_LISTINGS_PATH, async (c) => {
     const userId = requireUserId(c)
     if (!userId) return userNotFoundResponse(c)
 
@@ -79,7 +80,7 @@ export function createUsersRouter(options: UsersRouterOptions) {
     }
 
     try {
-      return c.json(await service.listActiveListings(userId, parsed.data), 200)
+      return c.json(await service.listListings(userId, parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

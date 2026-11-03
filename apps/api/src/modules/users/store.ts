@@ -39,7 +39,7 @@ export interface PublicUserRow {
 }
 
 export interface PublicUserStatsRow {
-  /** 在售数：口径必须与 `listActiveListings` 完全一致，否则页面会出现"写着 5 件、只列出 3 件"。 */
+  /** 在售数：口径必须与 `listListings(…, 'ACTIVE', …)` 完全一致，否则页面会出现"写着 5 件、只列出 3 件"。 */
   activeListings: number
   /** 卖出数：已完成交易里 TA 是卖家的条数。 */
   soldCount: number
@@ -72,13 +72,25 @@ export interface PublicListingRow {
 /** 游标在 store 层是**已解码**结构；合法性由 service 校验后才走到这里。 */
 export type PublicListingCursor = { createdAt: string; id: string }
 
+/**
+ * 公开读模型允许的两种口径（#565）：`ACTIVE` = 在售、`SOLD` = 已售出。
+ *
+ * 与契约 `PublicUserListingsQuerySchema.status` 的值域**逐字相同**：契约已把
+ * OFFLINE / RESERVED 拒在 422，所以这里的类型就是这一层的完整值域，不需要再兜一层。
+ */
+export type PublicUserListingStatus = 'ACTIVE' | 'SOLD'
+
 export interface PublicUserStore {
   /** 按 id 取公开资料列；不存在或**已注销**（#464）返回 null（不区分"不存在"与"不可见"）。 */
   findPublicUser(userId: string): Promise<PublicUserRow | null>
   stats(userId: string): Promise<PublicUserStatsRow>
-  /** 取 TA 的在售商品，`created_at DESC, id DESC`，多取一行由调用方判断还有没有下一页。 */
-  listActiveListings(
+  /**
+   * 取 TA 的某一类商品（在售 / 已售出），`created_at DESC, id DESC`，
+   * 多取一行由调用方判断还有没有下一页。
+   */
+  listListings(
     userId: string,
+    status: PublicUserListingStatus,
     limit: number,
     cursor: PublicListingCursor | null,
   ): Promise<PublicListingRow[]>
@@ -131,7 +143,7 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
     },
 
     async stats(userId) {
-      // 两个计数合成一次往返。**在售数的过滤条件必须与 listActiveListings 逐字相同**
+      // 两个计数合成一次往返。**在售数的过滤条件必须与 listListings(…, 'ACTIVE', …) 逐字相同**
       // （ACTIVE + APPROVED），否则页面顶部写「在售 5 件」而下面只列出 3 件。
       // `moderation_status = 'APPROVED'` 是公开可见性的第二道闸（与 listings feed 的
       // `includeUnapproved: false` 同口径）：只判 status 会把审核未通过的 ACTIVE 商品算进去。
@@ -151,13 +163,23 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
       }
     },
 
-    async listActiveListings(userId, limit, cursor) {
+    async listListings(userId, status, limit, cursor) {
       const conditions: SQL[] = [
         eq(listings.sellerId, userId),
-        // 公开在售列表：只出 ACTIVE。已售 / 已下架 / 已预定一律不在其中（#122 验收）。
-        eq(listings.status, 'ACTIVE'),
-        eq(listings.moderationStatus, 'APPROVED'),
+        // #565：口径由调用方给（在售 / 已售出）。已售出只认 `status = 'SOLD'`，
+        // 与在售一样是"公开可读"的：售出是成交事实，不是下架。
+        eq(listings.status, status),
       ]
+
+      // 公开可见性的第二道闸，**只在在售段生效**（与 listings feed 的
+      // `includeUnapproved: false` 同口径：只判 status 会把审核未通过的 ACTIVE 算进去）。
+      //
+      // 已售出段**不叠加** `moderationStatus = 'APPROVED'`（#565）：商品在治理期间
+      // （REVIEW / BLOCKED / 平台下架）成交时，`status` 仍是 SOLD 但审核列不是 APPROVED，
+      // 叠加就会凭空少几件；而页头的「卖出 N」来自 `transactions`（不含审核条件），
+      // 两边必须对得上，所以这里只按 `status` 过滤。
+      if (status === 'ACTIVE') conditions.push(eq(listings.moderationStatus, 'APPROVED'))
+
       if (cursor) conditions.push(cursorCondition(cursor))
 
       // innerJoin users（#191）：卡片要带卖家公开子集；`seller_id` 外键保证行存在，PK join 1:1。

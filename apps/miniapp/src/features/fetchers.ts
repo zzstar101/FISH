@@ -92,7 +92,11 @@ import {
 import { fetchProfile } from './profile/api'
 import { type OrderCardView, toOrderCard, toOrderCardFromMock } from './transaction/adapt'
 import { fetchAllTransactions } from './transaction/api'
-import { fetchPublicUserListings, fetchPublicUserProfile } from './user/api'
+import {
+  fetchPublicUserListings,
+  fetchPublicUserProfile,
+  type PublicUserListingsStatus,
+} from './user/api'
 import { fetchMyViewHistory } from './view-history/api'
 import { toMockWish } from './wish/adapt'
 
@@ -944,13 +948,39 @@ export {
  * `failed`（根本没问到 → 错误态）必须分开；混成一个 `null` 会让页面把「后端挂了」
  * 说成「用户不存在」。
  *
- * `hasMore` 是读取层对「这份列表是不是全部」的诚实回答（契约 `nextCursor !== null`）：
- * 本页只取一页（上限 50），服务端游标说还有下一页时，页面不能宣称「已经到底了」。
+ * `nextCursor` 是读取层对「这份列表是不是全部」的诚实回答（契约原样的游标）：
+ * 非 null 时页面既不能宣称「已经到底了」，也要把它当作「加载更多」的入口（#565）。
  */
 export type PublicUserResult =
-  | { status: 'ok'; profile: PublicUserProfile; listings: MockListing[]; hasMore: boolean }
+  | { status: 'ok'; profile: PublicUserProfile; listings: MockListing[]; nextCursor: string | null }
   | { status: 'notFound' }
   | { status: 'failed' }
+
+/** 一次翻页的结果：卡片 + 下一页游标（`null` = 这就是最后一页）。 */
+export type PublicUserListingsPage = {
+  listings: MockListing[]
+  nextCursor: string | null
+}
+
+/**
+ * 他人主页某一分段的**一页**商品（#565）：`ACTIVE` = 在售、`SOLD` = 已售出。
+ *
+ * 与 `loadPublicUserHome` 同一取舍（刻意没有 mock 回退）：拿不到就是抛错，由页面决定
+ * 显示失败态；404（用户不存在）返回 `null`，让页面把「这个人没了」与「这页没问到」分开。
+ */
+export async function loadPublicUserListingsPage(
+  userId: string,
+  status: PublicUserListingsStatus,
+  cursor: string | null,
+  now: number = Date.now(),
+): Promise<PublicUserListingsPage | null> {
+  const page = await fetchPublicUserListings(userId, {
+    status,
+    ...(cursor === null ? {} : { cursor }),
+  })
+  if (page === null) return null
+  return { listings: toMockListings(page.items, now), nextCursor: page.nextCursor }
+}
 
 /**
  * 他人主页：公开资料 + TA 的在售（Issue #122）。
@@ -985,9 +1015,9 @@ export async function loadPublicUserHome(
       status: 'ok',
       profile,
       listings: toMockListings(page.items, now),
-      // 契约的游标语义：`nextCursor !== null` 即还有下一页。本页不翻页，但这个布尔
-      // 是「列表是否完整」的唯一权威信号，必须原样透给页面（不能只看条数猜）。
-      hasMore: page.nextCursor !== null,
+      // 契约的游标语义：`nextCursor !== null` 即还有下一页。它是「列表是否完整」的
+      // 唯一权威信号（不能只看条数猜），也是「加载更多」的入口，必须原样透给页面。
+      nextCursor: page.nextCursor,
     }
   } catch (error) {
     reportFailure('他人主页', error, false)

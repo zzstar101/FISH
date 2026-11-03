@@ -10,7 +10,11 @@ import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
-import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+import {
+  loadPublicUserHome,
+  loadPublicUserListingsPage,
+  MOCK_FALLBACK_ENABLED,
+} from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
@@ -24,6 +28,33 @@ import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
 import './index.scss'
+
+/**
+ * 列表分段（#565）：取值域与契约 `PublicUserListingsQuerySchema.status` 逐字对齐。
+ *
+ * 两段都是同一个读端点 `GET /users/:userId/listings`，只差一个 `status` ——
+ * 服务端对 OFFLINE / RESERVED 一律 422，所以这里也只有这两个值。
+ */
+type Segment = 'ACTIVE' | 'SOLD'
+
+/** 一段的列表数据 + 它自己的游标与加载态（两段各自独立：切回已拉过的段不再请求） */
+type SegmentPage = {
+  items: MockListing[]
+  /** 服务端游标：`null` 表示这一段已经没有下一页了（唯一权威信号，条数不参与判断） */
+  nextCursor: string | null
+  /** 是否已成功拉过第一页 —— 决定切过去时要不要发请求 */
+  loaded: boolean
+  loading: boolean
+  failed: boolean
+}
+
+const emptyPage = (): SegmentPage => ({
+  items: [],
+  nextCursor: null,
+  loaded: false,
+  loading: false,
+  failed: false,
+})
 
 /**
  * 他人主页（设计稿 `D:\Downloads\1改\小程序1版user.html`）。
@@ -44,8 +75,11 @@ import './index.scss'
  * - **校区不渲染（#86 F：已从产品整体移除）**：2026-09-22 产品冻结「不采集、不公开校区」，
  *   `users.campus` 列与所有契约字段（`Me` / `ListingSeller` / `PublicUserProfile`）已删除，
  *   本页没有任何 campus 数据可读，也不会显示「XX校区」。
- * - **在售列表只有一页**（`PAGE_SIZE = 50`），终点提示按「服务端游标 + 真总数」判定，
- *   不能只看条数就说「已经到底了」（见 `./list-end.ts`）。
+ * - **列表按「在售 / 已售出」分段**（#565）：两段是同一个读端点
+ *   `GET /users/:userId/listings`，只差一个 `status`（`OFFLINE` / `RESERVED` 服务端
+ *   一律 422，故页面上也只有这两段）。每段按 `PAGE_SIZE = 50` 一页、滚到底按服务端
+ *   游标续拉；终点提示按「服务端游标 + 该段真总数」判定，不能只看条数就说
+ *   「已经到底了」（见 `./list-end.ts`）。
  * - **好评率不渲染**：仓库没有 reviews / ratings 表，没有真实口径 —— 恒显 `--`，
  *   不编一个百分比（稿里的 98% / 100% 是演示数据，不照抄）。
  * - **卖出数**用契约的 `soldCount`（已完成交易里 TA 是卖家的条数）。
@@ -81,16 +115,23 @@ export default function UserHome() {
 
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
-  const [items, setItems] = useState<MockListing[]>([])
-  /** 服务端游标说还有下一页（契约 `nextCursor !== null`）；本页不翻页，但这决定终点怎么说 */
-  const [hasMore, setHasMore] = useState(false)
+  /**
+   * 当前分段（#565）。默认停在「在售」—— 页头那两个数里「在售」就是这一段，
+   * 进页面先说同一件事；「已售出」是用户点过去才请求的第二段。
+   */
+  const [seg, setSeg] = useState<Segment>('ACTIVE')
+  /** 两段各自的数据 + 游标。首屏只填 ACTIVE，SOLD 在切过去时按需补。 */
+  const [pages, setPages] = useState<Record<Segment, SegmentPage>>({
+    ACTIVE: emptyPage(),
+    SOLD: emptyPage(),
+  })
 
   const load = useCallback(async () => {
     // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
     setLoadState('loading')
     setProfile(null)
-    setItems([])
-    setHasMore(false)
+    setSeg('ACTIVE')
+    setPages({ ACTIVE: emptyPage(), SOLD: emptyPage() })
     /**
      * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
      * 重试时它是**新挂载**的、`scrollTop` 回到 0，而 `glassOn` / `titled` 是页面级
@@ -111,10 +152,81 @@ export default function UserHome() {
       return
     }
     setProfile(result.profile)
-    setItems(result.listings)
-    setHasMore(result.hasMore)
+    setPages((prev) => ({
+      ...prev,
+      ACTIVE: {
+        items: result.listings,
+        nextCursor: result.nextCursor,
+        loaded: true,
+        loading: false,
+        failed: false,
+      },
+    }))
     setLoadState('ok')
   }, [userId])
+
+  /**
+   * 拉某一段的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
+   *
+   * 两个入口（切段补首屏、滚到底补下一页）都可能并发进来，重入由**该段自己的**
+   * `loading` 挡住；追加时读 `prev` 里那一段已展示的条目，不读闭包里的快照 ——
+   * 否则两次快速滚动会拿同一份旧数组覆盖。
+   */
+  const loadSegment = useCallback(
+    async (which: Segment, cursor: string | null) => {
+      setPages((prev) => ({ ...prev, [which]: { ...prev[which], loading: true, failed: false } }))
+      try {
+        const page = await loadPublicUserListingsPage(userId, which, cursor)
+        if (page === null) {
+          // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
+          setLoadState('notFound')
+          return
+        }
+        setPages((prev) => ({
+          ...prev,
+          [which]: {
+            items: cursor === null ? page.listings : [...prev[which].items, ...page.listings],
+            nextCursor: page.nextCursor,
+            loaded: true,
+            loading: false,
+            failed: false,
+          },
+        }))
+      } catch (error) {
+        // 分段内的失败只降级这一段（页头、另一段、顶栏都还在），不把整页打成 failed。
+        console.warn('[miniapp] 他人主页：分段列表加载失败', error)
+        setPages((prev) => ({ ...prev, [which]: { ...prev[which], loading: false, failed: true } }))
+      }
+    },
+    [userId],
+  )
+
+  /** 当前分段（下面所有渲染都读它：切段即换一页数据） */
+  const current = pages[seg]
+  const items = current.items
+  const hasMore = current.nextCursor !== null
+
+  /**
+   * 切到还没拉过的分段时补第一页。
+   *
+   * `failed` 也挡住自动补拉：失败后只认用户点「重试」，否则每次重渲染都会再打一次接口。
+   * 首屏已经把 ACTIVE 段填好，所以这个 effect 在默认视图下是空转的。
+   */
+  useEffect(() => {
+    if (loadState !== 'ok') return
+    if (current.loaded || current.loading || current.failed) return
+    void loadSegment(seg, null)
+  }, [current, loadSegment, loadState, seg])
+
+  /**
+   * 滚到底补下一页（两段共用）。`onScrollToLower` 在内容不满一屏时也会触发，
+   * 所以「没有下一页」与「正在拉」都必须先挡住，不能只靠事件本身。
+   */
+  const onScrollToLower = useCallback(() => {
+    if (loadState !== 'ok') return
+    if (current.loading || current.nextCursor === null) return
+    void loadSegment(seg, current.nextCursor)
+  }, [current, loadSegment, loadState, seg])
 
   const [left, right] = useMemo(() => {
     const l: MockListing[] = []
@@ -303,14 +415,23 @@ export default function UserHome() {
   const presence = profile ? presenceView(profile.presence, presenceNow) : null
 
   /**
+   * 当前分段的**真总数**：在售段用 `activeCount`、已售出段用 `soldCount`，都是服务端给的
+   * 数、与页头那两个同源。分段标题右侧的「N 件」也用它 —— 列表是分页的，用 `items.length`
+   * 会在还没加载完时低报。
+   */
+  const segTotal = seg === 'ACTIVE' ? (profile?.activeCount ?? 0) : (profile?.soldCount ?? 0)
+  const segTitle = seg === 'ACTIVE' ? '在售' : '已售出'
+
+  /**
    * 列表终点判定（纯函数，用例见 `tests/user-list-end.test.ts`）。
    *
    * 「已经到底了」要两个信号同时点头：服务端游标说没有下一页，且这份列表条数不少于
-   * 服务端报的在售真总数 `activeCount`。任一条不成立就改说「仅显示最近 N 件」——
-   * 单看条数会在超过单页上限（50）时把「还有没展示的」说成「TA 就这些」。
-   * `profile` 还没到（加载中）时 `shown` 恒为 0，判定自然是 `none`，不提前下结论。
+   * 该段真总数（在售 `activeCount` / 已售出 `soldCount`）。任一条不成立就改说
+   * 「仅显示最近 N 件」—— 单看条数会在超过单页上限（50）时把「还有没展示的」
+   * 说成「TA 就这些」。`profile` 还没到（加载中）时 `shown` 恒为 0，判定自然是
+   * `none`，不提前下结论。
    */
-  const end = userListEnd(items.length, profile?.activeCount ?? 0, hasMore)
+  const end = userListEnd(items.length, segTotal, hasMore)
 
   /**
    * 演示内容的**唯一闸门**：演示构建 + 页主是演示账号（seed 三号之一，见
@@ -586,6 +707,10 @@ export default function UserHome() {
           showScrollbar={false}
           scrollIntoView={topAnchor}
           onScroll={onScroll}
+          // 滚到底自动补下一页（分段共用，见 onScrollToLower）；提前 120px 触发，
+          // 让下一页在手指松开前后就接上，避免滚到底再等一次网络
+          lowerThreshold={120}
+          onScrollToLower={onScrollToLower}
         >
           {/* 回到顶部的两个同位锚点：交替指（见 backToTop 的注释） */}
           <View id="uhome-top-a" />
@@ -765,15 +890,27 @@ export default function UserHome() {
           {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内） */}
           <View className="uhome__body">
             <View className="uhome__sect">
-              <Text className="uhome__sect-title">TA 的在售</Text>
-              {/* 计数用服务端的 activeCount（与上方「在售」同一口径），
-                  不用 items.length —— 列表有单页上限，用它会在超出上限时低报 */}
-              <Text className="uhome__sect-cnt num">
-                {profile ? `${profile.activeCount} 件` : '加载中'}
-              </Text>
+              {/* 分段（#565）：「在售 / 已售出」两段同源，只差一个 `status`。
+                  计数取该段的服务端真总数（`activeCount` / `soldCount`），与页头那两个数同源；
+                  不用 items.length —— 列表是分页的，用它会在还没加载完时低报。 */}
+              <View className="uhome__segs">
+                <View
+                  className={`uhome__seg${seg === 'ACTIVE' ? ' uhome__seg--on' : ''}`}
+                  onClick={() => setSeg('ACTIVE')}
+                >
+                  <Text>在售</Text>
+                </View>
+                <View
+                  className={`uhome__seg${seg === 'SOLD' ? ' uhome__seg--on' : ''}`}
+                  onClick={() => setSeg('SOLD')}
+                >
+                  <Text>已售出</Text>
+                </View>
+              </View>
+              <Text className="uhome__sect-cnt num">{profile ? `${segTotal} 件` : '加载中'}</Text>
             </View>
 
-            {loadState === 'loading' ? (
+            {loadState === 'loading' || (!current.loaded && !current.failed) ? (
               <View className="uhome__grid">
                 {[0, 1, 2, 3].map((i) => (
                   <View key={`sk-${i}`} className="uhome__skel">
@@ -785,13 +922,26 @@ export default function UserHome() {
                   </View>
                 ))}
               </View>
+            ) : current.failed && items.length === 0 ? (
+              /* 分段内的失败只降级这一段：页头、顶栏、另一段都还在，所以不用整页 LoadError */
+              <EmptyState
+                title="列表加载失败"
+                text={`${segTitle}商品没拉到，其它内容不受影响`}
+                icon={ICONS.boxMuted}
+                actionText="重试"
+                onAction={() => void loadSegment(seg, null)}
+              />
             ) : items.length === 0 ? (
               <View className="uhome__empty">
                 <View className="uhome__empty-disc">
                   <Image className="uhome__empty-ic" src={ICONS.boxMuted} mode="aspectFit" />
                 </View>
-                <Text className="uhome__empty-title">TA 暂无在售商品</Text>
-                <Text className="uhome__empty-text">TA 的东西都被抢光啦，有新上架会出现在这里</Text>
+                <Text className="uhome__empty-title">{`TA 暂无${segTitle}商品`}</Text>
+                <Text className="uhome__empty-text">
+                  {seg === 'ACTIVE'
+                    ? 'TA 的东西都被抢光啦，有新上架会出现在这里'
+                    : 'TA 成交的商品会出现在这里'}
+                </Text>
               </View>
             ) : (
               <View className="uhome__grid">
@@ -800,9 +950,20 @@ export default function UserHome() {
               </View>
             )}
 
+            {/* 加载更多（滚到底自动补一页，见 `onScrollToLower`）：只给一行小字，
+                不做整块遮罩 —— 已经在看的商品不该被挡住 */}
+            {current.loading && items.length > 0 ? (
+              <View className="uhome__list-end">
+                <View className="uhome__list-end-line" />
+                <Text className="uhome__list-end-txt num">加载中</Text>
+                <View className="uhome__list-end-line" />
+              </View>
+            ) : null}
+
             {/* 列表终点（稿 `.list-end`）：只有**确认这份列表就是全部**时才说「已经到底了」。
-                在售列表是单页读取（上限 50），超过时 `activeCount > items.length` —— 那种
-                情况改说「仅显示最近 N 件」，不能宣称 TA 就这些（判定见 `./list-end.ts`）。
+                每段都可能不止一页（`PAGE_SIZE = 50`，滚到底按游标续拉），游标说还有下一页、
+                或该段真总数大于已展示条数时改说「仅显示最近 N 件」，不能宣称 TA 就这些
+                （判定见 `./list-end.ts`）。
                 两条都**不带总数**：稿的 N 是列表长度，与服务端 COUNT 口径不同，带上会打架。 */}
             {end === 'end' ? (
               <View className="uhome__list-end">
