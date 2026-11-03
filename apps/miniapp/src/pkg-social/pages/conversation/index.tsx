@@ -6,6 +6,7 @@ import {
 } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, ScrollView, Text, Textarea, View } from '@tarojs/components'
+import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
@@ -75,6 +76,7 @@ import {
   applyReadPoll,
   applyRecalled,
   applyReplyRecalled,
+  BOTTOM_SLACK_PX,
   beginSend,
   type ChatEntry,
   canRetry,
@@ -82,11 +84,13 @@ import {
   clearDeferredReload,
   type DeferredReload,
   deferReload,
+  growBottomAllowance,
   hasEarlierPage,
   initialDeferredReload,
   isCurrentPlayRequest,
   isLatestPageLoad,
   isLatestPresencePoll,
+  isNearBottom,
   isStaleMediaIdentity,
   isStaleMediaTask,
   keepRecalledMediaTombstones,
@@ -104,24 +108,29 @@ import {
   mergeRefreshedMedia,
   mergeRefreshedMessages,
   mergeTimeline,
+  mergeViewportShrink,
   messageActions,
   messageReadLabel,
+  nextKeyboardInset,
   type PendingMedia,
   type PendingMediaDraft,
   type PendingMessage,
   parseTxEvent,
   planMediaLoad,
+  planScrollFix,
   REPLY_DROPPED_TIP,
   type ReplyTarget,
   recallFailureText,
   resetDeferredReload,
   resolveConvState,
+  resolveSentinel,
   settleSend,
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
   startMediaRetry,
+  stickAfterScroll,
   systemPillText,
   type TxBarAction,
   txBarView,
@@ -203,6 +212,14 @@ const EMPTY_IDS: ReadonlySet<string> = new Set()
  */
 const DETAIL_POLL_MS = 20_000
 
+/**
+ * 收键盘活性哨兵的超时（#560 R2）。
+ *
+ * 安卓收键盘动画通常 200~300ms，取 500ms 留余量：到点闩还在，说明平台没报 0（或闩被误置），
+ * 强落 0 并重指尾行。只在页面刚叫过 `Taro.hideKeyboard()` 之后武装，不是常驻轮询。
+ */
+const KEYBOARD_SENTINEL_MS = 500
+
 /** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
 function touchClientY(event: unknown): number {
   const touch = (event as { touches?: Array<{ clientY?: number }> } | null)?.touches?.[0]
@@ -283,6 +300,44 @@ export default function Conversation() {
   const [panelOpen, setPanelOpen] = useState(false)
   /** 语音输入态：输入框换成「按住 说话」 */
   const [voiceMode, setVoiceMode] = useState(false)
+  /**
+   * 键盘占据的**设备 px**（0 = 收起），全页唯一的键盘高度真源（#560/#561）：
+   * 输入栏的下内边距、消息流还剩多高都从它派生；平台不再按 `adjustPosition` 推页面。
+   *
+   * **只有 `onKeyboardHeightChange` 那一处写它**，且写进去的是 `nextKeyboardInset` 压出来
+   * 的单调阶梯：安卓收键盘动画期间平台会连报若干递减中间值，逐帧跟着写就等于用自己的布局
+   * 去和系统动画拼速度（真机上的「先上提、再回落」）。切态 / 开面板那些路径一律只
+   * `Taro.hideKeyboard()`，高度由平台事件收到 0，本页不自己归零。
+   */
+  const [keyboardHeight, setKeyboardHeight] = useState(0)
+  /**
+   * 尾行锚点的交替位（#561）：`scrollIntoView` 的值不变时原生层不会重滚，几何一变
+   * （键盘升降、面板开合）就得换一个**同位**锚点再指一次，见 `tailAnchorId`。
+   */
+  const [tailAnchorFlip, setTailAnchorFlip] = useState(false)
+  /**
+   * 输入行**实测**高度（设备 px，0 = 还没量到）。
+   *
+   * 它已经不是布局来源了（#560 安卓真机的根因修掉之后）：输入框在两态之间**常驻**，语音态
+   * 只是把它 `opacity: 0` 藏起来，`bar` 的高度自始至终由这一个输入框决定，不需要再拿实测
+   * 高度去给「按住说话」顶 `minHeight`。现在它的用途只剩记账：`onLineChange` 拿它算
+   * 「这次长高了多少」，交给贴底判据（`growBottomAllowance`），所以仍要跟着事件更新。
+   *
+   * 来源两处：`onLineChange`（行数一变就报高度，打字时最及时）与几何量测（进页面 / 切态
+   * 后各量一次，兜住「一进页面就带多行草稿」这种没有行数变化事件的情况）。
+   */
+  const [inputRowPx, setInputRowPx] = useState(0)
+  /**
+   * 「把滚动偏移写回去」的复位指令（#561）。
+   *
+   * 原生层在几何突变时可能把滚动偏移整个丢掉（复现里就是掉成 0），而 `scrollTop` 属性只
+   * 认「值有变化」——所以带一个自增 `tick`，让同一位置也能再下发一次（`0.5px` 的交替在端上
+   * 看不出来，但足以让属性真的变一次）。只在**非贴底**时才用：贴底态直接重指尾行锚点更稳。
+   *
+   * 值**用过不撤**：撤掉等于让属性回到默认的 0，那正是本票要修的「偏移掉成 0」形态；而属性
+   * 值不变时不会重新应用，所以长期绑着也不会压住后续滚动（换身份时才清场，见 `:580`）。
+   */
+  const [scrollRestore, setScrollRestore] = useState<{ top: number; tick: number } | null>(null)
   /**
    * 正在引用的消息（#359 3c）：非 null 时输入栏上方显示引用栏，发出的消息带摘引。
    * 存整条 DTO 而不是只存 id：引用栏要显示摘引文案，而服务端的 `replyTo` 投射只挂在
@@ -367,6 +422,80 @@ export default function Conversation() {
   const visibleRef = useRef(true)
   /** 组件是否还活着：卸载后不再补刷新（Taro 的 didHide 不覆盖卸载这一路径） */
   const aliveRef = useRef(true)
+  /** 消息流视口高度（设备 px）：`onScroll` 的 detail 不带它，只能量一次 */
+  const scrollViewportRef = useRef(0)
+  /**
+   * 消息流此刻是不是贴着底部（#561）。几何一变（键盘升降、面板开合）就据此决定要不要
+   * 重指尾行：贴底就继续贴底，翻历史翻到一半就原地不动。
+   */
+  const stickBottomRef = useRef(true)
+  /**
+   * 最近一次滚动事件里的 `scrollTop`（#561）：几何变化前后拿它做「偏移有没有被原生层丢掉」
+   * 的比对依据，也是非贴底时写回去的原值。
+   */
+  const scrollTopRef = useRef(0)
+  /**
+   * 本页自己造成的视口缩量（设备 px）：消息流刚矮了多少，就允许底部差临时大多少。
+   *
+   * 多行输入能把输入栏顶高几十 px（远超 `BOTTOM_SLACK_PX`），而滚动事件里可能是「旧
+   * scrollTop + 新 scrollHeight」的中间态 —— 不给这段余量，一次多行切换就会把「贴底」
+   * 判成「翻历史」，而后面的重锚全被守卫挡掉（#560 的「多行输入后再切更明显」）。
+   *
+   * 生命周期只有「几何变化 → 回读判完」这一小段：`keepTailAnchored` 的回读回调判完 `fix`
+   * 就把它清零，`onScroll` 判到真贴底也清零。**不许只增不减** —— 余量长期留在高水位，用户
+   * 上翻不到那么多时仍会被判成贴底，随后的重锚会把他从历史里拽回底部（#561 验收第一条）。
+   */
+  const bottomGapAllowanceRef = useRef(0)
+  /**
+   * `inputRowPx` 的同步镜像（#560/#561）：`onLineChange` 里要立刻算出「这次长高了多少」，
+   * 等一轮渲染再读 state 就已经晚了（原生层的截断滚动事件可能先到）。
+   */
+  const inputRowPxRef = useRef(0)
+  /**
+   * `keyboardHeight` 的同步镜像与「正在收起」闩（#560）：键盘事件是常驻订阅，回调里读 state
+   * 只会拿到订阅那一刻的旧值，阶梯判定必须看上一帧真正落地的高度（见 `nextKeyboardInset`）。
+   */
+  const keyboardHeightRef = useRef(0)
+  const keyboardClosingRef = useRef(false)
+  /**
+   * 意图闩的起点高度与「收尾尾巴」记录（#560 R1/R3）：`closing` 是**页面要求收起**的意图，
+   * 不是从高度符号反推的 —— 安卓上切输入法 / 候选栏伸缩会让键盘「没关、只是变矮」，拿
+   * 「变矮」当「开始收起」就会把闩误置、之后所有变高都被丢弃，内边距停在小值、更高的那把
+   * 键盘把输入栏整条盖住。判据全在 `view.ts` 的 `nextKeyboardInset()` 里。
+   */
+  const keyboardClosingFromRef = useRef(0)
+  const keyboardClosedFromRef = useRef(0)
+  const keyboardClosedAtRef = useRef(0)
+  /** 收起途中连续报到 `>= closingFrom` 的帧数（#560：连两帧才认作「键盘真被开回来」） */
+  const keyboardAboveFromRef = useRef(0)
+  /**
+   * 「平台不报 0」的活性哨兵（#560 R2）：`hideKeyboard()` 之后平台若始终不报 `0`（或闩被误置），
+   * 内边距会永久停在抬高位置。到点**先无条件解闩**，再按 `resolveSentinel()` 的结论决定落哪个
+   * 高度 —— 这是**卡死兜底**，不是动画补偿：条件触发、`inset === 0` / 页面被盖住 / 卸载三处清理。
+   */
+  const keyboardSentinelRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 这一轮哨兵期内平台报过的最高高度（#560）：到点用它算「报过多少」，而不是拿「值有没有变」猜。
+   * 拿「与快照是否相等」判断在原理上无解 —— 「报过且等于快照」（切回同一把键盘，最常见）会被
+   * 判成「没报过」→ 强落 0 把输入栏埋进键盘；「报了中间值然后静默」（真该归零的兜底场景）会被
+   * 判成「报过」→ 永久停在中间值。
+   */
+  const keyboardSentinelMaxRef = useRef(0)
+  /** 阶梯里被丢弃的候选高度镜像（#560：终值只报一次时，哨兵兜底要优先落它，见 `pending`） */
+  const keyboardPendingRef = useRef(0)
+  /** 哨兵重新武装的次数（#560：这一拍下不了结论时最多再给一个周期，不无限重发 `hideKeyboard()`） */
+  const keyboardSentinelRearmsRef = useRef(0)
+  /**
+   * 输入框此刻是否聚焦（#560）：哨兵到点唯一可信的**意图**信号 —— 还在输入框里就说明键盘大概
+   * 率真开着，绝不猜 0；失焦才说明键盘该走。
+   */
+  const inputFocusedRef = useRef(false)
+  /**
+   * 重锚并发序号（#560 R5）：收键盘期间每接受一档高度都会 `keepTailAnchored()`，异步回读
+   * 可能乱序落地 —— 旧那道的 `restore` 分支会把过期 `top` 写回去（`scrollWithAnimation`
+   * 为假时是硬跳）。回调首行比对这个序号，过期的直接退出。
+   */
+  const anchorSeqRef = useRef(0)
   /**
    * 当前消息流的 id 快照来源（#186 P2-1）：silent 刷新发起时记下当时的 id 集合，
    * 落地时据此把「刷新期间才确认落地」的消息补回来。`load` 的 `useCallback` 依赖
@@ -480,6 +609,19 @@ export default function Conversation() {
     setLoadingEarlier(false)
     setEarlierFailed(false)
     setInputValue('')
+    // 与 `send()` 同一条理由（#560）：换身份也把输入框清空了，输入行高度真源必须一起回落，
+    // 否则下一个身份首个「切语音」还用着上一个身份草稿的多行高度
+    setInputRowPx(0)
+    inputRowPxRef.current = 0
+    /*
+     * 滚动状态也属于上一个身份（第五轮复审 N4）：`scrollRestore` 用过不撤，是本页唯一不再
+     * 自动回落的滚动状态 —— 不清的话，新身份第一次复位会沿用上个账号的偏移；`scrollTopRef`
+     * 是回读判据的基准，`bottomGapAllowanceRef` 是上个身份的容差余量，一并归位。
+     */
+    scrollTopRef.current = 0
+    stickBottomRef.current = true
+    bottomGapAllowanceRef.current = 0
+    setScrollRestore(null)
     setPending([])
     setPanelOpen(false)
     setVoiceMode(false)
@@ -795,6 +937,24 @@ export default function Conversation() {
   })
   useDidHide(() => {
     visibleRef.current = false
+    /**
+     * 页面被盖住，键盘也随之收起：真源跟着归零，回来时输入栏不会挂在原来的键盘高度上。
+     *
+     * 同步镜像和「正在收起」闩要一起清 —— 否则下一次事件的高度等于镜像里的旧值，阶梯会
+     * 判定「没变化」直接丢掉，输入栏就一直贴在那条看不见的键盘高度上。
+     */
+    keyboardClosingRef.current = false
+    keyboardClosingFromRef.current = 0
+    keyboardClosedFromRef.current = 0
+    keyboardClosedAtRef.current = 0
+    keyboardAboveFromRef.current = 0
+    keyboardHeightRef.current = 0
+    // 页面被盖住，输入框必然失焦；重新武装的预算也一起作废（R2 清理点之三）
+    inputFocusedRef.current = false
+    keyboardSentinelRearmsRef.current = 0
+    // 哨兵也收掉（R2 清理点之三）：页面都被盖住了，500ms 后再跑一次重锚没有意义
+    clearKeyboardSentinel()
+    setKeyboardHeight(0)
     // 页面被盖住：在线态已经不显示了，把轮询停掉（不再让定时器在后台空转每一跳）
     detailPollRef.current?.stop()
     /**
@@ -1329,6 +1489,18 @@ export default function Conversation() {
     const text = inputValue.trim()
     if (!text || !canSend) return
     setInputValue('')
+    /*
+      输入框清空回单行，「语音态沿用输入行高度」的真源必须跟着回落（#560）。
+      不回落的后果：输入 3 行（≈145.6rpx）→ 发送 → 点话筒 → `.conv__hold` 拿 145.6rpx 当
+      `minHeight` 把输入栏顶高 ≈39px、消息流矮一截 —— 又变回「切态时消息流跳一下」。
+      置 0 让下一次量测（`inputRowPx` 变 0 会触发量测 effect）回填清空后的真实高度；
+      量不到就退回 scss 的 68rpx，恰好等于单行输入框的真实高度。
+    */
+    setInputRowPx(0)
+    // 同步镜像一起清掉：留着上一次的多行高度，下一轮「这次长高多少」会从旧值起算而算成 0。
+    // 置 0 后由量测 effect 在下一帧用清空后的真实高度回填（单行 68rpx，就是 `.conv__hold` 的
+    // 默认高度），中间那一帧人来不及输入。
+    inputRowPxRef.current = 0
     // 引用只跟着这一条发出：发完立刻收起引用栏（下一条默认不引用，与微信一致）
     const reply = replyTarget
       ? { id: replyTarget.id, excerpt: localReplyExcerpt(replyTarget) }
@@ -2099,6 +2271,171 @@ export default function Conversation() {
   }
 
   /**
+   * 输入栏 / 消息流的几何要变了：贴底就换一个同位锚点重指尾行，翻历史就把位置钉住（#561）。
+   *
+   * 必须与造成几何变化的那次 `setState` 落在**同一批**里调用 —— 分两帧就是先跳顶再回底。
+   *
+   * 贴底与否只来自 `onScroll`，而「贴底」本身是程序化 `scrollIntoView` 完成的：那次滚动在
+   * 真机上会不会回吐 `bindscroll` 静态无法证伪（见 `animateScroll` 的注释）。所以换锚之后
+   * **直接**认定贴底 —— 我们刚亲手指到底，这是已知事实，不能交给一条可能永远不来的事件。
+   *
+   * 换完锚点再回读一次偏移：原生层在几何突变（视口变矮、内容变短）时可能把滚动偏移整个
+   * 丢掉，而复现里就是「偏移掉成 0」之后再也回不到消息底部。丢了就补 —— 贴底的再指一次
+   * 尾行，翻历史的把原值写回去。偏移没丢的机型上这段什么都不做，不存在副作用。
+   *
+   * 「丢没丢、怎么补」全部交给 `view.ts` 的 `planScrollFix()` 判定，这里只负责执行 ——
+   * 判据留在组件里就只能靠源码片段断言，取值反了也不会红；连「该写回哪个值」都在它的返回值
+   * 里，页面没有第二只手去写错。
+   */
+  const keepTailAnchored = useCallback(() => {
+    // 收键盘期间会连着叫好几次（每接受一档高度一次），只有最后一道的结论能落地（#560 R5）
+    const seq = ++anchorSeqRef.current
+    const prevTop = scrollTopRef.current
+    // 贴底标志也在调用时快照：回读是异步的，到回调里再读，中间可能已经被 `onScroll`
+    // 改过一次 —— 拿「调用时的 prevTop」配「回调时的 stick」是两次观测混用
+    const stick = stickBottomRef.current
+    if (stick) {
+      setTailAnchorFlip((prev) => !prev)
+      stickBottomRef.current = true
+    }
+    void Taro.nextTick(() => {
+      Taro.createSelectorQuery()
+        .select('.conv__scroll')
+        .scrollOffset()
+        .exec((res) => {
+          // 查询是异步的：回读结果落地时页面可能已经卸载（同文件别处的回调都有这道守卫）
+          if (!aliveRef.current) return
+          // 已经发起了更新的一道（#560 R5）：乱序落地时旧结论会把过期 top 写回去
+          if (seq !== anchorSeqRef.current) return
+          const offset = res?.[0] as { scrollTop?: number } | undefined
+          const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick })
+          /**
+           * 余量判完即废（#561）：它只护「几何变化前后那一两帧」的读数 —— 那一刻滚动事件里
+           * 可能是「旧 scrollTop + 新 scrollHeight」，底部差临时变大。回读判完，几何已经
+           * 落定，再留着就是把贴底判据**永久**抬高：用户上翻的距离不到余量那么多时仍被判成
+           * 贴底，接着开面板 / 起键盘 / 切语音就把他从历史里拽回底部。
+           */
+          bottomGapAllowanceRef.current = 0
+          if (fix.kind === 'anchor') {
+            setTailAnchorFlip((prev) => !prev)
+            return
+          }
+          if (fix.kind === 'restore') {
+            setScrollRestore((prev) => ({ top: fix.top, tick: (prev?.tick ?? 0) + 1 }))
+            // 复位指令**用后不撤**（#561）：撤掉等于让属性回到默认的 0，那正是本票要修的
+            // 「偏移掉成 0」形态。同一个位置靠 `tick % 2` 的 0.5px 交替再下发一次
+            // （见 `restoreScrollTop` 的注释）。
+          }
+        })
+    })
+  }, [])
+
+  /** 收掉活性哨兵（#560 R2）：`inset === 0` / 页面被盖住 / 卸载 / 重新武装四处调用 */
+  const clearKeyboardSentinel = useCallback(() => {
+    const timer = keyboardSentinelRef.current
+    if (timer !== null) {
+      clearTimeout(timer)
+      keyboardSentinelRef.current = null
+    }
+    // 账本跟着哨兵一起清：留着就是下一轮哨兵的假阳性（#560 B1）
+    keyboardSentinelMaxRef.current = 0
+    keyboardPendingRef.current = 0
+  }, [])
+
+  /**
+   * 武装活性哨兵（#560 R2/B1）：页面刚叫过 `Taro.hideKeyboard()`，等平台把高度收到 0。
+   *
+   * 到点**先无条件解闩**（闩不能烂在定时器里），再按 `resolveSentinel()` 的结论决定落哪个高度：
+   * - 用户已离开输入框（`inputFocusedRef` 为假）→ 键盘该走，归零并重指尾行；
+   * - 还在输入框里 → 键盘大概率真开着，**绝不猜 0**（`adjustPosition={false}` 下没有别的补偿，
+   *   猜 0 就是把输入栏埋进键盘），落「这一轮报过的最高真实值」—— 没有报过就一个周期后再判。
+   *
+   * 判据只用事实（报过的最大值）与意图（焦点），不猜方向：拿「高度与武装时的快照是否相等」判断
+   * 在原理上无解 —— 「报过且等于快照」（切回同一把键盘，最常见）会被判成「没报过」而强落 0；
+   * 「报了中间值然后静默」（真该归零的兜底场景）会被判成「报过」而永久停在中间值。
+   *
+   * 这是**条件触发的卡死兜底**，不是给收键盘动画做补偿（不参与任何动画时序）。
+   */
+  const armKeyboardSentinel = useCallback(() => {
+    clearKeyboardSentinel()
+    keyboardSentinelRef.current = setTimeout(() => {
+      keyboardSentinelRef.current = null
+      if (!aliveRef.current) return
+      const plan = resolveSentinel({
+        closing: keyboardClosingRef.current,
+        seen: keyboardSentinelMaxRef.current,
+        pending: keyboardPendingRef.current,
+        height: keyboardHeightRef.current,
+        focused: inputFocusedRef.current,
+        rearms: keyboardSentinelRearmsRef.current,
+      })
+      if (plan.releaseLatch) {
+        keyboardClosingRef.current = false
+        keyboardClosingFromRef.current = 0
+        keyboardAboveFromRef.current = 0
+      }
+      // 闩本来就不在：这一拍什么都不用下结论（`clearKeyboardSentinel` 已经清过账本）
+      if (!plan.releaseLatch) return
+      if (plan.inset !== keyboardHeightRef.current) {
+        keyboardHeightRef.current = plan.inset
+        setKeyboardHeight(plan.inset)
+      }
+      keepTailAnchored()
+      keyboardSentinelMaxRef.current = 0
+      keyboardPendingRef.current = 0
+      if (plan.rearms > keyboardSentinelRearmsRef.current) {
+        /**
+         * 这一拍下不了结论（平台一个事件都没给、可用户还在输入框里）：重发一次收键盘、再给一个
+         * 周期，不在第一个 500ms 就拍死。**不复用 `collapseKeyboard()`** —— 它会重置重新武装的
+         * 预算，就成了无限循环。
+         */
+        keyboardSentinelRearmsRef.current = plan.rearms
+        void Taro.hideKeyboard()
+        const from = keyboardHeightRef.current
+        if (from > 0) {
+          keyboardClosingRef.current = true
+          keyboardClosingFromRef.current = Math.max(from, keyboardClosingFromRef.current)
+          armKeyboardSentinel()
+        }
+        return
+      }
+      keyboardSentinelRearmsRef.current = 0
+    }, KEYBOARD_SENTINEL_MS)
+  }, [clearKeyboardSentinel, keepTailAnchored])
+
+  /**
+   * 本页主动收键盘（#560）：切语音态、开面板都走这一处。
+   *
+   * 只叫平台收、**不自己归零高度** —— 自己归零就是拿本页布局去和系统收键盘动画抢时序
+   * （真机上的「先上提、再回落」）。同时置上**意图闩**并武装活性哨兵：闩只由页面写入，
+   * 不从「高度变矮」反推（安卓切输入法/候选栏伸缩会让键盘没关、只是变矮）；哨兵兜底
+   * 「平台始终不报 0」（R2）。两个调用点共用一处武装，改一处不会漏另一处。
+   */
+  const collapseKeyboard = useCallback(() => {
+    void Taro.hideKeyboard()
+    /**
+     * 页面主动收起 = 用户离开输入框：哨兵的**意图信号**跟着置假（重新点输入框时 `onFocus` 会置回真）。
+     *
+     * 不置的话这条兜底就是空的 —— 切语音态会把 `Textarea` 卸载，而 React 卸载**不合成 blur**，
+     * 微信的 `hideKeyboard()` 本身也不 blur，`togglePanel` 更是明确「不 blur 输入框」。于是
+     * `inputFocusedRef` 一直停在「真」，哨兵到点按「用户还在编辑、绝不猜 0」把中间值（例如收起
+     * 动画里的 300）当终值落地 —— 输入栏悬在空中，又因为 `closedAt` 为 0 不会被尾巴纠正。
+     */
+    inputFocusedRef.current = false
+    // 页面新发起的一次收起：重新给满重新武装的预算（哨兵自己重发时不走这里，见上）
+    keyboardSentinelRearmsRef.current = 0
+    const from = keyboardHeightRef.current
+    // 键盘本来就没开：没有要收的，也不必武装哨兵（否则 500ms 后会白做一次重锚）
+    if (!(from > 0)) return
+    keyboardClosingRef.current = true
+    // 连着调两次（切态又开面板）时，第二次读到的 `from` 只是收起动画里的**中间高度**，
+    // 直接覆盖会把起点下修 → 动画尾部的回抬就能越过它、提前解闩。闩已置时保大值。
+    keyboardClosingFromRef.current = Math.max(from, keyboardClosingFromRef.current)
+    keyboardAboveFromRef.current = 0
+    armKeyboardSentinel()
+  }, [armKeyboardSentinel])
+
+  /**
    * 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致）。
    *
    * 隐私授权放在这里而不是 `startVoice`：这是普通点击，可以安全 await；进入语音态时
@@ -2110,6 +2447,15 @@ export default function Conversation() {
       setVoiceMode(false)
       return
     }
+    /**
+     * 进语音态前**同步**收键盘（#560）：点击当拍就发，不等隐私授权那趟 await。
+     *
+     * 收键盘走 `collapseKeyboard()`：只叫平台收、不自己把高度真源归零 —— 高度只由
+     * `onKeyboardHeightChange` 那一处改写（见 `./view` 的 `nextKeyboardInset`）。自己归零
+     * 等于拿本页布局去和系统收键盘的动画抢时序：安卓真机复验里，切态当拍撤掉内边距、系统的
+     * 位移回落还在动画途中，输入栏就是「先上提、再回落」。交给平台事件，高度一路单调走到 0。
+     */
+    collapseKeyboard()
     if (privacyPendingRef.current) return
     privacyPendingRef.current = true
     const seq = ++voiceGateSeqRef.current
@@ -2132,6 +2478,14 @@ export default function Conversation() {
       })
       return
     }
+    /**
+     * 切态这一批（#560）：收面板 + 切语音态 + 重指尾行，**同一批**落地。
+     *
+     * 键盘高度不在这批里 —— 它由平台事件单调收到 0，和本批没有时序耦合。输入框两态常驻
+     * （语音态只 `opacity: 0`，不卸载重挂），这一批根本不改变输入栏高度，用户看到的是
+     * 「按住 说话」原地换上去；键盘按自己的动画滑走。
+     */
+    keepTailAnchored()
     setPanelOpen(false)
     setVoiceMode(true)
   }
@@ -2284,12 +2638,28 @@ export default function Conversation() {
       abortRecording()
       setVoiceMode(false)
     }
+    /**
+     * 面板是输入栏里的**流内**块（#561）：一展开，消息流就矮一截；键盘还开着时更狠。
+     * 「先收键盘」与「再长面板」若分两帧落地，消息流会连着变矮两次，原生层把越界的滚动
+     * 偏移截断/归零后没有任何指令把它推回底部 —— 看起来就是「跳回顶部 + 错位抽搐」。
+     * 所以收键盘、重指尾行、开面板压进同一批：面板一次性出现在最终位置。
+     *
+     * 键盘高度**同样不在这批里归零**：它是平台事件的产物（`nextKeyboardInset`），自己归零
+     * 就是拿本页布局去和系统收键盘动画抢时序 —— #560 电的正是这一下。面板长高的那一下仍是
+     * 同批一次到位。收键盘与意图闩 / 活性哨兵一起走 `collapseKeyboard()`。
+     */
+    collapseKeyboard()
+    keepTailAnchored()
     setPanelOpen(!panelOpen)
   }
 
-  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541），只改 `panelOpen` —— 不碰
-   *  已输入文字、不 blur 输入框、不动滚动位置。 */
-  const dismissPanel = () => setPanelOpen(false)
+  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541）—— 不碰已输入文字、不 blur
+   *  输入框；消息流高度会随面板收起变回来，所以位置仍交给同一个守卫决定（贴底继续贴底，
+   *  翻历史原地不动），与「再点一次 +」走 `togglePanel` 那条路径一致。 */
+  const dismissPanel = () => {
+    keepTailAnchored()
+    setPanelOpen(false)
+  }
 
   const openListing = () => {
     if (!conversation) return
@@ -2618,14 +2988,30 @@ export default function Conversation() {
   const tailId = tail ? `e-${tail.keyId}` : ''
 
   /**
+   * 尾行锚点（#561）：`scrollIntoView` 的值不变时原生层不会重滚（先例
+   * `pkg-browse/pages/user/index.tsx:184-195` 的「回到顶部」两颗同位锚点），所以「贴底」
+   * 不能只靠一个恒定 id —— 几何一变（键盘升降、面板开合）就得换一个**同位**锚点再指一次，
+   * 否则偏移被截断后没人把它推回底部。两个锚点都贴在最末一条消息之后，位置等价。
+   *
+   * 带上尾行的 `keyId`：内容追加时值也必然变，新消息照旧跟随到底（与改前同一条路径）。
+   */
+  const tailAnchorId = tail ? `conv-tail-${tail.keyId}-${tailAnchorFlip ? 'b' : 'a'}` : ''
+
+  /**
    * 新消息落地就放弃「跳去看摘引」的目标，回到跟随最新。
    *
    * 不做成 `useEffect(() => setJumpTo(''), [tailId])`：那样要先渲染一帧旧目标再纠正，
    * 且 biome 的 `useExhaustiveDependencies` 会把 `tailId` 判成多余依赖（`setJumpTo` 是
    * 稳定引用）。这里把「跳转目标」与「设它时的 tailId」绑成一个值，渲染期直接比对 ——
    * tail 一变，目标自动失效，无需任何副作用。
+   *
+   * ⚠️ 已知限制（只记录，本票不改）：停在「跳去看摘引」期间，这里的值恒为 `jumpTo.id`，
+   * 于是 `keepTailAnchored()` 翻的尾行锚点落不到 `scrollIntoView` 上 —— 那几秒里的重锚是
+   * 空操作。它的代价只在「点摘引后、新消息到达前」这个窗口内，且 `#540` 要求那时锁住
+   * 被引用的那条（不能被拽到底），两者本来就是互斥的；改法要连 `#540` 的判据一起动，
+   * 不在本票范围。
    */
-  const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailId
+  const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailAnchorId
 
   /**
    * 滚动动画只留给「点摘引跳过去」这一条路径（#540）。
@@ -2642,6 +3028,160 @@ export default function Conversation() {
    * 行为，一旦不触发就会静默退化成「永远瞬时」，比写明取舍更难排查。
    */
   const animateScroll = jumpTo !== null && jumpTo.tail === tailId
+
+  /**
+   * 非贴底时的偏移复位指令（#561）：只有原生层把滚动偏移丢掉过才会出现这个值。
+   *
+   * **用后不撤**：撤掉就等于让属性回到默认的 0，那正是本票要修的「偏移掉成 0」形态。
+   * 代价是属性长期绑在最后一次复位的位置上，所以靠 `tick` 的奇偶做 `0.5px` 交替 ——
+   * `scrollTop` 只认「值有变化」，交替保证**同一个位置也能再下发一次**（半像素端上
+   * 看不出来）；而属性值不变时不会重新应用，也就不存在「一直压着滚动位置」的副作用。
+   * 已知取舍见 PR 的「已知取舍与风险」，端上要验一句（翻历史后手动滚回底部不被拉回）。
+   */
+  const restoreScrollTop = scrollRestore
+    ? scrollRestore.top + (scrollRestore.tick % 2 === 0 ? 0 : 0.5)
+    : undefined
+
+  /**
+   * 记下一处输入行实测高度（#560 两态同盒模型的第二个真源）。
+   *
+   * `state` 供渲染（语音态 `minHeight`），`ref` 供**同步**读上一次的实测值 —— 判断「这次
+   * 长高了多少」不能等一轮渲染回来。
+   */
+  const writeInputRowPx = useCallback((next: number) => {
+    if (!(next > 0)) return
+    inputRowPxRef.current = next
+    setInputRowPx((prev) => (Math.abs(prev - next) < 0.5 ? prev : next))
+  }, [])
+
+  /**
+   * 键盘高度订阅（#560/#561）：`onKeyboardHeightChange` 是设备级的，**只有这里能改写高度
+   * 真源**。切态 / 开面板那些路径一律只 `Taro.hideKeyboard()`，高度交给平台事件收回 0。
+   *
+   * 平台报来的高度先过 `nextKeyboardInset` 压成单调阶梯：安卓收键盘动画期间会连报若干递减
+   * 中间值，逐帧写进布局就成了用自己的布局动作去和系统动画拼速度（「先上提、再回落」）。
+   *
+   * 高度**真的变了**才重指尾行：键盘一升消息流就矮一截，原生层会把越界的滚动偏移截掉，
+   * 不重新下一道「滚到底」的指令就回不来；同一高度的重复上报没有布局变化，不必再指一次。
+   */
+  useEffect(() => {
+    // 基础库 < 2.7.0 没有这个 API（`undefined`）：直接调会在挂载时抛 TypeError，整页白屏
+    if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined
+    const onHeightChange = (res: { height: number }) => {
+      const step = nextKeyboardInset({
+        prev: keyboardHeightRef.current,
+        next: res.height,
+        closing: keyboardClosingRef.current,
+        closingFrom: keyboardClosingFromRef.current,
+        closedFrom: keyboardClosedFromRef.current,
+        closedAt: keyboardClosedAtRef.current,
+        aboveFrom: keyboardAboveFromRef.current,
+        pending: keyboardPendingRef.current,
+        now: Date.now(),
+      })
+      /**
+       * 阶梯状态**在纯函数里算完**，这里只回写与落地：页面里不保留第二条比较链，把「要不要
+       * 落地」也交给返回值 `changed`，就不存在「换个比较对象把阶梯整个废掉」的改法。
+       */
+      keyboardClosingRef.current = step.closing
+      keyboardClosingFromRef.current = step.closingFrom
+      keyboardClosedFromRef.current = step.closedFrom
+      keyboardClosedAtRef.current = step.closedAt
+      keyboardAboveFromRef.current = step.aboveFrom
+      /**
+       * 哨兵账本（#560 B1）：`seen` 记「这一轮哨兵期内平台报过的最高值」，`pending` 接住被阶梯
+       * 丢弃但值得留的候选值 —— 到点判「平台报过没有」只能看这个。**必须写在 `changed` 早退
+       * 之前**：被丢弃的那一帧恰恰是最需要记账的一帧（终值只报一次的形态全是丢弃帧）。
+       */
+      keyboardSentinelMaxRef.current = Math.max(keyboardSentinelMaxRef.current, step.inset)
+      keyboardPendingRef.current = step.pending
+      // 收到 0：平台把键盘收干净了，活性哨兵不用再兜底（R2 的三个清理点之一）
+      if (step.inset === 0) clearKeyboardSentinel()
+      if (!step.changed) return
+      keyboardHeightRef.current = step.inset
+      setKeyboardHeight(step.inset)
+      // 只要真落地了新高度就重指尾行 —— 开键盘时视口变矮同样要重锚，不是只在收到 0 时
+      keepTailAnchored()
+    }
+    Taro.onKeyboardHeightChange(onHeightChange)
+    return () => {
+      Taro.offKeyboardHeightChange(onHeightChange)
+      // 卸载：哨兵的定时器不能在页面之外再跑一次 setState（R2 清理点之二）
+      clearKeyboardSentinel()
+    }
+  }, [clearKeyboardSentinel, keepTailAnchored])
+
+  /**
+   * 量一次几何：消息流视口高度 + 输入行高度（设备 px，0 = 量不到）。
+   *
+   * `onScroll` 的 detail 只有 `scrollTop` / `scrollHeight`，判断「离底部还差多少」必须知道
+   * 视口多高 —— 自己量，不猜。输入行高度则是 #560 要的「两态同盒模型」：语音态拿它当
+   * `minHeight`，切态时消息流不能因为输入框比「按住说话」高而变矮。
+   *
+   * 每次几何变化后重量一次：键盘升降、面板开合、语音/键盘切换、输入框长高、录音面板出现
+   * 都会改变可视高度。量不到就沿用上一次的值（`isNearBottom` 对视口未知按贴底处理，见其注释）。
+   *
+   * 顺带记下「视口自己变矮了多少」（`bottomGapAllowanceRef`）：滚动事件里可能是「旧
+   * scrollTop + 新 scrollHeight」的中间态，不给这段余量，一次多行输入就会把贴底误判成
+   * 「用户在翻历史」，之后的重锚全被守卫挡掉（#560 的「多行输入后再切更明显」）。
+   * 这里只是**兜底**：抢在滚动事件之前把缩量算出来的地方在 `onLineChange`（见其注释）。
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 五项都是刻意的重测信号（几何变了就重量一次），体内只写 ref 与按实测值 setState，不是渲染期读到的值
+  useEffect(() => {
+    let measuring = true
+    void Taro.nextTick(() => {
+      Taro.createSelectorQuery()
+        .select('.conv__scroll')
+        .boundingClientRect()
+        .select('.conv__input')
+        .boundingClientRect()
+        .exec((res) => {
+          if (!measuring) return
+          const viewport = res?.[0] as { height?: number } | undefined
+          if (typeof viewport?.height === 'number' && viewport.height > 0) {
+            // 只认「缩了多少」且**取大不覆盖**：视口变高不需要放宽；量测是事后的一帧，布局
+            // 没落定时可能报 0，直接覆盖会把 `onLineChange` 刚记的增量清零（判据见
+            // `mergeViewportShrink` 的注释与表驱动单测）
+            bottomGapAllowanceRef.current = mergeViewportShrink({
+              allowance: bottomGapAllowanceRef.current,
+              prevViewport: scrollViewportRef.current,
+              nextViewport: viewport.height,
+            })
+            scrollViewportRef.current = viewport.height
+          }
+          // 输入框两态常驻，语音态也量得到；量不到（首帧、老基础库）就沿用旧值，不归零
+          const inputRow = res?.[1] as { height?: number } | undefined
+          const inputHeight = inputRow?.height
+          if (typeof inputHeight === 'number' && inputHeight > 0) writeInputRowPx(inputHeight)
+        })
+    })
+    return () => {
+      measuring = false
+    }
+  }, [keyboardHeight, panelOpen, voiceMode, inputRowPx, recording])
+
+  /**
+   * 记住用户是不是贴着底部。只写 ref：滚动事件很密，翻历史不该引起重渲染
+   * （先例 `pkg-browse/pages/user/index.tsx:172-182` 的 `onScroll`）。
+   *
+   * `scrollTop` 另外存一份（#561）：几何变化前后拿它判断原生层有没有把偏移丢掉，非贴底时
+   * 也靠它把位置写回去。
+   */
+  const onScroll = useCallback((event: { detail: ScrollViewProps.onScrollDetail }) => {
+    const { scrollTop, scrollHeight } = event.detail
+    scrollTopRef.current = scrollTop
+    const nearBottom = isNearBottom(
+      {
+        scrollTop,
+        scrollHeight,
+        viewportHeight: scrollViewportRef.current,
+      },
+      // 本页刚造成的视口缩量算进容差；真到底了余量就该归零，免得长期放宽
+      Math.max(BOTTOM_SLACK_PX, bottomGapAllowanceRef.current),
+    )
+    if (nearBottom) bottomGapAllowanceRef.current = 0
+    stickBottomRef.current = stickAfterScroll(nearBottom)
+  }, [])
 
   /**
    * DOM 那一次**只给预览（h5）用**：预览桩把 scrollIntoView 透传成普通属性、
@@ -3083,12 +3623,17 @@ export default function Conversation() {
         />
       ) : null}
 
-      {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条 */}
+      {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条。
+          `scrollTop` 只在原生层丢过偏移（非贴底复位）之后才有值，且**用过不撤** ——
+          靠 `tick % 2` 的 0.5px 交替保证同一位置也能再下发，属性值不变则不会重新应用，
+          所以它长期在场也不会盖住 `scrollIntoView` 的后续定位（两者并存的优先级只能端上验） */}
       <ScrollView
         className="conv__scroll"
         scrollY
+        scrollTop={restoreScrollTop}
         scrollIntoView={scrollTarget}
         scrollWithAnimation={animateScroll}
+        onScroll={onScroll}
       >
         <View className="conv__list">
           {/* 更早一页：文本与媒体两条流各有游标，任一还有更早就给入口（#67 N3） */}
@@ -3362,13 +3907,30 @@ export default function Conversation() {
             </>
           )}
         </View>
+        {/* 尾行锚点（#561）：贴在整条流的**最末**（不在 `.conv__list` 里，免得吃它的 gap /
+            下内边距），零尺寸，滚到它就是滚到底；两个锚点靠 `tailAnchorFlip` 交替指 */}
+        {tailAnchorId ? <View id={tailAnchorId} /> : null}
       </ScrollView>
 
       {/*
         输入栏（稿子 .composer）：语音/键盘切换 + 自动长高输入框 + 「+」+ 发送。
         空内容时「发送」置灰（稿子 .send.is-off）。
+
+        键盘高度是**运行期**量到的设备 px，只能内联给：内联样式不过 pxtransform
+        （先例 `components/back-top/index.tsx:26-36` 的「请直接传 rpx 字符串」），
+        所以键盘占位直接写 px、本栏自己的 16pt 内边距按设计稿写 rpx。键盘收起时既不留
+        任何内联值，`.conv__bar` 的 `env(safe-area-inset-bottom)` 照旧生效。
+
+        这个值只会**一路变小**（`nextKeyboardInset` 的单调阶梯）：收键盘动画期间平台连报的
+        中间值被压成一条向下的序列，输入栏不会在中途被顶回去一下（#560 安卓真机的「先上提、
+        再回落」）。
       */}
-      <View className="conv__bar">
+      <View
+        className="conv__bar"
+        style={
+          keyboardHeight > 0 ? { paddingBottom: `calc(${keyboardHeight}px + 16rpx)` } : undefined
+        }
+      >
         {/* 录音反馈面板（#535）：计时与波形在子组件内部，消息流不随秒数重渲染 */}
         {recording ? <VoiceRecordPanel cancelArmed={cancelArmed} /> : null}
         {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
@@ -3398,36 +3960,108 @@ export default function Conversation() {
             />
           </View>
 
-          {voiceMode ? (
-            /*
-              按住说话：`onTouchStart` 起录、`onTouchEnd` 松开就发、`onTouchCancel`
-              手指滑出即放弃。微信的 `RecorderManager` 只有「停」没有「撤销」，
-              取消只能靠不把这段音频交给上传。
-            */
-            <View
-              className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
-              onTouchStart={startVoice}
-              onTouchMove={moveVoice}
-              onTouchEnd={endVoice}
-              onTouchCancel={() => finishVoice(true)}
-            >
-              <Text className="conv__hold-tx">
-                {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
-              </Text>
-            </View>
-          ) : (
+          {/*
+            输入框**常驻不卸载**（#560 安卓真机的根因）：切语音态时把它卸载再挂回来，
+            新挂载的 `<Textarea autoHeight>` 在拿到真实宽度之前会按最窄宽排版、把占位文字
+            折成三行，`onLineChange` 报出 85/100 的高度，下一拍才塌回 30/48 —— 输入栏先上提
+            52px 再回落，就是 Owner 说的「底部空缺」。
+
+            保持挂载就没有这段瞬态：两态共用同一块输入行，`bar` 的高度自始至终由这一个
+            输入框决定（语音态也如此，只是把它藏起来）。所以语音态不再需要拿
+            `inputRowPx` 去给「按住说话」顶一个 `minHeight` —— 那条桥本身就是对
+            「输入行会消失」的补偿。
+          */}
+          <View className="conv__rowwrap">
+            {voiceMode ? (
+              /*
+                按住说话：`onTouchStart` 起录、`onTouchEnd` 松开就发、`onTouchCancel`
+                手指滑出即放弃。微信的 `RecorderManager` 只有「停」没有「撤销」，
+                取消只能靠不把这段音频交给上传。
+
+                绝对定位盖满整行（`conv__rowwrap` 是它的定位父级）：高度跟着输入行走，
+                多行草稿切到语音态时手势区也是同样的高度。
+              */
+              <View
+                className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
+                onTouchStart={startVoice}
+                onTouchMove={moveVoice}
+                onTouchEnd={endVoice}
+                onTouchCancel={() => finishVoice(true)}
+              >
+                <Text className="conv__hold-tx">
+                  {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
+                </Text>
+              </View>
+            ) : null}
             <Textarea
               className="conv__input"
+              /*
+                语音态只藏不卸载：`opacity: 0` 让它不参与视觉，`pointerEvents: 'none'`
+                把触摸让给上面那层 `conv__hold`。
+              */
+              style={voiceMode ? { opacity: 0, pointerEvents: 'none' } : undefined}
               value={inputValue}
               placeholder="发消息…"
               placeholderClass="conv__input-ph"
               autoHeight
               maxlength={2000}
               disableDefaultPadding
-              onFocus={() => setPanelOpen(false)}
+              /*
+                `adjustPosition={false}`：键盘高度已经由本页自己补偿（见 `.conv__bar` 的
+                内联下内边距，真源是 `keyboardHeight`）。再让平台按默认行为推一次页面就是
+                两套补偿叠加 —— 切语音态时就是「先上提、再回落」。`cursorSpacing={0}`
+                同理：光标与键盘的距离由本页的布局定，平台不要再替我们滚动。
+              */
+              adjustPosition={false}
+              cursorSpacing={0}
+              /*
+                `onLineChange` 直接给设备 px 高度，比在渲染期猜行数准 —— `event.detail.height`
+                就是这个输入行的实测高度。它已经不用来给语音态顶 `minHeight` 了（输入框常驻，
+                高度自己就在），但仍然要记：下面第一句把它折算成「本页刚让出多少消息流高度」。
+
+                **当场**把缩量交给贴底判据：输入框一变高，原生层会截断越界偏移并立刻抛
+                `bindscroll`，而量测 effect 还要等下一帧的 `nextTick`；等它回来，这次滚动
+                早被判成「用户在翻历史」，之后切态 / 开面板的重锚全被守卫挡掉，最新一条就
+                压在视口外几十 px 回不来（#561 的复发路径）。
+                记账口径（累加 / 边界 / `ref` 为 0 表示还没量到或刚清空）全在
+                `growBottomAllowance` 里 —— 这里只管把值交过去。
+              */
+              onLineChange={(event) => {
+                const { height } = event.detail
+                if (!(height > 0)) return
+                bottomGapAllowanceRef.current = growBottomAllowance({
+                  allowance: bottomGapAllowanceRef.current,
+                  prevInputPx: inputRowPxRef.current,
+                  nextInputPx: height,
+                })
+                writeInputRowPx(height)
+              }}
+              onFocus={() => {
+                setPanelOpen(false)
+                /**
+                 * 用户点输入框 = 明确要键盘（#560）：收尾尾巴窗口、意图闩、哨兵账本立刻作废。
+                 *
+                 * 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」（切输入法、候选栏收起）
+                 * 会被当成动画残值吞掉，输入栏停在上一次那把键盘的高度、被更矮的新键盘盖住。
+                 *
+                 * `inputFocusedRef` 是活性哨兵唯一可信的**意图**信号：还在输入框里就说明键盘
+                 * 大概率真开着，到点绝不猜 0（见 `armKeyboardSentinel`）。
+                 */
+                inputFocusedRef.current = true
+                keyboardClosedAtRef.current = 0
+                keyboardClosingRef.current = false
+                keyboardClosingFromRef.current = 0
+                keyboardAboveFromRef.current = 0
+                keyboardSentinelMaxRef.current = 0
+                keyboardPendingRef.current = 0
+              }}
+              onBlur={() => {
+                // 失焦 = 用户离开输入框 → 键盘该走了，哨兵到点可以放心归零（#560 B1）
+                inputFocusedRef.current = false
+              }}
               onInput={(event) => setInputValue(event.detail.value)}
             />
-          )}
+          </View>
 
           <View className={`conv__plus${panelOpen ? ' is-open' : ''}`} onClick={togglePanel}>
             <Image className="conv__plus-ic" src={ICONS.plusBrand} mode="aspectFit" />

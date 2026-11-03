@@ -973,16 +973,40 @@
   color: var(--fg);
 }
 
+/*
+ * 输入行容器（#560）：让「输入框」与「按住说话」共用同一个定位父级。
+ *
+ * 输入框在两态之间**常驻**（语音态只 `opacity: 0`，见 index.tsx），所以这一层的高度就是
+ * 输入框的自然高度 —— 单行 68、多行跟着长。卸载重挂 `<Textarea autoHeight>` 会产生
+ * 「按最窄宽折成三行、报 100 再塌回 48」的瞬态，那段瞬态正是 Owner 说的输入栏抽搐。
+ *
+ * `display: flex` 是为了让 `.conv__input` 的 `flex: 1` 继续生效（宽度仍由这一行分配），
+ * `position: relative` 是给「按住说话」的绝对定位当参照。
+ */
+.conv__rowwrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
 /* placeholder 走稿子的次级灰（微信默认灰更深） */
 .conv__input-ph {
   color: var(--muted-2);
 }
 
-/* 语音模式：输入框换成「按住 说话」（同一高度与圆角，切换时不跳版） */
+/*
+ * 语音模式：输入框还在（藏着），「按住 说话」绝对定位盖满整行。
+ *
+ * 不再写死 `height: 68px`：高度跟着输入行走（多行草稿切到语音态时手势区同样高），
+ * 也不再占文档流 —— 输入栏的高度从一开始就由输入框决定，两个状态之间没有任何高度差。
+ */
 .conv__hold {
-  flex: 1;
-  min-width: 0;
-  height: 68px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
   border-radius: 34px;
   background: var(--ice);
   display: flex;
