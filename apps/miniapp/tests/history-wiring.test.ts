@@ -138,4 +138,21 @@ describe('历史浏览：接线', () => {
     expect(skip).toContain('const refreshRun = refreshPending.current')
     expect(skip).toContain('if (!refreshRun) void Taro.stopPullDownRefresh()')
   })
+
+  test('缩略图：有真封面用真图，无封面才回落分类色块（三档同一口径）', async () => {
+    const code = await source()
+    const cell = sliceFrom(code, 'const renderCell = (item: RecordCell', 'hist__price-cur')
+    // 三列格：`??` 的右边才是色块，左边必须是真封面
+    expect(cell).toContain('src={item.coverUrl ?? blockUrlOf(item.category)}')
+    // 有真图才加 `is-photo`（品类小字的胶囊底只在真图上垫，色块形态不变）
+    expect(cell).toContain("item.coverUrl === null ? '' : ' is-photo'")
+
+    // 留言行（评价行没有分类 → 色块退 OTHER）
+    const row = sliceFrom(code, 'className="hist__rows"', 'hist__rthumb-tag')
+    expect(row).toContain("src={item.coverUrl ?? blockUrlOf(item.category ?? 'OTHER')}")
+    expect(row).toContain("item.coverUrl === null ? '' : ' is-photo'")
+
+    // 不许再出现「无条件用色块」的写法（这正是本票修掉的 bug）
+    expect(code).not.toContain('src={blockUrlOf(')
+  })
 })

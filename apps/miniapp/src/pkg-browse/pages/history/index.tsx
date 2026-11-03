@@ -750,11 +750,26 @@ export default function History() {
 
   if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
-  /** 三列格（全部浏览 / 我收藏的共用）：方形色块 + 品类小字 + 失效遮罩 + 格下价格 */
+  /**
+   * 三列格（全部浏览 / 我收藏的共用）：方图 + 品类小字 + 失效遮罩 + 格下价格。
+   * 缩略图优先用商品真实封面（`item.coverUrl`），无图商品退回分类色块 ——
+   * 与 `features/listing/adapt.ts:124` 同口径（不留空串，否则 `<Image>` 是裂图）。
+   * 有真图时加 `is-photo`：小字改胶囊底压一层暗色，浅色商品图上才读得清（色块形态不变）。
+   */
   const renderCell = (item: RecordCell, onOpen: (cell: RecordCell) => void) => (
     <View key={item.id} className="hist__cell">
-      <View className={`hist__thumb${item.gone ? ' is-gone' : ''}`} onClick={() => onOpen(item)}>
-        <Image className="hist__thumb-img" src={blockUrlOf(item.category)} mode="aspectFill" />
+      <View
+        className={`hist__thumb${item.coverUrl === null ? '' : ' is-photo'}${
+          item.gone ? ' is-gone' : ''
+        }`}
+        onClick={() => onOpen(item)}
+      >
+        <Image
+          className="hist__thumb-img"
+          src={item.coverUrl ?? blockUrlOf(item.category)}
+          mode="aspectFill"
+          lazyLoad
+        />
         <Text className="hist__ttag">{shortLabelOf(item.category)}</Text>
         {item.gone ? <Text className="hist__tgone">{item.gone}</Text> : null}
       </View>
@@ -913,7 +928,8 @@ export default function History() {
             {tab === 'msgs' ? (
               /* 我留言的：整宽行 —— 缩略图 + 标题 + 类型胶囊 + 我那句话（2 行）+ 时间。
                  刻意**不显示价格**（稿决策④：这一档找的是「我当时说了什么」）。
-                 评价行没有品类（交易 DTO 内嵌的商品摘要不带分类）→ 不画品类小字、色块退 OTHER。 */
+                 缩略图同上：有封面用真图，无图退色块（评价行没有品类 → 退 OTHER、
+                 不画品类小字）。 */
               <View className="hist__rows">
                 {msgs.map((item) => (
                   <View
@@ -921,11 +937,12 @@ export default function History() {
                     className="hist__row"
                     onClick={() => (realMsgs === null ? openDemoRecord() : openRealMsg(item))}
                   >
-                    <View className="hist__rthumb">
+                    <View className={`hist__rthumb${item.coverUrl === null ? '' : ' is-photo'}`}>
                       <Image
                         className="hist__rthumb-img"
-                        src={blockUrlOf(item.category ?? 'OTHER')}
+                        src={item.coverUrl ?? blockUrlOf(item.category ?? 'OTHER')}
                         mode="aspectFill"
+                        lazyLoad
                       />
                       {item.category === null ? null : (
                         <Text className="hist__rthumb-tag">{shortLabelOf(item.category)}</Text>
