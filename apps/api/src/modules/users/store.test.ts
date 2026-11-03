@@ -282,11 +282,16 @@ test("listListings(…, 'SOLD', …) 只出 SOLD，筛掉平台已下架，且�
   )
 })
 
-test("listListings(…, 'SOLD', …) 不叠加审核列：审核期间成交的商品照常返回", async () => {
+test("listListings(…, 'SOLD', …) 不叠加审核列（防御性：该组合生产上不可达）", async () => {
   await withSeller(
     [
-      // 审核未通过期间成交（`moderation_status` 不是 APPROVED，且没有治理下架痕迹）。
-      // 已售出段刻意不判审核列，否则这类商品在页面上会凭空消失，而「卖出 N」还算着它。
+      // **防御性用例**：`status = 'SOLD'` 且 `moderation_status != 'APPROVED'` 这个组合在生产上
+      // 不可达 —— 新建商品只有送审才写 OFFLINE + REVIEW（`listings/store.ts:582`）、编辑送审
+      // 同理（`listings/service.ts:845`）、发起交易只认 ACTIVE（`transactions/store.ts:402`）、
+      // 治理下架只从 APPROVED 下架（`governance/service.ts:296`）且恢复时 `moderation_status`
+      // 取 delist 审计里的 before 值（`:387` / `:565-574`）。
+      // 留在这里是防未来变化：已售出段若哪天开始叠加审核列，审核/治理期间的成交会凭空消失在
+      // 他人的「已售出」里，而页头的「卖出 N」还算着它。
       { status: 'SOLD', moderationStatus: 'BLOCKED' },
     ],
     async ({ sellerId, listingIds }) => {

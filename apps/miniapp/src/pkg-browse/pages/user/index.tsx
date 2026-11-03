@@ -27,47 +27,9 @@ import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
+import type { Segment, SegmentPage } from './segment-page'
+import { emptyPage, mergeSegmentPage } from './segment-page'
 import './index.scss'
-
-/**
- * 列表分段（#565）：取值域与契约 `PublicUserListingsQuerySchema.status` 逐字对齐。
- *
- * 两段都是同一个读端点 `GET /users/:userId/listings`，只差一个 `status` ——
- * 服务端对 OFFLINE / RESERVED 一律 422，所以这里也只有这两个值。
- */
-type Segment = 'ACTIVE' | 'SOLD'
-
-/** 一段的列表数据 + 它自己的游标与加载态（两段各自独立：切回已拉过的段不再请求） */
-type SegmentPage = {
-  items: MockListing[]
-  /** 服务端游标：`null` 表示这一段已经没有下一页了（唯一权威信号，条数不参与判断） */
-  nextCursor: string | null
-  /** 是否已成功拉过第一页 —— 决定切过去时要不要发请求 */
-  loaded: boolean
-  loading: boolean
-  failed: boolean
-}
-
-const emptyPage = (): SegmentPage => ({
-  items: [],
-  nextCursor: null,
-  loaded: false,
-  loading: false,
-  failed: false,
-})
-
-/**
- * 追加下一页时按 `id` 去重（#565 复核 M2）。
- *
- * 游标翻页本身不重不漏，但同一条游标可能被并发提交两次（见下面的 `inFlight` 闩），
- * 迟到的那个响应会把同一页再追加一遍 —— 列表里就出现两张一模一样的卡。
- * 去重按 `id`（商品主键）做，不按位置：时间线可能因为别人新上架而平移。
- */
-function appendUnique(current: MockListing[], incoming: MockListing[]): MockListing[] {
-  if (incoming.length === 0) return current
-  const seen = new Set(current.map((item) => item.id))
-  return [...current, ...incoming.filter((item) => !seen.has(item.id))]
-}
 
 /**
  * 他人主页（设计稿 `D:\Downloads\1改\小程序1版user.html`）。
@@ -95,7 +57,8 @@ function appendUnique(current: MockListing[], incoming: MockListing[]): MockList
  *   「已经到底了」（见 `./list-end.ts`）。
  * - **好评率不渲染**：仓库没有 reviews / ratings 表，没有真实口径 —— 恒显 `--`，
  *   不编一个百分比（稿里的 98% / 100% 是演示数据，不照抄）。
- * - **卖出数**用契约的 `soldCount`（已完成交易里 TA 是卖家的条数）。
+ * - **卖出数**用契约的 `soldCount`：**公开可见的已售商品数**，与「已售出」段列表同源
+ *   （被平台下架的商品不计入）。页头文案仍叫「卖出」，口径已从成交笔数换成商品数。
  * - **「加入 N 天」按稿不展示**（被签名行替换；签名缺字段时不额外补回）。
  *
  * **页面结构（1版稿取舍 ②）**：昵称区跟着内容滚走，导航条常驻但初始透明 ——
@@ -154,7 +117,9 @@ export default function UserHome() {
     setProfile(null)
     setSeg('ACTIVE')
     setPages({ ACTIVE: emptyPage(), SOLD: emptyPage() })
-    // 上一轮还在飞的请求作废：它的响应回来时不该再往刚清空的段里追加。
+    // 把上一轮留下的闩清掉，新的一轮从「没有请求在飞」开始。⚠️ 这里没有 epoch / generation
+    // 校验：上一轮的响应若真的回来，仍会写进这一轮的段状态 —— 实际不可达（`load` 的两个入口
+    // 都在 `loadState !== 'ok'` 时才调，此时不可能有段内请求在飞），但别按「已作废」推理。
     inFlight.current = { ACTIVE: false, SOLD: false }
     /**
      * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
@@ -212,8 +177,7 @@ export default function UserHome() {
         setPages((prev) => ({
           ...prev,
           [which]: {
-            items: cursor === null ? page.listings : appendUnique(prev[which].items, page.listings),
-            nextCursor: page.nextCursor,
+            ...mergeSegmentPage(prev[which], page, cursor),
             loaded: true,
             loading: false,
             failed: false,

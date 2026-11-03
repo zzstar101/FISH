@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { userListEnd } from '../src/pkg-browse/pages/user/list-end'
+import { mergeSegmentPage } from '../src/pkg-browse/pages/user/segment-page'
 
 /**
  * 他人主页「列表终点提示」的判定（#178 审查收口）。
@@ -48,6 +49,44 @@ describe('userListEnd —— 列表终点判定', () => {
  * `loadState === 'ok' && items.length > 0 → 已经到底了`（正是上一轮审查点名的写法），
  * 上面的用例照样全绿。本仓 `tests/` 没有 Taro 组件渲染基建，只能读源码断言。
  */
+/**
+ * 分段列表的合并（#565 复核 M1）：早先这条判定只写在页面里，用例读源码字符串断言，
+ * 结果是「闩立即放开」「去重写坏」两个变异全都能绿 —— 钉不住行为。合并规则抽成
+ * `pkg-browse/pages/user/segment-page.ts` 的纯函数后，用样本直接钉两种翻页语义与去重。
+ */
+describe('mergeSegmentPage —— 分段列表的合并与去重', () => {
+  type Item = { id: string }
+  const page = (ids: string[], nextCursor: string | null) => ({
+    listings: ids.map((id) => ({ id })),
+    nextCursor,
+  })
+  const ids = (items: Item[]) => items.map((item) => item.id)
+
+  test('首屏（cursor === null）覆盖已展示内容，并取新游标', () => {
+    const merged = mergeSegmentPage({ items: [{ id: 'a' }] }, page(['b', 'c'], 'c2'), null)
+    expect(ids(merged.items)).toEqual(['b', 'c'])
+    expect(merged.nextCursor).toBe('c2')
+  })
+
+  test('续页（cursor !== null）追尾，不吃掉已展示的旧页', () => {
+    const merged = mergeSegmentPage({ items: [{ id: 'a' }, { id: 'b' }] }, page(['c'], 'c3'), 'c2')
+    expect(ids(merged.items)).toEqual(['a', 'b', 'c'])
+    expect(merged.nextCursor).toBe('c3')
+  })
+
+  test('同一条游标被并发打两次：迟到的同页响应不追加第二遍', () => {
+    const first = mergeSegmentPage({ items: [{ id: 'a' }] }, page(['b'], 'b2'), 'a1')
+    const late = mergeSegmentPage(first, page(['b'], 'b2'), 'a1')
+    expect(ids(late.items)).toEqual(['a', 'b'])
+  })
+
+  test('迟到的响应里混着新条目：按 id 去重后追加，不重复、不丢旧页', () => {
+    const first = mergeSegmentPage({ items: [] }, page(['a', 'b'], 'b2'), 'a1')
+    const late = mergeSegmentPage(first, page(['b', 'c'], 'b2'), 'a1')
+    expect(ids(late.items)).toEqual(['a', 'b', 'c'])
+  })
+})
+
 describe('user 页面接线', () => {
   const source = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
 
@@ -75,7 +114,7 @@ describe('user 页面接线', () => {
     expect(code).toContain('result.nextCursor')
   })
 
-  test('滚到底的重入靠同步 ref 闩互斥，迟到的同页响应按 id 去重（#565 复核 M2）', async () => {
+  test('滚到底的重入靠同步 ref 闩互斥，合并交给纯函数（#565 复核 M2）', async () => {
     const code = await source
     // `pages[seg].loading` 是渲染快照：同一帧里连点两次滚到底（或切段与滚底撞在同一帧），
     // 两次回调读到的都是上一次渲染的 `loading: false`，会拿同一条游标并发打两次接口。
@@ -83,7 +122,7 @@ describe('user 页面接线', () => {
     expect(code).toContain('if (inFlight.current[which]) return')
     expect(code).toContain('inFlight.current[which] = true')
     expect(code).toContain('inFlight.current[which] = false')
-    // 抢输/迟到的那份响应仍可能回来：追加时按 id 去重，否则同一页会被追加两遍。
-    expect(code).toContain('appendUnique(')
+    // 合并（覆盖 / 追尾 / 按 id 去重）由 `mergeSegmentPage` 承担，行为在纯函数用例里钉住。
+    expect(code).toContain('mergeSegmentPage(prev[which], page, cursor)')
   })
 })
