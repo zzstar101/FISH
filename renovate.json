@@ -1,0 +1,58 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "每周一批、按领域分组、不自动合并；小程序依赖、major 与锁文件刷新须在 Dependency Dashboard 批准后才开 PR。安全更新例外：Renovate 强制立即开 PR、不分组、不受批准门约束（小程序的安全 PR 合并前仍须走端上演示）。Docker 镜像不由 Renovate 管理（compose 与 ci.yml 里的 digest 须手动同步）。",
+  "extends": ["config:recommended"],
+  "timezone": "Asia/Shanghai",
+  "schedule": ["* 0-3 * * 1"],
+  "labels": ["dependencies"],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "description": "刷新整份 bun.lock，包括小程序的解析版本，所以与小程序依赖一样须批准",
+    "dependencyDashboardApproval": true
+  },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "Docker 镜像（docker-compose.yml、ci.yml services）不由 Renovate 更新：pgsty/* 只钉 digest（会被当成跟踪 latest），ci.yml 里 docker run 的同一 digest 又识别不到，自动更新会让两处漂移",
+      "matchDatasources": ["docker"],
+      "enabled": false
+    },
+    {
+      "description": "服务端：api / worker / db / contracts / shared / visual-embedding",
+      "matchFileNames": [
+        "apps/api/package.json",
+        "apps/worker/package.json",
+        "packages/db/package.json",
+        "packages/contracts/package.json",
+        "packages/shared/package.json",
+        "packages/visual-embedding/package.json"
+      ],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "server non-major"
+    },
+    {
+      "description": "PC Web：web-pc 与它使用的组件库 packages/ui",
+      "matchFileNames": ["apps/web-pc/package.json", "packages/ui/package.json"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "web-pc non-major"
+    },
+    {
+      "description": "工具链：根 package.json（Bun、Biome、TypeScript、类型包）与 GitHub Actions",
+      "matchFileNames": ["package.json", ".github/workflows/**"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "groupName": "toolchain non-major"
+    },
+    {
+      "description": "小程序：改动产物须过微信开发者工具逐页演示（docs/miniapp-dev-workflow.md），且同一时间只开一个小程序 PR，所以单独成组并须在 Dashboard 批准",
+      "matchFileNames": ["apps/miniapp/package.json"],
+      "matchUpdateTypes": ["major", "minor", "patch", "pin", "digest", "pinDigest", "replacement"],
+      "groupName": "miniapp",
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "major 一律人工决定",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}
