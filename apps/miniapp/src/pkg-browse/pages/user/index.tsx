@@ -29,8 +29,14 @@ import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
 import { toggleAnchor } from './scroll-anchor'
-import type { Segment, SegmentPage } from './segment-page'
-import { emptyPage, firstPageOf, mergeSegmentPage, segmentOfTab, userHomeUrl } from './segment-page'
+import type { Segment, SegmentPage, SegmentRequest } from './segment-page'
+import {
+  applySegmentPage,
+  emptyPage,
+  firstPageOf,
+  isCurrentRequest,
+  segmentOfTab,
+} from './segment-page'
 import './index.scss'
 
 /**
@@ -94,17 +100,26 @@ export default function UserHome() {
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
   /**
-   * 列表口径（#581）：由 `tab` 查询参数决定 —— `?tab=SOLD` 是「已售出」视图，
-   * 缺省或任意非法值一律回落到「在售」（`segmentOfTab`，纯函数、用例见
-   * `tests/user-page-tabs.test.ts`）。
+   * 列表口径（#581）：**页内切换**，不换页面实例。
    *
-   * **一个页面实例只服务一个口径**，所以这里是常量而不是 state：页头「卖出 N」跳
-   * `?tab=SOLD` 开一个新实例、返回键自然回到在售视图，没有「切段」这个动作，
-   * 也就没有「删掉胶囊后藏起来不可达」的状态机。
+   * 初值来自深链 `?tab=SOLD`（缺省或任意非法值回落到「在售」，`segmentOfTab` 纯函数、
+   * 用例见 `tests/user-page-tabs.test.ts`）；之后再点页头两格只改这里的 state，
+   * 不 `navigateTo`、不写 URL 参数、没有转场动画（Owner 反馈：切页观感不对）。
+   * 代价是返回键不再「回在售视图」，而是直接退出这个页面 —— 页内切换不产生历史记录。
    */
-  const seg: Segment = segmentOfTab(router.params.tab)
-  /** 当前口径的数据 + 游标。首屏只填「在售」（跟资料同一次请求回来），「已售出」按需补。 */
+  const [seg, setSeg] = useState<Segment>(() => segmentOfTab(router.params.tab))
+  /**
+   * 当前段的同步镜像。`state` 要等下一次渲染才更新，而切段后是**同步**发请求的，
+   * 闭包里的 `seg` 会是旧值 —— 所以取数、判重入都读这里。
+   */
+  const segRef = useRef<Segment>(seg)
+  /** 当前视图的数据 + 游标。切段会整份重置（见 `switchSegment`）。 */
   const [page, setPage] = useState<SegmentPage>(emptyPage())
+  /**
+   * 在途请求的代号：每切一次段 `+1`，用来判断回来的响应还算不算数。
+   * 没有它，切段瞬间返回的旧段数据会写进新段（列表被污染、`loading` 被改回 false）。
+   */
+  const epoch = useRef(0)
   /**
    * 「在飞」闩：同步 ref，**不是** state（#565 复核 M2）。
    *
@@ -151,10 +166,10 @@ export default function UserHome() {
      * 代价是已售出视图会多取一页用不上的在售列表：换掉它得把资料与列表拆成两次请求，
      * 会把 notFound / failed 的判定口径一分为二，不值得（#581）。
      */
-    const first = firstPageOf(seg, result)
+    const first = firstPageOf(segRef.current, result)
     if (first.loaded) setPage(first)
     setLoadState('ok')
-  }, [seg, userId])
+  }, [userId])
 
   /**
    * 拉当前口径的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
@@ -168,29 +183,30 @@ export default function UserHome() {
     async (cursor: string | null) => {
       if (inFlight.current) return
       inFlight.current = true
+      // 发起时的身份：段 + 代号。回来时用它判断这份响应还算不算数（切段即作废）
+      const sent: SegmentRequest = { seg: segRef.current, epoch: epoch.current }
+      const live = (): SegmentRequest => ({ seg: segRef.current, epoch: epoch.current })
       setPage((prev) => ({ ...prev, loading: true, failed: false }))
       try {
-        const next = await loadPublicUserListingsPage(userId, seg, cursor)
+        const next = await loadPublicUserListingsPage(userId, sent.seg, cursor)
+        if (!isCurrentRequest(sent, live())) return
         if (next === null) {
           // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
           setLoadState('notFound')
           return
         }
-        setPage((prev) => ({
-          ...mergeSegmentPage(prev, next, cursor),
-          loaded: true,
-          loading: false,
-          failed: false,
-        }))
+        setPage((prev) => applySegmentPage(prev, sent, live(), next, cursor))
       } catch (error) {
         // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
         console.warn('[miniapp] 他人主页：列表加载失败', error)
+        if (!isCurrentRequest(sent, live())) return
         setPage((prev) => ({ ...prev, loading: false, failed: true }))
       } finally {
-        inFlight.current = false
+        // 只有「自己这一份」才归还闩：切段时闩已被新段接管，别替别人解锁
+        if (isCurrentRequest(sent, live())) inFlight.current = false
       }
     },
-    [seg, userId],
+    [userId],
   )
 
   const items = page.items
@@ -307,34 +323,34 @@ export default function UserHome() {
   }, [])
 
   /**
-   * 页头两格就是列表入口（#581）：「卖出 N」开一个只渲染已售出的新实例
-   * （`?tab=SOLD`），返回键自然回到在售视图；「在售 N」在已售出视图里退回上一页。
+   * 切到另一段 —— **页内切换**（Owner 反馈：不要切页观感、不要转场动画）。
    *
-   * 已经在当前口径时不再跳转（连点不会叠出一串同样的页面），改为把列表滚进视野 ——
-   * 这两个数字离列表还有一屏页头，点了总得给点反应。`onClick` 只挂在「在售」「卖出」
-   * 两格上，「好评率」那格没有列表可去，不接任何点击。
+   * 只动本页状态：不压栈、不 `navigateTo` / `redirectTo`、也不回写 `?tab=`（回写会让路由
+   * 把它当成一次跳转重入，看着又像切页）。已经在当前段时只把列表滚进视野 ——
+   * 这两个数字离列表还有一屏页头，点了总得给点反应。`onClick` 只挂在「在售」「卖出」两格上，
+   * 「好评率」那格没有列表可去，不接任何点击。
+   *
+   * 切段同时处理在途请求：代号 `+1` 让旧段还没回来的响应作废，闩立刻放开给新段用，
+   * 数据整份重置成空页（新段从第一页拉、不继承上一段的游标与失败态），最后滚到列表顶部。
    */
-  const openSoldListings = useCallback(() => {
-    if (seg === 'SOLD') {
+  const switchSegment = useCallback(
+    (next: Segment) => {
+      if (segRef.current === next) {
+        scrollToBody()
+        return
+      }
+      epoch.current += 1
+      inFlight.current = false
+      segRef.current = next
+      setSeg(next)
+      setPage(emptyPage())
       scrollToBody()
-      return
-    }
-    void Taro.navigateTo({ url: userHomeUrl(userId, 'SOLD') })
-  }, [scrollToBody, seg, userId])
+    },
+    [scrollToBody],
+  )
 
-  const openActiveListings = useCallback(() => {
-    if (seg === 'ACTIVE') {
-      scrollToBody()
-      return
-    }
-    void Taro.navigateBack({
-      delta: 1,
-      fail: () => {
-        // 栈里没有上一页（直接带着 `?tab=SOLD` 进来）：原地换成在售视图，不留白屏。
-        void Taro.redirectTo({ url: userHomeUrl(userId) })
-      },
-    })
-  }, [scrollToBody, seg, userId])
+  const openSoldListings = useCallback(() => switchSegment('SOLD'), [switchSegment])
+  const openActiveListings = useCallback(() => switchSegment('ACTIVE'), [switchSegment])
 
   /**
    * 量一次身份区底边，换算成**内容坐标**。

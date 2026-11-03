@@ -2,9 +2,10 @@
  * 他人主页的口径入口（#581）：页头「在售 N / 卖出 N」两格替代了原来的「在售｜已售出」胶囊。
  *
  * 这里钉三层：
- * 1. **纯函数**：`?tab=` 的解析（非法值回落）、页面自己的路由拼接、首屏那一页取自哪、内滚锚点的交替；
+ * 1. **纯函数**：`?tab=` 的解析（非法值回落）、首屏那一页取自哪、切段瞬间的过期响应怎么处理、
+ *    内滚锚点的交替；
  * 2. **接线**：三格统计各自的属性区**按节点切片**断言 —— 谁接了哪个入口、好评率那格什么都不接、
- *    两个入口各自在「已在当前口径」时怎么走、补拉第一页的触发、失败重试调的是什么；
+ *    切段只改本页状态（不压栈 / 不跳转）、在途请求的身份校验、补拉第一页的触发、失败重试调的是什么；
  * 3. **样式**：胶囊删净不留孤儿规则、可点两格的触控高度。
  *
  * 为什么切片而不是全文 `toContain`：全文断言只能证明「字符串在文件里出现过」，
@@ -14,7 +15,13 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { toggleAnchor } from '../src/pkg-browse/pages/user/scroll-anchor'
-import { firstPageOf, segmentOfTab, userHomeUrl } from '../src/pkg-browse/pages/user/segment-page'
+import type { SegmentRequest } from '../src/pkg-browse/pages/user/segment-page'
+import {
+  applySegmentPage,
+  firstPageOf,
+  isCurrentRequest,
+  segmentOfTab,
+} from '../src/pkg-browse/pages/user/segment-page'
 
 /**
  * 取 `from` 开头、到其后第一次出现的 `to` 为止的那段源码。
@@ -44,14 +51,57 @@ describe('segmentOfTab —— 路由参数决定看哪一段', () => {
   })
 })
 
-describe('userHomeUrl —— 页头「卖出 N」要跳的那个地址', () => {
-  test('不带 tab 就是在售视图，带 tab 就指到对应段', () => {
-    expect(userHomeUrl('u-1')).toBe('/pkg-browse/pages/user/index?id=u-1')
-    expect(userHomeUrl('u-1', 'SOLD')).toBe('/pkg-browse/pages/user/index?id=u-1&tab=SOLD')
+describe('isCurrentRequest —— 回来的响应还算不算数', () => {
+  test('段与代号都对才算当前请求，任一不符即过期', () => {
+    expect(isCurrentRequest({ seg: 'SOLD', epoch: 3 }, { seg: 'SOLD', epoch: 3 })).toBe(true)
+    // 段变了：切段了，这是上一段的响应
+    expect(isCurrentRequest({ seg: 'ACTIVE', epoch: 3 }, { seg: 'SOLD', epoch: 3 })).toBe(false)
+    // 段又切回来了，但中间切过（代号变了）：仍是上一次的响应
+    expect(isCurrentRequest({ seg: 'SOLD', epoch: 3 }, { seg: 'SOLD', epoch: 4 })).toBe(false)
+  })
+})
+
+describe('applySegmentPage —— 切段瞬间回来的旧段数据不许落进新段', () => {
+  // 已售出视图：一条数据、没有下一页、已加载完成
+  const soldPage = {
+    items: [{ id: 'sold-1' }],
+    nextCursor: null,
+    loaded: true,
+    loading: false,
+    failed: false,
+  }
+
+  test('过期响应原样返回，列表 / 游标 / 三态一个字段都不动', () => {
+    const stale: SegmentRequest = { seg: 'ACTIVE', epoch: 1 }
+    const live: SegmentRequest = { seg: 'SOLD', epoch: 2 }
+    const applied = applySegmentPage(
+      soldPage,
+      stale,
+      live,
+      { listings: [{ id: 'active-1' }, { id: 'active-2' }], nextCursor: 'n1' },
+      null,
+    )
+    // 引用相等：不是「值相同」，是压根没重建 —— 旧段的列表没混进来，
+    // `loading` 没被改回 false（新段自己的请求还在飞），`nextCursor` 也没被旧游标顶掉
+    expect(applied).toBe(soldPage)
   })
 
-  test('publicId 是用户可控的路径参数，必须转义', () => {
-    expect(userHomeUrl('a&tab=SOLD')).toBe('/pkg-browse/pages/user/index?id=a%26tab%3DSOLD')
+  test('当前响应照常合并：续页追尾、换游标、三态收敛', () => {
+    const live: SegmentRequest = { seg: 'SOLD', epoch: 1 }
+    const applied = applySegmentPage(
+      { items: [{ id: 'sold-1' }], nextCursor: 'c1', loaded: false, loading: true, failed: false },
+      live,
+      live,
+      { listings: [{ id: 'sold-2' }], nextCursor: 'c2' },
+      'c1',
+    )
+    expect(applied).toEqual({
+      items: [{ id: 'sold-1' }, { id: 'sold-2' }],
+      nextCursor: 'c2',
+      loaded: true,
+      loading: false,
+      failed: false,
+    })
   })
 })
 
@@ -102,17 +152,18 @@ describe('他人主页接线（#581）', () => {
     expect(scss).not.toContain('uhome__seg')
   })
 
-  test('口径由 tab 参数派生，页面自己的路由由 userHomeUrl 拼', async () => {
+  test('口径初值来自 ?tab=，之后由页内 state 驱动，页面不再拼自己的路由', async () => {
     const code = await page
-    expect(code).toContain('segmentOfTab(router.params.tab)')
-    expect(code).toContain("userHomeUrl(userId, 'SOLD')")
-    // 跳转后新实例只按这个口径取数（不再有 pages[seg] 那种双段状态机）
-    expect(code).toContain('loadPublicUserListingsPage(userId, seg, cursor)')
+    expect(code).toContain('useState<Segment>(() => segmentOfTab(router.params.tab))')
+    // 页内切换后没人再拼「回自己」的地址，深链只由外部带进来
+    expect(code).not.toContain('userHomeUrl')
+    // 请求发的是「发起时的段」（`sent.seg`），不是可能已经过期的 state
+    expect(code).toContain('loadPublicUserListingsPage(userId, sent.seg, cursor)')
   })
 
   test('首屏那一页走 firstPageOf，不在页面里手写「口径是否 ACTIVE」的分支', async () => {
     const code = await page
-    expect(code).toContain('firstPageOf(seg, result)')
+    expect(code).toContain('firstPageOf(segRef.current, result)')
     expect(code).not.toContain("if (seg === 'ACTIVE') {\n      setPage(")
   })
 
@@ -142,41 +193,72 @@ describe('他人主页接线（#581）', () => {
     expect(rate).not.toContain('uhome__stat--link')
   })
 
-  test('两个入口在「已在当前口径」时滚列表，否则才跳转 / 返回', async () => {
+  test('页头两格只改本页状态：不压栈、不跳转、不写 URL 参数（#582 交互改动）', async () => {
     const code = await page
-    const soldHandler = slice(
+    const section = slice(
+      code,
+      'const switchSegment = useCallback(',
+      'const IDENTITY_FALLBACK = 320',
+    )
+
+    // 页内切换：整块里不许出现任何路由跳转，也不许回写 ?tab=
+    expect(section).not.toContain('navigate')
+    expect(section).not.toContain('redirectTo')
+    expect(section).not.toContain('tab=')
+
+    // 已经在当前段：只滚列表，且必须**提前返回** —— 少了 return 会接着把数据重置、白拉一遍
+    const same = slice(section, 'if (segRef.current === next) {', '}')
+    expect(same.replace(/\s+/g, ' ')).toContain('scrollToBody() return')
+
+    // 换段的顺序是有讲究的：先作废在途请求，再改同步镜像、state、数据、滚动
+    const order = [
+      'epoch.current += 1',
+      'inFlight.current = false',
+      'segRef.current = next',
+      'setSeg(next)',
+      'setPage(emptyPage())',
+      'scrollToBody()',
+    ]
+    let at = -1
+    for (const step of order) {
+      const found = section.indexOf(step, at + 1)
+      expect(found).toBeGreaterThan(at)
+      at = found
+    }
+
+    // 两个入口各自只调自己那一档
+    const sold = slice(
       code,
       'const openSoldListings = useCallback(',
       'const openActiveListings = useCallback(',
     )
-    const activeHandler = slice(
+    expect(sold).toContain("switchSegment('SOLD')")
+    const active = slice(
       code,
       'const openActiveListings = useCallback(',
       'const IDENTITY_FALLBACK = 320',
     )
+    expect(active).toContain("switchSegment('ACTIVE')")
+  })
 
-    // 卖出格：已在已售出视图 → 滚列表（不叠栈）；否则开一个 ?tab=SOLD 的新实例
-    expect(soldHandler).toContain("if (seg === 'SOLD') {")
-    const soldBranch = slice(soldHandler, "if (seg === 'SOLD') {", '}')
-    expect(soldBranch).toContain('scrollToBody()')
-    // 滚完必须**提前返回**：少了 return 就会既滚动又往下走去压栈一个新实例
-    expect(soldBranch.replace(/\s+/g, ' ')).toContain('scrollToBody() return')
-    expect(soldBranch).not.toContain('navigateTo')
-    expect(soldHandler).toContain("Taro.navigateTo({ url: userHomeUrl(userId, 'SOLD') })")
-    // 卖出格不许出现「返回」：从在售视图点「卖出」是往前开一页，不是退一页
-    expect(soldHandler).not.toContain('Taro.navigateBack(')
-
-    // 在售格：已在在售视图 → 滚列表；否则返回上一页（返回失败才原地 redirect，不留白屏）
-    expect(activeHandler).toContain("if (seg === 'ACTIVE') {")
-    const activeBranch = slice(activeHandler, "if (seg === 'ACTIVE') {", '}')
-    expect(activeBranch).toContain('scrollToBody()')
-    // 同理：滚完必须提前返回，否则会接着「退一页」
-    expect(activeBranch.replace(/\s+/g, ' ')).toContain('scrollToBody() return')
-    expect(activeBranch).not.toContain('navigateTo')
-    expect(activeHandler).toContain('Taro.navigateBack({')
-    // 在售格不许压栈：从已售出视图点「在售」是退回原来的在售实例，压栈会把同一页叠起来
-    expect(activeHandler).not.toContain('Taro.navigateTo(')
-    expect(activeHandler).toContain('Taro.redirectTo({ url: userHomeUrl(userId) })')
+  test('在途请求带段 + 代号：切段后回来的旧响应整包丢弃（#582）', async () => {
+    const code = await page
+    const body = slice(code, 'const loadSegment = useCallback(', 'const items = page.items')
+    // 发起时记下身份，请求用的也是它（不是渲染快照里的 seg）
+    expect(body).toContain(
+      'const sent: SegmentRequest = { seg: segRef.current, epoch: epoch.current }',
+    )
+    expect(body).toContain('loadPublicUserListingsPage(userId, sent.seg, cursor)')
+    expect(body).toContain('applySegmentPage(prev, sent, live(), next, cursor)')
+    // 成功分支：拿到数据之后、写状态之前必须再判一次身份（写状态时可能已经切过段）
+    const tryBody = slice(body, 'const next = await', 'catch (error)')
+    expect(tryBody).toContain('if (!isCurrentRequest(sent, live())) return')
+    // 闩只由「自己这一份」归还：切段时闩已被新段接管，旧响应不许替新段解锁
+    expect(body).toContain('if (isCurrentRequest(sent, live())) inFlight.current = false')
+    // 失败分支同样先判身份：旧段的失败不能把新段打成 failed
+    const catchAt = body.indexOf('catch (error)')
+    expect(catchAt).toBeGreaterThan(-1)
+    expect(body.slice(catchAt)).toContain('if (!isCurrentRequest(sent, live())) return')
   })
 
   test('滚列表用交替锚点，不写死单一 id', async () => {
@@ -194,12 +276,13 @@ describe('他人主页接线（#581）', () => {
     expect(body).toContain("'uhome-body-a'")
     expect(body).toContain("'uhome-body-b'")
     expect(body).toContain('toggleAnchor(prev,')
-    const handlers = slice(
+    // 滚动只发生在 `switchSegment` 里：同段连点一次、换段一次，都靠它把列表滚进视野
+    const switcher = slice(
       code,
+      'const switchSegment = useCallback(',
       'const openSoldListings = useCallback(',
-      'const IDENTITY_FALLBACK = 320',
     )
-    expect((handlers.match(/scrollToBody\(\)/g) ?? []).length).toBe(2)
+    expect((switcher.match(/scrollToBody\(\)/g) ?? []).length).toBe(2)
   })
 
   test('没载入就补拉第一页（已售出实例全靠它），失败后不自动重试', async () => {

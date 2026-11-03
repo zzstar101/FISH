@@ -120,9 +120,10 @@ describe('user 页面接线', () => {
 
   test('列表是否有下一页取自读取层的游标结果，不靠条数猜', async () => {
     const code = await source
-    // #565：下一页信号就是读取层交回的契约游标本身，页面把它原样合并进分段状态，
-    // 不再有「hasMore 布尔」这一层转手（#581 起首屏那一页也由 `firstPageOf` 保管游标）
-    expect(code).toContain('mergeSegmentPage(prev, next, cursor)')
+    // #565：下一页信号就是读取层交回的契约游标本身，页面把它原样合并进视图状态，
+    // 不再有「hasMore 布尔」这一层转手（#581 起首屏那一页也由 `firstPageOf` 保管游标，
+    // #582 起合并要先过在途请求的段 / 代号校验，见 `applySegmentPage`）
+    expect(code).toContain('applySegmentPage(prev, sent, live(), next, cursor)')
     expect(code).toContain('page.nextCursor === null')
   })
 
@@ -131,21 +132,27 @@ describe('user 页面接线', () => {
     // `page.loading` 是渲染快照：同一帧里连点两次滚到底，两次回调读到的都是上一次渲染的
     // `loading: false`，会拿同一条游标并发打两次接口。
     // 互斥必须**先同步置位**（compare-and-set），不能靠读 state 决定要不要发。
-    // #581 起一个页面实例只服务一个口径（`seg` 由 `?tab=` 派生），闩也就只剩一把。
+    // #581/#582 起一个页面实例只服务当前这一段（切段=页内换 state），闩只剩一把；
+    // 切段时由 `switchSegment` 立刻放开给新段用。
     expect(code).toContain('if (inFlight.current) return')
     expect(code).toContain('inFlight.current = true')
     expect(code).toContain('inFlight.current = false')
     // 合并（覆盖 / 追尾 / 按 id 去重）由 `mergeSegmentPage` 承担，行为在纯函数用例里钉住。
-    expect(code).toContain('mergeSegmentPage(prev, next, cursor)')
+    expect(code).toContain('applySegmentPage(prev, sent, live(), next, cursor)')
   })
 
-  test('合并结果整体展开进分段状态：游标与三态是同一次写回（#565 复核 M1）', async () => {
-    const code = flatten(await source)
+  test('合并结果整体展开进视图状态：游标与三态是同一次写回（#565 复核 M1）', async () => {
+    // 这段形状在 `applySegmentPage` 里（#582 起页面只负责「什么时候发请求」）。
     // 只取 `.items`（`items: mergeSegmentPage(...).items`）会丢掉 `nextCursor`：
     // `hasMore` 恒真 → 滚到底拿同一游标反复请求，去重又把条目全滤掉 → 列表静止、网络空转。
     // 删掉 `loaded: true` 则列表永远停在骨架屏。整块形状一次钉住两条写回。
-    expect(code).toContain(
-      '{ ...mergeSegmentPage(prev, next, cursor), loaded: true, loading: false, failed: false, }',
+    const page = flatten(
+      await Bun.file(
+        new URL('../src/pkg-browse/pages/user/segment-page.ts', import.meta.url),
+      ).text(),
+    )
+    expect(page).toContain(
+      '{ ...mergeSegmentPage(prev, page, cursor), loaded: true, loading: false, failed: false, }',
     )
   })
 })
