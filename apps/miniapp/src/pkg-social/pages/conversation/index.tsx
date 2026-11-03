@@ -84,6 +84,7 @@ import {
   clearDeferredReload,
   type DeferredReload,
   deferReload,
+  growBottomAllowance,
   hasEarlierPage,
   initialDeferredReload,
   isCurrentPlayRequest,
@@ -107,6 +108,7 @@ import {
   mergeRefreshedMedia,
   mergeRefreshedMessages,
   mergeTimeline,
+  mergeViewportShrink,
   messageActions,
   messageReadLabel,
   type PendingMedia,
@@ -542,6 +544,10 @@ export default function Conversation() {
     setLoadingEarlier(false)
     setEarlierFailed(false)
     setInputValue('')
+    // 与 `send()` 同一条理由（#560）：换身份也把输入框清空了，输入行高度真源必须一起回落，
+    // 否则下一个身份首个「切语音」还用着上一个身份草稿的多行高度
+    setInputRowPx(0)
+    inputRowPxRef.current = 0
     setPending([])
     setPanelOpen(false)
     setVoiceMode(false)
@@ -2188,11 +2194,15 @@ export default function Conversation() {
    * 尾行，翻历史的把原值写回去。偏移没丢的机型上这段什么都不做，不存在副作用。
    *
    * 「丢没丢、怎么补」全部交给 `view.ts` 的 `planScrollFix()` 判定，这里只负责执行 ——
-   * 判据留在组件里就只能靠源码片段断言，取值反了也不会红。
+   * 判据留在组件里就只能靠源码片段断言，取值反了也不会红；连「该写回哪个值」都在它的返回值
+   * 里，页面没有第二只手去写错。
    */
   const keepTailAnchored = useCallback(() => {
     const prevTop = scrollTopRef.current
-    if (stickBottomRef.current) {
+    // 贴底标志也在调用时快照：回读是异步的，到回调里再读，中间可能已经被 `onScroll`
+    // 改过一次 —— 拿「调用时的 prevTop」配「回调时的 stick」是两次观测混用
+    const stick = stickBottomRef.current
+    if (stick) {
       setTailAnchorFlip((prev) => !prev)
       stickBottomRef.current = true
     }
@@ -2204,15 +2214,16 @@ export default function Conversation() {
           // 查询是异步的：回读结果落地时页面可能已经卸载（同文件别处的回调都有这道守卫）
           if (!aliveRef.current) return
           const offset = res?.[0] as { scrollTop?: number } | undefined
-          const top = offset?.scrollTop
-          if (typeof top !== 'number') return
-          const fix = planScrollFix({ prevTop, top, stick: stickBottomRef.current })
-          if (fix === 'anchor') {
+          const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick })
+          if (fix.kind === 'anchor') {
             setTailAnchorFlip((prev) => !prev)
             return
           }
-          if (fix === 'restore') {
-            setScrollRestore((prev) => ({ top: prevTop, tick: (prev?.tick ?? 0) + 1 }))
+          if (fix.kind === 'restore') {
+            setScrollRestore((prev) => ({ top: fix.top, tick: (prev?.tick ?? 0) + 1 }))
+            // 复位指令用过就撤（#561）：`scroll-top` 属性一直绑着旧偏移，之后的新消息追加与
+            // 摘引跳转都可能被它压住。撤在下一帧 —— 这一帧要先把值下发出去
+            void Taro.nextTick(() => setScrollRestore(null))
           }
         })
     })
@@ -2823,9 +2834,9 @@ export default function Conversation() {
    * `scrollTop` 属性只认「值有变化」，所以带 `0.5px` 的交替 —— 同一个位置也能再下发一次。
    * 半个像素在端上看不出来，但足以让属性真的变一次。
    *
-   * 用过之后**不撤**（不把属性置回 `undefined`）：撤掉等于让属性回到默认的 0，那正是本票
-   * 要修的「偏移掉成 0」形态。留着一个不再变化的数值是惰性的 —— 数据绑定只下发变化过的
-   * 值，它不会再去压后面的 `scrollIntoView`。
+   * 指令下发后的下一帧就撤（`null` → 属性回到 `undefined`）：一直绑着一个旧偏移，后续的
+   * 新消息追加与摘引跳转都可能被它压住。撤的动作在 `keepTailAnchored` 里，撤之前值已经
+   * 下发过一轮。
    */
   const restoreScrollTop = scrollRestore
     ? scrollRestore.top + (scrollRestore.tick % 2 === 0 ? 0 : 0.5)
@@ -2891,14 +2902,14 @@ export default function Conversation() {
           if (!measuring) return
           const viewport = res?.[0] as { height?: number } | undefined
           if (typeof viewport?.height === 'number' && viewport.height > 0) {
-            // 只认「缩了多少」：视口变高不需要放宽（底部差只会变小）。首次量到（`ref = 0`）
-            // 没有可比对象，此时算出来的会是整个视口高，等于把所有判据一次放到最松
-            if (scrollViewportRef.current > 0) {
-              bottomGapAllowanceRef.current = Math.max(
-                0,
-                scrollViewportRef.current - viewport.height,
-              )
-            }
+            // 只认「缩了多少」且**取大不覆盖**：视口变高不需要放宽；量测是事后的一帧，布局
+            // 没落定时可能报 0，直接覆盖会把 `onLineChange` 刚记的增量清零（判据见
+            // `mergeViewportShrink` 的注释与表驱动单测）
+            bottomGapAllowanceRef.current = mergeViewportShrink({
+              allowance: bottomGapAllowanceRef.current,
+              prevViewport: scrollViewportRef.current,
+              nextViewport: viewport.height,
+            })
             scrollViewportRef.current = viewport.height
           }
           // 语音态没有 `.conv__input`：量不到就沿用旧值，不归零（归零会让「按住说话」跳回 68）
@@ -3756,14 +3767,17 @@ export default function Conversation() {
                 会截断越界偏移并立刻抛 `bindscroll`，而量测 effect 还要等下一帧的 `nextTick`；
                 等它回来，这次滚动早被判成「用户在翻历史」，之后切态 / 开面板的重锚全被守卫
                 挡掉，最新一条就压在视口外几十 px 回不来（#561 的复发路径）。
-                `ref` 为 0 表示「还没量到或刚清空」，此时 height 是单行基线、不是让出的高度。
+                记账口径（累加 / 边界 / `ref` 为 0 表示还没量到或刚清空）全在
+                `growBottomAllowance` 里 —— 这里只管把值交过去。
               */
               onLineChange={(event) => {
                 const { height } = event.detail
                 if (!(height > 0)) return
-                const grownBy =
-                  inputRowPxRef.current > 0 ? Math.max(0, height - inputRowPxRef.current) : 0
-                if (grownBy > 0) bottomGapAllowanceRef.current = grownBy
+                bottomGapAllowanceRef.current = growBottomAllowance({
+                  allowance: bottomGapAllowanceRef.current,
+                  prevInputPx: inputRowPxRef.current,
+                  nextInputPx: height,
+                })
                 writeInputRowPx(height)
               }}
               onFocus={() => setPanelOpen(false)}

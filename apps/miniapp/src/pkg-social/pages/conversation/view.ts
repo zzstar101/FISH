@@ -1319,18 +1319,73 @@ export function stickAfterScroll(nearBottom: boolean): boolean {
 /**
  * 几何变了、回读出来的偏移掉回了顶部：这一跳该怎么补（#561）。
  *
- * - `'none'`：偏移没丢（或丢的那次是原生层按**新**几何做的正常截断）→ 什么都不做；
- * - `'anchor'`：贴底态 → 换一个同位锚点再指一次尾行；
- * - `'restore'`：翻历史态 → 把几何变化前的 `scrollTop` 原值写回去。
+ * 返回的是**动作**而不是动作名：`restore` 要把哪个值写回去也在里面，页面只负责执行副作用
+ * —— 决策留在组件里，「算出来的值用错了」这类改动谁都看不见（`top` 与 `prevTop` 写反，
+ * 复位就变成一次空操作）。
+ *
+ * - `none`：偏移没丢（或丢的那次是原生层按**新**几何做的正常截断）→ 什么都不做；
+ * - `anchor`：贴底态 → 换一个同位锚点再指一次尾行；
+ * - `restore`：翻历史态 → 把几何变化前的 `scrollTop` 原值写回去。
  *
  * 只有「原本不在顶部、现在掉到顶部」算丢失：视口变矮 / 内容变短都会让 `scrollTop` 变小，
  * 那是原生层的正常截断，硬写回旧值反而会把页面按到越界位置。
+ *
+ * `prevTop <= 容差` 但**贴底**时仍按丢失处理：进页面就停在底部、一次没手动滚过的用户，
+ * `scrollTopRef` 一直是初值 0，若按「原本在顶部」放过，回读补偿对这些人一次都不执行 ——
+ * 而他们恰恰是「跟着最新消息」的常态用户。翻历史的人必然滚过，`prevTop` 不会停在 0。
  */
-export function planScrollFix(input: {
-  prevTop: number
-  top: number
-  stick: boolean
-}): 'anchor' | 'restore' | 'none' {
-  if (input.prevTop <= BOTTOM_SLACK_PX || input.top > BOTTOM_SLACK_PX) return 'none'
-  return input.stick ? 'anchor' : 'restore'
+export type ScrollFix = { kind: 'none' } | { kind: 'anchor' } | { kind: 'restore'; top: number }
+
+export function planScrollFix(input: { prevTop: number; top: number; stick: boolean }): ScrollFix {
+  const { prevTop, top, stick } = input
+  // 量不到就是 `undefined`，但也可能是 `NaN`（`typeof NaN === 'number'`，光判类型挡不住）
+  if (!Number.isFinite(top)) return { kind: 'none' }
+  // 偏移还在顶部之外：没丢
+  if (top > BOTTOM_SLACK_PX) return { kind: 'none' }
+  // 原本在中部 / 底部、现在掉到顶部 = 原生层把偏移丢了
+  if (prevTop > BOTTOM_SLACK_PX) {
+    return stick ? { kind: 'anchor' } : { kind: 'restore', top: prevTop }
+  }
+  // 观测量不可用（进页面就在底部 / 刚翻完锚点还没回写）：贴底态掉回顶部只可能是丢了
+  return stick ? { kind: 'anchor' } : { kind: 'none' }
+}
+
+/**
+ * 输入行变高时该给贴底判据留多少余量（#560/#561）。
+ *
+ * **累加**，不覆盖：原生层那次截断滚动反映的是相对**单行基线**的累计缩量，而打字是一行
+ * 一行涨的（每行只报 30 来 px）。只留最后一次增量的话，两行以上就被判成「用户在翻历史」
+ * —— 之后切态 / 开面板的重锚全被贴底守卫挡掉，最新一条压在视口外回不来（#561 原症状）。
+ *
+ * `prevInputPx <= 0` 表示还没量到或刚清空：此时的 `nextInputPx` 是单行基线，不是让出的高度。
+ */
+export function growBottomAllowance(input: {
+  allowance: number
+  prevInputPx: number
+  nextInputPx: number
+}): number {
+  const { allowance, prevInputPx, nextInputPx } = input
+  if (!(prevInputPx > 0) || !(nextInputPx > 0)) return allowance
+  const grownBy = nextInputPx - prevInputPx
+  if (grownBy <= 0) return allowance
+  return allowance + grownBy
+}
+
+/**
+ * 把几何量测到的视口缩量并进余量（#560/#561）：**取大**，不覆盖。
+ *
+ * 与 `growBottomAllowance` 的累加互补 —— 量测是事后的一帧，布局没落定时可能报 0；
+ * 直接覆盖会把 `onLineChange` 刚记下的增量清零，而原生那次滚动事件正好在这之后到达。
+ * 首次量测（`prevViewport <= 0`）没有可比对象，算出来会是整个视口高，等于一次放到最松。
+ */
+export function mergeViewportShrink(input: {
+  allowance: number
+  prevViewport: number
+  nextViewport: number
+}): number {
+  const { allowance, prevViewport, nextViewport } = input
+  if (!(prevViewport > 0) || !(nextViewport > 0)) return allowance
+  const shrunkBy = prevViewport - nextViewport
+  if (shrunkBy <= 0) return allowance
+  return Math.max(allowance, shrunkBy)
 }

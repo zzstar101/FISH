@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
   BOTTOM_SLACK_PX,
+  growBottomAllowance,
   isNearBottom,
+  mergeViewportShrink,
   planScrollFix,
   stickAfterScroll,
 } from '../src/pkg-social/pages/conversation/view'
@@ -103,19 +105,87 @@ describe('贴底标志与偏移回读的判据（#561，纯函数表驱动）', 
   })
 
   test('偏移没丢 / 丢的那次是正常截断 → 什么都不做', () => {
-    // 原本就在顶部（用户自己翻到最早）：下掉是正常截断
-    expect(planScrollFix({ prevTop: 0, top: 0, stick: true })).toBe('none')
     // 回读时仍在底部附近：没丢
-    expect(planScrollFix({ prevTop: 800, top: 790, stick: true })).toBe('none')
+    expect(planScrollFix({ prevTop: 800, top: 790, stick: true })).toEqual({ kind: 'none' })
+    expect(planScrollFix({ prevTop: 800, top: 790, stick: false })).toEqual({ kind: 'none' })
+    // 内容不足一屏 / 刚打开就贴底：顶部本来就没有可滚的
+    expect(planScrollFix({ prevTop: 0, top: 0, stick: true })).toEqual({ kind: 'anchor' })
+    expect(planScrollFix({ prevTop: 0, top: 0, stick: false })).toEqual({ kind: 'none' })
   })
 
   test('偏移掉回顶部：贴底重指尾行，翻历史把原值写回去', () => {
     // 复现里的形态：几何突变后偏移掉成 0
-    expect(planScrollFix({ prevTop: 800, top: 0, stick: true })).toBe('anchor')
-    expect(planScrollFix({ prevTop: 800, top: 0, stick: false })).toBe('restore')
-    // 只差一个像素也算丢（`top > BOTTOM_SLACK_PX` 才放过），贴底/翻历史两条路都要能走
-    expect(planScrollFix({ prevTop: 800, top: BOTTOM_SLACK_PX, stick: false })).toBe('restore')
-    expect(planScrollFix({ prevTop: 800, top: BOTTOM_SLACK_PX + 1, stick: false })).toBe('none')
+    expect(planScrollFix({ prevTop: 800, top: 0, stick: true })).toEqual({ kind: 'anchor' })
+    // 「写回哪个值」由纯函数给：写成观测值就是一次空操作
+    expect(planScrollFix({ prevTop: 800, top: 0, stick: false })).toEqual({
+      kind: 'restore',
+      top: 800,
+    })
+  })
+
+  test('边界就钉在容差上：`top` 恰等于容差算丢，多一 px 算没丢', () => {
+    // `top > BOTTOM_SLACK_PX` 改成 `>=` 会让「恰好掉到容差上」被放过
+    expect(planScrollFix({ prevTop: 800, top: BOTTOM_SLACK_PX, stick: false })).toEqual({
+      kind: 'restore',
+      top: 800,
+    })
+    expect(planScrollFix({ prevTop: 800, top: BOTTOM_SLACK_PX, stick: true })).toEqual({
+      kind: 'anchor',
+    })
+    expect(planScrollFix({ prevTop: 800, top: BOTTOM_SLACK_PX + 1, stick: true })).toEqual({
+      kind: 'none',
+    })
+    // `prevTop > BOTTOM_SLACK_PX` 改成 `>=` 会把「从没滚过」当成真实位置
+    expect(planScrollFix({ prevTop: BOTTOM_SLACK_PX, top: 0, stick: false })).toEqual({
+      kind: 'none',
+    })
+    expect(planScrollFix({ prevTop: BOTTOM_SLACK_PX + 1, top: 0, stick: false })).toEqual({
+      kind: 'restore',
+      top: BOTTOM_SLACK_PX + 1,
+    })
+  })
+
+  test('量不到位置（`NaN`）不动，也不许拿它去翻锚点', () => {
+    // `typeof NaN === 'number'`：只判类型挡不住，`NaN > 24` 又会静默变成 false
+    expect(planScrollFix({ prevTop: 800, top: Number.NaN, stick: true })).toEqual({ kind: 'none' })
+    expect(planScrollFix({ prevTop: Number.NaN, top: 0, stick: false })).toEqual({ kind: 'none' })
+  })
+})
+
+describe('贴底容差的记账口径（#560/#561，纯函数表驱动）', () => {
+  test('输入行长高：累计相加，不是只留最后一次增量', () => {
+    // 1 行 → 2 行：让出 30
+    expect(growBottomAllowance({ allowance: 0, prevInputPx: 34, nextInputPx: 64 })).toBe(30)
+    // 2 行 → 3 行：原生那次截断滚动反映的是相对单行基线的累计 60，只留 30 就不够
+    expect(growBottomAllowance({ allowance: 30, prevInputPx: 64, nextInputPx: 94 })).toBe(60)
+    // 变矮不回吐（余量只增不减，真到底由 onScroll 归零）
+    expect(growBottomAllowance({ allowance: 60, prevInputPx: 94, nextInputPx: 64 })).toBe(60)
+  })
+
+  test('输入行基线不明（还没量到 / 刚清空）时不记增量', () => {
+    // 此时 `nextInputPx` 是单行基线，不是让出的高度（记下来就等于把判据一次放到最松）
+    expect(growBottomAllowance({ allowance: 0, prevInputPx: 0, nextInputPx: 94 })).toBe(0)
+    expect(growBottomAllowance({ allowance: 30, prevInputPx: 0, nextInputPx: 94 })).toBe(30)
+    // 回调报 0 / 负数（键盘收起时有的机型会报一次）也不记
+    expect(growBottomAllowance({ allowance: 30, prevInputPx: 64, nextInputPx: 0 })).toBe(30)
+  })
+
+  test('视口缩量并进余量：取大不覆盖，且只认「缩」', () => {
+    // 量测报的缩量比已有余量大 → 用大的
+    expect(mergeViewportShrink({ allowance: 0, prevViewport: 600, nextViewport: 546 })).toBe(54)
+    // 比已有余量小（布局没落定的一帧）→ **不许**把 `onLineChange` 刚记的增量清零
+    expect(mergeViewportShrink({ allowance: 30, prevViewport: 600, nextViewport: 594 })).toBe(30)
+    // 视口变高不是「让出高度」：取绝对值就会把键盘收起当成放宽
+    expect(mergeViewportShrink({ allowance: 0, prevViewport: 570, nextViewport: 600 })).toBe(0)
+    expect(mergeViewportShrink({ allowance: 12, prevViewport: 570, nextViewport: 600 })).toBe(12)
+  })
+
+  test('首次量测没有可比对象，不许一次性放宽到整屏', () => {
+    // `prevViewport` 还是 0：差值就是整个视口高
+    expect(mergeViewportShrink({ allowance: 0, prevViewport: 0, nextViewport: 600 })).toBe(0)
+    expect(mergeViewportShrink({ allowance: 8, prevViewport: 0, nextViewport: 600 })).toBe(8)
+    // 量到的高度无效时同理
+    expect(mergeViewportShrink({ allowance: 8, prevViewport: 600, nextViewport: 0 })).toBe(8)
   })
 })
 
@@ -158,10 +228,15 @@ describe('键盘高度是单一真源（#560）', () => {
     // 输入框每多一行就往回报一次实测高度（设备 px），比在渲染期猜行数准。
     // `tag()` 会在 `onLineChange` 里的 `>` 处截断，切到下一个属性为止
     const textarea = slice(source, '<Textarea', 'onFocus=')
-    expect(textarea).toContain('onLineChange=')
+    expect(textarea).toContain('if (!(height > 0)) return')
     expect(textarea).toContain('writeInputRowPx(height)')
-    // 长高的那一刻先把「本页让出的高度」记进贴底容差，再更新真源（顺序反了就等于没记）
-    const grownAt = textarea.indexOf('bottomGapAllowanceRef.current = grownBy')
+    // 长高的那一刻先把「本页让出的高度」记进贴底容差，再更新真源（顺序反了就等于没记）。
+    // 记账口径本身在 `view.ts` 的 `growBottomAllowance()`（表驱动单测在上面）
+    expect(textarea).toContain(
+      'bottomGapAllowanceRef.current = growBottomAllowance({ allowance: ' +
+        'bottomGapAllowanceRef.current, prevInputPx: inputRowPxRef.current,',
+    )
+    const grownAt = textarea.indexOf('growBottomAllowance({')
     expect(grownAt).toBeGreaterThan(-1)
     expect(grownAt).toBeLessThan(textarea.indexOf('writeInputRowPx(height)'))
     // 「按住说话」拿同一个值当 `minHeight`：不然多行输入后切语音，消息流会突然长高一大截
@@ -178,6 +253,17 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain("setInputValue('')")
     expect(body).toContain('setInputRowPx(0)')
     // 同步镜像也要清：留着旧的多行高度，「这次长高多少」会从旧值起算而算成 0
+    expect(body).toContain('inputRowPxRef.current = 0')
+  })
+
+  test('换身份也把输入行高度真源清掉（下一个身份不该继承上一份草稿的多行高度）', async () => {
+    const body = slice(
+      squash(await pageSource()),
+      'deferredRef.current = resetDeferredReload(epoch.current)',
+      'setPending([])',
+    )
+    expect(body).toContain("setInputValue('')")
+    expect(body).toContain('setInputRowPx(0)')
     expect(body).toContain('inputRowPxRef.current = 0')
   })
 
@@ -222,7 +308,7 @@ describe('「+」面板与贴底（#561）', () => {
   test('贴底才重指尾行；换锚后直接认定贴底，不等一条可能永远不来的滚动事件', async () => {
     const body = slice(squash(await pageSource()), 'const keepTailAnchored = useCallback', '}, [])')
     // 翻历史时不动位置（守卫仍在）
-    expect(body).toContain('if (stickBottomRef.current) {')
+    expect(body).toContain('if (stick) {')
     expect(body).toContain('setTailAnchorFlip((prev) => !prev)')
     // 换锚之后贴底就是已知事实：`onScroll` 不一定会因程序化滚动而回吐事件
     expect(body).toContain('stickBottomRef.current = true')
@@ -230,21 +316,34 @@ describe('「+」面板与贴底（#561）', () => {
 
   test('几何变化后回读偏移：原生层把偏移丢了就补回来，没丢什么都不做', async () => {
     const body = slice(squash(await pageSource()), 'const keepTailAnchored = useCallback', '}, [])')
-    // 用几何变化前的 last-known scrollTop 做比对
-    expect(body).toContain('const prevTop = scrollTopRef.current')
-    expect(body).toContain("select('.conv__scroll')")
-    expect(body).toContain('scrollOffset()')
-    // 判据本身在 `view.ts`（表驱动单测在上面），这里只钉「真的调了它、三个入参都对」
-    expect(body).toContain('planScrollFix({ prevTop, top, stick: stickBottomRef.current })')
-    // 贴底 → 再指一次尾行；翻历史 → 把原偏移写回去
-    expect(body).toContain("if (fix === 'anchor')")
-    expect(body).toContain("if (fix === 'restore')")
-    expect(body).toContain('setScrollRestore(')
-    // 回读是异步的：落地时页面可能已经卸载
-    expect(body).toContain('if (!aliveRef.current) return')
-    // 回读必须**无条件**紧接着换锚执行：外面再套一层 `if (false)` / 提前 return，整段
-    // 「偏移丢了就补」就静默失效了，端上表现为「偶尔跳回顶部」，任何单点断言都看不出来
-    expect(body).toContain('stickBottomRef.current = true } void Taro.nextTick(() => {')
+    // 一拍一张快照：`prevTop` 与 `stick` 都取调用时的值，两者不能一个取快照一个现读
+    expect(body).toContain(
+      'const prevTop = scrollTopRef.current const stick = stickBottomRef.current',
+    )
+    /**
+     * 回读整段必须**无条件**紧接换锚执行，且回调体内部不许再插一层判断。
+     *
+     * 取整段连续文本而不是零散子串：外面套一层 `if (false)` / 回调首行插一句 `return`，
+     * 或者把 `planScrollFix(...)` 包进三元表达式，都会打断这段连续性 —— 而这几种改法
+     * 此前全是绿的（端上表现为「偶尔跳回顶部」，任何单点断言都看不出来）。
+     */
+    expect(body).toContain(
+      'void Taro.nextTick(() => { Taro.createSelectorQuery() ' +
+        ".select('.conv__scroll') .scrollOffset() .exec((res) => { " +
+        'if (!aliveRef.current) return ' +
+        'const offset = res?.[0] as { scrollTop?: number } | undefined ' +
+        'const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick })',
+    )
+    // 判据本身在 `view.ts`（表驱动单测在上面），这里钉「三支都往下走了、写回的是哪个值」
+    expect(body).toContain(
+      "if (fix.kind === 'anchor') { setTailAnchorFlip((prev) => !prev) return }",
+    )
+    expect(body).toContain(
+      "if (fix.kind === 'restore') { setScrollRestore((prev) => ({ top: fix.top, " +
+        'tick: (prev?.tick ?? 0) + 1 }))',
+    )
+    // 复位指令下发后的下一帧就撤：属性一直绑着旧偏移会压住后续的追加与摘引跳转
+    expect(body).toContain('void Taro.nextTick(() => setScrollRestore(null))')
   })
 
   test('消息流有 onScroll，并把 scrollTop/scrollHeight/视口高度喂给贴底判据', async () => {
@@ -264,10 +363,14 @@ describe('「+」面板与贴底（#561）', () => {
 
   test('首次量测不算「缩量」：视口高度从 ref 的 0 长起来时不能一次性放宽到整屏', async () => {
     const body = slice(squash(await pageSource()), 'const viewport = res?.[0]', 'const inputRow')
-    expect(body).toContain('scrollViewportRef.current > 0')
-    expect(body).toContain('scrollViewportRef.current - viewport.height')
-    // 只认缩量：视口变大不该放宽容差
-    expect(body).toContain('bottomGapAllowanceRef.current = Math.max(')
+    // 口径在 `view.ts` 的 `mergeViewportShrink()`（表驱动单测在上面）：首帧 prev 为 0 不记、
+    // 取大不覆盖、只认缩量
+    expect(body).toContain(
+      'bottomGapAllowanceRef.current = mergeViewportShrink({ allowance: ' +
+        'bottomGapAllowanceRef.current, prevViewport: scrollViewportRef.current,',
+    )
+    expect(body).toContain('nextViewport: viewport.height')
+    expect(body).toContain('scrollViewportRef.current = viewport.height')
   })
 
   test('尾行锚点带 keyId 且能交替：内容追加与几何变化都能重新滚到底', async () => {
