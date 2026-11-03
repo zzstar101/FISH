@@ -221,23 +221,12 @@
   @include ellipsis;
 }
 
-.wt__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  height: 40px;
-  padding: 0 16px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  border: 2px solid var(--accent-mid);
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  color: var(--brand-deep-2);
-}
-
+/* 认证徽章（#563）：设计稿「认证」3D 整图（275×108，按比例 61×24），昵称右侧内联。
+   原先的「浅强调胶囊 + 24×24 勾 + 已认证」外壳撤掉 —— 横向整图自带「认证」字样，
+   胶囊底与描边会叠成两层装饰（同 `pkg-browse/pages/user` 的同款处置）。 */
 .wt__badge-ic {
-  width: 24px;
+  flex: 0 0 auto;
+  width: 61px;
   height: 24px;
 }
 

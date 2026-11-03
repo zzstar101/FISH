@@ -1,6 +1,7 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -669,7 +670,7 @@ export default function Favorites() {
                         <Image className="fav__av" src={item.avatarUrl} mode="aspectFill" />
                         <Text className="fav__nm">{item.seller}</Text>
                         {item.verified ? (
-                          <Image className="fav__tick" src={ICONS.verifiedBrand} mode="aspectFit" />
+                          <Image className="fav__tick" src={BADGE.verified} mode="aspectFit" />
                         ) : null}
                       </View>
                       <View className="fav__fmeta">

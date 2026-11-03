@@ -4,6 +4,7 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -314,14 +315,7 @@ export default function Watchers() {
                         <View className="wt__top">
                           <Text className="wt__name">{user.nickname}</Text>
                           {user.authStatus === 'VERIFIED' ? (
-                            <View className="wt__badge">
-                              <Image
-                                className="wt__badge-ic"
-                                src={ICONS.verifiedBrand}
-                                mode="aspectFit"
-                              />
-                              <Text>已认证</Text>
-                            </View>
+                            <Image className="wt__badge-ic" src={BADGE.verified} mode="aspectFit" />
                           ) : null}
                         </View>
                         <Text className="wt__meta num">{dayLabelOf(startedAt, nowMs)}发起聊天</Text>

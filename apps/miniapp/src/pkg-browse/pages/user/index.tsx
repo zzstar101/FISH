@@ -4,6 +4,7 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
@@ -535,10 +536,11 @@ export default function UserHome() {
     <>
       <Text className="uhome__navname">{profile.nickname}</Text>
       {verified ? (
-        <View className="uhome__badge uhome__badge--nav">
-          <Image className="uhome__badge-ic" src={ICONS.verifiedBrand} mode="aspectFit" />
-          <Text>已认证</Text>
-        </View>
+        <Image
+          className="uhome__badge-ic uhome__badge-ic--nav"
+          src={BADGE.verified}
+          mode="aspectFit"
+        />
       ) : null}
     </>
   ) : null
@@ -617,14 +619,7 @@ export default function UserHome() {
                       <Text className="uhome__pname">{profile.nickname}</Text>
                       {/* 徽章只在 VERIFIED 时渲染：未认证不占位、不留白 */}
                       {verified ? (
-                        <View className="uhome__badge">
-                          <Image
-                            className="uhome__badge-ic"
-                            src={ICONS.verifiedBrand}
-                            mode="aspectFit"
-                          />
-                          <Text>已认证</Text>
-                        </View>
+                        <Image className="uhome__badge-ic" src={BADGE.verified} mode="aspectFit" />
                       ) : null}
                     </View>
                     {/* 在线态（#359 第五点）：头像右边这一列的第二行。绿点 + 文案；
