@@ -28,13 +28,11 @@ import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
-import { toggleAnchor } from './scroll-anchor'
-import type { Segment, SegmentPage, SegmentRequest } from './segment-page'
+import type { Segment, SegmentPage } from './segment-page'
 import {
-  applySegmentPage,
   emptyPage,
   firstPageOf,
-  makeSegmentLoader,
+  mergeSegmentPage,
   segmentOfTab,
   segTitleOf,
   shouldRefetch,
@@ -103,63 +101,37 @@ export default function UserHome() {
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
   /**
-   * 列表口径（#581）：**页内切换**，不换页面实例。
-   *
-   * 初值来自深链 `?tab=SOLD`（缺省或任意非法值回落到「在售」，`segmentOfTab` 纯函数、
-   * 用例见 `tests/user-page-tabs.test.ts`）；之后再点页头两格只改这里的 state，
-   * 不 `navigateTo`、不写 URL 参数、没有转场动画（Owner 反馈：切页观感不对）。
-   * 代价是返回键不再「回在售视图」，而是直接退出这个页面 —— 页内切换不产生历史记录。
+   * 列表口径（#581）：**页内切换**，不换页面实例 —— 不 `navigateTo`、不写 URL 参数、
+   * 没有转场动画。深链 `?tab=SOLD` 只作初值（非法值回落在售）；代价是返回键不再
+   * 「回在售视图」，而是直接退出这个页面（页内切换不产生历史记录）。
    */
-  const [seg, setSeg] = useState<Segment>(() => segmentOfTab(router.params.tab))
-  /**
-   * 当前段的同步镜像。`state` 要等下一次渲染才更新，而切段后是**同步**发请求的，
-   * 闭包里的 `seg` 会是旧值 —— 所以取数、判重入都读这里。
-   */
-  const segRef = useRef<Segment>(seg)
+  const tabParam = router.params.tab
+  const [seg, setSeg] = useState<Segment>(() => segmentOfTab(tabParam))
   /** 当前视图的数据 + 游标。切段会整份重置（见 `switchSegment`）。 */
   const [page, setPage] = useState<SegmentPage>(emptyPage())
   /**
-   * 在途请求的代号：每切一次段 `+1`，用来判断回来的响应还算不算数。
-   * 没有它，切段瞬间返回的旧段数据会写进新段（列表被污染、`loading` 被改回 false）。
+   * 在途列表请求的代号：切段 / 整页重载都 `+1`。响应回来时对不上就整包丢掉 ——
+   * 既不许写进新段的视图，也不许替新段归还下面那把闩。
    */
-  const epoch = useRef(0)
-  /** 当前这一份请求该不该写进视图：段或代号变了就是过期响应（判定在 `makeSegmentLoader`）。 */
-  const liveRequest = useCallback(
-    (): SegmentRequest => ({ seg: segRef.current, epoch: epoch.current }),
-    [],
-  )
+  const generation = useRef(0)
   /**
-   * 分段取数的加载器：同步重入闩 + 请求身份校验都收在里面。
-   *
-   * `page.loading` 是渲染快照，判定重入不可靠：同一帧里连点两次滚到底
-   * （`onScrollToLower` 会在内容不满屏时连发），两个回调读到的都是上一次渲染的
-   * `loading: false`，会拿**同一条游标**并发打两次接口，同一页被追加两遍 —— 所以闩是
-   * 同步的，且只由「自己那一份请求」归还（#565 复核 M2 / #582 审查中-1）。
+   * 同步重入闩：`page.loading` 是渲染快照，同一帧里连点两次滚到底（`onScrollToLower`
+   * 在内容不满屏时会连发）读到的都是 `false`，会拿同一条游标并发打两次接口。
    */
-  const loader = useMemo(
-    () =>
-      makeSegmentLoader<MockListing>({
-        getSeg: () => segRef.current,
-        getEpoch: () => epoch.current,
-        fetch: (status, cursor) => loadPublicUserListingsPage(userId, status, cursor),
-      }),
-    [userId],
-  )
+  const inFlight = useRef(false)
 
   const load = useCallback(async () => {
-    // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
+    // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
     setLoadState('loading')
     setProfile(null)
+    const initial = segmentOfTab(tabParam)
+    // 先作废在途请求：上一轮还没回来的响应（含列表页）一个字段都不许写进新一轮
+    generation.current += 1
+    inFlight.current = false
+    setSeg(initial)
     setPage(emptyPage())
-    // 新一轮加载：代号 +1 把上一轮还在飞的列表响应整包作废，闩一并放开给这一轮
-    // （加载器只在「自己那一份仍是当前请求」时写回视图，所以旧响应回来也落不进来）。
-    epoch.current += 1
-    loader.release()
-    /**
-     * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
-     * 重试时它是**新挂载**的、`scrollTop` 回到 0，而 `glassOn` / `titled` 是页面级
-     * state、会留着上一轮的值 —— 不复位就会出现「停在页顶却顶着玻璃底和居中标题」。
-     */
+    // 顶栏两态也要跟着复位：失败态会把 `ScrollView` 整块卸载，重试时它是新挂载的，
+    // 而这两个 page 级 state 会留着上一轮的值。
     setGlassOn(false)
     setTitled(false)
 
@@ -175,44 +147,50 @@ export default function UserHome() {
       return
     }
     setProfile(result.profile)
-    /**
-     * 首屏那一页由纯函数决定（`firstPageOf`，用例见 `tests/user-page-tabs.test.ts`）：
-     * 在售口径直接吃本次响应里的列表，已售出口径拿到的是空页、由下面的 effect 另拉一页
-     * —— 绝不把在售列表画到「已售出」标题底下。
-     * 代价是已售出视图会多取一页用不上的在售列表：换掉它得把资料与列表拆成两次请求，
-     * 会把 notFound / failed 的判定口径一分为二，不值得（#581）。
-     */
-    const first = firstPageOf(segRef.current, result)
-    if (first.loaded) setPage(first)
+    // 首屏那一页：「在售」段直接吃本次响应，「已售出」段拿到空页、由下面的 effect 补拉。
+    // 代价是已售出视图会多取一页用不上的在售列表（拆成两次请求会把 notFound / failed
+    // 的判定口径一分为二，不值得）。
+    setPage(firstPageOf(initial, result))
     setLoadState('ok')
-  }, [loader, userId])
+  }, [tabParam, userId])
 
   /**
    * 拉当前口径的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
    *
-   * 两个入口（首屏补拉、滚到底补下一页）都可能并发进来，重入由加载器里的同步闩挡住 ——
-   * 抢不到就是 `busy`，什么都不改（`loading` 是渲染快照，同一帧里的两次调用读到的都是
-   * 旧值）。追加时读 `prev` 里已展示的条目、并按 `id` 去重，不读闭包里的快照 ——
-   * 否则两次快速滚动会拿同一份旧数组覆盖、或把同一页追加两遍。
+   * 两个入口（空页补第一页、滚到底补下一页）都可能并发进来：重入靠同步闩挡，追加时读
+   * `prev` 里已展示的条目并按 id 去重（`mergeSegmentPage`），不读闭包里的快照。
    */
   const loadSegment = useCallback(
     async (cursor: string | null) => {
-      // 重入闩与请求身份都在加载器里：抢不到闩是 `busy`（一个回调都不走），
-      // 切段后回来的旧响应是 `stale`（同样一个回调都不走）。
-      await loader.load(cursor, {
-        onStart: () => setPage((prev) => ({ ...prev, loading: true, failed: false })),
-        onPage: (sent, next, at) =>
-          setPage((prev) => applySegmentPage(prev, sent, liveRequest(), next, at)),
-        // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
-        onMissing: () => setLoadState('notFound'),
-        onFailed: (_sent, error) => {
-          // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
-          console.warn('[miniapp] 他人主页：列表加载失败', error)
-          setPage((prev) => ({ ...prev, loading: false, failed: true }))
-        },
-      })
+      if (inFlight.current) return
+      inFlight.current = true
+      const sent = generation.current
+      setPage((prev) => ({ ...prev, loading: true, failed: false }))
+      try {
+        const next = await loadPublicUserListingsPage(userId, seg, cursor)
+        // 切过段 / 重载过：这一份响应作废，一个字段都不写（连 `finally` 也不归还闩）
+        if (sent !== generation.current) return
+        if (next === null) {
+          // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
+          setLoadState('notFound')
+          return
+        }
+        setPage((prev) => ({
+          ...mergeSegmentPage(prev, next, cursor),
+          loaded: true,
+          loading: false,
+          failed: false,
+        }))
+      } catch (error) {
+        if (sent !== generation.current) return
+        // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
+        console.warn('[miniapp] 他人主页：列表加载失败', error)
+        setPage((prev) => ({ ...prev, loading: false, failed: true }))
+      } finally {
+        if (sent === generation.current) inFlight.current = false
+      }
     },
-    [loader, liveRequest],
+    [seg, userId],
   )
 
   const items = page.items
@@ -227,7 +205,7 @@ export default function UserHome() {
    * 都走这条路，不是只有 `?tab=SOLD` 进来的实例（#581 / #582）。
    */
   useEffect(() => {
-    // 「该不该补拉」由纯函数决定（样本见 `tests/user-page-tabs.test.ts`）：不看口径、
+    // 「该不该补拉」由纯函数决定（样本见 `tests/user-page-tabs.test.ts`）：不看口径，
     // 只看加载态与这段页面的三态，`failed` 一律不自动重试。
     if (!shouldRefetch(loadState, page)) return
     void loadSegment(null)
@@ -311,50 +289,39 @@ export default function UserHome() {
   /**
    * 「回到顶部」：本页滚动发生在**内滚 ScrollView** 里，`Taro.pageScrollTo` 够不到它；
    * 用会话页（`pages/conversation`）同款的 `scrollIntoView` 方案指向内容顶部的锚点。
-   * scrollIntoView 的值不变时原生层不会重滚，所以备两个同位的锚点交替指 —— 连点、
-   * 滚下去再点，每次都能真的回到顶部。
+   * scrollIntoView 的值不变时原生层不会重滚，所以每处落点都备两个同位的锚点交替指 ——
+   * 连点、滚下去再点，每次都能真的滚过去。
    */
   const [topAnchor, setTopAnchor] = useState('')
   /** 回到顶部钮（共享组件）：滚过一屏浮现（onScroll 里置位） */
   const [showTop, setShowTop] = useState(false)
   const backToTop = () => {
-    setTopAnchor((prev) => toggleAnchor(prev, 'uhome-top-a', 'uhome-top-b'))
+    setTopAnchor((prev) => (prev === 'uhome-top-a' ? 'uhome-top-b' : 'uhome-top-a'))
   }
 
-  /**
-   * 滚到列表区。**必须和 `backToTop` 一样交替两个同位锚点**：`scrollIntoView` 的值不变
-   * 原生层就不重滚，写死一个 id 的话「在当前视图点『在售』→ 滚下去看 → 上滑回来再点」
-   * 第二次完全没反应（#581 复核必修 1）。
-   */
+  /** 滚到列表区（页头两格的落点）：同上，写死一个 id 的话第二次点就没反应 */
   const scrollToBody = useCallback(() => {
-    setTopAnchor((prev) => toggleAnchor(prev, 'uhome-body-a', 'uhome-body-b'))
+    setTopAnchor((prev) => (prev === 'uhome-body-a' ? 'uhome-body-b' : 'uhome-body-a'))
   }, [])
 
   /**
-   * 切到另一段 —— **页内切换**（Owner 反馈：不要切页观感、不要转场动画）。
-   *
-   * 只动本页状态：不压栈、不 `navigateTo` / `redirectTo`、也不回写 `?tab=`（回写会让路由
-   * 把它当成一次跳转重入，看着又像切页）。已经在当前段时只把列表滚进视野 ——
-   * 这两个数字离列表还有一屏页头，点了总得给点反应。`onClick` 只挂在「在售」「卖出」两格上，
-   * 「好评率」那格没有列表可去，不接任何点击。
-   *
-   * 切段同时处理在途请求：代号 `+1` 让旧段还没回来的响应作废，闩立刻放开给新段用，
-   * 数据整份重置成空页（新段从第一页拉、不继承上一段的游标与失败态），最后滚到列表顶部。
+   * 切到另一段 —— **页内切换**：只动本页 state，不压栈、不 `navigateTo` / `redirectTo`、
+   * 也不回写 `?tab=`（回写会被路由当成一次跳转重入，看着又像切页）。
+   * 已经在当前段时只把列表滚进视野（两格离列表还有一屏页头，点了总得给点反应）。
    */
   const switchSegment = useCallback(
     (next: Segment) => {
-      if (segRef.current === next) {
+      if (next === seg) {
         scrollToBody()
         return
       }
-      epoch.current += 1
-      loader.release()
-      segRef.current = next
+      generation.current += 1 // 在途的旧段响应就此作废
+      inFlight.current = false // 闩立刻放开给新段
       setSeg(next)
-      setPage(emptyPage())
+      setPage(emptyPage()) // 新段从第一页拉，不继承上一段的游标与失败态
       scrollToBody()
     },
-    [loader, scrollToBody],
+    [scrollToBody, seg],
   )
 
   const openSoldListings = useCallback(() => switchSegment('SOLD'), [switchSegment])
@@ -964,11 +931,14 @@ export default function UserHome() {
             )}
           </View>
 
-          {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内）；
-              上面两个空锚点是页头两个数字点下来的落点（#581，见 `scrollToBody`） */}
-          {/* 两个同位锚点交替指（见 scrollToBody）：`scrollIntoView` 同值不重滚 */}
-          <View id="uhome-body-a" />
-          <View id="uhome-body-b" />
+          {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内）。
+              两个同位空锚点是页头两格的落点（#581，见 `scrollToBody`）：锚点顶到滚区 y=0 时，
+              列表标题还得落在绝对定位的导航条下方，所以整块用负 margin 向上让出导航条高度
+              （不留白；`navTotalHeight` 与页头让位同一口径，行内 px 不经 pxtransform） */}
+          <View style={{ marginTop: `-${navTotalHeight}px` }}>
+            <View id="uhome-body-a" />
+            <View id="uhome-body-b" />
+          </View>
           <View className="uhome__body">
             <View className="uhome__sect">
               {/* 口径入口在页头（#581），这一行只报「在看哪一段 + 这一段有多少件」。

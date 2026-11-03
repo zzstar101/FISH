@@ -348,13 +348,8 @@
   color: var(--muted-2);
 }
 
-/*
- * 可点的那两格（#581）：整格就是入口。
- *
- * 仓库口径是「所有可点区域视觉高度 ≥ 44pt」，这里换算成设计值 `min-height: 88px`
- * （同一句换算见 `components/legal-doc/index.scss`）；`.uhome__stat` 原本只有
- * 40px 数字 + 22px 标签（≈ 70px），这两格补上高度，内容由基类的 `justify-content: center` 居中。
- */
+/* 可点的两格（#581）：整格就是入口，触控高度按 44pt 换算成设计值 88px
+   （同一句换算见 `components/legal-doc/index.scss`）；内容由基类居中 */
 .uhome__stat--link {
   min-height: 88px;
 }

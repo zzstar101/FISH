@@ -121,10 +121,9 @@ describe('user 页面接线', () => {
   test('列表是否有下一页取自读取层的游标结果，不靠条数猜', async () => {
     const code = await source
     // #565：下一页信号就是读取层交回的契约游标本身，页面把它原样合并进视图状态，
-    // 不再有「hasMore 布尔」这一层转手（#581 起首屏那一页也由 `firstPageOf` 保管游标，
-    // #582 起合并要先过在途请求的段 / 代号校验，见 `applySegmentPage`）
-    expect(code).toContain('applySegmentPage(prev, sent, liveRequest(), next, at)')
-    expect(code).toContain('page.nextCursor === null')
+    // 不再有「hasMore 布尔」这一层转手（#581 起首屏那一页由 `firstPageOf` 保管游标）
+    expect(code).toContain('mergeSegmentPage(prev, next, cursor)')
+    expect(code).toContain('const hasMore = page.nextCursor !== null')
   })
 
   test('滚到底的重入靠同步 ref 闩互斥，合并交给纯函数（#565 复核 M2）', async () => {
@@ -132,33 +131,22 @@ describe('user 页面接线', () => {
     // `page.loading` 是渲染快照：同一帧里连点两次滚到底，两次回调读到的都是上一次渲染的
     // `loading: false`，会拿同一条游标并发打两次接口。
     // 互斥必须**先同步置位**（compare-and-set），不能靠读 state 决定要不要发。
-    // #581/#582 起一个页面实例只服务当前这一段（切段=页内换 state），闩只剩一把；
+    // #581 起一个页面实例只服务当前这一段（切段=页内换 state），闩只剩一把；
     // 切段时由 `switchSegment` 立刻放开给新段用。
-    // #582 审查中-1 起闩搬进了加载器（`makeSegmentLoader`），页面只调它：
-    // 时序由 `tests/user-page-tabs.test.ts` 的 `makeSegmentLoader` 那组直接跑出来。
-    expect(code).toContain('await loader.load(cursor, {')
-    const loaderSource = await Bun.file(
-      new URL('../src/pkg-browse/pages/user/segment-page.ts', import.meta.url),
-    ).text()
-    expect(loaderSource).toContain("if (inFlight) return 'busy'")
-    expect(loaderSource).toContain('inFlight = true')
-    expect(loaderSource).toContain('if (isCurrentRequest(sent, live())) inFlight = false')
-    // 合并（覆盖 / 追尾 / 按 id 去重）由 `mergeSegmentPage` 承担，行为在纯函数用例里钉住。
-    expect(loaderSource).toContain('...mergeSegmentPage(prev, page, cursor)')
+    expect(code).toContain('if (inFlight.current) return')
+    expect(code).toContain('inFlight.current = true')
+    expect(code).toContain('if (sent === generation.current) inFlight.current = false')
+    // 滚到底补的是「下一页」，不是把第一页重拉一遍
+    expect(code).toContain('void loadSegment(page.nextCursor)')
   })
 
   test('合并结果整体展开进视图状态：游标与三态是同一次写回（#565 复核 M1）', async () => {
-    // 这段形状在 `applySegmentPage` 里（#582 起页面只负责「什么时候发请求」）。
     // 只取 `.items`（`items: mergeSegmentPage(...).items`）会丢掉 `nextCursor`：
     // `hasMore` 恒真 → 滚到底拿同一游标反复请求，去重又把条目全滤掉 → 列表静止、网络空转。
     // 删掉 `loaded: true` 则列表永远停在骨架屏。整块形状一次钉住两条写回。
-    const page = flatten(
-      await Bun.file(
-        new URL('../src/pkg-browse/pages/user/segment-page.ts', import.meta.url),
-      ).text(),
-    )
+    const page = flatten(await source)
     expect(page).toContain(
-      '{ ...mergeSegmentPage(prev, page, cursor), loaded: true, loading: false, failed: false, }',
+      '{ ...mergeSegmentPage(prev, next, cursor), loaded: true, loading: false, failed: false, }',
     )
   })
 })
