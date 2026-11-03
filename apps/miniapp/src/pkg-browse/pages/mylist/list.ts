@@ -22,6 +22,7 @@
  *   本页走的是本人查询，所以实际拿到的是三档枚举之一；判 `null` 归「已下架」是取最保守的落点。
  */
 import type { ListingModerationStatus, ListingStatus } from '@fish/contracts/listings/schema'
+import { outOfMarketLabel } from '@/features/listing/status-mark'
 
 export type MyListSegment = 'sale' | 'review' | 'pending' | 'sold' | 'off'
 
@@ -90,6 +91,9 @@ export function segmentLabel(segment: MyListSegment): string {
  *   但卖家能做的是找平台，与「自己下架、随时可重新上架」不是一回事，所以名字要分开。
  * - 「待确认」段：有买家在等你点头（`awaiting`）→ 待确认；已同意、等面交（`RESERVED`）→
  *   待面交（与订单页 `PENDING_MEETUP` 同名，一个状态一个名字）。
+ * - 「已售出 / 已下架」段（#566）：胶囊读 `features/listing/status-mark` 的 `outOfMarketLabel`，
+ *   与列表卡角标同一份文案（「卖掉了 / 下架了」）——同一件商品在他人主页和这里不能两种说法。
+ *   分段名仍然是「已售出 / 已下架」（`SEGMENTS`），那是这一页的导航词，不是卡片角标。
  */
 export function cardLabel(
   segment: MyListSegment,
@@ -100,6 +104,8 @@ export function cardLabel(
   if (segment === 'review') return moderationStatus === 'BLOCKED' ? '不过审' : '审核中'
   if (segment === 'off' && governanceDelisted) return '平台下架'
   if (segment === 'pending' && !awaiting) return '待面交'
+  if (segment === 'sold') return outOfMarketLabel('SOLD') ?? segmentLabel(segment)
+  if (segment === 'off') return outOfMarketLabel('OFFLINE') ?? segmentLabel(segment)
   return segmentLabel(segment)
 }
 

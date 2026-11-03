@@ -52,7 +52,7 @@
 .pcard__shade {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--scrim-strong);
   pointer-events: none;
 }
 
@@ -80,6 +80,12 @@
 .pcard--out .pcard__want,
 .pcard--out .pcard__who {
   color: var(--muted);
+}
+
+/* 成色印章自己垫着一层青色印底，只把字置灰会得到「灰字压青底」：
+   整枚印章退回中性底，与灰掉的文字落在同一档（#566 审查 M4）。 */
+.pcard--out .pcard__cond {
+  background: var(--line);
 }
 
 .pcard__body {

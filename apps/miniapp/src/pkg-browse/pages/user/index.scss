@@ -461,12 +461,13 @@
   color: #fff;
 }
 
-/* 已售 / 已下架（#566）：与共享卡片同一套形态 —— 50% 黑罩 + 深底白字状态角标 + 文字置灰。
-   罩子是与图片同占位的叠层，`.uhome__img` 的 300px 高度一个像素都不动。 */
+/* 已售 / 已下架（#566）：与共享卡片同一套形态 —— 强遮罩 + 深底白字状态角标 + 文字置灰。
+   压暗走既有令牌 `--scrim-strong`（`styles/_token-vars.scss`，收藏页 / 浏览历史页同一档），
+   不新增色值；罩子是与图片同占位的叠层，`.uhome__img` 的 300px 高度一个像素都不动。 */
 .uhome__shade {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--scrim-strong);
   pointer-events: none;
 }
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { outOfMarketLabel } from '../src/features/listing/status-mark'
 import {
   canDelete,
   canEdit,
@@ -168,14 +169,17 @@ describe('cardLabel —— 两段里的子状态要分开说', () => {
     // 与「自己下架、随时可重新上架」不是一回事 —— 名字必须分开
     expect(cardLabel('off', false, 'BLOCKED', true)).toBe('平台下架')
     expect(cardLabel('off', false, 'APPROVED', true)).toBe('平台下架')
-    expect(cardLabel('off', false, 'APPROVED', false)).toBe('已下架')
+    expect(cardLabel('off', false, 'APPROVED', false)).toBe('下架了')
   })
 
-  test('其余三段与分段名一致（awaiting / moderation 不影响它们）', () => {
+  test('在售 / 待确认与分段名一致，已售出 / 已下架改用卡片角标文案', () => {
     expect(cardLabel('sale', false, null)).toBe('在售')
-    expect(cardLabel('sold', false, null)).toBe('已售出')
-    expect(cardLabel('off', false, null)).toBe('已下架')
     expect(cardLabel('sale', true, null)).toBe('在售')
+    // #566：与列表卡角标同一份文案（`outOfMarketLabel`），不另写一份
+    expect(cardLabel('sold', false, null)).toBe('卖掉了')
+    expect(cardLabel('sold', false, null)).toBe(outOfMarketLabel('SOLD') ?? '')
+    expect(cardLabel('off', false, null)).toBe('下架了')
+    expect(cardLabel('off', false, null)).toBe(outOfMarketLabel('OFFLINE') ?? '')
   })
 })
 
