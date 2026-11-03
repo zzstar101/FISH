@@ -50,6 +50,7 @@ const NOW = {
 describe('opAliveIn —— 这次异步操作还属不属于当前页面', () => {
   test('账号 / 争议 / 世代都对得上 → 可以写回', () => {
     expect(opAliveIn(OP, NOW)).toBe(true)
+    expect(opAliveIn(OP, { ...NOW, status: 'WITHDRAWN' })).toBe(true)
   })
 
   test('换号：旧账号的响应不能写进新账号的页面', () => {

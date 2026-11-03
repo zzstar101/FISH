@@ -1,4 +1,4 @@
-import { beforeEach, expect, mock, test } from 'bun:test'
+import { beforeEach, expect, mock, spyOn, test } from 'bun:test'
 import type { DisputeAttachment } from '@fish/contracts/disputes/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { UploadAbortedError } from '../src/features/upload/active'
@@ -126,6 +126,23 @@ test('PUT 成功后 confirm 网络失败：保留 key，重试直接用同一 ke
   expect(presignCount()).toBe(1)
   expect(calls.filter((call) => call.kind === 'put').length).toBe(1)
   expect(confirmKeys()).toEqual([presignKey(1), presignKey(1)])
+})
+
+test('超过签名有效期仍先确认已上传对象，不重复占额度', async () => {
+  const clock = spyOn(Date, 'now').mockReturnValue(1_000_000)
+  try {
+    confirmImpl = async () => {
+      throw new Error('request:fail')
+    }
+    await expect(uploadDisputeAttachment('dsp_late_retry', photo)).rejects.toThrow('request:fail')
+    clock.mockReturnValue(1_000_000 + 60 * 60 * 1000)
+    confirmImpl = async () => ({ attachment })
+    await uploadDisputeAttachment('dsp_late_retry', photo)
+    expect(presignCount()).toBe(1)
+    expect(confirmKeys()).toEqual([presignKey(1), presignKey(1)])
+  } finally {
+    clock.mockRestore()
+  }
 })
 
 test('confirm 明确失效（422）：清缓存，下一次重新走完整链（同一个 key 再试也没用）', async () => {

@@ -307,12 +307,18 @@ export default function DisputeDetailPage() {
     setWithdrawing(true)
     try {
       const next = await withdrawDispute(op.disputeId)
-      if (!opAlive(op)) return
+      if (!opAlive(op)) {
+        if (opSameAccount(op) && detailRef.current?.id === op.disputeId) void read(true)
+        return
+      }
       setDetail(next)
       setStale(false)
       void Taro.showToast({ title: '已撤回争议', icon: 'none' })
     } catch (error) {
-      if (!opAlive(op)) return
+      if (!opAlive(op)) {
+        if (opSameAccount(op) && detailRef.current?.id === op.disputeId) void read(true)
+        return
+      }
       resyncIfConflict(error)
       void Taro.showToast({
         title: isApiError(error)
@@ -499,7 +505,10 @@ export default function DisputeDetailPage() {
     setAddingMessageId(messageId)
     try {
       const result = await addDisputeEvidence(op.disputeId, messageId)
-      if (!opAlive(op)) return
+      if (!opAlive(op)) {
+        if (opSameAccount(op) && detailRef.current?.id === op.disputeId) void read(true)
+        return
+      }
       setDetail((prev) => {
         if (prev === null) return prev
         if (prev.evidence.some((item) => item.message.id === result.evidence.message.id))
@@ -512,7 +521,10 @@ export default function DisputeDetailPage() {
         icon: 'none',
       })
     } catch (error) {
-      if (!opAlive(op)) return
+      if (!opAlive(op)) {
+        if (opSameAccount(op) && detailRef.current?.id === op.disputeId) void read(true)
+        return
+      }
       resyncIfConflict(error)
       void Taro.showToast({
         title: isApiError(error) ? disputeFailureText(error.code) : disputeFailureText(null),

@@ -17,7 +17,7 @@
  * 预算在 presign + PUT 那一刻就花掉了；此后无论是 **PUT 的响应丢了**（字节已落桶、超时/断网）
  * 还是 **confirm 撞上网络抖动**，都别把 `objectKey` 丢掉重走整条链（用户重试时又要选图、
  * 又要占一次 presign 配额，桶里还多一个没人引用的对象）。这里在模块级记一份
- * `disputeId → objectKey`（10 分钟，和服务端附件签名 TTL 同量级）：
+ * `disputeId → objectKey`（当前进程内保留；对象 key 不随签名 URL 过期）：
  * - 进入上传先尝试用记住的 key confirm（服务端 confirm 幂等，成功会清掉缓存），但**只认同一张图**
  *   （见 `fingerprintOf`：换图后旧 key 直接作废，重新 presign + PUT）；
  * - presign 成功后立刻记住 key（早于 PUT，才盖得住「响应丢失」这一种）；confirm 成功后清除；
@@ -34,12 +34,8 @@ import { type PickedPhoto, readFileBuffer, UPLOAD_TIMEOUT_MS } from '@/features/
 import { isApiError } from '@/lib/request'
 import { confirmDisputeAttachment, presignDisputeAttachment } from './api'
 
-/** 记住的 objectKey 多久后作废（与服务端附件签名 900s TTL 同量级）。 */
-const PENDING_CONFIRM_TTL_MS = 10 * 60 * 1000
-
 type PendingConfirm = {
   objectKey: string
-  expiresAt: number
   /** 这次上传的是哪一张图（`chooseMedia` 的临时路径 + 大小 + 类型）；换一张图就不许复用旧 key */
   fingerprint: string
 }
@@ -58,13 +54,9 @@ function fingerprintOf(photo: PickedPhoto): string {
 /** 模块级：页面在「PUT 成功、confirm 失败」之间重新挂载时也能续上（key 与 disputeId 绑定）。 */
 const pendingConfirms = new Map<string, PendingConfirm>()
 
-function readPendingConfirm(disputeId: string, photo: PickedPhoto, nowMs: number): string | null {
+function readPendingConfirm(disputeId: string, photo: PickedPhoto): string | null {
   const pending = pendingConfirms.get(disputeId)
   if (pending === undefined) return null
-  if (pending.expiresAt <= nowMs) {
-    pendingConfirms.delete(disputeId)
-    return null
-  }
   // 指纹不一致 = 用户换了另一张图：旧 key 属于上一张图，不能拿来 confirm，清掉走整条链
   if (pending.fingerprint !== fingerprintOf(photo)) {
     pendingConfirms.delete(disputeId)
@@ -110,7 +102,7 @@ export async function uploadDisputeAttachment(
   assertSame()
 
   // 1) 上次 PUT 成功但 confirm 没回来的：先用同一个 key 续 confirm（服务端幂等）
-  const remembered = readPendingConfirm(disputeId, photo, Date.now())
+  const remembered = readPendingConfirm(disputeId, photo)
   if (remembered !== null) {
     try {
       const confirmed = await confirmDisputeAttachment(disputeId, remembered)
@@ -143,7 +135,6 @@ export async function uploadDisputeAttachment(
   // （`DISPUTE_ATTACHMENT_INVALID`），清掉后重走整条链。
   pendingConfirms.set(disputeId, {
     objectKey: presign.objectKey,
-    expiresAt: Date.now() + PENDING_CONFIRM_TTL_MS,
     fingerprint: fingerprintOf(photo),
   })
 

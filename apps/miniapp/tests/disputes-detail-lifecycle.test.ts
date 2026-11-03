@@ -136,6 +136,17 @@ describe('接线：每条动线在 await 之前抓身份、在写回之前核身
   })
 })
 
+test('写请求回包撞上同账号刷新时重读服务端结果，不诱导重复提交', async () => {
+  const source = await pageSource()
+  for (const name of ['runWithdraw', 'addEvidence']) {
+    const body = handlerBody(source, name)
+    expect(
+      body.split('if (opSameAccount(op) && detailRef.current?.id === op.disputeId) void read(true)')
+        .length - 1,
+    ).toBe(2)
+  }
+})
+
 describe('收尾：忙位归账号所有，换号清场要放掉在途闩锁', () => {
   test('忙位收尾只判「还是同一账号」，不判世代', async () => {
     const source = await pageSource()
