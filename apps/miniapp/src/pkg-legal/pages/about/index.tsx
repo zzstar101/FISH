@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
-import { APP_VERSION } from '@/lib/app-meta'
+import { readAppVersion } from '@/lib/app-meta'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
@@ -23,9 +23,7 @@ import './index.scss'
  *   `Taro.getUpdateManager()` 只给回调、没有 `checkNow()`；
  * - 条目行**不加左图标**（一行只放一个信息），只有版本行留图标，用来区分「展示项 / 跳转项」。
  *
- * 版本号取仓内常量 `APP_VERSION`（`@/lib/app-meta`），**不照稿硬写 v1.0.0** ——
- * 稿自己标注了「仓内常量当前为 1.4.0，落地需对齐」，读同一个常量才不会出现
- * 「设置页写 1.4.0、本页写 1.0.0」的两处版本号打架。构建号不展示（设置页页脚已有）。
+ * 与设置页共用微信运行时版本读取；开发版/体验版缺少版本时显示环境名，不伪造版本或构建号。
  *
  * 品牌标记用真实资产 `BRAND.mark`（`@/assets/brand`；稿的取舍 ②：稿里那个渐变方块 +
  * 「鱼」字是占位，落地整块换成本图）。页脚版权行取稿的原文（来源
@@ -61,7 +59,7 @@ export default function About() {
             <Image className="ab__row-ic-img" src={ICONS.gridFg} mode="aspectFit" />
           </View>
           <Text className="ab__row-label">版本号</Text>
-          <Text className="ab__row-val num">{`v${APP_VERSION}`}</Text>
+          <Text className="ab__row-val num">{readAppVersion()}</Text>
         </View>
       </View>
 

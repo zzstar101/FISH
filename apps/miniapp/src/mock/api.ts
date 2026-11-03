@@ -25,8 +25,6 @@ import {
 } from '@/lib/listing-labels'
 import { formatAmount, formatYuan } from '@/lib/money'
 import {
-  APP_BUILD,
-  APP_VERSION,
   isEduEmail,
   meetupCodeOf,
   rotateMeetupCode,
@@ -506,8 +504,6 @@ export function eduEmailOk(email: string): boolean {
 export function settings(): MockSettings {
   return SETTINGS
 }
-
-export { APP_BUILD, APP_VERSION }
 
 export const allUsers: MockUser[] = USERS
 

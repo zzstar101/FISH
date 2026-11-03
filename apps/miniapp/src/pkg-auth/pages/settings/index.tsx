@@ -17,7 +17,7 @@ import {
 } from '@/features/settings/preferences'
 import { NOTIFY_PREFS_EVENT } from '@/features/settings/unread-badge'
 import { requestAllSubscribeKinds } from '@/features/subscribe/request'
-import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
+import { readAppVersion } from '@/lib/app-meta'
 import { settings } from '@/lib/settings-defaults'
 import type { MockSettings } from '@/mock/types'
 import './index.scss'
@@ -398,7 +398,7 @@ export default function Settings() {
               <Image className="st__ric-ic" src={ICONS.gridFg} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">关于鱼小应</Text>
-            <Text className="st__rvalue num">{`v${APP_VERSION}`}</Text>
+            <Text className="st__rvalue num">{readAppVersion()}</Text>
             <View className="st__arrow" />
           </View>
 
@@ -445,7 +445,7 @@ export default function Settings() {
           退出后需重新登录，本地草稿与收藏记录不会丢失。{'\n'}
           注销账号有 {ACCOUNT_DELETION_COOLING_OFF_DAYS} 天冷静期，期间可撤回。
         </Text>
-        <Text className="st__version num">{`鱼小应 v${APP_VERSION} · build ${APP_BUILD}`}</Text>
+        <Text className="st__version num">{`鱼小应 ${readAppVersion()}`}</Text>
       </View>
 
       {/* ==================== 退出登录二次确认（吸底弹层） ==================== */}
