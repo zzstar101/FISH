@@ -630,3 +630,47 @@ describe('预填交接（再次上架 / 重新上架）的接线', () => {
     expect(apply).toContain('setDescription(draft.description)')
   })
 })
+
+describe('发布 / 编辑成功 → 详情页的跳转方式（#562）', () => {
+  /*
+   * 需求：这个入口点详情页的返回键要**直达首页**，而不是回上一步。
+   *
+   * 判据全在「栈里还剩谁」上：`navigateTo` 把出物页留在栈里，而表单已被 `resetForm()`
+   * 清空 —— 返回就是一张看不出刚发生了什么的空白发布页；`redirectTo`/`reLaunch` 把本页
+   * 从栈里换掉，详情页成为栈底，它的 `handleBack` 走已有的「栈深 1 → switchTab 首页」
+   * 兜底，详情页本身**零改动**。
+   *
+   * 这里只钉源码接线（不证明平台是否接受这条跳转 —— 那是端上门禁，
+   * 见 `docs/miniapp-dev-workflow.md`）。
+   */
+  test('goDetail 用 redirectTo 换栈，不再用 navigateTo 压栈', async () => {
+    const go = await pageSlice('const goDetail = (id: string) => {', '* 上传一张图')
+    expect(go).toContain('Taro.redirectTo({ url })')
+    // 平台拒绝时退化到 reLaunch：目标 URL 与 redirectTo 同一份，别写成两处字面量
+    expect(go).toContain('Taro.reLaunch({ url })')
+    // 先清表单再跳（原行为保留：不把填过的旧内容留给下一个进入本页的人）
+    expectBefore(go, 'resetForm()', 'Taro.redirectTo')
+  })
+
+  // 不变式守卫，**不是**本缺陷的回归用例（改前也是绿的）：钉住「两条提交路径共用同一个跳转」，
+  // 免得以后有人只在新建分支改成 redirectTo、编辑分支漏掉。
+  //
+  // `submit` 里编辑 / 新建不是两条各自跳转的分支，而是同一个三元表达式：
+  // `const detail = editing && editId !== null ? await updateListing(...) : await createListing(...)`，
+  // 之后只有一处 `goDetail(detail.id)`。所以「编辑分支是否也走 goDetail」只能这样钉：
+  // ① 两条分支都把结果绑给同一个 `detail`；② `goDetail(` 在 submit 里**有且只有一处**，
+  // 且排在两条分支之后；③ submit 里不存在任何绕过它的直接跳转调用（否则编辑分支能自己跳走）。
+  test('新建与编辑两条提交路径都汇到唯一的 goDetail（别只改新建分支）', async () => {
+    const submit = await pageSlice('const submit = () => {', '* 冷却倒计时。')
+    expect(submit).toContain('editing && editId !== null')
+    // 编辑走 PATCH、新建走 POST，都汇到同一个 `detail` 再跳
+    expect(submit).toContain('await updateListing(editId')
+    expect(submit).toContain('await createListing(')
+    // 出现两处 `goDetail(` 就说明某条分支自己跳了（例如编辑分支被改成 navigateTo）
+    expect(submit.match(/goDetail\(/g) ?? []).toHaveLength(1)
+    expectBefore(submit, 'await updateListing(editId', 'goDetail(detail.id)')
+    expectBefore(submit, 'await createListing(', 'goDetail(detail.id)')
+    // 正则要求带调用括号：将来注释里提一句 API 名字不会误伤
+    expect(submit).not.toMatch(/Taro\.(?:navigateTo|redirectTo|reLaunch|switchTab)\s*\(/)
+  })
+})

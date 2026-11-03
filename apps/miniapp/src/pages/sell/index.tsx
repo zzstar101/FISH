@@ -460,14 +460,23 @@ export default function Sell() {
   }, [authStatus, userId])
 
   /**
-   * 发布成功 → 商品详情。
+   * 发布 / 编辑成功 → 商品详情。
    *
-   * 先 `resetForm()` 再 `navigateTo`：这样 back 回到发布页时是一张新表单，
-   * 而不是一份填过的旧内容（否则容易再点一次「发布」）。
+   * 用 `redirectTo`（而不是 `navigateTo`）把本页**从栈里换掉**（#562）：详情页成为栈底，
+   * 它的返回键走已有的「栈深 1 → 回首页」兜底（`lib/nav-back` 同口径），用户不会落回
+   * 一张被 `resetForm()` 清空、看不出刚才发生了什么的空表单。顺带根除底栏 bug：本页被
+   * 销毁，它那个常驻底栏实例不复存在，「底栏卡在本页上」无从发生。
+   *
+   * 平台对 `redirectTo` 的限制是**目标**页不能是 tabBar 页（不限制从 Tab 页跳走）；
+   * 万一某端拒绝这条跳转，退化到 `reLaunch`（栈同样只剩详情页，代价是整栈重开）。
+   * 两者都失败时用户仍停在本页 —— 表单已清空，可以重新填写。
    */
   const goDetail = (id: string) => {
+    const url = `/pkg-browse/pages/listing-detail/index?id=${id}`
     resetForm()
-    void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${id}` })
+    void Taro.redirectTo({ url }).catch(() => {
+      void Taro.reLaunch({ url })
+    })
   }
 
   /**
@@ -951,7 +960,7 @@ export default function Sell() {
   return (
     <View className="sell">
       <View className="sell__hero-bg" />
-      {/* 本页不渲染底栏（见 custom-tab-bar 的 HIDDEN_ROUTE），返回钮是唯一出口 */}
+      {/* 本页不渲染底栏（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），返回钮是唯一出口 */}
       {/* 页名大字跟其它页面顶栏同款：前段黑 + 尾段品牌蓝，跟在返回钮右边不居中 */}
       <TopBar back variant="glass" spacer title={editing ? '编' : '发'} titleEm="闲置" />
 

@@ -32,6 +32,7 @@ import {
   NOTIFY_PREFS_EVENT,
   readNotifyPrefsFromStorage,
 } from '@/features/settings/unread-badge'
+import { isTabbarHiddenRoute } from '@/lib/tabbar-route'
 import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
 import './index.scss'
 
@@ -114,21 +115,15 @@ function currentTabKey(): TabKey {
 }
 
 /**
- * 唯一不渲染底栏的 Tab 页：设计稿该页（`小程序第1版。发布闲置publish-listing.html`）
- * **根本没有画底栏**（全文 grep `tabbar` 零命中）—— 发布表单要占满屏高，
- * 底栏浮在上面会压住提交区（Owner 2026-09-28 二次确认维持此设计）。
+ * 显隐判据的真源在 `lib/tabbar-route`（`isTabbarHiddenRoute`）：唯一不渲染底栏的 Tab 页
+ * 是出物页，理由与边界都写在那里。
  *
- * `TAB_ITEMS` 里**保留** sell 项：`tabBar.list` 与 `switchTab` 仍需要它作为合法路由，
- * 隐藏只发生在本组件的渲染层。代价是该页只剩左上返回钮一个出口，
- * 所以 `pages/sell/index.tsx` 必须显示返回钮。
- *
- * ⚠️ 隐藏依赖 `currentRoute()` 的**渲染期求值**，而 tab-bar 实例挂载早于页面栈更新 ——
- * mount 首渲染时 route 还是上一页，tabbar 会先渲染出来；之后**唯一**能把早退判定
- * 「重新求值」的触发是 `setActive`（值变才重渲染）。所以 **sell 页也必须
- * `useDidShow(notifyTabbarRoute)` 广播**（2026-09-28 实测教训：漏了它，出物页底栏
- * 顶着上一页的高光常驻）。广播 → sync → setActive('sell') → 重渲染 → 早退生效。
+ * ⚠️ 显隐**不能**在渲染期现读 `currentRoute()`（#562 根因 2）：本实例在被别的页面压住
+ * 期间仍然挂载，未读快照（`useUnreadSnapshot` / `hydrateUnread`）、`useAuth()` 等异步源
+ * 随时会让它重渲染，那时栈顶已不是自己 —— 现读会命中「不隐藏」→ 把底栏画进一个看不见
+ * 的页面；回到本页时 sync 里 `setActive` 与离开前同值 → React bail out → 没人再求值 →
+ * 上一次画出来的底栏被原样显示。所以显隐跟着 `route` **状态**走（只由 onShow 广播更新）。
  */
-const HIDDEN_ROUTE = 'pages/sell/index'
 
 /**
  * 选中胶囊（Owner 2026-09-28 拍板）：**不做动画、不存独立状态**，位置直接由 `active`
@@ -146,6 +141,11 @@ const TAB_SLOT_RPX = 130.8
 
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
+  /**
+   * 当前页面 route（显隐判据的唯一输入）。初值取挂载时的栈顶，之后**只**由 onShow 广播
+   * 更新 —— 与 `active` 同一通道、同一时机（`lib/tabbar-sync`）。
+   */
+  const [route, setRoute] = useState<string>(() => currentRoute())
   /** 「消息」tab 的未读徽标文案（#431 任务二：蓝点 → 红色数字胶囊）；`null` = 不显示 */
   const [badge, setBadge] = useState<string | null>(null)
   const { status: authStatus, user } = useAuth()
@@ -266,10 +266,13 @@ export default function CustomTabBar() {
     )
   }, [authStatus, userId, unread, demoUnread, notifyPrefs, badge])
 
-  // 选中态同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
+  // 选中态与显隐同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
   // 复用实例不重新渲染，靠广播是它唯一能感知「我又被显示」的机会。
   useEffect(() => {
-    const sync = () => setActive(currentTabKey())
+    const sync = () => {
+      setActive(currentTabKey())
+      setRoute(currentRoute())
+    }
     sync()
     Taro.eventCenter.on(TABBAR_ROUTE_EVENT, sync)
     return () => {
@@ -284,9 +287,8 @@ export default function CustomTabBar() {
   }
 
   // 出物页早退：写在所有 hook 之后（hook 数量不能随路由变化）。
-  // 判定是渲染期求值 —— 依赖 sell 页自己的 onShow 广播触发 setActive 重渲染，
-  // 否则 mount 时（栈未更新）渲染出的底栏会带着旧页高光常驻（实测教训）。
-  if (currentRoute().includes(HIDDEN_ROUTE)) return null
+  // 判据读 `route` **状态**，不是渲染期现读页面栈 —— 见 `lib/tabbar-route` 的注释。
+  if (isTabbarHiddenRoute(route)) return null
 
   return (
     <View className="tabbar">
