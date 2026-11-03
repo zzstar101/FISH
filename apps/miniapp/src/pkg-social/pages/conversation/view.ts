@@ -1394,28 +1394,104 @@ export function mergeViewportShrink(input: {
 }
 
 /**
- * 键盘高度阶梯：把平台报来的高度压成**单调**的一串（#560，安卓真机复验）。
+ * 收尾尾巴的迟滞窗口（ms，R3）：部分机型报完 `0` 之后还会补一帧动画尾巴（一个非 0 的小高度）。
+ * 零迟滞照收就是「先上提、再回落」原样复发，所以收完之后的短窗口内、比收完时更矮的值一律丢弃。
+ * 只在这个窗口内生效（不是永久忽略），窗口外照收 —— 用户真的又开键盘必须跟得上。
+ */
+export const KEYBOARD_TAIL_WINDOW_MS = 400
+
+/** 键盘高度阶梯的完整状态（`nextKeyboardInset` 的输入与输出同构，逐字段回写即可） */
+export type KeyboardInsetState = {
+  /** 已经落地的键盘高度（设备 px，0 = 收起） */
+  inset: number
+  /** 是否处在「本页要求收起、等平台收完」的过程中（意图闩） */
+  closing: boolean
+  /** 这次收起是从多高开始的（0 = 没记，判「键盘又被开回来」用） */
+  closingFrom: number
+  /** 上一次收完时的高度基准（0 = 没记，判收尾尾巴用） */
+  closedFrom: number
+  /** 上一次收完的时刻（ms，0 = 没记） */
+  closedAt: number
+  /** 这次上报是否要求页面落地新高度（false = 丢弃 / 无变化，页面既不改布局也不重指尾行） */
+  changed: boolean
+}
+
+/**
+ * 键盘高度阶梯：把平台报来的高度压成**单调向下**的一串（#560，安卓真机复验）。
  *
  * 输入栏是 100vh 弹性列的最后一个流内块，下内边距直接由键盘高度派生 —— 每写一次高度就是
  * 一次布局变化。安卓上 `hideKeyboard()` 之后系统要动画收键盘，动画期间平台会连着报若干次
  * 递减的中间值（收的过程中还可能再抬一下）。把中间值逐个当终值写进布局，等于用自己的布局
  * 动作去和系统动画拼速度，真机上看到的就是「先上提、再回落」。
  *
- * 所以只维护一条规则：**收起一旦开始，就只认更小的值，直到平台报 0 才算收完**。
- * - `next <= 0`：收完了。这是唯一能把高度落到 0 的路径（切态、开面板都不许自己归零）；
- * - 不在收起态：跟随平台（开键盘、微调都算），并按「比上一帧小」判定收起开始；
- * - 收起态：`next < prev` 跟随 —— 一路贴着键盘走、只会往下；`next >= prev` 丢弃 —— 同一个
- *   动画里不许出现「先变小又变大」，否则那条被抬高的内边距会把输入栏再顶上去一次。
+ * 关键：**「在收」是意图，不是从高度符号反推的**。安卓上「键盘没关、只是变矮」是常态
+ * （切输入法、候选栏展开/收起、手写板），如果拿 `next < prev` 当「开始收起」，一次变矮就会
+ * 把闩置上、之后所有变高都被丢弃 —— 内边距停在小值、那把更高的键盘把输入栏整条盖住，且
+ * 只能靠彻底收键盘自愈。所以闩只在两个地方置位：页面调 `Taro.hideKeyboard()` 的地方
+ * （`closing = true` + 记下当时的 `closingFrom`）。
  *
- * 非有限值（`NaN`、`undefined` 之类）一律不动，交给下一次事件。
+ * 规则：
+ * - 非有限值（`NaN` 之类）：一律不动，交给下一次事件；
+ * - `next <= 0`：收完了 —— 唯一能把高度落到 0 的路径（切态、开面板都不许自己归零），闩释放
+ *   并记下尾巴窗口起点；
+ * - 没有意图闩：跟随平台（开键盘 / 换输入法 / 候选栏伸缩都在这儿），并清掉窗口状态；
+ * - 意图闩在、但高度 `>= closingFrom`：键盘又被开回来了，闩失效，跟随；
+ * - 意图闩在、`next < prev`：跟随（贴着键盘走，只会往下）；
+ * - 意图闩在、`next >= prev`：丢弃 —— 同一个动画里不许「先变小又变大」。
+ *
+ * `changed` 单独给出来，页面用 `if (!step.changed) return` 决定要不要落地：判据在函数里、
+ * 页面只执行，就不存在「页面里换个比较对象把阶梯整个废掉」的改法。
  */
-export function nextKeyboardInset(input: { prev: number; next: number; closing: boolean }): {
-  inset: number
+export function nextKeyboardInset(input: {
+  prev: number
+  next: number
   closing: boolean
-} {
-  const { prev, next, closing } = input
-  if (!Number.isFinite(next)) return { inset: prev, closing }
-  if (next <= 0) return { inset: 0, closing: false }
-  if (!closing) return { inset: next, closing: next < prev }
-  return next < prev ? { inset: next, closing: true } : { inset: prev, closing: true }
+  closingFrom: number
+  closedFrom: number
+  closedAt: number
+  now: number
+  tailWindowMs?: number
+}): KeyboardInsetState {
+  const { prev, next, closing, closingFrom, closedFrom, closedAt, now } = input
+  const tailWindowMs = input.tailWindowMs ?? KEYBOARD_TAIL_WINDOW_MS
+  if (!Number.isFinite(next))
+    return { inset: prev, changed: false, closing, closingFrom, closedFrom, closedAt }
+  if (next <= 0) {
+    return {
+      inset: 0,
+      changed: prev !== 0,
+      closing: false,
+      closingFrom: 0,
+      // 收完时的高度基准：本页要求收起的那次用起点，用户自己收的（闩没置上）用上一帧
+      closedFrom: closing ? closingFrom : prev,
+      closedAt: now,
+    }
+  }
+  // 收尾尾巴（R3）：刚收完的短窗口内、又报一个比收完时更矮的值 —— 那是动画尾巴，丢弃
+  if (!closing && closedAt > 0 && now - closedAt <= tailWindowMs && next < closedFrom) {
+    return { inset: prev, changed: false, closing: false, closingFrom: 0, closedFrom, closedAt }
+  }
+  if (!closing) {
+    return {
+      inset: next,
+      changed: next !== prev,
+      closing: false,
+      closingFrom: 0,
+      closedFrom: 0,
+      closedAt: 0,
+    }
+  }
+  if (next >= closingFrom) {
+    return {
+      inset: next,
+      changed: next !== prev,
+      closing: false,
+      closingFrom: 0,
+      closedFrom: 0,
+      closedAt: 0,
+    }
+  }
+  if (next < prev)
+    return { inset: next, changed: true, closing: true, closingFrom, closedFrom, closedAt }
+  return { inset: prev, changed: false, closing: true, closingFrom, closedFrom, closedAt }
 }

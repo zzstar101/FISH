@@ -211,6 +211,14 @@ const EMPTY_IDS: ReadonlySet<string> = new Set()
  */
 const DETAIL_POLL_MS = 20_000
 
+/**
+ * 收键盘活性哨兵的超时（#560 R2）。
+ *
+ * 安卓收键盘动画通常 200~300ms，取 500ms 留余量：到点闩还在，说明平台没报 0（或闩被误置），
+ * 强落 0 并重指尾行。只在页面刚叫过 `Taro.hideKeyboard()` 之后武装，不是常驻轮询。
+ */
+const KEYBOARD_SENTINEL_MS = 500
+
 /** 取第一个触点的 clientY（拿不到就给 NaN，调用方按「不知道手指在哪」处理） */
 function touchClientY(event: unknown): number {
   const touch = (event as { touches?: Array<{ clientY?: number }> } | null)?.touches?.[0]
@@ -448,6 +456,27 @@ export default function Conversation() {
    */
   const keyboardHeightRef = useRef(0)
   const keyboardClosingRef = useRef(false)
+  /**
+   * 意图闩的起点高度与「收尾尾巴」记录（#560 R1/R3）：`closing` 是**页面要求收起**的意图，
+   * 不是从高度符号反推的 —— 安卓上切输入法 / 候选栏伸缩会让键盘「没关、只是变矮」，拿
+   * 「变矮」当「开始收起」就会把闩误置、之后所有变高都被丢弃，内边距停在小值、更高的那把
+   * 键盘把输入栏整条盖住。判据全在 `view.ts` 的 `nextKeyboardInset()` 里。
+   */
+  const keyboardClosingFromRef = useRef(0)
+  const keyboardClosedFromRef = useRef(0)
+  const keyboardClosedAtRef = useRef(0)
+  /**
+   * 「平台不报 0」的活性哨兵（#560 R2）：`hideKeyboard()` 之后平台若始终不报 `0`（或闩被误置），
+   * 内边距会永久停在抬高位置。到点若闩仍为真就强落 0 并重指尾行 —— 这是**卡死兜底**，不是
+   * 动画补偿：条件触发、`inset === 0` / 页面被盖住 / 卸载三处清理。
+   */
+  const keyboardSentinelRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 重锚并发序号（#560 R5）：收键盘期间每接受一档高度都会 `keepTailAnchored()`，异步回读
+   * 可能乱序落地 —— 旧那道的 `restore` 分支会把过期 `top` 写回去（`scrollWithAnimation`
+   * 为假时是硬跳）。回调首行比对这个序号，过期的直接退出。
+   */
+  const anchorSeqRef = useRef(0)
   /**
    * 当前消息流的 id 快照来源（#186 P2-1）：silent 刷新发起时记下当时的 id 集合，
    * 落地时据此把「刷新期间才确认落地」的消息补回来。`load` 的 `useCallback` 依赖
@@ -896,7 +925,12 @@ export default function Conversation() {
      * 判定「没变化」直接丢掉，输入栏就一直贴在那条看不见的键盘高度上。
      */
     keyboardClosingRef.current = false
+    keyboardClosingFromRef.current = 0
+    keyboardClosedFromRef.current = 0
+    keyboardClosedAtRef.current = 0
     keyboardHeightRef.current = 0
+    // 哨兵也收掉（R2 清理点之三）：页面都被盖住了，500ms 后再跑一次重锚没有意义
+    clearKeyboardSentinel()
     setKeyboardHeight(0)
     // 页面被盖住：在线态已经不显示了，把轮询停掉（不再让定时器在后台空转每一跳）
     detailPollRef.current?.stop()
@@ -2231,6 +2265,8 @@ export default function Conversation() {
    * 里，页面没有第二只手去写错。
    */
   const keepTailAnchored = useCallback(() => {
+    // 收键盘期间会连着叫好几次（每接受一档高度一次），只有最后一道的结论能落地（#560 R5）
+    const seq = ++anchorSeqRef.current
     const prevTop = scrollTopRef.current
     // 贴底标志也在调用时快照：回读是异步的，到回调里再读，中间可能已经被 `onScroll`
     // 改过一次 —— 拿「调用时的 prevTop」配「回调时的 stick」是两次观测混用
@@ -2246,6 +2282,8 @@ export default function Conversation() {
         .exec((res) => {
           // 查询是异步的：回读结果落地时页面可能已经卸载（同文件别处的回调都有这道守卫）
           if (!aliveRef.current) return
+          // 已经发起了更新的一道（#560 R5）：乱序落地时旧结论会把过期 top 写回去
+          if (seq !== anchorSeqRef.current) return
           const offset = res?.[0] as { scrollTop?: number } | undefined
           const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick })
           /**
@@ -2269,6 +2307,52 @@ export default function Conversation() {
     })
   }, [])
 
+  /** 收掉活性哨兵（#560 R2）：`inset === 0` / 页面被盖住 / 卸载 / 重新武装四处调用 */
+  const clearKeyboardSentinel = useCallback(() => {
+    const timer = keyboardSentinelRef.current
+    if (timer === null) return
+    clearTimeout(timer)
+    keyboardSentinelRef.current = null
+  }, [])
+
+  /**
+   * 武装活性哨兵（#560 R2）：页面刚叫过 `Taro.hideKeyboard()`，等平台把高度收到 0。
+   *
+   * 到点闩还在，说明平台没报 0（或闩被误置）—— 强落 0 并重指尾行，否则内边距会永久停在
+   * 抬高位置。这是**条件触发的卡死兜底**，不是给收键盘动画做补偿（不参与任何动画时序）。
+   */
+  const armKeyboardSentinel = useCallback(() => {
+    clearKeyboardSentinel()
+    keyboardSentinelRef.current = setTimeout(() => {
+      keyboardSentinelRef.current = null
+      if (!aliveRef.current) return
+      if (!keyboardClosingRef.current) return
+      keyboardClosingRef.current = false
+      keyboardClosingFromRef.current = 0
+      keyboardHeightRef.current = 0
+      setKeyboardHeight(0)
+      keepTailAnchored()
+    }, KEYBOARD_SENTINEL_MS)
+  }, [clearKeyboardSentinel, keepTailAnchored])
+
+  /**
+   * 本页主动收键盘（#560）：切语音态、开面板都走这一处。
+   *
+   * 只叫平台收、**不自己归零高度** —— 自己归零就是拿本页布局去和系统收键盘动画抢时序
+   * （真机上的「先上提、再回落」）。同时置上**意图闩**并武装活性哨兵：闩只由页面写入，
+   * 不从「高度变矮」反推（安卓切输入法/候选栏伸缩会让键盘没关、只是变矮）；哨兵兜底
+   * 「平台始终不报 0」（R2）。两个调用点共用一处武装，改一处不会漏另一处。
+   */
+  const collapseKeyboard = useCallback(() => {
+    void Taro.hideKeyboard()
+    const from = keyboardHeightRef.current
+    // 键盘本来就没开：没有要收的，也不必武装哨兵（否则 500ms 后会白做一次重锚）
+    if (!(from > 0)) return
+    keyboardClosingRef.current = true
+    keyboardClosingFromRef.current = from
+    armKeyboardSentinel()
+  }, [armKeyboardSentinel])
+
   /**
    * 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致）。
    *
@@ -2284,12 +2368,12 @@ export default function Conversation() {
     /**
      * 进语音态前**同步**收键盘（#560）：点击当拍就发，不等隐私授权那趟 await。
      *
-     * 这里只叫平台收键盘，**不自己把高度真源归零** —— 高度只由 `onKeyboardHeightChange`
-     * 那一处改写（见 `./view` 的 `nextKeyboardInset`）。自己归零等于拿本页布局去和系统收
-     * 键盘的动画抢时序：安卓真机复验里，切态当拍撤掉内边距、系统的位移回落还在动画途中，
-     * 输入栏就是「先上提、再回落」。交给平台事件，高度一路单调走到 0。
+     * 收键盘走 `collapseKeyboard()`：只叫平台收、不自己把高度真源归零 —— 高度只由
+     * `onKeyboardHeightChange` 那一处改写（见 `./view` 的 `nextKeyboardInset`）。自己归零
+     * 等于拿本页布局去和系统收键盘的动画抢时序：安卓真机复验里，切态当拍撤掉内边距、系统的
+     * 位移回落还在动画途中，输入栏就是「先上提、再回落」。交给平台事件，高度一路单调走到 0。
      */
-    void Taro.hideKeyboard()
+    collapseKeyboard()
     if (privacyPendingRef.current) return
     privacyPendingRef.current = true
     const seq = ++voiceGateSeqRef.current
@@ -2480,9 +2564,9 @@ export default function Conversation() {
      *
      * 键盘高度**同样不在这批里归零**：它是平台事件的产物（`nextKeyboardInset`），自己归零
      * 就是拿本页布局去和系统收键盘动画抢时序 —— #560 电的正是这一下。面板长高的那一下仍是
-     * 同批一次到位。
+     * 同批一次到位。收键盘与意图闩 / 活性哨兵一起走 `collapseKeyboard()`。
      */
-    void Taro.hideKeyboard()
+    collapseKeyboard()
     keepTailAnchored()
     setPanelOpen(!panelOpen)
   }
@@ -2906,18 +2990,34 @@ export default function Conversation() {
         prev: keyboardHeightRef.current,
         next: res.height,
         closing: keyboardClosingRef.current,
+        closingFrom: keyboardClosingFromRef.current,
+        closedFrom: keyboardClosedFromRef.current,
+        closedAt: keyboardClosedAtRef.current,
+        now: Date.now(),
       })
+      /**
+       * 阶梯状态**在纯函数里算完**，这里只回写与落地：页面里不保留第二条比较链，把「要不要
+       * 落地」也交给返回值 `changed`，就不存在「换个比较对象把阶梯整个废掉」的改法。
+       */
       keyboardClosingRef.current = step.closing
-      if (step.inset === keyboardHeightRef.current) return
+      keyboardClosingFromRef.current = step.closingFrom
+      keyboardClosedFromRef.current = step.closedFrom
+      keyboardClosedAtRef.current = step.closedAt
+      // 收到 0：平台把键盘收干净了，活性哨兵不用再兜底（R2 的三个清理点之一）
+      if (step.inset === 0) clearKeyboardSentinel()
+      if (!step.changed) return
       keyboardHeightRef.current = step.inset
       setKeyboardHeight(step.inset)
+      // 只要真落地了新高度就重指尾行 —— 开键盘时视口变矮同样要重锚，不是只在收到 0 时
       keepTailAnchored()
     }
     Taro.onKeyboardHeightChange(onHeightChange)
     return () => {
       Taro.offKeyboardHeightChange(onHeightChange)
+      // 卸载：哨兵的定时器不能在页面之外再跑一次 setState（R2 清理点之二）
+      clearKeyboardSentinel()
     }
-  }, [keepTailAnchored])
+  }, [clearKeyboardSentinel, keepTailAnchored])
 
   /**
    * 量一次几何：消息流视口高度 + 输入行高度（设备 px，0 = 量不到）。

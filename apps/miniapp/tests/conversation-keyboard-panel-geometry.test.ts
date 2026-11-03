@@ -199,91 +199,253 @@ describe('贴底容差的记账口径（#560/#561，纯函数表驱动）', () =
 })
 
 describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 安卓真机）', () => {
-  test('开键盘：一路跟着平台抬上去', () => {
-    let prev = 0
-    let closing = false
-    const seen: number[] = []
-    for (const next of [120, 260, 336]) {
-      const step = nextKeyboardInset({ prev, next, closing })
-      prev = step.inset
-      closing = step.closing
-      seen.push(step.inset)
+  type RunState = {
+    inset: number
+    closing: boolean
+    closingFrom: number
+    closedFrom: number
+    closedAt: number
+  }
+  /** 一次事件里页面要回写的那几个字段（与 `nextKeyboardInset` 的输出同构） */
+  const again = (step: ReturnType<typeof nextKeyboardInset>) => ({
+    prev: step.inset,
+    closing: step.closing,
+    closingFrom: step.closingFrom,
+    closedFrom: step.closedFrom,
+    closedAt: step.closedAt,
+  })
+  /** 按事件序列跑一遍阶梯 —— 页面 handler 做的就是把这几个字段原样回写 */
+  const feed = (
+    sequence: number[],
+    start: Partial<RunState> & { now?: number[] } = {},
+  ): { state: RunState; insets: number[]; changed: boolean[]; closings: boolean[] } => {
+    let state: RunState = {
+      inset: start.inset ?? 0,
+      closing: start.closing ?? false,
+      closingFrom: start.closingFrom ?? 0,
+      closedFrom: 0,
+      closedAt: 0,
     }
-    expect(seen).toEqual([120, 260, 336])
-    expect(closing).toBe(false)
+    const insets: number[] = []
+    const changed: boolean[] = []
+    /**
+     * 闩的**逐帧**轨迹。只看末态会漏掉「中途误置、下一个事件又自己解掉」的形态 —— 那正是
+     * R1 的杀伤路径：变矮当收起之后，那一帧紧跟的变高会被丢弃（高度停在矮值），末态却仍然
+     * 正常。所以每一条序列都要连闩一起断言。
+     */
+    const closings: boolean[] = []
+    sequence.forEach((next, index) => {
+      const step = nextKeyboardInset({
+        prev: state.inset,
+        closing: state.closing,
+        closingFrom: state.closingFrom,
+        closedFrom: state.closedFrom,
+        closedAt: state.closedAt,
+        next,
+        now: start.now?.[index] ?? 1000 + index,
+      })
+      state = {
+        inset: step.inset,
+        closing: step.closing,
+        closingFrom: step.closingFrom,
+        closedFrom: step.closedFrom,
+        closedAt: step.closedAt,
+      }
+      insets.push(step.inset)
+      changed.push(step.changed)
+      closings.push(step.closing)
+    })
+    return { state, insets, changed, closings }
+  }
+
+  test('开键盘：一路跟着平台抬上去，每一档都要落地', () => {
+    const run = feed([120, 260, 336])
+    expect(run.insets).toEqual([120, 260, 336])
+    expect(run.changed).toEqual([true, true, true])
+    expect(run.state.closing).toBe(false)
   })
 
-  test('收键盘：只认更小的值，一路向下走到 0', () => {
-    let prev = 336
-    let closing = false
-    const seen: number[] = []
-    for (const next of [300, 180, 60, 0]) {
-      const step = nextKeyboardInset({ prev, next, closing })
-      prev = step.inset
-      closing = step.closing
-      seen.push(step.inset)
-    }
-    expect(seen).toEqual([300, 180, 60, 0])
-    // 收到 0 才算收完，闩跟着释放
-    expect(closing).toBe(false)
+  test('同一个高度重复上报：不落地（页面据此跳过重指尾行）', () => {
+    const run = feed([336, 336])
+    expect(run.insets).toEqual([336, 336])
+    expect(run.changed).toEqual([true, false])
   })
 
-  test('收起途中被抬一下：丢弃，不许出现「先变小又变大」', () => {
-    // 第一次变小 = 收起开始
-    expect(nextKeyboardInset({ prev: 336, next: 180, closing: false })).toEqual({
-      inset: 180,
+  test('换输入法 / 候选栏伸缩：键盘没关、只是变矮，之后变高必须跟回来（R1）', () => {
+    const run = feed([300, 336], { inset: 336 })
+    expect(run.insets).toEqual([300, 336])
+    expect(run.changed).toEqual([true, true])
+    // 每一帧都不许置闩：变矮不是「在收」
+    expect(run.closings).toEqual([false, false])
+    // 关键：变矮**不许**被当成「开始收起」—— 闩一旦误置，后面那个 336 会被丢弃，内边距停在
+    // 300、更高的那把键盘把输入栏整条盖住，且只能靠彻底收键盘自愈
+    expect(run.state.closing).toBe(false)
+  })
+
+  test('意图收起 336→300→180→0：单调向下，0 释放闩并记下尾巴窗口', () => {
+    const run = feed([300, 180, 0], {
+      inset: 336,
       closing: true,
+      closingFrom: 336,
+      now: [1000, 1100, 1300],
     })
-    // 动画抖动把高度报回 300：保持 180，绝不跟着抬回去（否则输入栏被顶上来一次）
-    expect(nextKeyboardInset({ prev: 180, next: 300, closing: true })).toEqual({
-      inset: 180,
+    expect(run.insets).toEqual([300, 180, 0])
+    expect(run.changed).toEqual([true, true, true])
+    // 收藏起过程里闩一直按住，只有收到 0 才释放
+    expect(run.closings).toEqual([true, true, false])
+    expect(run.state.closing).toBe(false)
+    expect(run.state.closedFrom).toBe(336)
+    expect(run.state.closedAt).toBe(1300)
+  })
+
+  test('收起途中被抬 / 原地重复：丢弃且闩保持，继续变小才跟随', () => {
+    const up = nextKeyboardInset({
+      prev: 180,
+      next: 300,
       closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1000,
     })
-    // 原地重复上报同样不产生布局变化
-    expect(nextKeyboardInset({ prev: 180, next: 180, closing: true })).toEqual({
-      inset: 180,
+    expect(up.inset).toBe(180)
+    expect(up.changed).toBe(false)
+    expect(up.closing).toBe(true)
+    const same = nextKeyboardInset({
+      prev: 180,
+      next: 180,
       closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1100,
     })
-    // 继续变小才跟随
-    expect(nextKeyboardInset({ prev: 180, next: 90, closing: true })).toEqual({
-      inset: 90,
+    expect(same.inset).toBe(180)
+    expect(same.changed).toBe(false)
+    expect(same.closing).toBe(true)
+    const down = nextKeyboardInset({
+      prev: 180,
+      next: 90,
       closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1200,
     })
+    expect(down.inset).toBe(90)
+    expect(down.changed).toBe(true)
+    expect(down.closing).toBe(true)
+  })
+
+  test('收起途中键盘又被开回来（高过收起起点）：闩失效，跟着走', () => {
+    const back = nextKeyboardInset({
+      prev: 200,
+      next: 336,
+      closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1000,
+    })
+    expect(back.inset).toBe(336)
+    expect(back.changed).toBe(true)
+    expect(back.closing).toBe(false)
   })
 
   test('0 是唯一的终点：只有报 0（或负数）才归零', () => {
-    expect(nextKeyboardInset({ prev: 336, next: 0, closing: false })).toEqual({
-      inset: 0,
-      closing: false,
+    for (const closing of [false, true]) {
+      const step = nextKeyboardInset({
+        prev: 336,
+        next: 0,
+        closing,
+        closingFrom: 336,
+        closedFrom: 0,
+        closedAt: 0,
+        now: 1000,
+      })
+      expect(step.inset).toBe(0)
+      expect(step.changed).toBe(true)
+      expect(step.closing).toBe(false)
+    }
+    const negative = nextKeyboardInset({
+      prev: 336,
+      next: -12,
+      closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1000,
     })
-    expect(nextKeyboardInset({ prev: 336, next: 0, closing: true })).toEqual({
-      inset: 0,
-      closing: false,
-    })
-    expect(nextKeyboardInset({ prev: 336, next: -12, closing: true })).toEqual({
-      inset: 0,
-      closing: false,
-    })
+    expect(negative.inset).toBe(0)
   })
 
   test('收完之后再开键盘：闩已释放，正常跟随', () => {
-    const closed = nextKeyboardInset({ prev: 60, next: 0, closing: true })
-    expect(closed).toEqual({ inset: 0, closing: false })
-    expect(nextKeyboardInset({ prev: closed.inset, next: 336, closing: closed.closing })).toEqual({
-      inset: 336,
-      closing: false,
+    const closed = nextKeyboardInset({
+      prev: 60,
+      next: 0,
+      closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1000,
     })
+    expect(closed.inset).toBe(0)
+    expect(closed.closing).toBe(false)
+    // 窗口外（或用更大的高度）就是真的又开了键盘
+    const reopened = nextKeyboardInset({ ...again(closed), next: 336, now: 2000 })
+    expect(reopened.inset).toBe(336)
+    expect(reopened.changed).toBe(true)
+  })
+
+  test('收尾尾巴（R3）：收完 400ms 内更矮的补报丢弃，窗口外照收', () => {
+    const closed = nextKeyboardInset({
+      prev: 336,
+      next: 0,
+      closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1000,
+    })
+    expect(closed.closedFrom).toBe(336)
+    // 窗口内、比收完时矮 → 动画尾巴，丢弃（照收就是「先上提、再回落」原样复发）
+    const tail = nextKeyboardInset({ ...again(closed), next: 120, now: 1200 })
+    expect(tail.inset).toBe(0)
+    expect(tail.changed).toBe(false)
+    // 窗口外的同值照收：不是永久忽略，用户真的又开键盘必须跟得上
+    const later = nextKeyboardInset({ ...again(closed), next: 120, now: 2000 })
+    expect(later.inset).toBe(120)
+    expect(later.changed).toBe(true)
+    // 窗口内但比收完时更高 = 真的又开键盘，也照收
+    const reopen = nextKeyboardInset({ ...again(closed), next: 336, now: 1200 })
+    expect(reopen.inset).toBe(336)
+    expect(reopen.changed).toBe(true)
   })
 
   test('非有限值一律不动，交给下一次事件', () => {
-    expect(nextKeyboardInset({ prev: 336, next: Number.NaN, closing: false })).toEqual({
-      inset: 336,
+    const idle = nextKeyboardInset({
+      prev: 336,
+      next: Number.NaN,
       closing: false,
+      closingFrom: 0,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1000,
     })
-    expect(nextKeyboardInset({ prev: 336, next: Number.NaN, closing: true })).toEqual({
-      inset: 336,
+    expect(idle.inset).toBe(336)
+    expect(idle.changed).toBe(false)
+    const closingIdle = nextKeyboardInset({
+      prev: 336,
+      next: Number.NaN,
       closing: true,
+      closingFrom: 336,
+      closedFrom: 0,
+      closedAt: 0,
+      now: 1000,
     })
+    expect(closingIdle.inset).toBe(336)
+    expect(closingIdle.changed).toBe(false)
+    expect(closingIdle.closing).toBe(true)
   })
 })
 
@@ -297,16 +459,93 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('prev: keyboardHeightRef.current')
     expect(body).toContain('next: res.height')
     expect(body).toContain('closing: keyboardClosingRef.current')
+    // 意图闩的起点与尾巴窗口都要喂进去，否则「键盘被开回来」「收尾尾巴」两条判据形同虚设
+    expect(body).toContain('closingFrom: keyboardClosingFromRef.current')
+    expect(body).toContain('closedFrom: keyboardClosedFromRef.current')
+    expect(body).toContain('closedAt: keyboardClosedAtRef.current')
+    expect(body).toContain('now: Date.now()')
+    // 阶梯状态整份回写
     expect(body).toContain('keyboardClosingRef.current = step.closing')
+    expect(body).toContain('keyboardClosingFromRef.current = step.closingFrom')
+    expect(body).toContain('keyboardClosedFromRef.current = step.closedFrom')
+    expect(body).toContain('keyboardClosedAtRef.current = step.closedAt')
+    // 收到 0 就撤掉活性哨兵（R2 的清理点之一）
+    expect(body).toContain('if (step.inset === 0) clearKeyboardSentinel()')
+    /**
+     * 落不落地只由纯函数的 `changed` 决定，而且**先判后写**：页面里没有第二条比较链，
+     * 把 `keyboardHeightRef` 的回写挪到早退之前也废不掉阶梯（审查探针 1）。
+     */
+    expect(body).toContain('if (!step.changed) return')
+    expect(body.indexOf('if (!step.changed) return')).toBeLessThan(
+      body.indexOf('keyboardHeightRef.current = step.inset'),
+    )
     expect(body).toContain('setKeyboardHeight(step.inset)')
-    // 阶梯算出来的值和当前一致（重复上报 / 被丢弃的回抬）→ 没有布局变化，不必重指尾行
-    expect(body).toContain('if (step.inset === keyboardHeightRef.current) return')
-    expect(body).toContain('keepTailAnchored()')
+    // 只要真落地了就重指尾行 —— 不是「只在收到 0 时」：开键盘时视口变矮同样要重锚（探针 2）
+    expect(body).toContain('setKeyboardHeight(step.inset) keepTailAnchored()')
     expect(source).toContain('Taro.onKeyboardHeightChange(onHeightChange)')
     expect(source).toContain('Taro.offKeyboardHeightChange(onHeightChange)')
+    // 卸载时把哨兵的定时器一起收掉（R2 清理点之二）
+    expect(
+      slice(source, 'Taro.offKeyboardHeightChange(onHeightChange)', '}, [clearKeyboardSentinel'),
+    ).toContain('clearKeyboardSentinel()')
     // 基础库 < 2.7.0 没有这个 API：裸调会在挂载时抛 TypeError，整页白屏
     expect(source).toContain(
       "if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined",
+    )
+  })
+
+  test('页面主动收键盘只走一处：置意图闩 + 武装活性哨兵，且不自己归零高度', async () => {
+    const source = squash(await pageSource())
+    const body = slice(source, 'const collapseKeyboard = useCallback', '}, [armKeyboardSentinel])')
+    // 只叫平台收，不自己归零（自己归零就是拿本页布局和系统收键盘动画抢时序）
+    expect(body).toContain('void Taro.hideKeyboard()')
+    expect(body).not.toContain('setKeyboardHeight')
+    // 意图闩只在这里置位：不从「高度变矮」反推（R1）
+    expect(body).toContain('keyboardClosingRef.current = true')
+    expect(body).toContain('keyboardClosingFromRef.current = from')
+    // 键盘本来就没开就不武装（否则 500ms 后白做一次重锚）
+    expect(body).toContain('if (!(from > 0)) return')
+    expect(body).toContain('armKeyboardSentinel()')
+    // 两个调用点共用这一处，改一处不会漏另一处
+    const voice = slice(source, 'const toggleVoiceMode = async', 'const onLongPressMessage')
+    expect(voice).toContain('collapseKeyboard()')
+    expect(voice).not.toContain('Taro.hideKeyboard(')
+    const panel = slice(source, 'const togglePanel = () => {', 'setPanelOpen(!panelOpen)')
+    expect(panel).toContain('collapseKeyboard()')
+    expect(panel).not.toContain('Taro.hideKeyboard(')
+  })
+
+  test('活性哨兵：到点闩还在就强落 0 并重指尾行（平台不报 0 的卡死兜底，R2）', async () => {
+    const source = squash(await pageSource())
+    const body = slice(
+      source,
+      'const armKeyboardSentinel = useCallback',
+      '}, [clearKeyboardSentinel',
+    )
+    expect(
+      slice(source, 'const clearKeyboardSentinel = useCallback', 'const armKeyboardSentinel'),
+    ).toContain('clearTimeout')
+    expect(body).toContain('KEYBOARD_SENTINEL_MS')
+    // 条件触发：闩已经释放（平台正常报了 0）就什么都不做
+    expect(body).toContain('if (!keyboardClosingRef.current) return')
+    expect(body).toContain('keyboardHeightRef.current = 0')
+    expect(body).toContain('setKeyboardHeight(0)')
+    expect(body).toContain('keepTailAnchored()')
+    // 页面被盖住也要收掉哨兵（R2 清理点之三）
+    expect(
+      slice(squash(await pageSource()), 'useDidHide(() => {', 'detailPollRef.current?.stop'),
+    ).toContain('clearKeyboardSentinel()')
+    // 超时常量在位（收键盘动画通常 200~300ms，留余量）
+    expect(source).toContain('const KEYBOARD_SENTINEL_MS = 500')
+  })
+
+  test('重锚的异步回读按序号作废旧结论（收键盘期间会连着换锚，R5）', async () => {
+    const body = slice(squash(await pageSource()), 'const keepTailAnchored = useCallback', '}, [])')
+    expect(body).toContain('const seq = ++anchorSeqRef.current')
+    expect(body).toContain('if (seq !== anchorSeqRef.current) return')
+    // 序号守卫必须早于任何写回：过期结论不许改滚动位置
+    expect(body.indexOf('if (seq !== anchorSeqRef.current) return')).toBeLessThan(
+      body.indexOf('setScrollRestore('),
     )
   })
 
@@ -317,8 +556,11 @@ describe('键盘高度是单一真源（#560）', () => {
       'detailPollRef.current?.stop',
     )
     expect(body).toContain('keyboardClosingRef.current = false')
+    expect(body).toContain('keyboardClosingFromRef.current = 0')
+    expect(body).toContain('keyboardClosedAtRef.current = 0')
     expect(body).toContain('keyboardHeightRef.current = 0')
     expect(body).toContain('setKeyboardHeight(0)')
+    expect(body).toContain('clearKeyboardSentinel()')
   })
 
   test('输入栏的下内边距由真源派生，收起时不内联（env 安全区照旧生效）', async () => {
@@ -396,7 +638,7 @@ describe('键盘高度是单一真源（#560）', () => {
       'const toggleVoiceMode = async',
       'const onLongPressMessage',
     )
-    const hideAt = body.indexOf('Taro.hideKeyboard()')
+    const hideAt = body.indexOf('collapseKeyboard()')
     const gateAt = body.indexOf('getPrivacyAuthorizationState()')
     expect(hideAt).toBeGreaterThan(-1)
     // 收键盘是纯原生动作，不碰本页布局：点击当拍就发，不等授权那趟 await
@@ -424,7 +666,7 @@ describe('「+」面板与贴底（#561）', () => {
       'const togglePanel = () => {',
       'setPanelOpen(!panelOpen)',
     )
-    const hideAt = body.indexOf('Taro.hideKeyboard()')
+    const hideAt = body.indexOf('collapseKeyboard()')
     const anchorAt = body.indexOf('keepTailAnchored()')
     expect(hideAt).toBeGreaterThan(-1)
     expect(anchorAt).toBeGreaterThan(hideAt)
@@ -459,6 +701,7 @@ describe('「+」面板与贴底（#561）', () => {
       'void Taro.nextTick(() => { Taro.createSelectorQuery() ' +
         ".select('.conv__scroll') .scrollOffset() .exec((res) => { " +
         'if (!aliveRef.current) return ' +
+        'if (seq !== anchorSeqRef.current) return ' +
         'const offset = res?.[0] as { scrollTop?: number } | undefined ' +
         'const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick }) ' +
         'bottomGapAllowanceRef.current = 0 ' +
