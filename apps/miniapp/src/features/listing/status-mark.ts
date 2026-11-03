@@ -35,19 +35,32 @@ export function outOfMarketLabel(status: ListingStatus): string | null {
  */
 
 /**
- * 详情页底部栏的**买家**状态行（#567）。
+ * 详情页底部栏的状态行文案（#567）：**两套口吻，同一个模块**。
  *
- * 与上面的卡片角标是同一件事的第二种粒度，字面量都归本文件，页面不另写一份：
- * 卡片上空间小，说「卖掉了」；详情页底部栏是整条状态行，说完整一句「此商品已售出」。
+ * 卖家看自己的商品说「商品已售出」，买家看别人的说「此商品已售出」—— 这是人称 / 语境的
+ * 区分，不是漂移；但两份字面量必须待在同一处导出，否则它们迟早各自漂走
+ * （Issue #567 修复方向第 4 条：「提到共享常量…避免两个版本漂移」）。
+ *
+ * - 卖家侧 `SELLER_SOLD_NOTE`：由 `pkg-browse/pages/listing-detail/view.ts` 的
+ *   `ownerStatusNote` 引用。卖家其余的措辞（已下架四细分 / 等面交）留在 view.ts —— 那些
+ *   只在卖家本人视角成立，与这里的「出局标记」不是同一件事。
+ * - 买家侧 `BUYER_SOLD_NOTE` / `buyerStatusNote()`：详情页底部栏用它。卡片角标另有一套
+ *   更短的「卖掉了」（`outOfMarketLabel`）：列表空间小，说得短。
+ *
+ * PC 站（`apps/web-pc`）跨端不能 import 小程序模块，那边照抄同一句，
+ * 由 `apps/miniapp/tests/listing-detail-owner-bar.test.ts` 的跨端一致性用例逐字比对。
+ */
+export const SELLER_SOLD_NOTE = '商品已售出'
+export const BUYER_SOLD_NOTE = '此商品已售出'
+
+/**
+ * 买家侧：`SOLD` 时底部栏说一句结论，其余 `null`（照常渲染操作钮）。
  *
  * 只有 `SOLD`：`OFFLINE` 在买家视角**不可达** —— 非卖家读已下架商品的详情一律 404
  * （`apps/api/src/modules/listings/service.ts` 的非卖家 OFFLINE 口径，服务端刻意不泄露
  * 存在性），买家根本到不了这一页，给那格写文案就是死代码。`RESERVED` 仍在售卖流程里
  * （有人拍下、还没成交），底部栏维持正常操作。
- *
- * 卖家视角的措辞不在这里：那是 `pkg-browse/pages/listing-detail/view.ts` 的
- * `ownerStatusNote`，同一个状态的卖家说法是「商品已售出」+ 一条去我的发布管理的出路。
  */
 export function buyerStatusNote(status: ListingStatus): string | null {
-  return status === 'SOLD' ? '此商品已售出' : null
+  return status === 'SOLD' ? BUYER_SOLD_NOTE : null
 }

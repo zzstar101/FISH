@@ -871,9 +871,13 @@ export default function ListingDetail() {
       : null
 
   /**
-   * 买家视角的状态行（#567）：`SOLD` 时底部栏换成一句买家口吻的结论，不再给
-   * 「收藏 / 立即购买 / 聊一聊」—— 已售出的商品再收藏或发起交易只会失败，不如直说；
-   * 这与卖家侧「非在售不给操作钮、整条换状态行」是同一套形态。
+   * 买家视角的状态行（#567）：`SOLD` 时底部栏换成一句买家口吻的结论。
+   *
+   * 取舍是「能用的保留、必失败的去掉」：`POST /favorite` 要求商品 `ACTIVE`（必失败），
+   * 所以未收藏时不给收藏心；`DELETE /favorite` 只清理一条关系、不判商品状态
+   * （`apps/api/src/modules/favorites/service.ts` 的注释），所以**已收藏的人仍能取消收藏**——
+   * 这与 PC 端「已收藏：即使已售出 / 下架也可取消」（`favorite-button.tsx`）同一口径。
+   * 「立即购买」「聊一聊」点了必失败，一并去掉。
    *
    * 只补 SOLD：非卖家读 `OFFLINE` 详情在服务端就是 404（不泄露存在性），买家到不了这一页。
    * 具体文案取自 `features/listing/status-mark` 的 `buyerStatusNote`（与卡片角标同一文件，
@@ -1947,7 +1951,8 @@ export default function ListingDetail() {
         卖家形态（Owner 2026-09-27 拍板）：当前账号是卖家时换成「管理 / 看谁想要」，
         收藏心不出现（卖家不收藏自己的商品）；非在售不渲染操作钮，整条换状态行
         （见 view.ownerStatusNote）。举报入口在标签行（#260），与本栏无关。
-        买家形态的**已售出**（#567）：同上不给钮，只说一句状态（见 buyerNote）。
+        买家形态的**已售出**（#567）：不给「立即购买 / 聊一聊」，只说一句状态（见 buyerNote）；
+        已收藏时保留收藏心，好让人就地取消收藏。
       */}
       <View className="detail__bar">
         {ownListing && ownerNote === null ? (
@@ -1969,10 +1974,19 @@ export default function ListingDetail() {
             </Text>
           </View>
         ) : buyerNote !== null ? (
-          /* 买家看**已售出**的商品（#567）：不给点了必失败的钮，只说结论 */
-          <View className="detail__bar-note">
-            <Text className="detail__bar-note-text">{buyerNote}</Text>
-          </View>
+          /* 买家看**已售出**的商品（#567）：只说结论。两个下单钮点下去必失败，不渲染；
+             已收藏的人要能取消收藏（DELETE 不判商品状态），所以只在 favorited 为真时
+             保留心形 —— 未收藏时不给：POST 收藏对非 ACTIVE 商品必失败。 */
+          <>
+            <View className="detail__bar-note">
+              <Text className="detail__bar-note-text">{buyerNote}</Text>
+            </View>
+            {faved ? (
+              <View className="detail__fav is-on" onClick={toggleFavorite}>
+                <Image className="detail__fav-img" src={ICONS.heartFillBrand} mode="aspectFit" />
+              </View>
+            ) : null}
+          </>
         ) : (
           <>
             <View className={`detail__fav${faved ? ' is-on' : ''}`} onClick={toggleFavorite}>
