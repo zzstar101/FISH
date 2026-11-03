@@ -212,7 +212,10 @@ describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/
   })
 
   test('大徽章的消费点白名单：只有已登记的消费点，新增必须显式登记', async () => {
-    // 两种写法都算消费：`BADGE.verified` 与 `BADGE['verified']`
+    // 两种写法都算消费：`BADGE.verified` 与 `BADGE['verified']`。
+    // 注意：`consumersOf` 按**文件内容**匹配，所以 src 下的 ts/tsx **注释里也不要写**
+    // 这个字面量（否则一个只做说明的注释文件会被当成消费点，白名单直接对不上 ——
+    // 曾经在 features/following 的字段注释里踩过）。
     const viaDot = await consumersOf('BADGE.verified')
     const viaIndex = await consumersOf("BADGE['verified']")
     expect([...new Set([...viaDot, ...viaIndex])].sort()).toEqual(
