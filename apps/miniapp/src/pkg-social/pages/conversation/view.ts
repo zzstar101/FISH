@@ -1303,3 +1303,34 @@ export function isNearBottom(
   if (scrollHeight <= viewportHeight) return true
   return scrollHeight - scrollTop - viewportHeight <= slack
 }
+
+/**
+ * `onScroll` 之后「用户是不是还贴着底」—— 与 `isNearBottom` 的结果**恒等**（#561）。
+ *
+ * 这层直白的转发是有意留下的：贴底标志决定「几何变化时要不要重指尾行」，取值反过来就是
+ * 把翻历史的人拽回底部、同时让贴底的人再也回不去 —— 两种错在端上都只表现为「有时候跳
+ * 一下」，审阅与演示都很难稳定复现。抽成具名纯函数后，「取反」这类改动必然踩红表驱动
+ * 单测，而不是安静地生效。
+ */
+export function stickAfterScroll(nearBottom: boolean): boolean {
+  return nearBottom
+}
+
+/**
+ * 几何变了、回读出来的偏移掉回了顶部：这一跳该怎么补（#561）。
+ *
+ * - `'none'`：偏移没丢（或丢的那次是原生层按**新**几何做的正常截断）→ 什么都不做；
+ * - `'anchor'`：贴底态 → 换一个同位锚点再指一次尾行；
+ * - `'restore'`：翻历史态 → 把几何变化前的 `scrollTop` 原值写回去。
+ *
+ * 只有「原本不在顶部、现在掉到顶部」算丢失：视口变矮 / 内容变短都会让 `scrollTop` 变小，
+ * 那是原生层的正常截断，硬写回旧值反而会把页面按到越界位置。
+ */
+export function planScrollFix(input: {
+  prevTop: number
+  top: number
+  stick: boolean
+}): 'anchor' | 'restore' | 'none' {
+  if (input.prevTop <= BOTTOM_SLACK_PX || input.top > BOTTOM_SLACK_PX) return 'none'
+  return input.stick ? 'anchor' : 'restore'
+}

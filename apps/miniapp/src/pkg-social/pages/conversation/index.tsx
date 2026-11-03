@@ -114,6 +114,7 @@ import {
   type PendingMessage,
   parseTxEvent,
   planMediaLoad,
+  planScrollFix,
   REPLY_DROPPED_TIP,
   type ReplyTarget,
   recallFailureText,
@@ -125,6 +126,7 @@ import {
   shouldReloadOnShow,
   sortMessages,
   startMediaRetry,
+  stickAfterScroll,
   systemPillText,
   type TxBarAction,
   txBarView,
@@ -422,6 +424,11 @@ export default function Conversation() {
    * 真滚到底时归零，余量只在几何变化的那一小段里生效。
    */
   const bottomGapAllowanceRef = useRef(0)
+  /**
+   * `inputRowPx` 的同步镜像（#560/#561）：`onLineChange` 里要立刻算出「这次长高了多少」，
+   * 等一轮渲染再读 state 就已经晚了（原生层的截断滚动事件可能先到）。
+   */
+  const inputRowPxRef = useRef(0)
   /**
    * 当前消息流的 id 快照来源（#186 P2-1）：silent 刷新发起时记下当时的 id 集合，
    * 落地时据此把「刷新期间才确认落地」的消息补回来。`load` 的 `useCallback` 依赖
@@ -1386,6 +1393,18 @@ export default function Conversation() {
     const text = inputValue.trim()
     if (!text || !canSend) return
     setInputValue('')
+    /*
+      输入框清空回单行，「语音态沿用输入行高度」的真源必须跟着回落（#560）。
+      不回落的后果：输入 3 行（≈145.6rpx）→ 发送 → 点话筒 → `.conv__hold` 拿 145.6rpx 当
+      `minHeight` 把输入栏顶高 ≈39px、消息流矮一截 —— 又变回「切态时消息流跳一下」。
+      置 0 让下一次量测（`inputRowPx` 变 0 会触发量测 effect）回填清空后的真实高度；
+      量不到就退回 scss 的 68rpx，恰好等于单行输入框的真实高度。
+    */
+    setInputRowPx(0)
+    // 同步镜像一起清掉：留着上一次的多行高度，下一轮「这次长高多少」会从旧值起算而算成 0。
+    // 置 0 后由量测 effect 在下一帧用清空后的真实高度回填（单行 68rpx，就是 `.conv__hold` 的
+    // 默认高度），中间那一帧人来不及输入。
+    inputRowPxRef.current = 0
     // 引用只跟着这一条发出：发完立刻收起引用栏（下一条默认不引用，与微信一致）
     const reply = replyTarget
       ? { id: replyTarget.id, excerpt: localReplyExcerpt(replyTarget) }
@@ -2167,6 +2186,9 @@ export default function Conversation() {
    * 换完锚点再回读一次偏移：原生层在几何突变（视口变矮、内容变短）时可能把滚动偏移整个
    * 丢掉，而复现里就是「偏移掉成 0」之后再也回不到消息底部。丢了就补 —— 贴底的再指一次
    * 尾行，翻历史的把原值写回去。偏移没丢的机型上这段什么都不做，不存在副作用。
+   *
+   * 「丢没丢、怎么补」全部交给 `view.ts` 的 `planScrollFix()` 判定，这里只负责执行 ——
+   * 判据留在组件里就只能靠源码片段断言，取值反了也不会红。
    */
   const keepTailAnchored = useCallback(() => {
     const prevTop = scrollTopRef.current
@@ -2179,17 +2201,19 @@ export default function Conversation() {
         .select('.conv__scroll')
         .scrollOffset()
         .exec((res) => {
+          // 查询是异步的：回读结果落地时页面可能已经卸载（同文件别处的回调都有这道守卫）
+          if (!aliveRef.current) return
           const offset = res?.[0] as { scrollTop?: number } | undefined
           const top = offset?.scrollTop
           if (typeof top !== 'number') return
-          // 只认「原本不在顶部、现在掉到顶部」这一种。其余的下掉都是原生层按**新的**几何做的
-          // 正常截断（视口变矮、内容变短），硬写回旧值反而会把页面按到越界位置。
-          if (prevTop <= BOTTOM_SLACK_PX || top > BOTTOM_SLACK_PX) return
-          if (stickBottomRef.current) {
+          const fix = planScrollFix({ prevTop, top, stick: stickBottomRef.current })
+          if (fix === 'anchor') {
             setTailAnchorFlip((prev) => !prev)
             return
           }
-          setScrollRestore((prev) => ({ top: prevTop, tick: (prev?.tick ?? 0) + 1 }))
+          if (fix === 'restore') {
+            setScrollRestore((prev) => ({ top: prevTop, tick: (prev?.tick ?? 0) + 1 }))
+          }
         })
     })
   }, [])
@@ -2768,6 +2792,12 @@ export default function Conversation() {
    * 且 biome 的 `useExhaustiveDependencies` 会把 `tailId` 判成多余依赖（`setJumpTo` 是
    * 稳定引用）。这里把「跳转目标」与「设它时的 tailId」绑成一个值，渲染期直接比对 ——
    * tail 一变，目标自动失效，无需任何副作用。
+   *
+   * ⚠️ 已知限制（只记录，本票不改）：停在「跳去看摘引」期间，这里的值恒为 `jumpTo.id`，
+   * 于是 `keepTailAnchored()` 翻的尾行锚点落不到 `scrollIntoView` 上 —— 那几秒里的重锚是
+   * 空操作。它的代价只在「点摘引后、新消息到达前」这个窗口内，且 `#540` 要求那时锁住
+   * 被引用的那条（不能被拽到底），两者本来就是互斥的；改法要连 `#540` 的判据一起动，
+   * 不在本票范围。
    */
   const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailAnchorId
 
@@ -2802,6 +2832,18 @@ export default function Conversation() {
     : undefined
 
   /**
+   * 记下一处输入行实测高度（#560 两态同盒模型的第二个真源）。
+   *
+   * `state` 供渲染（语音态 `minHeight`），`ref` 供**同步**读上一次的实测值 —— 判断「这次
+   * 长高了多少」不能等一轮渲染回来。
+   */
+  const writeInputRowPx = useCallback((next: number) => {
+    if (!(next > 0)) return
+    inputRowPxRef.current = next
+    setInputRowPx((prev) => (Math.abs(prev - next) < 0.5 ? prev : next))
+  }, [])
+
+  /**
    * 键盘高度订阅（#561/#560）：`onKeyboardHeightChange` 是设备级的，键盘升、降各报一次，
    * 页面拿它当唯一真源。
    *
@@ -2809,6 +2851,8 @@ export default function Conversation() {
    * 的滚动偏移截掉，不重新下一道「滚到底」的指令就回不来。
    */
   useEffect(() => {
+    // 基础库 < 2.7.0 没有这个 API（`undefined`）：直接调会在挂载时抛 TypeError，整页白屏
+    if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined
     const onHeightChange = (res: { height: number }) => {
       setKeyboardHeight(res.height > 0 ? res.height : 0)
       keepTailAnchored()
@@ -2826,14 +2870,15 @@ export default function Conversation() {
    * 视口多高 —— 自己量，不猜。输入行高度则是 #560 要的「两态同盒模型」：语音态拿它当
    * `minHeight`，切态时消息流不能因为输入框比「按住说话」高而变矮。
    *
-   * 每次几何变化后重量一次：键盘升降、面板开合、语音/键盘切换、输入框长高都会改变可视
-   * 高度。量不到就沿用上一次的值（`isNearBottom` 对视口未知按贴底处理，见其注释）。
+   * 每次几何变化后重量一次：键盘升降、面板开合、语音/键盘切换、输入框长高、录音面板出现
+   * 都会改变可视高度。量不到就沿用上一次的值（`isNearBottom` 对视口未知按贴底处理，见其注释）。
    *
    * 顺带记下「视口自己变矮了多少」（`bottomGapAllowanceRef`）：滚动事件里可能是「旧
    * scrollTop + 新 scrollHeight」的中间态，不给这段余量，一次多行输入就会把贴底误判成
    * 「用户在翻历史」，之后的重锚全被守卫挡掉（#560 的「多行输入后再切更明显」）。
+   * 这里只是**兜底**：抢在滚动事件之前把缩量算出来的地方在 `onLineChange`（见其注释）。
    */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 四项都是刻意的重测信号（几何变了就重量一次），体内只写 ref 与按实测值 setState，不是渲染期读到的值
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 五项都是刻意的重测信号（几何变了就重量一次），体内只写 ref 与按实测值 setState，不是渲染期读到的值
   useEffect(() => {
     let measuring = true
     void Taro.nextTick(() => {
@@ -2846,21 +2891,26 @@ export default function Conversation() {
           if (!measuring) return
           const viewport = res?.[0] as { height?: number } | undefined
           if (typeof viewport?.height === 'number' && viewport.height > 0) {
-            bottomGapAllowanceRef.current = Math.abs(viewport.height - scrollViewportRef.current)
+            // 只认「缩了多少」：视口变高不需要放宽（底部差只会变小）。首次量到（`ref = 0`）
+            // 没有可比对象，此时算出来的会是整个视口高，等于把所有判据一次放到最松
+            if (scrollViewportRef.current > 0) {
+              bottomGapAllowanceRef.current = Math.max(
+                0,
+                scrollViewportRef.current - viewport.height,
+              )
+            }
             scrollViewportRef.current = viewport.height
           }
           // 语音态没有 `.conv__input`：量不到就沿用旧值，不归零（归零会让「按住说话」跳回 68）
           const inputRow = res?.[1] as { height?: number } | undefined
           const inputHeight = inputRow?.height
-          if (typeof inputHeight === 'number' && inputHeight > 0) {
-            setInputRowPx((prev) => (Math.abs(prev - inputHeight) < 0.5 ? prev : inputHeight))
-          }
+          if (typeof inputHeight === 'number' && inputHeight > 0) writeInputRowPx(inputHeight)
         })
     })
     return () => {
       measuring = false
     }
-  }, [keyboardHeight, panelOpen, voiceMode, inputRowPx])
+  }, [keyboardHeight, panelOpen, voiceMode, inputRowPx, recording])
 
   /**
    * 记住用户是不是贴着底部。只写 ref：滚动事件很密，翻历史不该引起重渲染
@@ -2882,7 +2932,7 @@ export default function Conversation() {
       Math.max(BOTTOM_SLACK_PX, bottomGapAllowanceRef.current),
     )
     if (nearBottom) bottomGapAllowanceRef.current = 0
-    stickBottomRef.current = nearBottom
+    stickBottomRef.current = stickAfterScroll(nearBottom)
   }, [])
 
   /**
@@ -3701,10 +3751,20 @@ export default function Conversation() {
                 `autoHeight` 的输入框每多一行就高 30 多 px，语音态要跟着用同一高度（#560 的
                 两态同盒模型）。`onLineChange` 直接给设备 px 高度，比在渲染期猜行数准 ——
                 `event.detail.height` 就是这个输入行的实测高度。
+
+                同时**当场**把「本页刚让出多少消息流高度」交给贴底判据：输入框一变高，原生层
+                会截断越界偏移并立刻抛 `bindscroll`，而量测 effect 还要等下一帧的 `nextTick`；
+                等它回来，这次滚动早被判成「用户在翻历史」，之后切态 / 开面板的重锚全被守卫
+                挡掉，最新一条就压在视口外几十 px 回不来（#561 的复发路径）。
+                `ref` 为 0 表示「还没量到或刚清空」，此时 height 是单行基线、不是让出的高度。
               */
               onLineChange={(event) => {
                 const { height } = event.detail
-                if (height > 0) setInputRowPx(height)
+                if (!(height > 0)) return
+                const grownBy =
+                  inputRowPxRef.current > 0 ? Math.max(0, height - inputRowPxRef.current) : 0
+                if (grownBy > 0) bottomGapAllowanceRef.current = grownBy
+                writeInputRowPx(height)
               }}
               onFocus={() => setPanelOpen(false)}
               onInput={(event) => setInputValue(event.detail.value)}

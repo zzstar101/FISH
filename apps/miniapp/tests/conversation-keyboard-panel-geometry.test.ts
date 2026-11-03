@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { BOTTOM_SLACK_PX, isNearBottom } from '../src/pkg-social/pages/conversation/view'
+import {
+  BOTTOM_SLACK_PX,
+  isNearBottom,
+  planScrollFix,
+  stickAfterScroll,
+} from '../src/pkg-social/pages/conversation/view'
 
 /**
  * 会话页输入栏 / 消息流的几何（#560、#561）。
@@ -90,6 +95,30 @@ describe('贴底判据（#561）', () => {
   })
 })
 
+describe('贴底标志与偏移回读的判据（#561，纯函数表驱动）', () => {
+  test('onScroll 之后贴底标志恒等于「此刻贴底」，不取反', () => {
+    // 取反的后果：贴底的人再也回不到底部、翻历史的人被拽回底部，端上只表现为「有时候跳一下」
+    expect(stickAfterScroll(true)).toBe(true)
+    expect(stickAfterScroll(false)).toBe(false)
+  })
+
+  test('偏移没丢 / 丢的那次是正常截断 → 什么都不做', () => {
+    // 原本就在顶部（用户自己翻到最早）：下掉是正常截断
+    expect(planScrollFix({ prevTop: 0, top: 0, stick: true })).toBe('none')
+    // 回读时仍在底部附近：没丢
+    expect(planScrollFix({ prevTop: 800, top: 790, stick: true })).toBe('none')
+  })
+
+  test('偏移掉回顶部：贴底重指尾行，翻历史把原值写回去', () => {
+    // 复现里的形态：几何突变后偏移掉成 0
+    expect(planScrollFix({ prevTop: 800, top: 0, stick: true })).toBe('anchor')
+    expect(planScrollFix({ prevTop: 800, top: 0, stick: false })).toBe('restore')
+    // 只差一个像素也算丢（`top > BOTTOM_SLACK_PX` 才放过），贴底/翻历史两条路都要能走
+    expect(planScrollFix({ prevTop: 800, top: BOTTOM_SLACK_PX, stick: false })).toBe('restore')
+    expect(planScrollFix({ prevTop: 800, top: BOTTOM_SLACK_PX + 1, stick: false })).toBe('none')
+  })
+})
+
 describe('键盘高度是单一真源（#560）', () => {
   test('页面订阅设备级键盘高度事件，并在卸载时收回', async () => {
     const source = squash(await pageSource())
@@ -97,6 +126,10 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('setKeyboardHeight(res.height > 0 ? res.height : 0)')
     expect(source).toContain('Taro.onKeyboardHeightChange(onHeightChange)')
     expect(source).toContain('Taro.offKeyboardHeightChange(onHeightChange)')
+    // 基础库 < 2.7.0 没有这个 API：裸调会在挂载时抛 TypeError，整页白屏
+    expect(source).toContain(
+      "if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined",
+    )
   })
 
   test('输入栏的下内边距由真源派生，收起时不内联（env 安全区照旧生效）', async () => {
@@ -126,7 +159,11 @@ describe('键盘高度是单一真源（#560）', () => {
     // `tag()` 会在 `onLineChange` 里的 `>` 处截断，切到下一个属性为止
     const textarea = slice(source, '<Textarea', 'onFocus=')
     expect(textarea).toContain('onLineChange=')
-    expect(textarea).toContain('setInputRowPx(height)')
+    expect(textarea).toContain('writeInputRowPx(height)')
+    // 长高的那一刻先把「本页让出的高度」记进贴底容差，再更新真源（顺序反了就等于没记）
+    const grownAt = textarea.indexOf('bottomGapAllowanceRef.current = grownBy')
+    expect(grownAt).toBeGreaterThan(-1)
+    expect(grownAt).toBeLessThan(textarea.indexOf('writeInputRowPx(height)'))
     // 「按住说话」拿同一个值当 `minHeight`：不然多行输入后切语音，消息流会突然长高一大截
     // （`tag()` 同样会在 `inputRowPx > 0` 的 `>` 处截断，切到下一个事件绑定为止）
     const hold = slice(source, '<View className={`conv__hold', 'onTouchStart={startVoice}')
@@ -134,6 +171,14 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(hold).toContain('inputRowPx > 0')
     // 量不到值时退回 scss 的 68（首帧 / 老基础库不报 onLineChange）
     expect(await styleSource()).toContain('height: 68px')
+  })
+
+  test('发送清空输入后，输入行高度真源跟着回落（否则下一轮切语音又把消息流顶矮一截）', async () => {
+    const body = slice(squash(await pageSource()), 'const send = () => {', 'doSend(text')
+    expect(body).toContain("setInputValue('')")
+    expect(body).toContain('setInputRowPx(0)')
+    // 同步镜像也要清：留着旧的多行高度，「这次长高多少」会从旧值起算而算成 0
+    expect(body).toContain('inputRowPxRef.current = 0')
   })
 
   test('切语音态：点击当下收键盘，真源归零与切态同批落地（分两帧就是先上提再回落）', async () => {
@@ -189,10 +234,17 @@ describe('「+」面板与贴底（#561）', () => {
     expect(body).toContain('const prevTop = scrollTopRef.current')
     expect(body).toContain("select('.conv__scroll')")
     expect(body).toContain('scrollOffset()')
-    // 只认「原本不在顶部、现在掉到顶部」这一种（其余下掉是原生层按新几何的正常截断）
-    expect(body).toContain('prevTop <= BOTTOM_SLACK_PX || top > BOTTOM_SLACK_PX')
+    // 判据本身在 `view.ts`（表驱动单测在上面），这里只钉「真的调了它、三个入参都对」
+    expect(body).toContain('planScrollFix({ prevTop, top, stick: stickBottomRef.current })')
     // 贴底 → 再指一次尾行；翻历史 → 把原偏移写回去
+    expect(body).toContain("if (fix === 'anchor')")
+    expect(body).toContain("if (fix === 'restore')")
     expect(body).toContain('setScrollRestore(')
+    // 回读是异步的：落地时页面可能已经卸载
+    expect(body).toContain('if (!aliveRef.current) return')
+    // 回读必须**无条件**紧接着换锚执行：外面再套一层 `if (false)` / 提前 return，整段
+    // 「偏移丢了就补」就静默失效了，端上表现为「偶尔跳回顶部」，任何单点断言都看不出来
+    expect(body).toContain('stickBottomRef.current = true } void Taro.nextTick(() => {')
   })
 
   test('消息流有 onScroll，并把 scrollTop/scrollHeight/视口高度喂给贴底判据', async () => {
@@ -206,6 +258,16 @@ describe('「+」面板与贴底（#561）', () => {
     // 本页自己造成的视口缩量算进容差；真到底了归零，免得长期放宽
     expect(body).toContain('Math.max(BOTTOM_SLACK_PX, bottomGapAllowanceRef.current)')
     expect(body).toContain('bottomGapAllowanceRef.current = 0')
+    // 标志的取值交给 `view.ts` 的纯函数（表驱动单测在上面），组件里不许自己决断
+    expect(body).toContain('stickBottomRef.current = stickAfterScroll(nearBottom)')
+  })
+
+  test('首次量测不算「缩量」：视口高度从 ref 的 0 长起来时不能一次性放宽到整屏', async () => {
+    const body = slice(squash(await pageSource()), 'const viewport = res?.[0]', 'const inputRow')
+    expect(body).toContain('scrollViewportRef.current > 0')
+    expect(body).toContain('scrollViewportRef.current - viewport.height')
+    // 只认缩量：视口变大不该放宽容差
+    expect(body).toContain('bottomGapAllowanceRef.current = Math.max(')
   })
 
   test('尾行锚点带 keyId 且能交替：内容追加与几何变化都能重新滚到底', async () => {
