@@ -1,0 +1,203 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 我的争议（#497）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 顶栏（`components/top-bar`：返回 + 「我的争议」双色标题）→ 争议卡列表（状态胶囊 +
+ * 类型 + 交易标题 + 身份/对方/金额 + 编号脚行）→「已经到底了 / 上拉加载更多」。
+ *
+ * 根节点不写 overflow（会破坏 pageScrollTo 与下拉刷新，与 `pages/wish/index.scss` 同类说明）。
+ * 页头渐变是 absolute 定位元素，`.dsp__body` 必须抬层（z-index）否则内容被渐变盖住 ——
+ * 这是 my-reports 走查时踩过的同一个坑。
+ */
+
+.dsp {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.dsp__bg {
+  @include page-hero(496px, 64px);
+}
+
+.dsp__body {
+  position: relative;
+  z-index: 1;
+  padding: 24px 40px 0;
+  box-sizing: border-box;
+}
+
+/* ── 列表卡 ── */
+.dsp__card {
+  @include card;
+  @include pressable;
+
+  padding: 28px;
+  margin-bottom: 20px;
+}
+
+.dsp__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 状态胶囊：三种基调，圆点用 currentColor 跟着文字色走（与 my-reports 同语言） */
+.dsp__chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  flex: 0 0 auto;
+
+  &.is-warn {
+    background: var(--warn-weak);
+    border-color: var(--warn-line);
+    color: var(--warn-ink);
+  }
+
+  &.is-ok {
+    background: var(--ok-weak);
+    border-color: var(--ok-line);
+    color: var(--ok-ink);
+  }
+
+  &.is-off {
+    background: var(--ice);
+    border-color: var(--border);
+    color: var(--muted);
+  }
+}
+
+.dsp__chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.dsp__type {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.dsp__time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.dsp__title {
+  display: block;
+  margin: 18px 0 10px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.dsp__sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.dsp__role {
+  color: var(--brand-deep);
+  font-weight: 600;
+}
+
+.dsp__counter {
+  min-width: 0;
+  @include ellipsis;
+}
+
+.dsp__sep {
+  color: var(--muted);
+}
+
+.dsp__amount {
+  color: var(--muted-2);
+}
+
+.dsp__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 18px;
+}
+
+.dsp__id {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.dsp__chev {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.dsp__more {
+  display: block;
+  padding: 24px 0 8px;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  color: var(--muted);
+}
+
+/* ── 空态 / 骨架屏 ── */
+.dsp__emptypad {
+  padding: 120px 40px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.dsp__skeleton {
+  padding: 8px 0 0;
+}
+
+.dsp__skel {
+  @include card;
+
+  padding: 28px;
+  margin-bottom: 20px;
+}
+
+.dsp__skel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.dsp__skel-bar {
+  @include skeleton(22px, 100%);
+
+  border-radius: 12px;
+}
+
+.dsp__skel-hint {
+  display: block;
+  margin-top: 8px;
+  text-align: center;
+  font-size: 20px;
+  color: var(--muted);
+}

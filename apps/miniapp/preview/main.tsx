@@ -50,6 +50,9 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-trade/pages/report-listing/index': () => import('@/pkg-trade/pages/report-listing/index'),
   '/pkg-trade/pages/report-user/index': () => import('@/pkg-trade/pages/report-user/index'),
   '/pkg-trade/pages/my-reports/index': () => import('@/pkg-trade/pages/my-reports/index'),
+  '/pkg-trade/pages/my-disputes/index': () => import('@/pkg-trade/pages/my-disputes/index'),
+  '/pkg-trade/pages/dispute-detail/index': () => import('@/pkg-trade/pages/dispute-detail/index'),
+  '/pkg-trade/pages/dispute-create/index': () => import('@/pkg-trade/pages/dispute-create/index'),
   // 静态法务与帮助页（未定内容页面，实际内容由 zzstar 决策）
   '/pkg-legal/pages/about/index': () => import('@/pkg-legal/pages/about/index'),
   '/pkg-legal/pages/terms/index': () => import('@/pkg-legal/pages/terms/index'),

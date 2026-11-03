@@ -1,0 +1,271 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 发起交易争议（#497）。尺寸 = 设计稿 pt × 2。
+ *
+ * 表单顺序：交易摘要（只读）→ 争议类型（单选卡）→ 详细说明（Textarea）→ 提示 → 提交。
+ * 窗口关闭时不渲染表单，只给一整块警示卡。
+ */
+
+.dsc {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.dsc__bg {
+  @include page-hero(496px, 64px);
+}
+
+.dsc__body {
+  position: relative;
+  z-index: 1;
+  padding: 24px 40px 0;
+  box-sizing: border-box;
+}
+
+.dsc__content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.dsc__loading {
+  display: block;
+  padding: 120px 0;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.dsc__emptypad {
+  padding: 96px 40px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ── 卡 ── */
+.dsc__card {
+  @include card;
+
+  padding: 28px;
+
+  &.is-err {
+    border-color: var(--danger-line);
+  }
+}
+
+.dsc__card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.dsc__card-h {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dsc__req {
+  font-size: var(--fs-body);
+  color: var(--danger-ink);
+}
+
+.dsc__card-sub {
+  display: block;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
+/* ── 交易摘要（只读） ── */
+.dsc__title {
+  display: block;
+  margin-top: 8px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.dsc__sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+}
+
+.dsc__sep {
+  color: var(--muted);
+}
+
+/* ── 窗口关闭警示 ── */
+.dsc__warn {
+  padding: 28px;
+  border-radius: 28px;
+  background: var(--warn-weak);
+  border: 2px solid var(--warn-line);
+}
+
+.dsc__warn-t {
+  display: block;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--warn-ink);
+}
+
+.dsc__warn-s {
+  display: block;
+  margin-top: 10px;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+/* ── 类型单选卡 ── */
+.dsc__opts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dsc__opt {
+  @include pressable;
+
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 20px;
+  border-radius: 24px;
+  background: var(--ice);
+  border: 2px solid var(--border);
+
+  &.is-on {
+    background: var(--accent-weak);
+    border-color: var(--brand);
+  }
+}
+
+.dsc__radio {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  margin-top: 2px;
+  border-radius: 999px;
+  border: 2px solid var(--line);
+  box-sizing: border-box;
+
+  &.is-on {
+    border: 10px solid var(--brand);
+  }
+}
+
+.dsc__opt-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dsc__opt-label {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.dsc__opt-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ── 说明输入 ── */
+.dsc__field {
+  @include input-box;
+
+  align-items: stretch;
+  padding: 20px;
+  height: auto;
+
+  &.is-focus {
+    border-color: var(--brand);
+  }
+}
+
+.dsc__ta {
+  width: 100%;
+  min-height: 200px;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--fg);
+}
+
+.dsc__fieldfoot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.dsc__kb {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ── 错误 ── */
+.dsc__err {
+  display: flex;
+  align-items: center;
+  margin-top: 14px;
+  font-size: var(--fs-xs);
+  color: var(--danger-ink);
+
+  &--block {
+    padding: 20px 24px;
+    border-radius: 20px;
+    background: var(--danger-weak);
+    border: 2px solid var(--danger-line);
+    margin-top: 0;
+  }
+}
+
+/* ── 提示与提交 ── */
+.dsc__note {
+  padding: 0 8px;
+}
+
+.dsc__note-t {
+  display: block;
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.dsc__submit {
+  @include btn-brand;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--surface);
+  @include pressable;
+
+  &.is-off {
+    opacity: 0.5;
+  }
+}

@@ -455,7 +455,7 @@ export type MockNotification = NotificationDto & {
   /**
    * 跳转目标；`null` = 这条通知没有可跳的地方（只标记已读）。
    * `conversation` = 会话详情（TX 进展都在会话里）、`mylist` = 我的发布（审核结果）、
-   * `verify` = 校园认证页（认证结果）。
+   * `verify` = 校园认证页（认证结果）、`dispute` = 交易争议详情（#497）。
    */
   target:
     | { kind: 'listing'; listingId: string }
@@ -463,6 +463,7 @@ export type MockNotification = NotificationDto & {
     | { kind: 'conversation'; conversationId: string }
     | { kind: 'mylist' }
     | { kind: 'verify' }
+    | { kind: 'dispute'; disputeId: string }
     | null
   /** 视觉语气：命中成功 / 需要留意 */
   tone: 'mint' | 'warn'
