@@ -531,7 +531,7 @@ export default function UserHome() {
       </View>
     ) : null
 
-  /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染） */
+  /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染；#563 起同为横向整图，无胶囊外壳） */
   const navTitle = profile ? (
     <>
       <Text className="uhome__navname">{profile.nickname}</Text>
@@ -617,7 +617,10 @@ export default function UserHome() {
                   <View className="uhome__pinfo">
                     <View className="uhome__nameRow">
                       <Text className="uhome__pname">{profile.nickname}</Text>
-                      {/* 徽章只在 VERIFIED 时渲染：未认证不占位、不留白 */}
+                      {/* 徽章只在 VERIFIED 时渲染：未认证不占位、不留白。
+                          #563 起这里只放横向整图（BADGE.verified，61×24）—— 原先的「浅强调胶囊 +
+                          小勾 + 「已认证」文案」外壳撤掉了，因为整图自带「认证」字样，再套胶囊底
+                          与描边就是两层装饰。别补回外壳类名或文案（契约测试有否定断言）。 */}
                       {verified ? (
                         <Image className="uhome__badge-ic" src={BADGE.verified} mode="aspectFit" />
                       ) : null}

@@ -49,12 +49,31 @@ function slice(sourceText: string, anchor: string, end: string): string {
   return sourceText.slice(start, endAt + end.length)
 }
 
-/** 扫 `src/**\/*.{ts,tsx}`，返回源码里出现 `needle` 的文件（相对 `src/`，已排序） */
+/**
+ * 去掉注释后的源码：断言只该看**代码**，不该看说明文字。
+ *
+ * 以前 `consumersOf()` / `places` / `aspectFit` / 「不许出现 `已认证`」全是对**全文**的纯子串
+ * 匹配，于是注释里的字面量会被当成代码 —— 实测两种后果：
+ * 1) 在白名单文件里补一句「与 `BADGE.verified` 同一张图」的说明注释 → `places` 与 `aspectFit`
+ *    两条**双双误报**，报错文字是「消费位数量不对」，把人引向完全错误的方向；
+ * 2) 本仓既有注释风格就是 `{/* 已认证徽章（#534）：… *\/}`（见
+ *    `apps/miniapp/src/components/order-list/index.tsx:431`），逼得「为什么撤掉外壳」只能写进
+ *    scss，tsx 侧零解释 —— 后面维护的人只读 tsx 就不知道这里曾有两层装饰。
+ *
+ * 剥的是 `/* … *\/`（含 JSX 的 `{/* … *\/}`）与 `//` 行注释；`//` 前是冒号/反斜杠时不动，
+ * 避免把 `https://` 这类字符串截断。
+ */
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/[^\n]*/gm, '$1')
+}
+
+/** 扫 `src/**\/*.{ts,tsx}`，返回**代码里**出现 `needle` 的文件（相对 `src/`，已排序） */
 async function consumersOf(needle: string): Promise<string[]> {
   const glob = new Bun.Glob('**/*.{ts,tsx}')
   const files: string[] = []
   for await (const file of glob.scan({ cwd: SRC_DIR })) {
-    if ((await Bun.file(new URL(file, SRC)).text()).includes(needle)) files.push(file)
+    const text = stripComments(await Bun.file(new URL(file, SRC)).text())
+    if (text.includes(needle)) files.push(file)
   }
   return files.sort()
 }
@@ -67,12 +86,13 @@ async function scssBlock(relPath: string, cls: string): Promise<string> {
   return text.slice(start, text.indexOf('}', start))
 }
 
-/** 按**内容**扫 `src/**\/*.{ts,tsx,scss}`，返回出现 `needle` 的文件（相对 `src/`，已排序） */
+/** 按**代码内容**扫 `src/**\/*.{ts,tsx,scss}`，返回出现 `needle` 的文件（相对 `src/`，已排序） */
 async function filesMentioning(needle: string): Promise<string[]> {
   const glob = new Bun.Glob('**/*.{ts,tsx,scss}')
   const files: string[] = []
   for await (const file of glob.scan({ cwd: SRC_DIR })) {
-    if ((await Bun.file(new URL(file, SRC)).text()).includes(needle)) files.push(file)
+    const text = stripComments(await Bun.file(new URL(file, SRC)).text())
+    if (text.includes(needle)) files.push(file)
   }
   return files.sort()
 }
@@ -228,7 +248,7 @@ describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/
 
   test('大徽章的每个 <Image> 都是 aspectFit（比例正确但 mode 写错一样会拉伸）', async () => {
     for (const tsx of [...new Set(BADGE_DISPLAY.map((e) => e.tsx))]) {
-      const text = await source(tsx)
+      const text = stripComments(await source(tsx))
       const tails = text.split('BADGE.verified').slice(1)
       expect({ tsx, consumed: tails.length > 0 }).toEqual({ tsx, consumed: true })
       for (const tail of tails) {
@@ -247,7 +267,7 @@ describe('大徽章资产（#534：设计稿「认证」整图，独立出口 @/
       expected.set(entry.tsx, (expected.get(entry.tsx) ?? 0) + entry.places)
     }
     for (const [tsx, places] of expected) {
-      const text = await source(tsx)
+      const text = stripComments(await source(tsx))
       expect({ tsx, places: text.split('BADGE.verified').length - 1 }).toEqual({ tsx, places })
     }
   })
@@ -361,7 +381,7 @@ describe('认证标识形态契约（#563 起：列表 / 卡片一律大徽章�
       },
     ] as const
     for (const { tsx, scss, shell } of shells) {
-      const text = await source(tsx)
+      const text = stripComments(await source(tsx))
       const classes = [...text.matchAll(/className="([^"]*)"/g)]
         .flatMap((m) => (m[1] ?? '').split(/\s+/))
         .filter(Boolean)
@@ -372,7 +392,7 @@ describe('认证标识形态契约（#563 起：列表 / 卡片一律大徽章�
       }).toEqual({ tsx, shells: [] })
       expect({ tsx, label: text.includes('已认证') }).toEqual({ tsx, label: false })
       // 样式侧同理：外壳规则整块删掉，不留死样式给下一个人「复活」用
-      const style = await source(scss)
+      const style = stripComments(await source(scss))
       expect({
         scss,
         dead: [`.${shell} {`, `.${shell}--`].filter((needle) => style.includes(needle)),
