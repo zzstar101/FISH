@@ -41,7 +41,7 @@
 `fetch`、storage 或模块级单例，杜绝跨文件污染。权威入口两处，改口径必须同步：
 
 - `package.json:25`（`"test": "bun test --isolate"`，本地 `bun run test` 的实义）；
-- `.github/workflows/ci.yml:282-294`（db-tests 作业）与 `:312-326`（unit-tests 作业）的 Test 步骤。
+- `.github/workflows/ci.yml:291-303`（db-tests 作业）与 `:321-341`（unit-tests 作业）的 Test 步骤。
 
 ## 4. Bun 版本口径
 
@@ -54,7 +54,7 @@
   TS2321），所以下限不能低于 1.4.4。`--no-script` 防止某个包日后加了名为 `check` 的脚本时，
   `bun check` 改去跑那个脚本而不做类型检查。
 
-## 5. CI 的实际门禁结构（`origin/main = 89a09401` + #406 第 3 项的新增步骤）
+## 5. CI 的实际门禁结构（`origin/main = 09f84c2a` + Bun 1.4.4 + db-tests 分片）
 
 作业按改动范围裁剪（`changes` 作业跑 `scripts/ci-changes.ts` 算范围；纯文档 PR 到 `changes`
 为止，不装依赖、不起容器、不跑测试）。作业清单与行号：
@@ -63,15 +63,15 @@
 | --- | --- | --- |
 | `changes` | `ci.yml:54` | 算改动范围，产出各作业开关 |
 | `static` | `ci.yml:107` | lockfile 源断言（拒镜像源污染）→ Install → Lint & format → Typecheck |
-| `db-tests` | `ci.yml:148` | 起 Postgres（+按需 MinIO）→ Migrate（`:257`）→ Chat media smoke（`:260`）→ **Visual search eval gates（`:269`，`bun run visual:eval`）** → **Visual search eval db leg（`:277`，`bun run visual:eval:db`）** → `bun test --isolate` 受影响目录（`:282`） |
-| `unit-tests` | `ci.yml:298` | 无服务依赖的单测（web-pc / miniapp / contracts / shared / scripts） |
-| `web-pc` | `ci.yml:330` | `Build PC web`（`:344`）+ `PC preview smoke`（`:348`，真实验证 `/pc` 308 与深链回退） |
-| `miniapp` | `ci.yml:355` | `Build Miniapp`（`:369`，Taro production 构建） |
-| `core-smoke` | `ci.yml:378` | 主链端到端（scratch 库 + 真实 API/Worker/MinIO） |
-| `ci` | `ci.yml:474` | 聚合结论（作业按范围 skip 是正常的） |
+| `db-tests` | `ci.yml:151` | 按测试文件分 2 片（matrix `shard: [1, 2]`，每片独立的 Postgres / MinIO）：起 Postgres（+按需 MinIO）→ Migrate（`:265`，每片都跑）→ 仅第 1 片：Chat media smoke（`:268`）→ **Visual search eval gates（`:277`，`bun run visual:eval`）** → **Visual search eval db leg（`:285`，`bun run visual:eval:db`）** → `bun test --isolate --shard=i/2` 受影响目录（`:291`） |
+| `unit-tests` | `ci.yml:307` | 无服务依赖的单测（web-pc / miniapp / contracts / shared / scripts） |
+| `web-pc` | `ci.yml:345` | `Build PC web`（`:359`）+ `PC preview smoke`（`:363`，真实验证 `/pc` 308 与深链回退） |
+| `miniapp` | `ci.yml:370` | `Build Miniapp`（`:396`，Taro production 构建） |
+| `core-smoke` | `ci.yml:405` | 主链端到端（scratch 库 + 真实 API/Worker/MinIO） |
+| `ci` | `ci.yml:501` | 聚合结论（作业按范围 skip 是正常的） |
 
 **行号基线的说明**：本节此前的行号基于 `b641fd7`，之后 CI 已多次改动（本例新增了两个步骤），
-所以按 `origin/main = 89a09401` + 本 PR 重新逐条核对；改 `ci.yml` 务必回来更新这张表。
+db-tests 分片（`origin/main = 09f84c2a` + Bun 1.4.4 升级 + 分片改动）后再次逐条核对；改 `ci.yml` 务必回来更新这张表。
 
 **评测门槛的位置与理由**（#406 第 3 项）：issue 点名的评测脚本是**两个**，CI 里两条腿都要跑：
 
