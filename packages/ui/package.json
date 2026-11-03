@@ -53,7 +53,7 @@
     "./user-avatar": "./src/user-avatar.tsx"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "bun check --no-script -p tsconfig.json"
   },
   "peerDependencies": {
     "react": "^19.3.0"

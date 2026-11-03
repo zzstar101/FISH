@@ -45,11 +45,14 @@
 
 ## 4. Bun 版本口径
 
-三处一致为 **1.4.0**，升级必须三处一起动：
+唯一来源是 `package.json:5` 的 `"packageManager": "bun@1.4.4"`：
 
-- `package.json:5`（`"packageManager": "bun@1.4.0"`）；
-- `package.json:7`（`"engines": { "bun": ">=1.4.0" }`）；
-- `.github/workflows/ci.yml` 每个作业的 setup-bun 步骤（`:76,114,171,305,337,362,401`，全部 `"1.4.0"`）。
+- `.github/workflows/ci.yml` 每个作业的 setup-bun 步骤都写 `bun-version-file: package.json`，
+  由 `oven-sh/setup-bun` 读 `packageManager` 字段，CI 里不再另写版本号；
+- `package.json:7` 的 `"engines": { "bun": ">=1.4.4" }` 是下限声明，升级时与 `packageManager` 一起改；
+- 各工作区的 `typecheck` 脚本用 `bun check`（Bun ≥ 1.4.3 才有，1.4.4 修了随线程数误报的
+  TS2321），所以下限不能低于 1.4.4。`--no-script` 防止某个包日后加了名为 `check` 的脚本时，
+  `bun check` 改去跑那个脚本而不做类型检查。
 
 ## 5. CI 的实际门禁结构（`origin/main = 89a09401` + #406 第 3 项的新增步骤）
 
