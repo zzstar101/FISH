@@ -158,8 +158,16 @@ describe('贴底容差的记账口径（#560/#561，纯函数表驱动）', () =
     expect(growBottomAllowance({ allowance: 0, prevInputPx: 34, nextInputPx: 64 })).toBe(30)
     // 2 行 → 3 行：原生那次截断滚动反映的是相对单行基线的累计 60，只留 30 就不够
     expect(growBottomAllowance({ allowance: 30, prevInputPx: 64, nextInputPx: 94 })).toBe(60)
-    // 变矮不回吐（余量只增不减，真到底由 onScroll 归零）
-    expect(growBottomAllowance({ allowance: 60, prevInputPx: 94, nextInputPx: 64 })).toBe(60)
+  })
+
+  test('输入行缩回去（删行 / autoHeight 回落）时余量要收，不是只增不减', () => {
+    // 只增不减的后果：余量长期停在高水位，用户上翻不到那么多仍被判成贴底，
+    // 随后的重锚把他从历史里拽回底部（#561 验收第一条）
+    expect(growBottomAllowance({ allowance: 60, prevInputPx: 94, nextInputPx: 64 })).toBe(30)
+    // 收到 0 为止，不留负数
+    expect(growBottomAllowance({ allowance: 10, prevInputPx: 94, nextInputPx: 34 })).toBe(0)
+    // 高度没变时不动
+    expect(growBottomAllowance({ allowance: 30, prevInputPx: 64, nextInputPx: 64 })).toBe(30)
   })
 
   test('输入行基线不明（还没量到 / 刚清空）时不记增量', () => {
@@ -315,7 +323,8 @@ describe('「+」面板与贴底（#561）', () => {
   })
 
   test('几何变化后回读偏移：原生层把偏移丢了就补回来，没丢什么都不做', async () => {
-    const body = slice(squash(await pageSource()), 'const keepTailAnchored = useCallback', '}, [])')
+    const source = squash(await pageSource())
+    const body = slice(source, 'const keepTailAnchored = useCallback', '}, [])')
     // 一拍一张快照：`prevTop` 与 `stick` 都取调用时的值，两者不能一个取快照一个现读
     expect(body).toContain(
       'const prevTop = scrollTopRef.current const stick = stickBottomRef.current',
@@ -332,7 +341,9 @@ describe('「+」面板与贴底（#561）', () => {
         ".select('.conv__scroll') .scrollOffset() .exec((res) => { " +
         'if (!aliveRef.current) return ' +
         'const offset = res?.[0] as { scrollTop?: number } | undefined ' +
-        'const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick })',
+        'const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick }) ' +
+        'bottomGapAllowanceRef.current = 0 ' +
+        "if (fix.kind === 'anchor')",
     )
     // 判据本身在 `view.ts`（表驱动单测在上面），这里钉「三支都往下走了、写回的是哪个值」
     expect(body).toContain(
@@ -342,8 +353,8 @@ describe('「+」面板与贴底（#561）', () => {
       "if (fix.kind === 'restore') { setScrollRestore((prev) => ({ top: fix.top, " +
         'tick: (prev?.tick ?? 0) + 1 }))',
     )
-    // 复位指令下发后的下一帧就撤：属性一直绑着旧偏移会压住后续的追加与摘引跳转
-    expect(body).toContain('void Taro.nextTick(() => setScrollRestore(null))')
+    // 复位指令**用后不撤**：撤掉等于让属性回到默认的 0，正是本票要修的「偏移掉成 0」形态
+    expect(source).not.toContain('setScrollRestore(null)')
   })
 
   test('消息流有 onScroll，并把 scrollTop/scrollHeight/视口高度喂给贴底判据', async () => {

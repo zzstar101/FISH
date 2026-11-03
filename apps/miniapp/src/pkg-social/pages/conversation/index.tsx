@@ -418,12 +418,15 @@ export default function Conversation() {
    */
   const scrollTopRef = useRef(0)
   /**
-   * 本页自己造成的视口缩量（设备 px）：视口刚量矮了多少，就允许底部差临时大多少。
+   * 本页自己造成的视口缩量（设备 px）：消息流刚矮了多少，就允许底部差临时大多少。
    *
    * 多行输入能把输入栏顶高几十 px（远超 `BOTTOM_SLACK_PX`），而滚动事件里可能是「旧
    * scrollTop + 新 scrollHeight」的中间态 —— 不给这段余量，一次多行切换就会把「贴底」
    * 判成「翻历史」，而后面的重锚全被守卫挡掉（#560 的「多行输入后再切更明显」）。
-   * 真滚到底时归零，余量只在几何变化的那一小段里生效。
+   *
+   * 生命周期只有「几何变化 → 回读判完」这一小段：`keepTailAnchored` 的回读回调判完 `fix`
+   * 就把它清零，`onScroll` 判到真贴底也清零。**不许只增不减** —— 余量长期留在高水位，用户
+   * 上翻不到那么多时仍会被判成贴底，随后的重锚会把他从历史里拽回底部（#561 验收第一条）。
    */
   const bottomGapAllowanceRef = useRef(0)
   /**
@@ -2215,15 +2218,22 @@ export default function Conversation() {
           if (!aliveRef.current) return
           const offset = res?.[0] as { scrollTop?: number } | undefined
           const fix = planScrollFix({ prevTop, top: offset?.scrollTop ?? Number.NaN, stick })
+          /**
+           * 余量判完即废（#561）：它只护「几何变化前后那一两帧」的读数 —— 那一刻滚动事件里
+           * 可能是「旧 scrollTop + 新 scrollHeight」，底部差临时变大。回读判完，几何已经
+           * 落定，再留着就是把贴底判据**永久**抬高：用户上翻的距离不到余量那么多时仍被判成
+           * 贴底，接着开面板 / 起键盘 / 切语音就把他从历史里拽回底部。
+           */
+          bottomGapAllowanceRef.current = 0
           if (fix.kind === 'anchor') {
             setTailAnchorFlip((prev) => !prev)
             return
           }
           if (fix.kind === 'restore') {
             setScrollRestore((prev) => ({ top: fix.top, tick: (prev?.tick ?? 0) + 1 }))
-            // 复位指令用过就撤（#561）：`scroll-top` 属性一直绑着旧偏移，之后的新消息追加与
-            // 摘引跳转都可能被它压住。撤在下一帧 —— 这一帧要先把值下发出去
-            void Taro.nextTick(() => setScrollRestore(null))
+            // 复位指令**用后不撤**（#561）：撤掉等于让属性回到默认的 0，那正是本票要修的
+            // 「偏移掉成 0」形态。同一个位置靠 `tick % 2` 的 0.5px 交替再下发一次
+            // （见 `restoreScrollTop` 的注释）。
           }
         })
     })
@@ -2831,12 +2841,11 @@ export default function Conversation() {
   /**
    * 非贴底时的偏移复位指令（#561）：只有原生层把滚动偏移丢掉过才会出现这个值。
    *
-   * `scrollTop` 属性只认「值有变化」，所以带 `0.5px` 的交替 —— 同一个位置也能再下发一次。
-   * 半个像素在端上看不出来，但足以让属性真的变一次。
-   *
-   * 指令下发后的下一帧就撤（`null` → 属性回到 `undefined`）：一直绑着一个旧偏移，后续的
-   * 新消息追加与摘引跳转都可能被它压住。撤的动作在 `keepTailAnchored` 里，撤之前值已经
-   * 下发过一轮。
+   * **用后不撤**：撤掉就等于让属性回到默认的 0，那正是本票要修的「偏移掉成 0」形态。
+   * 代价是属性长期绑在最后一次复位的位置上，所以靠 `tick` 的奇偶做 `0.5px` 交替 ——
+   * `scrollTop` 只认「值有变化」，交替保证**同一个位置也能再下发一次**（半像素端上
+   * 看不出来）；而属性值不变时不会重新应用，也就不存在「一直压着滚动位置」的副作用。
+   * 已知取舍见 PR 的「已知取舍与风险」，端上要验一句（翻历史后手动滚回底部不被拉回）。
    */
   const restoreScrollTop = scrollRestore
     ? scrollRestore.top + (scrollRestore.tick % 2 === 0 ? 0 : 0.5)

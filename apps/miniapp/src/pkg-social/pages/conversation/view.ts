@@ -1357,7 +1357,10 @@ export function planScrollFix(input: { prevTop: number; top: number; stick: bool
  * 一行涨的（每行只报 30 来 px）。只留最后一次增量的话，两行以上就被判成「用户在翻历史」
  * —— 之后切态 / 开面板的重锚全被贴底守卫挡掉，最新一条压在视口外回不来（#561 原症状）。
  *
- * `prevInputPx <= 0` 表示还没量到或刚清空：此时的 `nextInputPx` 是单行基线，不是让出的高度。
+ * 缩回去（删行、`autoHeight` 回落）要**收**：余量只增不减就再也降不下来，用户上翻的距离
+ * 不到余量那么多时仍被判成贴底，随后的重锚会把他从历史里拽回底部（#561 验收第一条）。
+ * 收到 0 为止；`prevInputPx <= 0` 表示还没量到或刚清空，此时的 `nextInputPx` 是单行基线，
+ * 不是让出的高度，不动。
  */
 export function growBottomAllowance(input: {
   allowance: number
@@ -1367,8 +1370,8 @@ export function growBottomAllowance(input: {
   const { allowance, prevInputPx, nextInputPx } = input
   if (!(prevInputPx > 0) || !(nextInputPx > 0)) return allowance
   const grownBy = nextInputPx - prevInputPx
-  if (grownBy <= 0) return allowance
-  return allowance + grownBy
+  if (grownBy === 0) return allowance
+  return Math.max(0, allowance + grownBy)
 }
 
 /**
