@@ -7,5 +7,5 @@
  * 名字，既有 `@/mock/api` 的 import 路径不受影响。
  */
 
-export const APP_VERSION = '1.4.0'
+export const APP_VERSION = '0.0.4'
 export const APP_BUILD = '20260916'
