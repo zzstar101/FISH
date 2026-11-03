@@ -181,6 +181,18 @@ describe('cardLabel —— 两段里的子状态要分开说', () => {
     expect(cardLabel('off', false, null)).toBe('下架了')
     expect(cardLabel('off', false, null)).toBe(outOfMarketLabel('OFFLINE') ?? '')
   })
+
+  test('胶囊文案取自 `outOfMarketLabel`，不是写死的字面量（#575 复审 L5）', async () => {
+    /*
+     * 上面那条 `toBe(outOfMarketLabel('SOLD') ?? '')` 只能证明「值相等」：把实现改成
+     * `return '卖掉了'` 它照样绿，而单一来源已经断了。这里直接读实现源码，钉住两处调用。
+     */
+    const code = await Bun.file(
+      new URL('../src/pkg-browse/pages/mylist/list.ts', import.meta.url),
+    ).text()
+    expect(code).toContain("outOfMarketLabel('SOLD')")
+    expect(code).toContain("outOfMarketLabel('OFFLINE')")
+  })
 })
 
 describe('pillClassOf —— 胶囊配色按子状态分档', () => {

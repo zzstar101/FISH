@@ -9,6 +9,10 @@ import { outOfMarketLabel } from '../src/features/listing/status-mark'
  * 删掉整段灰罩样式也照样全绿（#575 复审 M1 的实测结论）。仓库没有 Taro 组件渲染基建，
  * 读源码的先例见 `comments-wiring.test.ts` / `user-list-end.test.ts`。
  *
+ * 置灰断言按**选择器块**钉（#575 复审 L4）：只断言文件里出现过 `color: var(--muted);`，
+ * 同文件别的规则（`.pcard__want`）就能满足它；把 `.pcard--out .pcard__who` 改名成
+ * `.pcard__whoGONE` 也照样全绿 —— 那正是要防的「置灰悄悄掉了」。
+ *
  * 钉的三条都是最容易在重构里悄悄丢掉的：
  *
  * 1. **`RESERVED` 不算已出局**：它只是「有人拍下、还没成交」，盖上灰罩等于告诉人卖掉了；
@@ -31,6 +35,11 @@ async function read(relative: string): Promise<string> {
   return Bun.file(new URL(relative, import.meta.url)).text()
 }
 
+/** 把源码里的换行与缩进压成单空格，便于对整条选择器 + 声明的**形状**断言。 */
+function flatten(code: string): string {
+  return code.replace(/\s+/g, ' ')
+}
+
 describe('卡片接线 —— 灰罩 / 状态角标 / 文字置灰', () => {
   test('共享卡片：已出局时压灰罩、换状态角标（与「0 元送 / 急出」二选一）', async () => {
     const code = await read('../src/components/product-card/index.tsx')
@@ -44,19 +53,23 @@ describe('卡片接线 —— 灰罩 / 状态角标 / 文字置灰', () => {
     expect(code).toContain(': listing.badge ? (')
   })
 
-  test('共享卡片的样式：同一枚遮罩令牌、文字置灰、成色印章退回中性底', async () => {
+  test('共享卡片的样式：中性遮罩令牌、文字置灰、成色印章改走中性轮廓', async () => {
     const scss = await read('../src/components/product-card/index.scss')
 
-    // 压暗走既有令牌（不新增色值），罩层不吃点击
+    // 压暗走 `--scrim-cover`（票面的「50% 灰」= 中性压暗），罩层不吃点击
     expect(scss).toContain('.pcard__shade {')
-    expect(scss).toContain('background: var(--scrim-strong);')
+    expect(scss).toContain('background: var(--scrim-cover);')
     expect(scss).toContain('pointer-events: none;')
-    // 文字置灰：标题一档起头，成色印章 / 价格 / 想要数 / 卖家名都在同一组选择器里
-    expect(scss).toContain('.pcard--out .pcard__title')
-    expect(scss).toContain('color: var(--muted);')
-    // 成色印章自带青色印底，只置灰字会得到「灰字压青底」
-    expect(scss).toContain('.pcard--out .pcard__cond {')
-    expect(scss).toContain('background: var(--line);')
+    // 文字置灰：五枚文字的选择器与颜色写在**同一条规则**里，少一枚就红
+    expect(flatten(scss)).toContain(
+      '.pcard--out .pcard__title, .pcard--out .pcard__cond, .pcard--out .pcard__price, ' +
+        '.pcard--out .pcard__want, .pcard--out .pcard__who { color: var(--muted); }',
+    )
+    // 成色印章自带青色印底，只置灰字会得到「灰字压青底」；中性轮廓（透明底 + 描边 + 灰字）
+    expect(flatten(scss)).toContain(
+      '.pcard--out .pcard__cond { background: transparent; border: 1px solid var(--line); ' +
+        'color: var(--muted); }',
+    )
   })
 
   test('他人主页自绘卡：同一套形态（状态角标压过 free / hot）', async () => {
@@ -74,8 +87,13 @@ describe('卡片接线 —— 灰罩 / 状态角标 / 文字置灰', () => {
     const scss = await read('../src/pkg-browse/pages/user/index.scss')
 
     expect(scss).toContain('.uhome__shade {')
-    expect(scss).toContain('background: var(--scrim-strong);')
+    expect(scss).toContain('background: var(--scrim-cover);')
     expect(scss).toContain('.uhome__corner--out {')
-    expect(scss).toContain('.uhome__card--out .uhome__ptitle')
+    // 五枚文字的选择器与颜色同一条规则（改名 / 删一枚都红，见文件头 L4 的说明）
+    expect(flatten(scss)).toContain(
+      '.uhome__card--out .uhome__ptitle, .uhome__card--out .uhome__pprice, ' +
+        '.uhome__card--out .uhome__porig, .uhome__card--out .uhome__pwant, ' +
+        '.uhome__card--out .uhome__ptime { color: var(--muted); }',
+    )
   })
 })

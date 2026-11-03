@@ -46,13 +46,15 @@
   line-height: 42px;
 }
 
-/* 已售 / 已下架（#566）：50% 黑罩 + 状态角标 + 文字置灰。
+/* 已售 / 已下架（#566）：50% 中性黑罩 + 状态角标 + 文字置灰。
    罩子是 `position: absolute` 的叠层、挂在与图片同一个占位里，图片高度由 JS 传入的 rpx 决定，
-   所以加罩不会改变高度（改高度等于让整个瀑布流重排）。 */
+   所以加罩不会改变高度（改高度等于让整个瀑布流重排）。
+   色值走 `--scrim-cover`（`styles/_token-vars.scss`）：票面要的是「50% 灰」这个中性压暗，
+   与弹层那几档「压暗让白字可读」的蓝灰 `--scrim*` 不是一回事。 */
 .pcard__shade {
   position: absolute;
   inset: 0;
-  background: var(--scrim-strong);
+  background: var(--scrim-cover);
   pointer-events: none;
 }
 
@@ -82,10 +84,15 @@
   color: var(--muted);
 }
 
-/* 成色印章自己垫着一层青色印底，只把字置灰会得到「灰字压青底」：
-   整枚印章退回中性底，与灰掉的文字落在同一档（#566 审查 M4）。 */
+/* 成色印章自己垫着一层青色印底，只把字置灰会得到「灰字压青底」（#566 审查 M4）。
+   但**不能**拿填充色去垫：浅蓝 `--line` 当底色时 `--muted` 文字对比度只有 2.28:1
+   （原青色印底上是 `--fg` 13.06:1），等于把成色值压成不可读。已售卡上这枚印章只需
+   承认「这里本来有枚章」，所以走中性轮廓：透明底 + `--line` 描边 + 灰字，文字对比度
+   回到与卡片底同档的 3.98:1（`--muted` on `--surface`，#575 复审 M3）。 */
 .pcard--out .pcard__cond {
-  background: var(--line);
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
 }
 
 .pcard__body {
