@@ -124,13 +124,20 @@ describe('notification view', () => {
   })
 
   /*
-   * DISPUTE（#465）：PC 侧没有当事人视角的争议页面（用户侧在小程序，`/admin/disputes`
-   * 是管理端、普通用户不可达），所以落点只能是「不跳」——不给一个点不动的入口。
-   * 文案照 TX 的规矩按 `disputeEvent` 分岔：它是收件人唯一能知道发生了什么的信息源，
-   * 缺席时退回通用句。结论措辞归 PR C 的用户侧票面，这里不做（见 notification-view.ts）。
+   * DISPUTE（#496）：用户侧 `/disputes/:disputeId` 已上线，收件人一定是当事人
+   * （发起人或被诉方），所以落点就是那条争议的详情；`disputeId` 为空才退回「不跳」。
+   * 文案照 TX 的规矩按 `disputeEvent` 分岔，`RESOLVED` 带出与详情页同源的结论标签。
    */
-  test('DISPUTE 只陈述事件、不给死链接，事件缺席时退回通用句', () => {
-    expect(notificationTarget(item({ disputeId: 'd1' }, 'DISPUTE'))).toEqual({ kind: 'none' })
+  test('DISPUTE 落到争议详情，已处理时带出结论、事件缺席时退回通用句', () => {
+    expect(notificationTarget(item({ disputeId: 'd1' }, 'DISPUTE'))).toEqual({
+      kind: 'dispute',
+      disputeId: 'd1',
+    })
+    // 空字符串 / 脏 payload 不当作有效目标
+    expect(notificationTarget(item({ disputeId: '  ' }, 'DISPUTE'))).toEqual({ kind: 'none' })
+    expect(notificationTarget(item({}, 'DISPUTE'))).toEqual({ kind: 'none' })
+    expect(notificationTargetErrorMessage({ kind: 'dispute', disputeId: 'd1' })).toBeNull()
+
     expect(notificationCopy(item({ disputeId: 'd1', disputeEvent: 'FILED' }, 'DISPUTE'))).toEqual({
       emoji: '⚖️',
       title: '交易争议有更新',
@@ -139,10 +146,20 @@ describe('notification view', () => {
     expect(
       notificationCopy(item({ disputeId: 'd1', disputeEvent: 'WITHDRAWN' }, 'DISPUTE')).description,
     ).toBe('对方撤回了这笔交易的争议。')
+    // 结论标签与 `/disputes/:disputeId` 详情页同源（features/disputes/meta.ts）
     expect(
       notificationCopy(
         item({ disputeId: 'd1', disputeEvent: 'RESOLVED', resolution: 'UPHELD' }, 'DISPUTE'),
       ).description,
+    ).toBe('争议已处理，结论：反馈成立。')
+    expect(
+      notificationCopy(
+        item({ disputeId: 'd1', disputeEvent: 'RESOLVED', resolution: 'DISMISSED' }, 'DISPUTE'),
+      ).description,
+    ).toBe('争议已处理，结论：反馈不成立。')
+    // 历史行 / 脏 payload 缺 resolution：不编结论
+    expect(
+      notificationCopy(item({ disputeId: 'd1', disputeEvent: 'RESOLVED' }, 'DISPUTE')).description,
     ).toBe('争议已处理，该结论为最终结论。')
     expect(notificationCopy(item({ disputeId: 'd1' }, 'DISPUTE')).description).toBe(
       '这笔交易的争议状态有变化。',

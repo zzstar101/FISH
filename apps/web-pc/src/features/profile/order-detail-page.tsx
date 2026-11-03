@@ -9,8 +9,10 @@ import {
   ArrowLeft,
   Check,
   Circle,
+  FileText,
   MessageCircle,
   PackageCheck,
+  Scale,
   ShieldCheck,
   XCircle,
 } from 'lucide-react'
@@ -18,6 +20,8 @@ import { useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
 import { useAuth } from '../auth/auth-provider'
+import { StartDisputeDialog } from '../disputes/start-dispute-dialog'
+import { canStartDispute, disputeWindowHint } from '../disputes/view'
 import { transactionActionError } from './api'
 import { MeetupPanel } from './meetup-panel'
 import { hasConfirmedOwnSide } from './meetup-view'
@@ -262,9 +266,49 @@ function OrderDetailContent({
               </p>
             )}
           </Card>
+
+          <DisputeEntryCard detail={detail} />
         </aside>
       </div>
     </div>
+  )
+}
+
+/**
+ * 交易争议入口：本人订单（买家 / 卖家）只在服务端允许的窗口内给「发起」按钮
+ * （`PENDING_MEETUP` 不限时；终态后 30 天内），窗口外只说明原因。
+ * 「我的争议」是常驻入口 —— 已发起过的争议之后只能从那里回看。
+ */
+function DisputeEntryCard({ detail }: { detail: TransactionDto }) {
+  const [startOpen, setStartOpen] = useState(false)
+  const now = Date.now()
+  const canStart = canStartDispute(detail, now)
+
+  return (
+    <Card className="gap-0 border border-line p-6">
+      <div className="flex items-center gap-2">
+        <Scale className="size-5 text-brand" />
+        <h2 className="font-semibold text-base">交易争议</h2>
+      </div>
+      <p className="mt-3 text-ink-3 text-xs leading-5">{disputeWindowHint(detail, now)}</p>
+      <div className="mt-4 space-y-3">
+        {canStart ? (
+          <Button className="w-full" onClick={() => setStartOpen(true)}>
+            <Scale className="size-4" />
+            发起交易争议
+          </Button>
+        ) : null}
+        <Button asChild className="w-full" variant="outline">
+          <Link to="/disputes">
+            <FileText className="size-4" />
+            我的争议
+          </Link>
+        </Button>
+      </div>
+      {canStart ? (
+        <StartDisputeDialog onOpenChange={setStartOpen} open={startOpen} transaction={detail} />
+      ) : null}
+    </Card>
   )
 }
 
