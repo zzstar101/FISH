@@ -25,9 +25,12 @@ contracts 源码、Zod 及 Taro 使用的 tslib，避免依赖中的现代语法
 `./dist`，Taro 在构建时会把 `dist/project.config.json` 的 `miniprogramRoot` 改写成 `"./"`。
 也可以直接打开 `apps/miniapp/dist`，两者都成立。
 
-仓库 `project.config.json` 里的 `appid` 是 #172 随开发者工具回写一起提交的 `wx4e8a1988208bcd17`，
-**不是**正式小程序「鱼小应」的 AppID。AppID 本身不是密钥，可以进仓库；**不要**往仓库里写
+仓库 `project.config.json` 里的 `appid` 就是正式小程序「鱼小应」的 `wx61b67a115826647e`：不注入
+`TARO_APP_ID` 时，构建产物、开发者工具打开与 `cli upload` 都落在它上面。（#172 曾随开发者工具回写
+提交过一个与本项目无关的 `wx4e8a1988208bcd17`，按它构建的上传会进到别的小程序、版本管理里看不到，
+已移除，不要再写回来。）AppID 本身不是密钥，可以进仓库；**不要**往仓库里写
 AppSecret / Access Token / 私钥。AppSecret 只放服务器 API 的 env（`WECHAT_APP_SECRET`，见
+`docs/deployment.md`）。AppSecret 只放服务器 API 的 env（`WECHAT_APP_SECRET`，见
 `docs/deployment.md`）。
 
 ### 切换 AppID
@@ -45,7 +48,8 @@ TARO_APP_ID=wx你的appid bun run build:miniapp
 
 ### 构建并上传体验版
 
-正式小程序 AppID 为 `wx61b67a115826647e`，后端为 `https://yuxiaoyingai.com/api`。在**干净的 `origin/main`
+正式小程序 AppID 为 `wx61b67a115826647e`（与仓库 `project.config.json` 一致；命令里仍显式注入，防止本地
+`.env` 里的 `TARO_APP_ID` 把它覆盖），后端为 `https://yuxiaoyingai.com/api`。在**干净的 `origin/main`
 worktree** 里构建，不要用带未提交改动的工作区：
 
 ```bash
