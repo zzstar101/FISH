@@ -1,42 +1,43 @@
-/**
- * 他人主页「在售 / 已售出」分段列表的**纯状态迁移**（#565，无 Taro、无请求：
- * `tests/user-list-end.test.ts` 直接 import）。
- *
- * 合并规则本身就是两个坑的答案，所以从页面里抽出来用纯函数钉住，页面里只剩「什么时候发请求」：
- *
- * - **同一条游标被并发打两次**（同一帧连点两次滚到底，或切段与滚底撞在同一帧）：抢输的那份
- *   响应仍会回来，必须按 `id` 去重，否则同一页会被追加两遍、列表里出现两张一模一样的卡。
- *   去重按商品主键而不是位置 —— 时间线可能因为别人刚上架而整体平移。
- * - **首屏覆盖 / 续页追尾**：`cursor === null` 是第一页，语义是覆盖；
- *   `cursor !== null` 是下一页，语义是追尾，不能把已展示的旧页吃掉。
- */
 import type { MockListing } from '@/mock/types'
 
 /**
- * 列表分段：取值域与契约 `PublicUserListingsQuerySchema.status` 逐字对齐。
+ * 他人主页「在售 / 已售出」的分段状态与加载器（#565 → #581 → #582）。
  *
- * 两段都是同一个读端点 `GET /users/:userId/listings`，只差一个 `status` ——
- * 服务端对 OFFLINE / RESERVED 一律 422，所以这里也只有这两个值。
+ * 这一段代码只做四件事，全部是纯函数或可注入依赖的工厂，页面只负责「什么时候发请求、
+ * 结果怎么落进 state」：
+ *
+ * 1. 口径（`Segment`）与一页分段列表的状态形状（`SegmentPage`）；
+ * 2. 一页数据怎么合并进现有列表（`mergeSegmentPage`：首屏覆盖、续页按 id 去重追尾）；
+ * 3. 首屏那一页从哪来（`firstPageOf`：只有「在售」段用他人主页随 profile 一起回来的
+ *    那一页，「已售出」段要自己发请求）；
+ * 4. 在途请求的「还算不算数」判定（`SegmentRequest` / `isCurrentRequest`）与把判定包好的
+ *    加载器（`makeSegmentLoader`）。
+ *
+ * 第 4 点是页内切段唯一的正确性卖点：切段那一刻可能还有旧段的请求在飞，它的响应回来时
+ * 既不能写进新段，也不能替新段把闩还回去。这两条只靠两行代码撑着 —— `live()` 实时读
+ * 当前口径与代号、`finally` 只由自己那一份归还闩 —— 所以逻辑不能散在页面里，
+ * 否则删掉任何一行都不会有用例变红。把它抽成 `makeSegmentLoader` 之后，
+ * `tests/user-page-tabs.test.ts` 能用挂起的 promise 把时序真的跑一遍。
  */
+
+/** 他人主页的两个分段：在售 / 已售出。 */
 export type Segment = 'ACTIVE' | 'SOLD'
 
-/**
- * 当前视图的列表数据 + 游标与三态。
- *
- * 页内切段会**整份重置**成 `emptyPage()`（#581 交互改动）：两个口径的滚动位置、游标、
- * 失败态互不继承，切过去就是从第一页重新拉，不会把上一段的游标带进新段。
- */
-export type SegmentPage = {
-  items: MockListing[]
-  /** 服务端游标：`null` 表示这一段已经没有下一页了（唯一权威信号，条数不参与判断） */
+/** 一段列表的视图状态。 */
+export type SegmentPage<T extends { id: string } = MockListing> = {
+  items: T[]
   nextCursor: string | null
-  /** 是否已成功拉过第一页 —— 决定切过去时要不要发请求 */
+  /**
+   * 这一段的「第几页」口径已经定下来了：`load()` 填首屏时置真（只有「在售」段会置真，
+   * 「已售出」段要等补拉 effect 自己去取）、页内切段时整份重置回假、补拉 effect 只看它。
+   */
   loaded: boolean
   loading: boolean
   failed: boolean
 }
 
-export const emptyPage = (): SegmentPage => ({
+/** 空段（未加载）。页内切段就是整份重置成它。 */
+export const emptyPage = <T extends { id: string } = MockListing>(): SegmentPage<T> => ({
   items: [],
   nextCursor: null,
   loaded: false,
@@ -44,21 +45,60 @@ export const emptyPage = (): SegmentPage => ({
   failed: false,
 })
 
+/** 读取层交回来的一页（不含视图三态）。 */
+export type SegmentPageSnapshot<T extends { id: string }> = {
+  listings: T[]
+  nextCursor: string | null
+}
+
 /**
- * 首屏那一页数据从哪来（#581 复核 M8）。
+ * 深链参数决定首屏停在哪个分段。外部带进来的 `?tab=` 只做**初值**，
+ * 页内点页头两格切段不再写 URL 参数；非法值一律回落在售。
+ */
+export const segmentOfTab = (tab: string | undefined): Segment =>
+  tab === 'SOLD' ? 'SOLD' : 'ACTIVE'
+
+/** 一次请求的身份证：发起时的口径 + 页面代次。 */
+export type SegmentRequest = { seg: Segment; epoch: number }
+
+/** 回来的响应「还算不算数」：口径换了算过期，同段重载（代号变了）也算过期。 */
+export const isCurrentRequest = (sent: SegmentRequest, live: SegmentRequest): boolean =>
+  sent.seg === live.seg && sent.epoch === live.epoch
+
+/**
+ * 把一页数据合并进现有列表。
  *
- * 「在售」的第一页与资料同一次请求回来（`loadPublicUserHome` 里是 `Promise.all`）；
- * 「已售出」视图**不能**拿这份在售列表充当自己的首屏 —— 那会把 TA 正在卖的东西画在
- * 「已售出」标题下面。抽成纯函数，是因为接线侧一个 `if (seg === 'ACTIVE')` 的变异
- * （改成 `if (true)`）在只读源码的用例里根本抓不住；这里逐条钉住。
+ * `cursor === null` 是首屏 / 重取：整份覆盖；否则是续页：按 id 去重后追尾（迟到的同页
+ * 响应不会把同一批条目追加第二遍）。两种情况都把 `nextCursor` 换成读取层刚交回的游标 ——
+ * 游标是「还有没有下一页」的唯一权威信号。
+ */
+export function mergeSegmentPage<T extends { id: string }>(
+  prev: { items: T[] },
+  page: SegmentPageSnapshot<T>,
+  cursor: string | null,
+): { items: T[]; nextCursor: string | null } {
+  if (cursor === null) return { items: page.listings, nextCursor: page.nextCursor }
+
+  const seen = new Set(prev.items.map((item) => item.id))
+  const items = [...prev.items]
+  for (const listing of page.listings) {
+    if (seen.has(listing.id)) continue
+    seen.add(listing.id)
+    items.push(listing)
+  }
+  return { items, nextCursor: page.nextCursor }
+}
+
+/**
+ * 首屏那一页从哪来。他人主页每开一次都会顺带取回「在售」的第一页
+ * （`loadPublicUserHome`），所以游标已经在手上；「已售出」段不在这条请求里，
+ * 由页面的补拉 effect 自己发请求。
  */
 export function firstPageOf<T extends { id: string }>(
   seg: Segment,
-  home: { listings: T[]; nextCursor: string | null },
-): { items: T[]; nextCursor: string | null; loaded: boolean; loading: boolean; failed: boolean } {
-  if (seg !== 'ACTIVE') {
-    return { items: [], nextCursor: null, loaded: false, loading: false, failed: false }
-  }
+  home: SegmentPageSnapshot<T>,
+): SegmentPage<T> {
+  if (seg !== 'ACTIVE') return emptyPage<T>()
   return {
     items: home.listings,
     nextCursor: home.nextCursor,
@@ -69,74 +109,91 @@ export function firstPageOf<T extends { id: string }>(
 }
 
 /**
- * 页面路由参数 `tab` → 列表口径（#581）。
- *
- * 只认 `'SOLD'` 一个字面量；缺省、`''`、大小写不符（`sold`）、以及任何别的值都回落到
- * 「在售」—— 页头点错了、外部链接写坏了都不该白屏，最差就是看到默认那段。
- */
-export const segmentOfTab = (tab: string | undefined): Segment =>
-  tab === 'SOLD' ? 'SOLD' : 'ACTIVE'
-
-/**
- * 把一页响应合进某一段，返回新的条目与游标（`loaded` / `loading` / `failed` 由页面自己改）。
- *
- * 泛型只要求「有条目主键」，纯函数用例可以直接拿 `{ id }` 造样本，不必拼一份完整的
- * `MockListing`。
- */
-export function mergeSegmentPage<T extends { id: string }>(
-  prev: { items: T[] },
-  page: { listings: T[]; nextCursor: string | null },
-  cursor: string | null,
-): { items: T[]; nextCursor: string | null } {
-  if (cursor === null) return { items: page.listings, nextCursor: page.nextCursor }
-  const seen = new Set(prev.items.map((item) => item.id))
-  const incoming = page.listings.filter((item) => !seen.has(item.id))
-  return { items: [...prev.items, ...incoming], nextCursor: page.nextCursor }
-}
-
-/**
- * 一次列表请求的「身份」：发起时的口径 + 代号（`epoch`）。
- *
- * 页内切段不换页面实例，所以**旧段在飞的请求会照常返回**。响应回来时必须能判断
- * 「这还是不是当前视图要的那一份」—— 段变了、或者中间又切过一次，整包丢掉。
- */
-export type SegmentRequest = { seg: Segment; epoch: number }
-
-/** 响应回来时还该不该写进视图：段或代号变了就是过期响应。 */
-export const isCurrentRequest = (sent: SegmentRequest, live: SegmentRequest): boolean =>
-  sent.seg === live.seg && sent.epoch === live.epoch
-
-/**
- * 把一次列表响应落到当前视图状态上 —— 过期响应原样返回 `prev`，一个字段都不动。
- *
- * 这条规则必须能被用例钉住，所以放在这里：切段瞬间返回的旧段数据既不能污染新段的列表，
- * 也不能把 `loading` / `nextCursor`（`hasMore` 的来源）改掉 —— 新段自己的请求还在飞，
- * 被旧响应改写成「已加载完成」会让它连第一页都不拉。
+ * 把一页写回分段状态。过期响应**原样返回 `prev`**（引用相等，不是值相等）：旧段的列表、
+ * 游标、`loading` / `loaded` / `failed` 一个字段都不动 —— 新段自己的请求还在飞，
+ * 旧响应连「把 loading 改回 false」的资格都没有。
  */
 export function applySegmentPage<T extends { id: string }>(
-  prev: {
-    items: T[]
-    nextCursor: string | null
-    loaded: boolean
-    loading: boolean
-    failed: boolean
-  },
+  prev: SegmentPage<T>,
   sent: SegmentRequest,
   live: SegmentRequest,
-  page: { listings: T[]; nextCursor: string | null },
+  page: SegmentPageSnapshot<T>,
   cursor: string | null,
-): {
-  items: T[]
-  nextCursor: string | null
-  loaded: boolean
-  loading: boolean
-  failed: boolean
-} {
+): SegmentPage<T> {
   if (!isCurrentRequest(sent, live)) return prev
   return {
     ...mergeSegmentPage(prev, page, cursor),
     loaded: true,
     loading: false,
     failed: false,
+  }
+}
+
+/** 一次 `load()` 的结局。 */
+export type SegmentLoadOutcome = 'busy' | 'stale' | 'applied' | 'missing' | 'failed'
+
+/** 一次 `load()` 的落地回调；页面只在这里碰 state。 */
+export type SegmentLoadHandlers<T extends { id: string }> = {
+  onStart?: () => void
+  onPage: (sent: SegmentRequest, page: SegmentPageSnapshot<T>, cursor: string | null) => void
+  onMissing: () => void
+  onFailed: (sent: SegmentRequest, error: unknown) => void
+}
+
+/** 加载器的外部依赖：当前口径 / 代次由页面注入（同步镜像），取数由读取层注入。 */
+export type SegmentLoaderDeps<T extends { id: string }> = {
+  getSeg: () => Segment
+  getEpoch: () => number
+  fetch: (seg: Segment, cursor: string | null) => Promise<SegmentPageSnapshot<T> | null>
+}
+
+export type SegmentLoader<T extends { id: string }> = {
+  /** 切段 / 重载时放开闩：上一轮的请求作废，新段立刻能发。 */
+  release: () => void
+  load: (cursor: string | null, handlers: SegmentLoadHandlers<T>) => Promise<SegmentLoadOutcome>
+}
+
+/**
+ * 分段列表加载器：一把同步闩（同一时刻只允许一条在途请求）+ 每次请求的身份证校验。
+ *
+ * `load()` 的时序：
+ * - 闩已占用 → `'busy'`（滚到底的回调读的是渲染快照，不能靠 `loading` 决定要不要发）；
+ * - 先同步占闩，再取身份证 `sent`，然后 `onStart`、取数；
+ * - 响应回来先比对身份：不一致就是 `'stale'`，一个回调都不调；
+ * - `page === null` 是「这个人不存在 / 被删」（读取层的 404 折叠成 null）→ `onMissing`；
+ * - `finally` 只由身份仍然有效的那一份归还闩 —— 旧段的成败不许替新段解锁。
+ */
+export function makeSegmentLoader<T extends { id: string }>(
+  deps: SegmentLoaderDeps<T>,
+): SegmentLoader<T> {
+  let inFlight = false
+  const live = (): SegmentRequest => ({ seg: deps.getSeg(), epoch: deps.getEpoch() })
+
+  return {
+    release: () => {
+      inFlight = false
+    },
+    load: async (cursor, handlers) => {
+      if (inFlight) return 'busy'
+      inFlight = true
+      const sent = live()
+      handlers.onStart?.()
+      try {
+        const page = await deps.fetch(sent.seg, cursor)
+        if (!isCurrentRequest(sent, live())) return 'stale'
+        if (page === null) {
+          handlers.onMissing()
+          return 'missing'
+        }
+        handlers.onPage(sent, page, cursor)
+        return 'applied'
+      } catch (error) {
+        if (!isCurrentRequest(sent, live())) return 'stale'
+        handlers.onFailed(sent, error)
+        return 'failed'
+      } finally {
+        if (isCurrentRequest(sent, live())) inFlight = false
+      }
+    },
   }
 }

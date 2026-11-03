@@ -15,11 +15,12 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { toggleAnchor } from '../src/pkg-browse/pages/user/scroll-anchor'
-import type { SegmentRequest } from '../src/pkg-browse/pages/user/segment-page'
+import type { Segment, SegmentRequest } from '../src/pkg-browse/pages/user/segment-page'
 import {
   applySegmentPage,
   firstPageOf,
   isCurrentRequest,
+  makeSegmentLoader,
   segmentOfTab,
 } from '../src/pkg-browse/pages/user/segment-page'
 
@@ -105,6 +106,142 @@ describe('applySegmentPage —— 切段瞬间回来的旧段数据不许落进�
   })
 })
 
+/**
+ * 「在途请求不污染新段」是页内切段唯一的正确性卖点，而它只靠两行代码撑着：
+ * `live()` 实时读当前口径与代号、`finally` 只由自己那一份归还闩。这两处删掉都不会让
+ * 任何 `toContain` 变红 —— 所以逻辑抽成了 `makeSegmentLoader`，这里用挂起的 promise
+ * 把时序真的跑一遍（#582 审查中-1）。
+ */
+describe('makeSegmentLoader —— 切段瞬间回来的旧段响应', () => {
+  type Item = { id: string }
+  type Fetched = { listings: Item[]; nextCursor: string | null }
+
+  /** 一条挂起的请求：什么时候回来、回来是成功还是失败，都由用例自己决定。 */
+  const pending = () => {
+    let settle!: {
+      resolve: (page: Fetched | null) => void
+      reject: (error: unknown) => void
+    }
+    const promise = new Promise<Fetched | null>((resolve, reject) => {
+      settle = { resolve, reject }
+    })
+    return { promise, settle }
+  }
+
+  /** 加载器 + 它的取数记录；`gates` 按段号存着那一条还没回来的请求。 */
+  const setup = () => {
+    const view: { seg: Segment; epoch: number } = { seg: 'ACTIVE', epoch: 0 }
+    const calls: Array<{ seg: Segment; cursor: string | null }> = []
+    const gates = new Map<Segment, ReturnType<typeof pending>>()
+    const loader = makeSegmentLoader<Item>({
+      getSeg: () => view.seg,
+      getEpoch: () => view.epoch,
+      fetch: (seg, cursor) => {
+        calls.push({ seg, cursor })
+        const gate = pending()
+        gates.set(seg, gate)
+        return gate.promise
+      },
+    })
+    return { view, calls, gates, loader }
+  }
+
+  /** 页面 `switchSegment` 干的三件事：换口径、作废代号、放开闩。 */
+  const switchTo = (h: ReturnType<typeof setup>, next: Segment) => {
+    h.view.epoch += 1
+    h.view.seg = next
+    h.loader.release()
+  }
+
+  const handlers = (seen: string[]) => ({
+    onPage: () => {
+      seen.push('page')
+    },
+    onMissing: () => {
+      seen.push('missing')
+    },
+    onFailed: () => {
+      seen.push('failed')
+    },
+  })
+
+  test('旧段成功响应回来：一个回调都不调，也不替新段归还闩', async () => {
+    const h = setup()
+    const seen: string[] = []
+    const old = h.loader.load(null, handlers(seen))
+    expect(h.calls).toEqual([{ seg: 'ACTIVE', cursor: null }])
+
+    switchTo(h, 'SOLD')
+    const fresh = h.loader.load(null, handlers(seen))
+    // 旧段的闩已被切段放开：新段这一份真的发出去了（两道请求同时在飞）
+    expect(h.calls.map((call) => call.seg)).toEqual(['ACTIVE', 'SOLD'])
+
+    h.gates.get('ACTIVE')?.settle.resolve({ listings: [{ id: 'active-1' }], nextCursor: 'a-next' })
+    expect(await old).toBe('stale')
+    // 「不污染新段」的实义：列表、游标、三态一个都没被旧响应写过
+    expect(seen).toEqual([])
+    // 闩仍由新段那一份持有：`finally` 无条件归还的话，第三次调用会真的发出请求
+    void h.loader.load(null, handlers(seen))
+    expect(h.calls.length).toBe(2)
+
+    h.gates.get('SOLD')?.settle.resolve({ listings: [{ id: 'sold-1' }], nextCursor: null })
+    expect(await fresh).toBe('applied')
+    expect(seen).toEqual(['page'])
+  })
+
+  test('旧段失败响应回来：不置 failed，也不归还新段的闩', async () => {
+    const h = setup()
+    const seen: string[] = []
+    const old = h.loader.load(null, handlers(seen))
+    switchTo(h, 'SOLD')
+    const fresh = h.loader.load(null, handlers(seen))
+
+    h.gates.get('ACTIVE')?.settle.reject(new Error('旧段的网络错误'))
+    expect(await old).toBe('stale')
+    expect(seen).toEqual([])
+    // 同上：旧段的失败不许替新段解锁
+    void h.loader.load(null, handlers(seen))
+    expect(h.calls.length).toBe(2)
+
+    h.gates.get('SOLD')?.settle.resolve(null)
+    expect(await fresh).toBe('missing')
+    expect(seen).toEqual(['missing'])
+  })
+
+  test('同一段但代号变了（重载）：响应同样作废，不许写进视图', async () => {
+    const h = setup()
+    const seen: string[] = []
+    const old = h.loader.load(null, handlers(seen))
+    // 页面 `load()` 只换代、不换段：判定必须「段 + 代号」一起看，缺一就漏
+    h.view.epoch += 1
+    h.loader.release()
+
+    h.gates.get('ACTIVE')?.settle.resolve({ listings: [{ id: 'active-1' }], nextCursor: null })
+    expect(await old).toBe('stale')
+    expect(seen).toEqual([])
+  })
+
+  test('没切段的正常路径：先 onStart，再按结局回调，结束后把闩还回来', async () => {
+    const h = setup()
+    const seen: string[] = []
+    const running = h.loader.load(null, {
+      onStart: () => {
+        seen.push('start')
+      },
+      ...handlers(seen),
+    })
+    expect(seen).toEqual(['start'])
+
+    h.gates.get('ACTIVE')?.settle.resolve({ listings: [{ id: 'active-1' }], nextCursor: 'a-next' })
+    expect(await running).toBe('applied')
+    expect(seen).toEqual(['start', 'page'])
+
+    // 闩已归还：下一份能进（发不发得出去，看 `calls` 就知道）
+    void h.loader.load(null, handlers(seen))
+    expect(h.calls.length).toBe(2)
+  })
+})
+
 describe('firstPageOf —— 首屏那一页从哪来', () => {
   const home = { listings: [{ id: 'a' }, { id: 'b' }], nextCursor: 'c1' }
 
@@ -157,8 +294,10 @@ describe('他人主页接线（#581）', () => {
     expect(code).toContain('useState<Segment>(() => segmentOfTab(router.params.tab))')
     // 页内切换后没人再拼「回自己」的地址，深链只由外部带进来
     expect(code).not.toContain('userHomeUrl')
-    // 请求发的是「发起时的段」（`sent.seg`），不是可能已经过期的 state
-    expect(code).toContain('loadPublicUserListingsPage(userId, sent.seg, cursor)')
+    // 取数读的是同步镜像 `segRef`（`state` 要等下一次渲染），判定与重入都在加载器里
+    const loader = slice(code, 'const loader = useMemo(', '[userId],')
+    expect(loader).toContain('getSeg: () => segRef.current')
+    expect(loader).toContain('loadPublicUserListingsPage(userId, status, cursor)')
   })
 
   test('首屏那一页走 firstPageOf，不在页面里手写「口径是否 ACTIVE」的分支', async () => {
@@ -213,7 +352,7 @@ describe('他人主页接线（#581）', () => {
     // 换段的顺序是有讲究的：先作废在途请求，再改同步镜像、state、数据、滚动
     const order = [
       'epoch.current += 1',
-      'inFlight.current = false',
+      'loader.release()',
       'segRef.current = next',
       'setSeg(next)',
       'setPage(emptyPage())',
@@ -241,24 +380,35 @@ describe('他人主页接线（#581）', () => {
     expect(active).toContain("switchSegment('ACTIVE')")
   })
 
-  test('在途请求带段 + 代号：切段后回来的旧响应整包丢弃（#582）', async () => {
+  test('整页重载也作废在途请求：重置数据之外还要换代 + 放开闩（#582 审查低-1）', async () => {
     const code = await page
+    // `load()` 会把分段数据整份重置、闩也放开。不换代的话，上一轮还在飞的响应回来时
+    // 身份仍然有效，会写进这一轮刚清空的视图（切段那条路已由上面那条用例钉住）
+    const body = slice(code, 'const load = useCallback(async () => {', '}, [loader, userId])')
+    expect(body).toContain('setPage(emptyPage())')
+    expect(body).toContain('epoch.current += 1')
+    expect(body).toContain('loader.release()')
+  })
+
+  test('在途请求的段 / 代号校验交给加载器，页面只注入同步镜像与取数（#582）', async () => {
+    const code = await page
+    // 身份与闩的**判断**搬进了 `makeSegmentLoader`（行为级用例见上面那一组）：
+    // 页面这边只负责把「当前口径 / 代号」的同步读法与真实取数交进去。
+    const loader = slice(code, 'const loader = useMemo(', '[userId],')
+    expect(loader).toContain('getSeg: () => segRef.current')
+    expect(loader).toContain('getEpoch: () => epoch.current')
+    expect(loader).toContain('loadPublicUserListingsPage(userId, status, cursor)')
+
     const body = slice(code, 'const loadSegment = useCallback(', 'const items = page.items')
-    // 发起时记下身份，请求用的也是它（不是渲染快照里的 seg）
-    expect(body).toContain(
-      'const sent: SegmentRequest = { seg: segRef.current, epoch: epoch.current }',
-    )
-    expect(body).toContain('loadPublicUserListingsPage(userId, sent.seg, cursor)')
-    expect(body).toContain('applySegmentPage(prev, sent, live(), next, cursor)')
-    // 成功分支：拿到数据之后、写状态之前必须再判一次身份（写状态时可能已经切过段）
-    const tryBody = slice(body, 'const next = await', 'catch (error)')
-    expect(tryBody).toContain('if (!isCurrentRequest(sent, live())) return')
-    // 闩只由「自己这一份」归还：切段时闩已被新段接管，旧响应不许替新段解锁
-    expect(body).toContain('if (isCurrentRequest(sent, live())) inFlight.current = false')
-    // 失败分支同样先判身份：旧段的失败不能把新段打成 failed
-    const catchAt = body.indexOf('catch (error)')
-    expect(catchAt).toBeGreaterThan(-1)
-    expect(body.slice(catchAt)).toContain('if (!isCurrentRequest(sent, live())) return')
+    // 页面不再自己判身份 / 自己管闩：重入、过期、用户消失全由加载器分档
+    expect(body).toContain('await loader.load(cursor, {')
+    expect(body).not.toContain('isCurrentRequest')
+    expect(body).not.toContain('inFlight')
+    // 写回时仍带当前身份（写 state 的那一刻可能又切过段），交给 `applySegmentPage` 兜底
+    expect(body).toContain('applySegmentPage(prev, sent, liveRequest(), next, at)')
+    // 用户在这一步消失 → 整页 notFound；列表失败只降级列表
+    expect(body).toContain("onMissing: () => setLoadState('notFound')")
+    expect(body).toContain('failed: true')
   })
 
   test('滚列表用交替锚点，不写死单一 id', async () => {
@@ -285,7 +435,7 @@ describe('他人主页接线（#581）', () => {
     expect((switcher.match(/scrollToBody\(\)/g) ?? []).length).toBe(2)
   })
 
-  test('没载入就补拉第一页（已售出实例全靠它），失败后不自动重试', async () => {
+  test('空页就补拉第一页（切段后 / 深链进已售出都靠它），失败后不自动重试', async () => {
     const code = await page
     const effect = slice(code, '列表还没拉过时补第一页', '}, [loadSegment, loadState, page])')
     expect(effect).toContain('void loadSegment(null)')

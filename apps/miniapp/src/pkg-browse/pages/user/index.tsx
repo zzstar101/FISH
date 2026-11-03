@@ -34,7 +34,7 @@ import {
   applySegmentPage,
   emptyPage,
   firstPageOf,
-  isCurrentRequest,
+  makeSegmentLoader,
   segmentOfTab,
 } from './segment-page'
 import './index.scss'
@@ -120,25 +120,38 @@ export default function UserHome() {
    * 没有它，切段瞬间返回的旧段数据会写进新段（列表被污染、`loading` 被改回 false）。
    */
   const epoch = useRef(0)
+  /** 当前这一份请求该不该写进视图：段或代号变了就是过期响应（判定在 `makeSegmentLoader`）。 */
+  const liveRequest = useCallback(
+    (): SegmentRequest => ({ seg: segRef.current, epoch: epoch.current }),
+    [],
+  )
   /**
-   * 「在飞」闩：同步 ref，**不是** state（#565 复核 M2）。
+   * 分段取数的加载器：同步重入闩 + 请求身份校验都收在里面。
    *
    * `page.loading` 是渲染快照，判定重入不可靠：同一帧里连点两次滚到底
    * （`onScrollToLower` 会在内容不满屏时连发），两个回调读到的都是上一次渲染的
-   * `loading: false`，会拿**同一条游标**并发打两次接口，同一页被追加两遍。
-   * 所以真正的互斥靠这里 compare-and-set：先同步置位，抢不到直接返回。
+   * `loading: false`，会拿**同一条游标**并发打两次接口，同一页被追加两遍 —— 所以闩是
+   * 同步的，且只由「自己那一份请求」归还（#565 复核 M2 / #582 审查中-1）。
    */
-  const inFlight = useRef(false)
+  const loader = useMemo(
+    () =>
+      makeSegmentLoader<MockListing>({
+        getSeg: () => segRef.current,
+        getEpoch: () => epoch.current,
+        fetch: (status, cursor) => loadPublicUserListingsPage(userId, status, cursor),
+      }),
+    [userId],
+  )
 
   const load = useCallback(async () => {
     // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
     setLoadState('loading')
     setProfile(null)
     setPage(emptyPage())
-    // 把上一轮留下的闩清掉，新的一轮从「没有请求在飞」开始。⚠️ 这里没有 epoch / generation
-    // 校验：上一轮的响应若真的回来，仍会写进这一轮的列表状态 —— 实际不可达（`load` 的两个
-    // 入口都在 `loadState !== 'ok'` 时才调，此时不可能有列表请求在飞），但别按「已作废」推理。
-    inFlight.current = false
+    // 新一轮加载：代号 +1 把上一轮还在飞的列表响应整包作废，闩一并放开给这一轮
+    // （加载器只在「自己那一份仍是当前请求」时写回视图，所以旧响应回来也落不进来）。
+    epoch.current += 1
+    loader.release()
     /**
      * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
      * 重试时它是**新挂载**的、`scrollTop` 回到 0，而 `glassOn` / `titled` 是页面级
@@ -169,44 +182,34 @@ export default function UserHome() {
     const first = firstPageOf(segRef.current, result)
     if (first.loaded) setPage(first)
     setLoadState('ok')
-  }, [userId])
+  }, [loader, userId])
 
   /**
    * 拉当前口径的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
    *
-   * 两个入口（首屏补拉、滚到底补下一页）都可能并发进来，重入由 `inFlight` 闩挡住 ——
-   * 同步 compare-and-set，抢不到直接返回（`loading` 是渲染快照，同一帧里的两次调用读到
-   * 的都是旧值）。追加时读 `prev` 里已展示的条目、并按 `id` 去重，不读闭包里的快照 ——
+   * 两个入口（首屏补拉、滚到底补下一页）都可能并发进来，重入由加载器里的同步闩挡住 ——
+   * 抢不到就是 `busy`，什么都不改（`loading` 是渲染快照，同一帧里的两次调用读到的都是
+   * 旧值）。追加时读 `prev` 里已展示的条目、并按 `id` 去重，不读闭包里的快照 ——
    * 否则两次快速滚动会拿同一份旧数组覆盖、或把同一页追加两遍。
    */
   const loadSegment = useCallback(
     async (cursor: string | null) => {
-      if (inFlight.current) return
-      inFlight.current = true
-      // 发起时的身份：段 + 代号。回来时用它判断这份响应还算不算数（切段即作废）
-      const sent: SegmentRequest = { seg: segRef.current, epoch: epoch.current }
-      const live = (): SegmentRequest => ({ seg: segRef.current, epoch: epoch.current })
-      setPage((prev) => ({ ...prev, loading: true, failed: false }))
-      try {
-        const next = await loadPublicUserListingsPage(userId, sent.seg, cursor)
-        if (!isCurrentRequest(sent, live())) return
-        if (next === null) {
-          // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
-          setLoadState('notFound')
-          return
-        }
-        setPage((prev) => applySegmentPage(prev, sent, live(), next, cursor))
-      } catch (error) {
-        // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
-        console.warn('[miniapp] 他人主页：列表加载失败', error)
-        if (!isCurrentRequest(sent, live())) return
-        setPage((prev) => ({ ...prev, loading: false, failed: true }))
-      } finally {
-        // 只有「自己这一份」才归还闩：切段时闩已被新段接管，别替别人解锁
-        if (isCurrentRequest(sent, live())) inFlight.current = false
-      }
+      // 重入闩与请求身份都在加载器里：抢不到闩是 `busy`（一个回调都不走），
+      // 切段后回来的旧响应是 `stale`（同样一个回调都不走）。
+      await loader.load(cursor, {
+        onStart: () => setPage((prev) => ({ ...prev, loading: true, failed: false })),
+        onPage: (sent, next, at) =>
+          setPage((prev) => applySegmentPage(prev, sent, liveRequest(), next, at)),
+        // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
+        onMissing: () => setLoadState('notFound'),
+        onFailed: (_sent, error) => {
+          // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
+          console.warn('[miniapp] 他人主页：列表加载失败', error)
+          setPage((prev) => ({ ...prev, loading: false, failed: true }))
+        },
+      })
     },
-    [userId],
+    [loader, liveRequest],
   )
 
   const items = page.items
@@ -216,8 +219,9 @@ export default function UserHome() {
    * 列表还没拉过时补第一页。
    *
    * `failed` 也挡住自动补拉：失败后只认用户点「重试」，否则每次重渲染都会再打一次接口。
-   * 在售口径的首屏跟着资料一起回来（`load` 里填好），所以默认视图下这个 effect 是空转的；
-   * 只有 `?tab=SOLD` 进来的实例要在这里补那一页（#581）。
+   * 谁需要这里补：`load` 只填「在售」的首屏（`firstPageOf`），所以**任何一段只要是空页**
+   * 都在这里补第一页 —— 切段后（整份重置成 `emptyPage()`）与深链直接进「已售出」两种情形
+   * 都走这条路，不是只有 `?tab=SOLD` 进来的实例（#581 / #582）。
    */
   useEffect(() => {
     if (loadState !== 'ok') return
@@ -340,13 +344,13 @@ export default function UserHome() {
         return
       }
       epoch.current += 1
-      inFlight.current = false
+      loader.release()
       segRef.current = next
       setSeg(next)
       setPage(emptyPage())
       scrollToBody()
     },
-    [scrollToBody],
+    [loader, scrollToBody],
   )
 
   const openSoldListings = useCallback(() => switchSegment('SOLD'), [switchSegment])

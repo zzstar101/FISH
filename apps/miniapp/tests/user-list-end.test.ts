@@ -123,7 +123,7 @@ describe('user 页面接线', () => {
     // #565：下一页信号就是读取层交回的契约游标本身，页面把它原样合并进视图状态，
     // 不再有「hasMore 布尔」这一层转手（#581 起首屏那一页也由 `firstPageOf` 保管游标，
     // #582 起合并要先过在途请求的段 / 代号校验，见 `applySegmentPage`）
-    expect(code).toContain('applySegmentPage(prev, sent, live(), next, cursor)')
+    expect(code).toContain('applySegmentPage(prev, sent, liveRequest(), next, at)')
     expect(code).toContain('page.nextCursor === null')
   })
 
@@ -134,11 +134,17 @@ describe('user 页面接线', () => {
     // 互斥必须**先同步置位**（compare-and-set），不能靠读 state 决定要不要发。
     // #581/#582 起一个页面实例只服务当前这一段（切段=页内换 state），闩只剩一把；
     // 切段时由 `switchSegment` 立刻放开给新段用。
-    expect(code).toContain('if (inFlight.current) return')
-    expect(code).toContain('inFlight.current = true')
-    expect(code).toContain('inFlight.current = false')
+    // #582 审查中-1 起闩搬进了加载器（`makeSegmentLoader`），页面只调它：
+    // 时序由 `tests/user-page-tabs.test.ts` 的 `makeSegmentLoader` 那组直接跑出来。
+    expect(code).toContain('await loader.load(cursor, {')
+    const loaderSource = await Bun.file(
+      new URL('../src/pkg-browse/pages/user/segment-page.ts', import.meta.url),
+    ).text()
+    expect(loaderSource).toContain("if (inFlight) return 'busy'")
+    expect(loaderSource).toContain('inFlight = true')
+    expect(loaderSource).toContain('if (isCurrentRequest(sent, live())) inFlight = false')
     // 合并（覆盖 / 追尾 / 按 id 去重）由 `mergeSegmentPage` 承担，行为在纯函数用例里钉住。
-    expect(code).toContain('applySegmentPage(prev, sent, live(), next, cursor)')
+    expect(loaderSource).toContain('...mergeSegmentPage(prev, page, cursor)')
   })
 
   test('合并结果整体展开进视图状态：游标与三态是同一次写回（#565 复核 M1）', async () => {
