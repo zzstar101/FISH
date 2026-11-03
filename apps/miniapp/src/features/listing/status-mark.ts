@@ -33,3 +33,21 @@ export function outOfMarketLabel(status: ListingStatus): string | null {
  * 合并它等于要改收藏 / 历史两页的既有文案，属于另一条票的口径；而本票要求的是
  * 「卖掉了 / 下架了」。两套文案最终统一到哪一套，待 Owner 拍板。
  */
+
+/**
+ * 详情页底部栏的**买家**状态行（#567）。
+ *
+ * 与上面的卡片角标是同一件事的第二种粒度，字面量都归本文件，页面不另写一份：
+ * 卡片上空间小，说「卖掉了」；详情页底部栏是整条状态行，说完整一句「此商品已售出」。
+ *
+ * 只有 `SOLD`：`OFFLINE` 在买家视角**不可达** —— 非卖家读已下架商品的详情一律 404
+ * （`apps/api/src/modules/listings/service.ts` 的非卖家 OFFLINE 口径，服务端刻意不泄露
+ * 存在性），买家根本到不了这一页，给那格写文案就是死代码。`RESERVED` 仍在售卖流程里
+ * （有人拍下、还没成交），底部栏维持正常操作。
+ *
+ * 卖家视角的措辞不在这里：那是 `pkg-browse/pages/listing-detail/view.ts` 的
+ * `ownerStatusNote`，同一个状态的卖家说法是「商品已售出」+ 一条去我的发布管理的出路。
+ */
+export function buyerStatusNote(status: ListingStatus): string | null {
+  return status === 'SOLD' ? '此商品已售出' : null
+}

@@ -376,8 +376,15 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               )
             ) : null}
             {chatError !== null ? <p className="mt-3 text-danger text-xs">{chatError}</p> : null}
+            {/* #567：已售出要单独说一句。原来这里只有一句通用的「商品当前不可发起新会话」，
+                对着一件卖掉的商品等于什么都没解释；措辞与小程序
+                `apps/miniapp/src/features/listing/status-mark.ts` 的 `buyerStatusNote` 对齐。
+                「已下架」那一支不写：非卖家读 OFFLINE 商品在服务端就是 404（不泄露存在性），
+                这个页面走不到那个状态。 */}
             {!item.isOwner && item.status !== 'ACTIVE' ? (
-              <p className="mt-5 text-ink-3 text-xs">商品当前不可发起新会话</p>
+              <p className="mt-5 text-ink-3 text-xs">
+                {item.status === 'SOLD' ? '此商品已售出' : '商品当前不可发起新会话'}
+              </p>
             ) : null}
           </Card>
         </aside>

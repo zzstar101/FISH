@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { buyerStatusNote } from '../src/features/listing/status-mark'
 import {
   clearedPrivateScope,
   isOwnListing,
@@ -69,6 +70,25 @@ describe('下架确认卡是账号私有的', () => {
   })
 })
 
+describe('buyerStatusNote —— 买家侧底栏状态行（#567）', () => {
+  test('已售出：底部栏说「此商品已售出」', () => {
+    // 卖家侧同一状态说的是「商品已售出」（`ownerStatusNote`），人称不同：买家看的是"这一件"。
+    expect(buyerStatusNote('SOLD')).toBe('此商品已售出')
+    expect(ownerStatusNote('SOLD')).toBe('商品已售出')
+  })
+
+  test('在售 / 等面交不给状态行，底部栏照常渲染操作钮', () => {
+    expect(buyerStatusNote('ACTIVE')).toBeNull()
+    // RESERVED 仍在售卖流程里（有人拍下、还没成交），不当成一句话了事
+    expect(buyerStatusNote('RESERVED')).toBeNull()
+  })
+
+  test('已下架在买家视角不可达：不出文案，而不是出了一条看不到的文案', () => {
+    // 非卖家读 OFFLINE 商品的详情，服务端直接 404（不泄露存在性），买家到不了这一页。
+    expect(buyerStatusNote('OFFLINE')).toBeNull()
+  })
+})
+
 describe('页面接线', () => {
   test('演示登录钉死的账号只顶替「已登录」那一格，匿名态不许被顶成卖家', async () => {
     // 本页不挂登录守卫，`TARO_APP_MOCK=1` 的构建里退出登录后 `userId` 就是 `null`；
@@ -83,5 +103,17 @@ describe('页面接线', () => {
     // `tests/mock-boundary.test.ts`，这里只钉住本页的接线。
     expect(code).toContain("from '@/lib/demo-user-id'")
     expect(code).not.toContain("from '@/mock/users'")
+  })
+
+  test('买家形态：已售出时整条换状态行，操作钮（含「立即购买」）不渲染（#567）', async () => {
+    const code = await Bun.file(
+      new URL('../src/pkg-browse/pages/listing-detail/index.tsx', import.meta.url),
+    ).text()
+    // 判据取自 `features/listing/status-mark`（与卡片角标同一文件），页面里不许再手写这份文案
+    expect(code).toContain('buyerStatusNote(data.listing.status)')
+    expect(code).not.toContain('此商品已售出')
+    // 买家 + 有状态行 → 状态行；「收藏 / 立即购买 / 聊一聊」只留在剩下的那个分支里
+    expect(code).toContain(') : buyerNote !== null ? (')
+    expect(code).toContain('立即购买')
   })
 })

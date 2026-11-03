@@ -41,6 +41,8 @@ import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
+// #567：买家侧底栏的已售出文案与卡片角标（#566）同一来源，页面不另写字面量
+import { buyerStatusNote } from '@/features/listing/status-mark'
 import { fetchListingMatches } from '@/features/match/api'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
@@ -867,6 +869,17 @@ export default function ListingDetail() {
           data.listing.governanceDelisted === true,
         )
       : null
+
+  /**
+   * 买家视角的状态行（#567）：`SOLD` 时底部栏换成一句买家口吻的结论，不再给
+   * 「收藏 / 立即购买 / 聊一聊」—— 已售出的商品再收藏或发起交易只会失败，不如直说；
+   * 这与卖家侧「非在售不给操作钮、整条换状态行」是同一套形态。
+   *
+   * 只补 SOLD：非卖家读 `OFFLINE` 详情在服务端就是 404（不泄露存在性），买家到不了这一页。
+   * 具体文案取自 `features/listing/status-mark` 的 `buyerStatusNote`（与卡片角标同一文件，
+   * 页面里不写第二份字面量）；卖家侧的说法由上面的 `ownerNote` 负责。
+   */
+  const buyerNote = data !== null && !ownListing ? buyerStatusNote(data.listing.status) : null
 
   /**
    * 卖家在线态（#359 第五点）：卖家行里、头像右侧那一列的昵称行。
@@ -1934,6 +1947,7 @@ export default function ListingDetail() {
         卖家形态（Owner 2026-09-27 拍板）：当前账号是卖家时换成「管理 / 看谁想要」，
         收藏心不出现（卖家不收藏自己的商品）；非在售不渲染操作钮，整条换状态行
         （见 view.ownerStatusNote）。举报入口在标签行（#260），与本栏无关。
+        买家形态的**已售出**（#567）：同上不给钮，只说一句状态（见 buyerNote）。
       */}
       <View className="detail__bar">
         {ownListing && ownerNote === null ? (
@@ -1953,6 +1967,11 @@ export default function ListingDetail() {
             <Text className="detail__bar-note-link" onClick={goMyList}>
               去我的发布管理
             </Text>
+          </View>
+        ) : buyerNote !== null ? (
+          /* 买家看**已售出**的商品（#567）：不给点了必失败的钮，只说结论 */
+          <View className="detail__bar-note">
+            <Text className="detail__bar-note-text">{buyerNote}</Text>
           </View>
         ) : (
           <>
