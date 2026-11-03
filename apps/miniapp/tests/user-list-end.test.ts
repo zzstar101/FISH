@@ -127,23 +127,24 @@ describe('user 页面接线', () => {
 
   test('滚到底的重入靠同步 ref 闩互斥，合并交给纯函数（#565 复核 M2）', async () => {
     const code = await source
-    // `pages[seg].loading` 是渲染快照：同一帧里连点两次滚到底（或切段与滚底撞在同一帧），
-    // 两次回调读到的都是上一次渲染的 `loading: false`，会拿同一条游标并发打两次接口。
+    // `page.loading` 是渲染快照：同一帧里连点两次滚到底，两次回调读到的都是上一次渲染的
+    // `loading: false`，会拿同一条游标并发打两次接口。
     // 互斥必须**先同步置位**（compare-and-set），不能靠读 state 决定要不要发。
-    expect(code).toContain('if (inFlight.current[which]) return')
-    expect(code).toContain('inFlight.current[which] = true')
-    expect(code).toContain('inFlight.current[which] = false')
+    // #581 起一个页面实例只服务一个口径（`seg` 由 `?tab=` 派生），闩也就只剩一把。
+    expect(code).toContain('if (inFlight.current) return')
+    expect(code).toContain('inFlight.current = true')
+    expect(code).toContain('inFlight.current = false')
     // 合并（覆盖 / 追尾 / 按 id 去重）由 `mergeSegmentPage` 承担，行为在纯函数用例里钉住。
-    expect(code).toContain('mergeSegmentPage(prev[which], page, cursor)')
+    expect(code).toContain('mergeSegmentPage(prev, next, cursor)')
   })
 
   test('合并结果整体展开进分段状态：游标与三态是同一次写回（#565 复核 M1）', async () => {
     const code = flatten(await source)
     // 只取 `.items`（`items: mergeSegmentPage(...).items`）会丢掉 `nextCursor`：
     // `hasMore` 恒真 → 滚到底拿同一游标反复请求，去重又把条目全滤掉 → 列表静止、网络空转。
-    // 删掉 `loaded: true` 则分段永远停在骨架屏。整块形状一次钉住两条写回。
+    // 删掉 `loaded: true` 则列表永远停在骨架屏。整块形状一次钉住两条写回。
     expect(code).toContain(
-      '[which]: { ...mergeSegmentPage(prev[which], page, cursor), loaded: true, loading: false, failed: false, }',
+      '{ ...mergeSegmentPage(prev, next, cursor), loaded: true, loading: false, failed: false, }',
     )
   })
 })

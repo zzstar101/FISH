@@ -29,7 +29,7 @@ import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
 import type { Segment, SegmentPage } from './segment-page'
-import { emptyPage, mergeSegmentPage } from './segment-page'
+import { emptyPage, mergeSegmentPage, segmentOfTab, userHomeUrl } from './segment-page'
 import './index.scss'
 
 /**
@@ -79,7 +79,7 @@ import './index.scss'
  * - **不做下拉刷新**（稿的 `.refresher` 不实现）。
  */
 export default function UserHome() {
-  const router = useRouter<{ id?: string }>()
+  const router = useRouter<{ id?: string; tab?: string }>()
   /**
    * 路径参数就是这个页面的唯一输入。**没有兜底值**：mock 时代那句
    * `?? 'u-lin'` 在真实接口下等于"随手挑一个真实用户给访客看"，
@@ -93,35 +93,36 @@ export default function UserHome() {
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
   /**
-   * 当前分段（#565）。默认停在「在售」—— 页头那两个数里「在售」就是这一段，
-   * 进页面先说同一件事；「已售出」是用户点过去才请求的第二段。
-   */
-  const [seg, setSeg] = useState<Segment>('ACTIVE')
-  /** 两段各自的数据 + 游标。首屏只填 ACTIVE，SOLD 在切过去时按需补。 */
-  const [pages, setPages] = useState<Record<Segment, SegmentPage>>({
-    ACTIVE: emptyPage(),
-    SOLD: emptyPage(),
-  })
-  /**
-   * 每段一个「在飞」闩：同步 ref，**不是** state（#565 复核 M2）。
+   * 列表口径（#581）：由 `tab` 查询参数决定 —— `?tab=SOLD` 是「已售出」视图，
+   * 缺省或任意非法值一律回落到「在售」（`segmentOfTab`，纯函数、用例见
+   * `tests/user-page-tabs.test.ts`）。
    *
-   * `pages[seg].loading` 是渲染快照，判定重入不可靠：同一帧里连点两次滚到底
-   * （`onScrollToLower` 会在内容不满屏时连发）、或者切段与滚底撞在同一帧，
-   * 两个回调读到的都是上一次渲染的 `loading: false`，会拿**同一条游标**并发打两次接口，
-   * 同一页被追加两遍。所以真正的互斥靠这里 compare-and-set：先同步置位，抢不到直接返回。
+   * **一个页面实例只服务一个口径**，所以这里是常量而不是 state：页头「卖出 N」跳
+   * `?tab=SOLD` 开一个新实例、返回键自然回到在售视图，没有「切段」这个动作，
+   * 也就没有「删掉胶囊后藏起来不可达」的状态机。
    */
-  const inFlight = useRef<Record<Segment, boolean>>({ ACTIVE: false, SOLD: false })
+  const seg: Segment = segmentOfTab(router.params.tab)
+  /** 当前口径的数据 + 游标。首屏只填「在售」（跟资料同一次请求回来），「已售出」按需补。 */
+  const [page, setPage] = useState<SegmentPage>(emptyPage())
+  /**
+   * 「在飞」闩：同步 ref，**不是** state（#565 复核 M2）。
+   *
+   * `page.loading` 是渲染快照，判定重入不可靠：同一帧里连点两次滚到底
+   * （`onScrollToLower` 会在内容不满屏时连发），两个回调读到的都是上一次渲染的
+   * `loading: false`，会拿**同一条游标**并发打两次接口，同一页被追加两遍。
+   * 所以真正的互斥靠这里 compare-and-set：先同步置位，抢不到直接返回。
+   */
+  const inFlight = useRef(false)
 
   const load = useCallback(async () => {
     // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
     setLoadState('loading')
     setProfile(null)
-    setSeg('ACTIVE')
-    setPages({ ACTIVE: emptyPage(), SOLD: emptyPage() })
+    setPage(emptyPage())
     // 把上一轮留下的闩清掉，新的一轮从「没有请求在飞」开始。⚠️ 这里没有 epoch / generation
-    // 校验：上一轮的响应若真的回来，仍会写进这一轮的段状态 —— 实际不可达（`load` 的两个入口
-    // 都在 `loadState !== 'ok'` 时才调，此时不可能有段内请求在飞），但别按「已作废」推理。
-    inFlight.current = { ACTIVE: false, SOLD: false }
+    // 校验：上一轮的响应若真的回来，仍会写进这一轮的列表状态 —— 实际不可达（`load` 的两个
+    // 入口都在 `loadState !== 'ok'` 时才调，此时不可能有列表请求在飞），但别按「已作废」推理。
+    inFlight.current = false
     /**
      * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
      * 重试时它是**新挂载**的、`scrollTop` 回到 0，而 `glassOn` / `titled` 是页面级
@@ -142,85 +143,86 @@ export default function UserHome() {
       return
     }
     setProfile(result.profile)
-    setPages((prev) => ({
-      ...prev,
-      ACTIVE: {
+    /**
+     * 「在售」的第一页与资料同一次请求回来（`loadPublicUserHome` 里是 `Promise.all`）；
+     * 「已售出」口径用不上这份列表 —— 它由下面的 effect 按 `status=SOLD` 另拉一页。
+     * 代价是已售出视图会多取一页用不上的在售列表：换掉它得把资料与列表拆成两次请求，
+     * 会把 notFound / failed 的判定口径一分为二，不值得（#581）。
+     */
+    if (seg === 'ACTIVE') {
+      setPage({
         items: result.listings,
         nextCursor: result.nextCursor,
         loaded: true,
         loading: false,
         failed: false,
-      },
-    }))
+      })
+    }
     setLoadState('ok')
-  }, [userId])
+  }, [seg, userId])
 
   /**
-   * 拉某一段的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
+   * 拉当前口径的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
    *
-   * 两个入口（切段补首屏、滚到底补下一页）都可能并发进来，重入由**该段自己的**
-   * `inFlight` 闩挡住 —— 同步 compare-and-set，抢不到直接返回（`loading` 是渲染快照，
-   * 同一帧里的两次调用读到的都是旧值）。追加时读 `prev` 里那一段已展示的条目、并按 `id`
-   * 去重，不读闭包里的快照 —— 否则两次快速滚动会拿同一份旧数组覆盖、或把同一页追加两遍。
+   * 两个入口（首屏补拉、滚到底补下一页）都可能并发进来，重入由 `inFlight` 闩挡住 ——
+   * 同步 compare-and-set，抢不到直接返回（`loading` 是渲染快照，同一帧里的两次调用读到
+   * 的都是旧值）。追加时读 `prev` 里已展示的条目、并按 `id` 去重，不读闭包里的快照 ——
+   * 否则两次快速滚动会拿同一份旧数组覆盖、或把同一页追加两遍。
    */
   const loadSegment = useCallback(
-    async (which: Segment, cursor: string | null) => {
-      if (inFlight.current[which]) return
-      inFlight.current[which] = true
-      setPages((prev) => ({ ...prev, [which]: { ...prev[which], loading: true, failed: false } }))
+    async (cursor: string | null) => {
+      if (inFlight.current) return
+      inFlight.current = true
+      setPage((prev) => ({ ...prev, loading: true, failed: false }))
       try {
-        const page = await loadPublicUserListingsPage(userId, which, cursor)
-        if (page === null) {
+        const next = await loadPublicUserListingsPage(userId, seg, cursor)
+        if (next === null) {
           // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
           setLoadState('notFound')
           return
         }
-        setPages((prev) => ({
-          ...prev,
-          [which]: {
-            ...mergeSegmentPage(prev[which], page, cursor),
-            loaded: true,
-            loading: false,
-            failed: false,
-          },
+        setPage((prev) => ({
+          ...mergeSegmentPage(prev, next, cursor),
+          loaded: true,
+          loading: false,
+          failed: false,
         }))
       } catch (error) {
-        // 分段内的失败只降级这一段（页头、另一段、顶栏都还在），不把整页打成 failed。
-        console.warn('[miniapp] 他人主页：分段列表加载失败', error)
-        setPages((prev) => ({ ...prev, [which]: { ...prev[which], loading: false, failed: true } }))
+        // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
+        console.warn('[miniapp] 他人主页：列表加载失败', error)
+        setPage((prev) => ({ ...prev, loading: false, failed: true }))
       } finally {
-        inFlight.current[which] = false
+        inFlight.current = false
       }
     },
-    [userId],
+    [seg, userId],
   )
 
-  /** 当前分段（下面所有渲染都读它：切段即换一页数据） */
-  const current = pages[seg]
-  const items = current.items
-  const hasMore = current.nextCursor !== null
+  const items = page.items
+  const hasMore = page.nextCursor !== null
 
   /**
-   * 切到还没拉过的分段时补第一页。
+   * 列表还没拉过时补第一页。
    *
    * `failed` 也挡住自动补拉：失败后只认用户点「重试」，否则每次重渲染都会再打一次接口。
-   * 首屏已经把 ACTIVE 段填好，所以这个 effect 在默认视图下是空转的。
+   * 在售口径的首屏跟着资料一起回来（`load` 里填好），所以默认视图下这个 effect 是空转的；
+   * 只有 `?tab=SOLD` 进来的实例要在这里补那一页（#581）。
    */
   useEffect(() => {
     if (loadState !== 'ok') return
-    if (current.loaded || current.loading || current.failed) return
-    void loadSegment(seg, null)
-  }, [current, loadSegment, loadState, seg])
+    if (page.loaded || page.loading || page.failed) return
+    void loadSegment(null)
+  }, [loadSegment, loadState, page])
 
   /**
-   * 滚到底补下一页（两段共用）。`onScrollToLower` 在内容不满一屏时也会触发，
+   * 滚到底补下一页。`onScrollToLower` 在内容不满一屏时也会触发，
    * 所以「没有下一页」与「正在拉」都必须先挡住，不能只靠事件本身。
    */
   const onScrollToLower = useCallback(() => {
     if (loadState !== 'ok') return
-    if (current.loading || current.nextCursor === null) return
-    void loadSegment(seg, current.nextCursor)
-  }, [current, loadSegment, loadState, seg])
+    if (page.loading || page.nextCursor === null) return
+    void loadSegment(page.nextCursor)
+  }, [loadSegment, loadState, page])
 
   const [left, right] = useMemo(() => {
     const l: MockListing[] = []
@@ -299,6 +301,36 @@ export default function UserHome() {
   const backToTop = () => {
     setTopAnchor((prev) => (prev === 'uhome-top-a' ? 'uhome-top-b' : 'uhome-top-a'))
   }
+
+  /**
+   * 页头两格就是列表入口（#581）：「卖出 N」开一个只渲染已售出的新实例
+   * （`?tab=SOLD`），返回键自然回到在售视图；「在售 N」在已售出视图里退回上一页。
+   *
+   * 已经在当前口径时不再跳转（连点不会叠出一串同样的页面），改为把列表滚进视野 ——
+   * 这两个数字离列表还有一屏页头，点了总得给点反应。`onClick` 只挂在「在售」「卖出」
+   * 两格上，「好评率」那格没有列表可去，不接任何点击。
+   */
+  const openSoldListings = useCallback(() => {
+    if (seg === 'SOLD') {
+      setTopAnchor('uhome-body')
+      return
+    }
+    void Taro.navigateTo({ url: userHomeUrl(userId, 'SOLD') })
+  }, [seg, userId])
+
+  const openActiveListings = useCallback(() => {
+    if (seg === 'ACTIVE') {
+      setTopAnchor('uhome-body')
+      return
+    }
+    void Taro.navigateBack({
+      delta: 1,
+      fail: () => {
+        // 栈里没有上一页（直接带着 `?tab=SOLD` 进来）：原地换成在售视图，不留白屏。
+        void Taro.redirectTo({ url: userHomeUrl(userId) })
+      },
+    })
+  }, [seg, userId])
 
   /**
    * 量一次身份区底边，换算成**内容坐标**。
@@ -836,17 +868,28 @@ export default function UserHome() {
                   </View>
                 ) : null}
 
+                {/* 两格就是列表入口（#581）：整格可点（`--link` 给足触控高度），
+                    计数取契约的 `activeCount` / `soldCount`，不用 `items.length`（分页会低报） */}
                 <View className="uhome__stats">
-                  <View className="uhome__stat">
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={openActiveListings}
+                  >
                     <Text className="uhome__stat-num num">{profile.activeCount}</Text>
                     <Text className="uhome__stat-label">在售</Text>
                   </View>
-                  <View className="uhome__stat">
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={openSoldListings}
+                  >
                     <Text className="uhome__stat-num num">{profile.soldCount}</Text>
                     <Text className="uhome__stat-label">卖出</Text>
                   </View>
                   <View className="uhome__stat">
-                    {/* 好评率：仓库没有评价表，没有真实口径 → 恒显 `--`，不编百分比 */}
+                    {/* 好评率：仓库没有评价表，没有真实口径 → 恒显 `--`，不编百分比。
+                        也没有对应列表可去，所以不接点击、无点击反馈（#581）。 */}
                     <Text className="uhome__stat-num num">--</Text>
                     <Text className="uhome__stat-label">好评率</Text>
                   </View>
@@ -893,30 +936,19 @@ export default function UserHome() {
             )}
           </View>
 
-          {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内） */}
-          <View className="uhome__body">
+          {/* 列表区坐在页面底色上（稿 `.inner` 是 headblock 的兄弟节点，不在渐变块内）；
+              `uhome-body` 是页头两个数字点下来的落点（#581，见 openSoldListings /
+              openActiveListings 里那句 `setTopAnchor('uhome-body')`） */}
+          <View className="uhome__body" id="uhome-body">
             <View className="uhome__sect">
-              {/* 分段（#565）：「在售 / 已售出」两段同源，只差一个 `status`。
-                  计数取该段的服务端真总数（`activeCount` / `soldCount`），与页头那两个数同源；
+              {/* 口径入口在页头（#581），这一行只报「在看哪一段 + 这一段有多少件」。
+                  件数取该段的服务端真总数（在售 `activeCount` / 已售出 `soldCount`），
                   不用 items.length —— 列表是分页的，用它会在还没加载完时低报。 */}
-              <View className="uhome__segs">
-                <View
-                  className={`uhome__seg${seg === 'ACTIVE' ? ' uhome__seg--on' : ''}`}
-                  onClick={() => setSeg('ACTIVE')}
-                >
-                  <Text>在售</Text>
-                </View>
-                <View
-                  className={`uhome__seg${seg === 'SOLD' ? ' uhome__seg--on' : ''}`}
-                  onClick={() => setSeg('SOLD')}
-                >
-                  <Text>已售出</Text>
-                </View>
-              </View>
+              <Text className="uhome__sect-title">{`TA 的${segTitle}`}</Text>
               <Text className="uhome__sect-cnt num">{profile ? `${segTotal} 件` : '加载中'}</Text>
             </View>
 
-            {loadState === 'loading' || (!current.loaded && !current.failed) ? (
+            {loadState === 'loading' || (!page.loaded && !page.failed) ? (
               <View className="uhome__grid">
                 {[0, 1, 2, 3].map((i) => (
                   <View key={`sk-${i}`} className="uhome__skel">
@@ -928,14 +960,14 @@ export default function UserHome() {
                   </View>
                 ))}
               </View>
-            ) : current.failed && items.length === 0 ? (
-              /* 分段内的失败只降级这一段：页头、顶栏、另一段都还在，所以不用整页 LoadError */
+            ) : page.failed && items.length === 0 ? (
+              /* 列表失败只降级列表：页头、顶栏都还在，所以不用整页 LoadError */
               <EmptyState
                 title="列表加载失败"
                 text={`${segTitle}商品没拉到，其它内容不受影响`}
                 icon={ICONS.boxMuted}
                 actionText="重试"
-                onAction={() => void loadSegment(seg, null)}
+                onAction={() => void loadSegment(null)}
               />
             ) : items.length === 0 ? (
               <View className="uhome__empty">
@@ -958,7 +990,7 @@ export default function UserHome() {
 
             {/* 加载更多（滚到底自动补一页，见 `onScrollToLower`）：只给一行小字，
                 不做整块遮罩 —— 已经在看的商品不该被挡住 */}
-            {current.loading && items.length > 0 ? (
+            {page.loading && items.length > 0 ? (
               <View className="uhome__list-end">
                 <View className="uhome__list-end-line" />
                 <Text className="uhome__list-end-txt num">加载中</Text>
