@@ -2,7 +2,7 @@
  * 腾讯云内容安全 provider（#228）：TMS 审文本、IMS 审图片。
  *
  * 用官方 Node SDK（`tencentcloud-sdk-nodejs-tms` / `-ims`）承载 TC3-HMAC-SHA256 签名与重试无关的
- * 传输细节；Bun 下可用性已在 #228 开工前用本地假上游实测（见 docs/design/issue-228-*.md §2）。
+ * 传输细节；Bun 下可用性已在 #228 开工前用本地假上游实测。
  * 业务层只看到 `ContentModerationProvider`，换签名实现只需改本文件。
  *
  * 三条纪律：
@@ -144,7 +144,7 @@ function verdictFromPayload(payload: unknown, provider: ModerationProviderName):
  * IMS 响应里的 `FileMD5` → 固化材料。它会被调用方当成「图片内容未被替换」的证明，所以只接受
  * MD5 十六进制形状（SDK 文档：检测对象对应的 MD5 校验值）：非空但不符形状说明上游响应不可信，
  * 按 `invalid_response` 失败（**绝不放行**），不把任意字符串当摘要透传。缺字段仍返回 null——
- * 调用方不得把 null 当通过（设计文档 §7/§8）。
+ * 调用方不得把 null 当通过。
  */
 function digestFromPayload(payload: TencentModerationPayload): string | null {
   const raw = nonEmpty(payload.FileMD5)

@@ -193,7 +193,7 @@ describe('recommendation API wiring (#323 R1)', () => {
     expect(body.items.length).toBeGreaterThan(0)
     // 服务端必须补发会话标识：客户端存不下来就会每次都是新会话。
     expect(sessionId).toMatch(/^[0-9a-f-]{36}$/)
-    // 内部排序分不下发（#323 §M7）。
+    // 内部排序分不下发（#323 M7）。
     expect(body).not.toHaveProperty('rankScore')
 
     // 请求行真的落库了，且是匿名身份。
@@ -1272,7 +1272,7 @@ describe('recommendation rec-v2 (#524)', () => {
 })
 
 /**
- * 服务端确证行为的埋点（#323 §M0：COMMENT / CHAT_START / TRANSACTION_START / PURCHASE）。
+ * 服务端确证行为的埋点（#323 M0：COMMENT / CHAT_START / TRANSACTION_START / PURCHASE）。
  *
  * 这些事件刻意**不走客户端上报**：评论成功、交易建行、成交这些事实只有服务端知道，
  * 客户端断网重试会丢或重复。这里验证的是"行为真的发生 → 事件真的落库"，以及
@@ -1555,7 +1555,7 @@ describe('recommendation domain events (#323 R1)', () => {
 
     // 排序模式的两行都由 `service.createRankedFeed` 写下。这里直接建出同形的两行：走真实 Feed 拿到
     // 的 position 取决于召回与排序结果，而本用例要钉的是 `recordDomainEvent` 的归因分支——
-    // 快照命中即取快照的 position/primarySource，客户端上报的上下文头一律丢弃（#323 §8 真值表）。
+    // 快照命中即取快照的 position/primarySource，客户端上报的上下文头一律丢弃（#323 真值表）。
     const requestId = newId()
     await db.insert(recommendationRequests).values({
       id: requestId,
@@ -2098,7 +2098,7 @@ describe('recommendation 限流与进程内计数 (#323 R6 PR-2)', () => {
         error: { code: RECOMMENDATION_RATE_LIMITED, retryAfterSeconds },
       })
 
-      // Feed 也参与限流（§8.1）：不限 Feed 等于给脚本留一条"免费取号"的通道。
+      // Feed 也参与限流：不限 Feed 等于给脚本留一条"免费取号"的通道。
       const firstFeed = await limitedApp.request('/recommendations/feed?limit=1', { headers })
       expect(firstFeed.status).toBe(200)
       const secondFeed = await limitedApp.request('/recommendations/feed?limit=1', { headers })

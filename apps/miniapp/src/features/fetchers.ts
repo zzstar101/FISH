@@ -906,7 +906,7 @@ function demoProfile(): ProfileView {
       activeListings: saleCount,
       activeWishes: wishes.length,
       completedTransactions: completedCount,
-      // 与 `features/following/demo.ts` 的演示名单条数一致（方案 §2.3：数字栏与列表不能自相矛盾）
+      // 与 `features/following/demo.ts` 的演示名单条数一致（数字栏与列表不能自相矛盾）
       followingCount: 5,
     },
     listings,

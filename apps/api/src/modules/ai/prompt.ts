@@ -3,17 +3,17 @@ import type { ListingCategory } from '@fish/contracts/listings/schema'
 import { ListingCategorySchema } from '@fish/contracts/listings/schema'
 
 /**
- * 上游 prompt 与版本号（#141 设计 §3.3 / §9）。
+ * 上游 prompt 与版本号（#141）。
  *
  * 运行时改 prompt 属独立迭代：**改本文件即升版本**（与 `MODERATION_RULE_VERSION` 同一惯例），
  * 版本号随用量一起落 `ai_polish_requests.prompt_version`。脱敏规则没有对应的落库版本
- * （`ai_polish_requests` 没有该列，见设计 §6.1），别把这两者的可追溯性混为一谈。
+ * （`ai_polish_requests` 没有该列），别把这两者的可追溯性混为一谈。
  */
 export const PROMPT_VERSION = '2026-09-21-v2'
 
 /**
  * 分类的中文标签由**服务端**解析：请求只收枚举值，不接受客户端传标签文本，堵住
- * "伪造上下文诱导模型"的口子（设计 §4.1）。本表只服务本模块的 prompt，不是全仓标签来源
+ * "伪造上下文诱导模型"的口子。本表只服务本模块的 prompt，不是全仓标签来源
  * ——web / miniapp 各有一份自己的前端标签表，抽公共层要等有第二个服务端调用方。
  */
 const CATEGORY_LABELS: Record<ListingCategory, string> = {
@@ -28,9 +28,9 @@ const CATEGORY_LABELS: Record<ListingCategory, string> = {
 }
 
 /**
- * 系统提示词。第 1、2 条来自实测：探针 2 里模型确实照抄过 "标题：/分类：/描述：" 字段名
- * （设计 §9），服务端另有 §5.6b 硬校验兜底；第 6 条是回填的前提——标记被改写或删掉，
- * 那条候选就会整条降级（§5.7）。
+ * 系统提示词。第 1、2 条来自实测：探针 2 里模型确实照抄过 "标题：/分类：/描述：" 字段名，
+ * 服务端另有硬校验兜底；第 6 条是回填的前提——标记被改写或删掉，
+ * 那条候选就会整条降级。
  */
 const SYSTEM_PROMPT = `你是校内二手交易平台的文案助手，负责把学生写的原始描述改写成更清晰、更好读的商品描述。
 
@@ -49,7 +49,7 @@ export type PolishPromptInput = {
   category: ListingCategory
 }
 
-/** 只拼装文本，不做脱敏——送进来的 `description` 必须已是脱敏后的标记版（设计 §5.3）。 */
+/** 只拼装文本，不做脱敏——送进来的 `description` 必须已是脱敏后的标记版。 */
 export function buildPolishPrompt(input: PolishPromptInput): { system: string; user: string } {
   const user = [
     `商品标题：${input.title}`,

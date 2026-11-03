@@ -1,5 +1,5 @@
 /**
- * 愿望 → 匹配的解耦层（Issue #7 设计方案 §5）。
+ * 愿望 → 匹配的解耦层（Issue #7）。
  * matching 模块与 worker 归 Dev A；本模块只投递事件。
  *
  * #322 M1 起 `enqueue` 投**两条** job：`EMBED_WISH`（语义向量刷新）与 `MATCH_WISH`（重算）。

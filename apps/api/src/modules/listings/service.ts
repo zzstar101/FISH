@@ -708,14 +708,14 @@ export function createListingService(deps: {
         objectKeys: input.objectKeys,
         duplicateWindowStart: new Date(now().getTime() - DUPLICATE_WINDOW_MS),
         moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
-        // 对外只给既有安全码，绝不透出腾讯 Label/Score/命中策略（#228 §6）。
+        // 对外只给既有安全码，绝不透出腾讯 Label/Score/命中策略（#228）。
         moderationReason: moderationReasonCodeFor(decision),
         moderationRuleVersion: moderationResult.policyVersion,
         moderation: {
           // 落库的结论是**整条商品**的结论（可能由某张 REVIEW 图抬上来），不只是文本那一档。
           decision,
           // 本地词表时代的命中规则/脱敏词条对腾讯 provider 没有对应物：审计改看下面这组
-          // provider 字段（#228 §6），这里保持空数组（列本身 NOT NULL）。
+          // provider 字段（#228），这里保持空数组（列本身 NOT NULL）。
           matchedRules: [],
           matchedTermsMasked: [],
           ruleVersion: moderationResult.policyVersion,
@@ -813,7 +813,7 @@ export function createListingService(deps: {
                 description: finalDescription,
                 decision,
                 // 本地词表时代的命中规则/脱敏词条对腾讯 provider 没有对应物：审计改看下面这组
-                // provider 字段（#228 §6），这里保持空数组（列本身 NOT NULL）。
+                // provider 字段（#228），这里保持空数组（列本身 NOT NULL）。
                 matchedRules: [],
                 matchedTermsMasked: [],
                 ruleVersion: moderationResult.policyVersion,
@@ -838,7 +838,7 @@ export function createListingService(deps: {
                 fields: {
                   ...fields,
                   moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
-                  // 对外只给既有安全码，绝不透出腾讯 Label/Score/命中策略（#228 §6）。
+                  // 对外只给既有安全码，绝不透出腾讯 Label/Score/命中策略（#228）。
                   moderationReason: moderationReasonCodeFor(decision),
                   moderationRuleVersion: moderationResult.policyVersion,
                   moderatedAt: new Date(),
@@ -954,7 +954,7 @@ async function recordModeration(
     title: input.title,
     description: input.description,
     decision: input.result.decision,
-    // provider 结果里没有本地词表的命中规则/脱敏词条；审计看下面的 provider 字段（#228 §6）。
+    // provider 结果里没有本地词表的命中规则/脱敏词条；审计看下面的 provider 字段（#228）。
     matchedRules: [],
     matchedTermsMasked: [],
     ruleVersion: input.result.policyVersion,
@@ -972,7 +972,7 @@ function tracedField(result: TextModerationResult): FieldModerationResult | null
   )
 }
 
-/** provider 结果 → 审核记录里的可追溯字段（#228 §6）。 */
+/** provider 结果 → 审核记录里的可追溯字段（#228）。 */
 function moderationTraceOf(result: TextModerationResult): ModerationTrace {
   const field = tracedField(result)
   return {
@@ -985,7 +985,7 @@ function moderationTraceOf(result: TextModerationResult): ModerationTrace {
   }
 }
 
-/** 对外只给**既有安全码**（客户端已能翻译），绝不透出腾讯 Label/Score/命中策略（#228 §6）。 */
+/** 对外只给**既有安全码**（客户端已能翻译），绝不透出腾讯 Label/Score/命中策略（#228）。 */
 function moderationReasonCodeFor(decision: ModerationDecision): string | null {
   if (decision === 'BLOCK') return 'PROHIBITED_CONTENT'
   if (decision === 'REVIEW') return 'CONTENT_REQUIRES_REVIEW'

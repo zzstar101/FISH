@@ -87,7 +87,7 @@ export type RecommendationRecallDeps = {
    */
   embeddingModel: string | null
   clock?: () => Date
-  /** 进程内延迟采样（#323 R6 §6.4）；**可选**，只用于 pgvector 单次查询耗时。 */
+  /** 进程内延迟采样（#323 R6）；**可选**，只用于 pgvector 单次查询耗时。 */
   latency?: LatencyRecorder
 }
 
@@ -255,7 +255,7 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
       let categoryReason: RecallDegradeReason | null = identityReason
 
       // 会话类目权重是**纯 SQL**（不碰向量），所以只依赖身份、不依赖 embedding 模型：
-      // category 是 semantic 不可用时的兜底通道（设计文档 §2 决定 1 / Issue M2），把它一起锁在
+      // category 是 semantic 不可用时的兜底通道（Issue M2 的决定 1），把它一起锁在
       // `model !== null` 后面会让"模型不可用"退化成"个性化全丢"。
       if (identity !== null) {
         try {
@@ -358,7 +358,7 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
         const interestVector = combined
         channels.push(
           await runChannel('semantic', async () => {
-            // pgvector 检索的唯一入口（#323 R6 §6.4）：失败也要采样——通道故障时
+            // pgvector 检索的唯一入口（#323 R6）：失败也要采样——通道故障时
             // 延迟分布里"没有样本"会被误读成"没查询"，而实际是查询超时/报错。
             const startedAt = performance.now()
             try {
@@ -457,7 +457,7 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
           for (const row of rows) impressions.set(row.listingId, row.count)
         } catch (error) {
           // 曝光计数失败 ⇒ 每条候选的 `alreadySeenCount` 都是**未知**（`null`），不是 0：
-          // "查询挂了"和"确实没重复曝光过"在排序层是两件事（R3 §9 待办①）。整份计数置 null，
+          // "查询挂了"和"确实没重复曝光过"在排序层是两件事（R3 待办①）。整份计数置 null，
           // merge 层据此透传。可见性不受影响，因此不清空候选。
           console.warn('[recommendation] 曝光次数读取失败，alreadySeenCount 记为未知：', error)
           impressions = null

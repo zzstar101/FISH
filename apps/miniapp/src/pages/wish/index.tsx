@@ -573,8 +573,8 @@ export default function Wish() {
                         </Text>
                       </Text>
                       {/*
-                        `wantCount` 是**需求条数**（`count(*)`，见 `docs/design/issue-7-wish-system.md`
-                        「k-匿名」那段：准入按去重用户数，`wantCount` 是该组的条数）——
+                        `wantCount` 是**需求条数**（`count(*)`，k-匿名准入按去重用户数，
+                        `wantCount` 是该组的条数）——
                         不是人数。同一用户重复许同一个关键词会各算一条，所以文案用「条」。
                       */}
                       <Text className="pool__want">{`${item.wantCount} 条求购`}</Text>

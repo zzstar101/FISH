@@ -26,7 +26,7 @@
 //   --dry-run                    只统计将要处理多少条，不调 provider、不写库
 //
 // 换模型必须暂停 Worker、保留旧向量、双侧回填并验证重算；回滚也要补齐旧模型的新鲜向量。
-// 完整切换/回滚门禁见 docs/design/issue-322-matching-v2-cutover.md。
+// 切换与回滚须走完整门禁。
 // 注意：脚本直接往 jobs 表投 MATCH_*，不 import `apps/api` 的队列封装——worker 不依赖 api 包；
 // 投递形状与 `apps/api/src/modules/wishes/match-queue.ts` / `jobs/embedding/enqueue.ts` 保持一致
 // （`::text::jsonb` 双转型，见 enqueue.ts 的注释）。

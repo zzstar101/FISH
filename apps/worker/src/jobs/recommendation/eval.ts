@@ -1,20 +1,20 @@
 /**
- * R6 离线评估的**纯计算**层（Issue #323 §M8 / 设计 §5）。
+ * R6 离线评估的**纯计算**层（Issue #323）。
  *
  * 输入是一份"已经回放好的"内存数据集（请求 + 快照 + 事件 + 商品），输出是指标对象；
  * 取数由 `apps/worker/scripts/rank-eval.ts` 负责，样本由 `eval-fixture.ts` 提供。
  * 这样切分的理由：指标口径是**唯一需要被断言**的东西（手算样本 → 已知数字），
  * 而 SQL 只是它的搬运工；把两者混在一起，测试就得起库，指标本身反而没人验证。
  *
- * 三条贯穿口径（全部来自设计 §5，改动前先读 §11 的已知边界）：
+ * 三条贯穿口径：
  *
  * 1. **只评"有排序结果"的请求**：降级请求（`strategy_version = 'rec-v1-none'`）不写快照，
  *    没有位次可评，单独计数；
- * 2. **`R(r) = ∅` 的请求不进 Recall/MRR/NDCG 的分母**（0/0 口径，§5.3）：把"没人点"算成 0
+ * 2. **`R(r) = ∅` 的请求不进 Recall/MRR/NDCG 的分母**（0/0 口径）：把"没人点"算成 0
  *    会让指标随用户活跃度变化，而不是随排序质量变化；
  * 3. **所有输出都带分母**：只有比率没有样本量的指标在小样本下会骗人。
  *
- * 这里不引入随机性、不算置信区间：样本量与分布一起报出来，让人自己判断（§5.6）。
+ * 这里不引入随机性、不算置信区间：样本量与分布一起报出来，让人自己判断。
  */
 
 import {
@@ -34,7 +34,7 @@ export type RankEvalSnapshotItem = {
   listingId: string
   position: number
   primarySource: string | null
-  /** `rank_breakdown` 的原始 jsonb（可能为空/形状不符，读取侧必须容错，见 §11 第 12 条）。 */
+  /** `rank_breakdown` 的原始 jsonb（可能为空/形状不符，读取侧必须容错）。 */
   rankBreakdown: unknown
 }
 
@@ -56,7 +56,7 @@ export type RankEvalEvent = {
   eventType: RecommendationEventType
   occurredAt: Date
   /**
-   * 由 §4.3 的口径**算出来**的归因请求；`null` = 候选集为空（来自非推荐入口或窗口外曝光）。
+   * 由归因口径**算出来**的归因请求；`null` = 候选集为空（来自非推荐入口或窗口外曝光）。
    *
    * 刻意不是事件自带的 `request_id`：那是"客户端当时带着哪个推荐头"，与"哪次曝光真正促成了
    * 这次行为"不是一回事（同一商品可以在多次快照里出现）。
@@ -83,7 +83,7 @@ export type RankEvalDataset = {
    * 缺少某个 listing 时相关指标按"无法判定"跳过并计入 `missingListingRefs`，不抛错。
    */
   listings: readonly RankEvalListing[]
-  /** 窗口末的可见商品（coverage / sellerCoverage 的分母，口径见设计 §4.1）。 */
+  /** 窗口末的可见商品（coverage / sellerCoverage 的分母）。 */
   visibleListings: readonly RankEvalListing[]
 }
 
@@ -91,7 +91,7 @@ export type RankEvalQualityRow = {
   k: number
   requests: number
   /**
-   * `Σ|R(r)|`：这些请求的相关集**总规模**（设计 §5.2）。
+   * `Σ|R(r)|`：这些请求的相关集**总规模**。
    *
    * 与 `requests` 一起才能读懂 Recall：`Recall@K = 1.0` 可能是"1 个请求、1 个相关商品"，
    * 也可能是"50 个请求、200 个相关商品"——只看比率分不出来，而这两件事的可信度完全不同。
@@ -126,7 +126,7 @@ export type RankEvalChannelRow = {
 }
 
 /**
- * 覆盖率 / 曝光分布每一行的分子与分母（设计 §5.2「所有输出都带分母」）。
+ * 覆盖率 / 曝光分布每一行的分子与分母。
  *
  * 比率行（新鲜曝光率、重复曝光率）的分子分母都是计数；均值行（类目多样性、每请求去重类目数）
  * 的「分子」是 Σ、「分母」是样本数——均值在 3 个请求上平均和在 300 个请求上平均不是一回事，
@@ -175,7 +175,7 @@ export type RankEvalMetrics = {
     firstPublishToFirstIntentHours: RankEvalHoursSummary
     exposuresBeforeSale: RankEvalHoursSummary
   }
-  /** 形状不符的 `rank_breakdown` 行数：跳过而不是终止整次评估（§11 第 12 条）。 */
+  /** 形状不符的 `rank_breakdown` 行数：跳过而不是终止整次评估。 */
   skippedBreakdownRows: number
   /** 快照引用了 `listings` 里不存在的商品的行数（数据被清理/查询缺失）。 */
   missingListingRefs: number
@@ -235,7 +235,7 @@ function isNegativeEvent(eventType: RecommendationEventType): boolean {
  *
  * 形状真值由 `RankScoreBreakdownSchema` 定义（每个键是 `{normalized, weight, contribution}`）；
  * 库层不做校验，所以这里**逐键验形**：任一键缺失/不是对象/`normalized` 不是数字就返回 `null`，
- * 由调用方计入 `skippedBreakdownRows` 并跳过（设计 §11 第 12 条：形状不符不能终止整次评估）。
+ * 由调用方计入 `skippedBreakdownRows` 并跳过（形状不符不能终止整次评估）。
  */
 function readNormalized(rankBreakdown: unknown): Record<RankFeatureKey, number> | null {
   if (rankBreakdown === null || typeof rankBreakdown !== 'object') return null
@@ -261,7 +261,7 @@ function readMissing(rankBreakdown: unknown): readonly string[] | null {
 
 /**
  * 一个请求的相关集 `R(r)`：取每个商品的**最高** grade（同一商品可能既是详情又是收藏），
- * 且任一负向事件命中即整个剔除（§3.1 的剔除口径）。
+ * 且任一负向事件命中即整个剔除（剔除口径）。
  */
 function buildRelevance(events: readonly RankEvalEvent[]): Map<string, number> {
   const grades = new Map<string, number>()
@@ -467,7 +467,7 @@ export function computeRankEvalMetrics(
     }
   })
 
-  // ---- 商品侧生命周期（§5.5）：窗口内新建 → 首次归因曝光 / 首次有效意向 ----------
+  // ---- 商品侧生命周期：窗口内新建 → 首次归因曝光 / 首次有效意向 ----------
   const firstExposureAt = new Map<string, number>()
   const firstIntentAt = new Map<string, number>()
   const purchaseAt = new Map<string, number>()

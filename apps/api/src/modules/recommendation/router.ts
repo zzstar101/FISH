@@ -27,22 +27,22 @@ export type RecommendationRouterOptions = {
    */
   resolveViewerId: (c: Context) => Promise<string | null>
   /**
-   * 进程内延迟采样（#323 R6 §6.4）。**可选**：测试与嵌入场景可以不接，
+   * 进程内延迟采样（#323 R6）。**可选**：测试与嵌入场景可以不接，
    * 不接就是"没有这一路延迟数据"，不影响响应。
    */
   latency?: LatencyRecorder
   /**
-   * 进程内限流（#323 R6 §8.1，两份令牌桶：埋点与 Feed）。**可选**：不接＝不限流，
+   * 进程内限流（#323 R6，两份令牌桶：埋点与 Feed）。**可选**：不接＝不限流，
    * 只服务于"不关心限流"的测试；生产装配（`app.ts`）必须注入。
    */
   rateLimit?: { events: TokenBucketLimiter; feed: TokenBucketLimiter }
   /**
-   * 可信出口 IP（#323 R6 §2.3）：由 `app.ts` 复用既有的 `resolveClientIp`
+   * 可信出口 IP（#323 R6）：由 `app.ts` 复用既有的 `resolveClientIp`
    * （`trustedClientIp(request, peerIp, trustedProxyIp)`）。**缺省返回 null ⇒ 匿名落到共享兜底桶**
    * （fail-closed：宁可共享一个桶，也不能让"伪造转发头"变成免限通道）。
    */
   resolveClientIp?: (c: Context) => string | null
-  /** 进程内计数（#323 R6 §6.3）：此处只记"被 429 拒绝的请求数"，与 service 共用同一个实例。 */
+  /** 进程内计数（#323 R6）：此处只记"被 429 拒绝的请求数"，与 service 共用同一个实例。 */
   processMetrics?: RecommendationProcessMetricsRecorder
 }
 
@@ -80,10 +80,10 @@ function toErrorResponse(c: Context, error: unknown): Response {
 }
 
 /**
- * 取令牌，不过就抛 429（#323 R6 §8.1）。
+ * 取令牌，不过就抛 429（#323 R6）。
  *
  * 未接限流时直接放行：限流是**可选的横切**，不接它的调用方（测试、嵌入式场景）行为与 R5 一致。
- * 被拒的请求计进 `rateLimitedRequests`——这正是"bot 流量在指标上可见"的那一列（§8.2 第 4 条）。
+ * 被拒的请求计进 `rateLimitedRequests`——这正是"bot 流量在指标上可见"的那一列。
  */
 function takeTokens(
   limiter: TokenBucketLimiter | undefined,
@@ -103,14 +103,14 @@ export function createRecommendationRouter(options: RecommendationRouterOptions)
   const router = new Hono<{ Variables: AuthVariables }>()
 
   /**
-   * 推荐 Feed（#323 §M7）。
+   * 推荐 Feed（#323 M7）。
    *
    * R1 是"透传 `newest` + 生成推荐上下文"的最小可用入口：它存在**不是为了**改变首页内容，
    * 而是为了让曝光/详情有真实的 `requestId` 可归因（`GET /listings` 的契约里没有、也不该有
    * 推荐上下文字段）。真实召回与排序归 R3/R4。
    */
   router.get('/feed', async (c) => {
-    // 整段处理耗时（#323 R6 §6.4）：含 422 早退，这样"参数不合法"也计入延迟分布，
+    // 整段处理耗时（#323 R6）：含 422 早退，这样"参数不合法"也计入延迟分布，
     // 否则分位只统计成功请求，慢查询被"合法请求"平均掉。
     const startedAt = performance.now()
     try {
@@ -119,7 +119,7 @@ export function createRecommendationRouter(options: RecommendationRouterOptions)
 
       const viewerId = await options.resolveViewerId(c)
       const anonymousSessionId = readAnonymousSessionId(c)
-      // Feed 也过限流（§8.1 最后一条）：`requestId` 是写归因事件的前提，不限 Feed 等于给脚本
+      // Feed 也过限流：`requestId` 是写归因事件的前提，不限 Feed 等于给脚本
       // 一条"免费取号"通道——不写事件就能拿到成千上万个 requestId。位置在契约校验之后、查库之前：
       // 被限流的请求不该先花掉一次多路召回。
       takeTokens(
@@ -151,7 +151,7 @@ export function createRecommendationRouter(options: RecommendationRouterOptions)
   })
 
   /**
-   * 行为事件批量写入（#323 §M0）。匿名可写、202。
+   * 行为事件批量写入（#323 M0）。匿名可写、202。
    *
    * 会话标识**只从 body 取**（每条事件自带 `anonymousSessionId`）：离线队列补发时，
    * 一批事件可能横跨会话切换，用请求头里的"当前会话"覆盖它们会把历史行为记到错的会话上。

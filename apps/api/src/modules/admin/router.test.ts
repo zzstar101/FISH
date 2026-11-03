@@ -163,7 +163,7 @@ beforeAll(async () => {
     matchedRules: jsonParam(['TEST_RULE']),
     matchedTermsMasked: jsonParam(['测**']),
     ruleVersion: 'test-v1',
-    // #228 §6：这条记录模拟「腾讯 TMS 判 Review」，六列元数据必须能被 Admin 读回来。
+    // #228：这条记录模拟「腾讯 TMS 判 Review」，六列元数据必须能被 Admin 读回来。
     provider: 'TENCENT_TMS',
     providerRequestId: 'req-tms-0001',
     suggestion: 'Review',
@@ -186,7 +186,7 @@ beforeAll(async () => {
     ruleVersion: 'test-v1',
     createdAt: new Date('2026-09-03T02:02:00Z'),
   })
-  // #228 §6：`provider='LOCAL'` 的行**不是**六列全 NULL——本地词表没有腾讯的 Label/Score/RequestId，
+  // #228：`provider='LOCAL'` 的行**不是**六列全 NULL——本地词表没有腾讯的 Label/Score/RequestId，
   // 但它自己会给出 `suggestion`（由 decision 派生）与 `subLabel`（命中的本地规则码）。
   // 这条种子行把本地 transport 的真实形状钉住：把 `suggestion`/`subLabel` 一律当成腾讯结论的读法，
   // 或反过来「顺手把本地行也清成 null」的改动，都必须在这里变红。
@@ -236,7 +236,7 @@ async function loginAs(studentNo: string): Promise<string> {
 let adminCookie: string
 let userCookie: string
 
-describe('Admin HTTP 权限边界（设计 §3.2）', () => {
+describe('Admin HTTP 权限边界', () => {
   test('setup: login both accounts', async () => {
     adminCookie = await loginAs('202101000901')
     userCookie = await loginAs('202101000902')
@@ -513,7 +513,7 @@ describe('Admin 查询端到端', () => {
     )
     expect(moderationBody.items[0]?.seller.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
     expect(moderationBody.items[0]?.record.titleSnapshot).toBe('待人工审核商品')
-    // #228 §6：队列必须能追溯到腾讯上游结论（provider / RequestId / Suggestion / Label / Score）。
+    // #228：队列必须能追溯到腾讯上游结论（provider / RequestId / Suggestion / Label / Score）。
     expect(moderationBody.items[0]?.record).toMatchObject({
       provider: 'TENCENT_TMS',
       providerRequestId: 'req-tms-0001',
@@ -530,7 +530,7 @@ describe('Admin 查询端到端', () => {
     expect(AdminTransactionPageSchema.parse(await transaction.json()).items).toEqual([])
   })
 
-  test('#228 §6：审核记录检索也暴露 provider 上游元数据，历史记录保持 null', async () => {
+  test('#228：审核记录检索也暴露 provider 上游元数据，历史记录保持 null', async () => {
     const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, REVIEW_LISTING_ID)
     const response = await app.request(`${ADMIN_ROUTES.moderationRecords}?listingId=${listingId}`, {
       headers: { cookie: adminCookie },
@@ -572,7 +572,7 @@ describe('Admin 查询端到端', () => {
       score: null,
     })
 
-    // #228 §6「不公开 Label/Score/RequestId 给普通用户」：这些列现在进了 Admin 契约，
+    // #228「不公开 Label/Score/RequestId 给普通用户」：这些列现在进了 Admin 契约，
     // 但卖家侧的商品详情必须一个都不带——包括命中策略（matchedRules / matchedTermsMasked）。
     // 对**原始 JSON 文本**扫键名而不是逐字段断言：以后有人把 record 整个展开进 Listing DTO 时，
     // 逐字段断言很容易漏掉新增的嵌套，扫描不会。
@@ -899,7 +899,7 @@ describe('Admin 查询端到端', () => {
     const detailBody = AdminModerationDetailSchema.parse(await detail.json())
     expect(detailBody.machineDecision).toBe('REVIEW')
     expect(detailBody.humanDecision).toBeNull()
-    // #228 §6：详情要能追溯到腾讯上游结论。
+    // #228：详情要能追溯到腾讯上游结论。
     expect(detailBody.item.record).toMatchObject({
       provider: 'TENCENT_TMS',
       providerRequestId: 'req-tms-0001',
@@ -952,7 +952,7 @@ describe('Admin 查询端到端', () => {
     const decidedBody = AdminModerationDetailSchema.parse(await decided.json())
     expect(decidedBody.humanDecision?.decision).toBe('ALLOW')
     expect(decidedBody.item.listing.moderationStatus).toBe('APPROVED')
-    // #228 §6「人工结果也可追溯」：人工改判自己写成一条 provider=MANUAL 的记录，
+    // #228「人工结果也可追溯」：人工改判自己写成一条 provider=MANUAL 的记录，
     // 且不得伪造腾讯的 label / score。
     const manualRecord = decidedBody.history.find((record) => record.provider === 'MANUAL')
     expect(manualRecord).toMatchObject({
@@ -1189,7 +1189,7 @@ describe('Admin 查询端到端', () => {
     expect(missing.status).toBe(404)
     expect(await missing.json()).toMatchObject({ error: { code: 'ADMIN_NOT_FOUND' } })
 
-    // 守卫先于 404：未登录访问不存在的 admin 路径同样是 401，不泄漏路径是否存在（设计 §3.2）。
+    // 守卫先于 404：未登录访问不存在的 admin 路径同样是 401，不泄漏路径是否存在。
     const anonymous = await app.request('/admin/nope')
     expect(anonymous.status).toBe(401)
     expect(await anonymous.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })

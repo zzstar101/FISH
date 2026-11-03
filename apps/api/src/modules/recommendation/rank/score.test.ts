@@ -135,7 +135,7 @@ describe('scoreCandidates 的"缺失 ≠ 0"', () => {
     expect(unknown.breakdown.repeatedExposure.contribution).toBeCloseTo(0, 12)
 
     // 与"确实没曝光过"（0）相比：两者分数相同，但一个记 missing、一个不记 —— 这正是
-    // R3 §9 待办①要保住的信息（未知不能被当成 0 之后又被当成已知）。
+    // R3 待办①要保住的信息（未知不能被当成 0 之后又被当成已知）。
     const knownZero = scoreOne(candidate({ alreadySeenCount: 0 }))
     expect(knownZero.breakdown.missing).not.toContain('repeatedExposure')
     expect(knownZero.rankScore).toBeCloseTo(unknown.rankScore, 12)

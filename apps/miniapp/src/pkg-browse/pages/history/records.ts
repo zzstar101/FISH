@@ -415,7 +415,7 @@ export function loadingTextOf(tab: HistoryTab): string {
  *   a) 保留 30 天保留期，把文案改成「近 30 天」—— 说清它是**范围**不是「全部」；
  *   b) 去掉保留期，真给全部历史（后端要支持全量分页）；
  *   c) 「全部浏览」只表示「未筛选」这个状态，保留期照旧。
- * 本轮按方案 `D:\FISH\四页面并行-收藏历史评论关注.md` §3.2 的要求**只留档、不改保留期**，
+ * 本轮按方案稿的要求**只留档、不改保留期**，
  * 文案照稿原样保留。改这里之前先看 Owner 怎么定。
  */
 export function noteOf(tab: HistoryTab): string {

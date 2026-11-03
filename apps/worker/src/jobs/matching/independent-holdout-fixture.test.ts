@@ -2,9 +2,10 @@ import { expect, test } from 'bun:test'
 import { INDEPENDENT_HOLDOUT_SAMPLES } from './independent-holdout-fixture'
 
 // 验证的是审批输入转写，不运行算法，不提前暴露独立组分数。
+// 批准的表格冻结在本目录的 `independent-holdout-fixture.approved-table.md`。
 test('N fixture逐字段等于Owner批准的表格，元转整数分且所有标签保留', async () => {
   const doc = await Bun.file(
-    new URL('../../../../../docs/design/issue-322-matching-v2-holdout-2.md', import.meta.url),
+    new URL('./independent-holdout-fixture.approved-table.md', import.meta.url),
   ).text()
   const inputTable = doc.split('## 冻结输入与批准标签')[1]?.split('批准标签：')[0]
   if (!inputTable) throw new Error('缺少批准输入表')

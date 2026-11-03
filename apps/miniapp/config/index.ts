@@ -118,7 +118,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
        * AI 润色的 mock 兜底门禁（读取处 `src/features/ai/api.ts`）。
        *
        * **只认显式的 `TARO_APP_MOCK=1`**（与 `__DEMO_AUTH__` 取同一个 `mockEnabled`；
-       * #142 设计 §10.2 要求它不跟着别的开关被动打开，这里仍由构建命令显式决定）：
+       * #142 要求它不跟着别的开关被动打开，这里仍由构建命令显式决定）：
        * 润色失败会摆出本地假候选，而那些
        * 候选带着 `provider='stub'` 角标、与真实 stub 传输的候选长得一样，现场分不清
        * "接的是后端还是兜底"；这个开关宁可只跟显式演示命令绑定，也不要跟着别的开关被动打开。

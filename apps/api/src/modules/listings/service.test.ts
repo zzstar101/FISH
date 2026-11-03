@@ -1960,7 +1960,7 @@ describe('文本审核 provider 接线（#228）', () => {
     // 阻断文案只有安全话术：不含 label/subLabel/命中词。
     expect(JSON.stringify(error.details)).not.toContain('AdLaw')
     expect(createdCalls).toBe(0)
-    // 审计仍记录 provider 元数据（#228 §6），供人工复核与调参。
+    // 审计仍记录 provider 元数据（#228），供人工复核与调参。
     expect(recorded[0]).toMatchObject({
       action: 'CREATE',
       decision: 'BLOCK',

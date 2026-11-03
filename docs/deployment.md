@@ -487,9 +487,9 @@ stub**——它返回的是演示文案，客户端会带"演示文案·非真�
   （它是真 HTTP 服务，"stub" 指模型是假的，不是指进程内有个假实现）。
 - 上游密钥轮换不影响存量数据——这与 `MEETUP_TOKEN_SECRET` 不同（换后者会让未核销的面交码立刻
   失效）。但它同样会随 §10 备份的 `config-*.tar.gz` 进备份，泄漏处置按同一口径。
-- 本期**不设成本上限与告警**（设计 §11-R1）：用量落在 `ai_polish_requests`
+- 本期**不设成本上限与告警**：用量落在 `ai_polish_requests`
   （`outcome` / `prompt_tokens` / `completion_tokens` / `latency_ms`），事后查表；配额是每用户
-  最小间隔 5s + 滚动 24h 30 次正常调用，另有 `EMPTY` 出口的单列 60/日桶（设计 §5.2 / #173）
+  最小间隔 5s + 滚动 24h 30 次正常调用，另有 `EMPTY` 出口的单列 60/日桶（#173）
   ——每账号 24h 内的调用上界因此是 **89 次**（29 次非 `EMPTY` + 59 次 `EMPTY` + 1 次在飞占位）。
 
 - 用 `openssl rand -hex 32`（64 个 `[0-9a-f]`）而不是 `base64`：systemd 的 `EnvironmentFile`
@@ -540,8 +540,7 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
   等于静默退回本地词表——因此回滚窗口内要么保持新版本，要么显式接受这一降级。
 - `local` 的生产禁令**依赖 `NODE_ENV=production`**，而本仓库部署路径当前不设置 `NODE_ENV`（§5.1 的
   systemd 单元只有 `EnvironmentFile`）。因此生产务必按上面的脚本写 `tencent`，不要指望那道护栏兜底；
-  该前提与既有的 `WECHAT_TRANSPORT=stub` 护栏相同，是否在部署侧统一补 `NODE_ENV` 由 Owner 决定
-  （见 `docs/design/issue-228-content-moderation-adapter.md` §10-R7）。
+  该前提与既有的 `WECHAT_TRANSPORT=stub` 护栏相同，是否在部署侧统一补 `NODE_ENV` 由 Owner 决定。
 
 ## 5. systemd 托管
 

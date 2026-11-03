@@ -1,5 +1,5 @@
 /**
- * #322 M4 §12.1 缺口 #2 的回归：补投额度用尽此前只写一行 stderr（`embed.retry`，
+ * #322 M4 缺口 #2 的回归：补投额度用尽此前只写一行 stderr（`embed.retry`，
  * `reason='budget-exhausted'`），事后没人能回答"现在有哪些实体已经不再自动重试了"。
  * 本文件跑**真的** `obs:summary`（`Bun.spawn`，与 `recommendation-cleanup.test.ts` 同一手法），
  * 断言额度用尽变成了可查询/可聚合的输出：`obs.retries` 明细 + `obs.summary` 的两个计数。

@@ -73,7 +73,7 @@ import type {
 } from './store'
 
 /**
- * Admin service（#73，设计 §6）：权限校验之后 + 数据层之前的业务编排。
+ * Admin service（#73）：权限校验之后 + 数据层之前的业务编排。
  *
  * - 只从 store 产出的行构造 DTO，URL 由共享的 `storage.publicUrl` 拼（与 #6 同一实现，
  *   后台展示的图片地址与 feed / 详情必须一致）。
@@ -145,7 +145,7 @@ export type AdminTransactionListQuery = {
 }
 
 /**
- * 推荐埋点的**进程内**计数（#323 R6 §6.3 / 决策 D5、N2）。
+ * 推荐埋点的**进程内**计数（#323 R6 / 决策 D5、N2）。
  *
  * 形状与实现都在 `apps/api/src/observability/recommendation-metrics.ts`（`app.ts` 建实例，
  * 推荐模块写、admin 模块读）。这里 re-export 是为了让"admin 读到的形状"只有一个定义——
@@ -308,7 +308,7 @@ function toModerationRecord(row: ModerationDetailRow['record']) {
     matchedRules: row.matchedRules,
     matchedTermsMasked: row.matchedTermsMasked,
     ruleVersion: row.ruleVersion,
-    // #228 §6：上游可追溯字段。只走 Admin 读路径；卖家/公开响应不经过这里。
+    // #228：上游可追溯字段。只走 Admin 读路径；卖家/公开响应不经过这里。
     provider: row.provider,
     providerRequestId: row.providerRequestId,
     suggestion: row.suggestion,
@@ -403,7 +403,7 @@ export function createAdminService({
    */
   latency?: LatencyRecorder
   /**
-   * 推荐埋点的进程内计数（#323 R6 §6.3）：**传读取函数而不是快照值**——这些数字随请求变化，
+   * 推荐埋点的进程内计数（#323 R6）：**传读取函数而不是快照值**——这些数字随请求变化，
    * 启动时取一份快照会让 admin 端点永远返回 0（正是"读了一个永远不变的字段"这种 bug）。
    * 缺省时用全 0 常量（见 `NO_PROCESS_METRICS`）。
    */
@@ -585,7 +585,7 @@ export function createAdminService({
         lifecycle: row.lifecycle,
         guardrails: {
           emptyRankedFeedRate: ratio(row.emptyRankedFeedRequests, row.rankedFeedRequests),
-          // 重复曝光 = 快照行里"同一个身份看过同一个商品"之外的份额（与离线评估 §5.4 同口径）。
+          // 重复曝光 = 快照行里"同一个身份看过同一个商品"之外的份额（与离线评估同口径）。
           repeatedExposureRate: ratio(
             row.snapshotItems - row.snapshotDistinctPairs,
             row.snapshotItems,

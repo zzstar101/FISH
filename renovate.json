@@ -43,7 +43,7 @@
       "groupName": "toolchain non-major"
     },
     {
-      "description": "小程序：改动产物须过微信开发者工具逐页演示（docs/miniapp-dev-workflow.md），且同一时间只开一个小程序 PR，所以单独成组并须在 Dashboard 批准",
+      "description": "小程序：改动产物须过微信开发者工具逐页演示（docs/miniapp-dev-workflow.md），逐个合并的成本高，所以单独成组并须在 Dashboard 批准",
       "matchFileNames": ["apps/miniapp/package.json"],
       "matchUpdateTypes": ["major", "minor", "patch", "pin", "digest", "pinDigest", "replacement"],
       "groupName": "miniapp",

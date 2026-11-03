@@ -4,7 +4,7 @@ import { readAnonymousSessionId, readRecommendationContext } from './context'
 import type { RecommendationService } from './service'
 
 /**
- * 服务端已确证行为的埋点适配器（#323 §M0：CHAT_START / COMMENT / TRANSACTION_START / PURCHASE）。
+ * 服务端已确证行为的埋点适配器（#323 M0：CHAT_START / COMMENT / TRANSACTION_START / PURCHASE）。
  *
  * 这些事件不该由客户端上报：评论成功、下单成功这些事实只有服务端知道，客户端重试/断网
  * 会让它们丢失或重复。各业务模块只依赖这个窄接口，不依赖推荐模块的 store / 游标 / 召回，

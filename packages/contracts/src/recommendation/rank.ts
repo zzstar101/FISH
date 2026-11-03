@@ -17,7 +17,7 @@ import type { RecommendationEventType } from './schema'
  *
  * **M4 的公式不在这里**：契约给的是"零件"（特征键、权重、归一化），不是那个表达式。
  * `priceAffinity` 与 `quality` 两项在 v1 **刻意缺席**（候选集里没有价格与质量列，加它们要动召回层），
- * 所以 `rankScore` 不能按 M4 的字面公式复现——这一点写进设计文档的「已知边界」而不是偷偷补齐。
+ * 所以 `rankScore` 不能按 M4 的字面公式复现——这是已知边界，不偷偷补齐。
  */
 
 /**
@@ -327,7 +327,7 @@ export type RankFeatureContribution = z.infer<typeof RankFeatureContributionSche
  *
  * **七个键全在**（`strictObject` 强制）：某个特征这次没有值（冷启动无 semantic、曝光次数读取
  * 失败）时，它的 `normalized` 是 0 并进 `missing` —— "未知"与"真的是 0"必须能区分。
- * R3 §9 待办① 说的就是这个：`alreadySeenCount` 查询失败时静默变 0，等于把"不知道"当成
+ * R3 待办① 说的就是这个：`alreadySeenCount` 查询失败时静默变 0，等于把"不知道"当成
  * "一次都没看过"，于是少给了一次惩罚却看不出来。
  *
  * 为什么用 `missing: string[]` 而不是给每项加一个 `input` 字段：明细的用途是"解释分数"，

@@ -2,19 +2,18 @@ import { AI_POLISH_CANDIDATE_MAX } from '@fish/contracts/ai/schema'
 import type { AiPolishEnv } from '@fish/shared/env'
 
 /**
- * 上游调用（#141 设计 §3.1 / §3.3 / §5.4 / §5.5）。
+ * 上游调用（#141）。
  *
  * 形状照 `apps/api/src/modules/auth/email-providers.ts`：裸 `fetch`（不加 SDK 依赖）、
  * `AbortSignal.timeout`、**不重试**、绝不把上游响应体写进错误消息——外部响应文本不可信，
  * 可能回显用户原文，而日志与错误响应都不该出现用户文本。
  *
- * stub 与 live 走**同一个实现**，只差配置与本地 stub 服务：少一条分支就少一处两者行为漂移
- * （设计 §3.3 的理由）。
+ * stub 与 live 走**同一个实现**，只差配置与本地 stub 服务：少一条分支就少一处两者行为漂移。
  */
 const TIMEOUT_MS = 8000
 const MAX_TOKENS = 2000
 const TEMPERATURE = 0.7
-/** 实测该端点接受 `thinking:{type:'disabled'}` 且 1.3–2.4s 完成（设计 §9）。保留参数位便于换回显式思考。 */
+/** 实测该端点接受 `thinking:{type:'disabled'}` 且 1.3–2.4s 完成。保留参数位便于换回显式思考。 */
 const THINKING = { type: 'disabled' } as const
 
 /** 只用 `[ \t]` 而不是 `\s`：`\s` 会吃掉换行，把上下两段候选粘在一起（`^`/`$` 在 /m 下按行匹配）。 */
@@ -51,7 +50,7 @@ export type PolishCompletion = {
 }
 
 export type PolishProvider = {
-  /** 响应里的 `provider` 字段：让客户端能对 stub 显示"演示文案"角标（设计 §8.2）。 */
+  /** 响应里的 `provider` 字段：让客户端能对 stub 显示"演示文案"角标。 */
   readonly name: 'stub' | 'live'
   complete(prompt: { system: string; user: string }): Promise<PolishCompletion>
 }
@@ -133,7 +132,7 @@ export function createPolishProvider(env: AiPolishEnv): PolishProvider {
           signal: AbortSignal.timeout(TIMEOUT_MS),
         })
       } catch (error) {
-        // 不重试（设计 §5.4）：重试会让"失败扣不扣配额"难以解释，用户再点一次"润色"就是天然重试。
+        // 不重试：重试会让"失败扣不扣配额"难以解释，用户再点一次"润色"就是天然重试。
         throw new AiUpstreamError(isAbortError(error) ? 'timeout' : 'network')
       }
 

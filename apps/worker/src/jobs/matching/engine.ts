@@ -39,7 +39,7 @@ import type { MatchListingFacts, scoreMatch } from './scoring'
  * 而读接口按阈值过滤也就挡不住它（只加过滤是不够的）。
  * 这条在 M2 里更重要：掉出 Top-K 的旧匹配必须被降级，而不是因为"不再被召回"就冻在旧高分上。
  *
- * **向量未就绪时不做等待**（#322 M1 交给 M2 的前置，见 M2 设计文档 §5）：目标实体缺本模型的向量
+ * **向量未就绪时不做等待**（#322 M1 交给 M2 的前置）：目标实体缺本模型的向量
  * / 向量与当前内容不一致 / 只有旧模型的向量时，本轮退回 v1 的结构化全量候选（含已有行），
  * 并补投一条 `EMBED_*` job；候选侧没有向量只是"进不了 Top-K"，不额外投递、也不会产生伪匹配。
  *
@@ -152,7 +152,7 @@ type ListingTarget = {
 }
 
 /**
- * 能否**新建**这一对：候选集收窄规则（§3.1）的 TS 镜像，与两个候选 SQL 逐条对应。
+ * 能否**新建**这一对：候选集收窄规则的 TS 镜像，与两个候选 SQL 逐条对应。
  *
  * 它只决定"要不要 INSERT、要不要发通知"（`qualifies`）。**不要**拿它去判断"读接口会不会展示"——
  * 可见性是方向相关的（见下面两个函数），两者不是同一件事，混用会让同一对事实出现
@@ -178,7 +178,7 @@ function priceWithinBudget(wish: WishTarget, listing: ListingTarget): boolean {
  * `GET /matches?wishId=` 会不会展示这一对（镜像 wish 侧读谓词）：
  * 愿望本身必须 `ACTIVE`；`OFFLINE` 商品隐藏，`RESERVED` / `SOLD` **保留**（商品状态在卡片里可见）。
  *
- * ⚠️ 商品状态这一项比"可新建"更宽：新建要求商品 `ACTIVE`（§3.1 收窄），展示不要求。所以
+ * ⚠️ 商品状态这一项比"可新建"更宽：新建要求商品 `ACTIVE`（收窄规则），展示不要求。所以
  * **`RESERVED`/`SOLD` 的商品只对它已经有行的那一对可见**（先建行、后转状态），当时没建过行的
  * 那对永远不会出现。这是刻意接受的取舍（两条规则分别由契约 §3.1 与补记 §9.1 冻结），
  * 要消除它只能二选一：读接口连 `RESERVED`/`SOLD` 一起隐藏，或者允许为 ACTIVE 之外的商品建行。
@@ -335,7 +335,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       wishOwnerId: string
       /** 该对在**本轮评估之前**是否已有 `matches` 行。 */
       hadRow: boolean
-      /** 裸分达阈值 **且** 满足收窄规则（§3.1）。 */
+      /** 裸分达阈值 **且** 满足收窄规则。 */
       qualifies: boolean
       breakdown: ReturnType<typeof scoreMatch>
     },

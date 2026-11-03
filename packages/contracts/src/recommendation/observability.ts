@@ -13,7 +13,7 @@
 /**
  * 事件（`recommendation_events`）保留天数。
  *
- * 与 `docs/design/issue-323-r1-event-tracking.md:135` 的政策一致：事件是曝光/点击的原始事实，
+ * 与 R1 的政策一致：事件是曝光/点击的原始事实，
  * 是离线评估与兴趣向量的唯一输入，留 180 天；R1 当时明确"不做自动删除，交给 R6"。
  */
 export const RECOMMENDATION_EVENT_RETENTION_DAYS = 180

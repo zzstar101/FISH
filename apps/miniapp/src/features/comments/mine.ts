@@ -411,7 +411,7 @@ export function emptyStateOf(segment: CommentSegment): EmptyCopy {
  * 全局量，测试里要先顶掉 Taro 才 import 得动（见 `tests/order-list-state.test.ts` 的手法）。
  * 判定逻辑本身与那两个模块无关，放在这里测更直接。
  *
- * 为什么是「与」而不是只看 `MOCK_FALLBACK_ENABLED`（方案 §2.3 明写的一条）：
+ * 为什么是「与」而不是只看 `MOCK_FALLBACK_ENABLED`：
  * 两个常量由**不同注入点**分别喂进来（miniapp 构建走 `config/index.ts` 的
  * defineConstants，H5 预览走 `preview/build.mjs`；今天两边取值相同，但不该假定
  * 它们永远同步）；只认 `DEMO_AUTH_ENABLED` 时，演示登录态开着但真起了后端就分不出

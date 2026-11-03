@@ -3,7 +3,7 @@
  *
  * 与 `./form` 同一取舍：这里只放**屏幕该显示什么**的判定，不放网络调用。
  * 状态机本身留在页面（它要读写 React state），但每个转移的判据都在这里 —— 它们各有
- * 明确的验收口径（#142 / 设计 §10.2），而组件没有测试基建，写在组件里就只能靠人肉 review。
+ * 明确的验收口径（#142），而组件没有测试基建，写在组件里就只能靠人肉 review。
  */
 import type { ListingCategory } from '@fish/contracts/listings/schema'
 
@@ -11,7 +11,7 @@ import type { ListingCategory } from '@fish/contracts/listings/schema'
  * 429 的粗粒度阈值（秒）。
  *
  * 命中滚动 24h 配额时 `retryAfterSeconds` 可达数千至上万秒，一律「N 秒后再试」不可读；
- * 而 >60s 的估算本身还带一个已知误差（设计 §5.2「已知近似」），粗粒度文案同时挡住它。
+ * 而 >60s 的估算本身还带一个已知误差，粗粒度文案同时挡住它。
  */
 export const POLISH_QUOTA_COARSE_SECONDS = 60
 
@@ -22,7 +22,7 @@ export const POLISH_FIELD_ERROR_TOAST = '有字段没填对，改好再润色'
  * `redacted === true` 时 sheet 里那行灰字。
  *
  * 它描述的是**送上游之前**做过脱敏，**不是**「最终候选里没有联系方式」：回填会把用户原文
- * 原样还原（设计 §5.7），所以候选里照样可能出现他自己写过的号码 —— 本 PR 的真实链路实测就是
+ * 原样还原，所以候选里照样可能出现他自己写过的号码 —— 本 PR 的真实链路实测就是
  * `redacted:true` 且候选保留了 `13812345678`。早先写成「已为你的信息安全隐去联系方式」，
  * 会让用户以为采用后发出去的内容已经不含联系方式（#185 审查 P2）。
  */
@@ -120,7 +120,7 @@ const FALLBACK_FAILURE_VIEW: PolishFailureView = {
   canRetry: true,
 }
 
-/** 429 的 sheet 文案。**不透露日配额数字**（设计 §10.2）：只给等待时间或粗粒度结论。 */
+/** 429 的 sheet 文案。**不透露日配额数字**：只给等待时间或粗粒度结论。 */
 export function polishQuotaMessage(retryAfterSeconds: number | undefined): string {
   if (retryAfterSeconds === undefined) return '操作太频繁，稍后再试'
   if (retryAfterSeconds > POLISH_QUOTA_COARSE_SECONDS) return '今天的润色次数用完了，明天再来'
@@ -173,7 +173,7 @@ export function polishButtonText(input: {
 }
 
 /**
- * 「换一条」的索引。**纯前端轮播**，不重新请求、不消耗配额（设计 §12-3）。
+ * 「换一条」的索引。**纯前端轮播**，不重新请求、不消耗配额。
  *
  * 契约保证候选 1~3 条，`count <= 0` 只是防御：`% 0` 会得到 `NaN`，
  * 渲染时变成「第 NaN / 0 条」。

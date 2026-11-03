@@ -8,7 +8,7 @@ import {
 } from './rate-limit'
 
 /**
- * 令牌桶与主体键推导（#323 R6 §10.1「令牌桶」一行）。
+ * 令牌桶与主体键推导（#323 R6「令牌桶」一行）。
  *
  * 时钟是注入的假时钟：真时钟下这些用例要靠 `Bun.sleep` 等待，既慢又不稳
  * （容量耗尽与补充的断言必须精确到"第几秒"）。
@@ -175,7 +175,7 @@ describe('createTokenBucketLimiter（R6 限流）', () => {
   })
 })
 
-describe('rateLimitSubjects（§2.3 主体键）', () => {
+describe('rateLimitSubjects 主体键', () => {
   test('登录用户只有 user 桶（不叠 IP）', () => {
     expect(rateLimitSubjects({ viewerId: 'u-1', clientIp: '1.1.1.1' })).toEqual(['user:u-1'])
     expect(

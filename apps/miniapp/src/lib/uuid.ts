@@ -1,5 +1,5 @@
 /**
- * UUIDv4 生成器（Issue #323 R1 §3.7）。
+ * UUIDv4 生成器（Issue #323 R1）。
  *
  * **为什么不直接用 `crypto.randomUUID()`**：那是 WebCrypto 的 API，小程序运行时里没有
  * `crypto` 这个全局对象，直接调用会在真机上抛错。而埋点的 `eventId`（幂等键：入队即固定、

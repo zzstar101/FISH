@@ -150,7 +150,7 @@ describe('上游调用', () => {
         // 上游响应文本不可信：可能回显用户原文，绝不能进错误消息（日志与响应都会带上它）。
         expect(error.message).not.toContain(leak)
         expect(error.message).not.toContain('13812345678')
-        // 不重试：重试会让"失败扣不扣配额"难以解释（设计 §5.4）。
+        // 不重试：重试会让"失败扣不扣配额"难以解释。
         expect(calls).toHaveLength(1)
       },
     )

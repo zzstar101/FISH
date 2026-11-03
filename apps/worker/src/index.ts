@@ -130,7 +130,7 @@ logEvent({
 const queue = createJobQueue(db, {
   handlers: {
     // 匹配引擎必须显式拿到"本进程用的是哪个模型"：读向量与召回都按它过滤，绝不从表里随便取一行
-    // （#322 M1 §11.6）。换模型 = 换这里的 provider，向量由 M4 的 backfill 重建。
+    // （#322 M1）。换模型 = 换这里的 provider，向量由 M4 的 backfill 重建。
     ...createMatchJobHandlers(db, { embeddingModel: embeddingProvider.model }),
     ...createEmbedJobHandlers(db, embeddingProvider, {
       // 失败态的 `embed.entity`（handler 先发事件再 rethrow）必须走 stderr——与 `job.settled`
@@ -186,7 +186,7 @@ async function runListingImageCleanup(now: Date): Promise<void> {
   }
 }
 
-/** 周期性保留期清理（#323 R6 §7）：删 90 天前的推荐上下文与 180 天前的埋点。 */
+/** 周期性保留期清理（#323 R6）：删 90 天前的推荐上下文与 180 天前的埋点。 */
 async function runRecommendationCleanup(now: Date): Promise<void> {
   try {
     const result = await cleanupExpiredRecommendationData({ db, now })
@@ -229,7 +229,7 @@ async function runAccountDeletionPurge(now: Date): Promise<void> {
 }
 
 /**
- * 周期任务表（#323 R6 §7.1，**已确认**）：把原先单个 `lastMaintenanceAt` 换成一张小表。
+ * 周期任务表（#323 R6，**已确认**）：把原先单个 `lastMaintenanceAt` 换成一张小表。
  *
  * 理由：再来第三个定时任务时不必继续堆 `if`，且「首次循环立即跑一轮」（`lastRunAt = 0`）的既有
  * 行为可以逐项保留。每项自己吞异常——一个任务失败不该让另一个任务也停摆。

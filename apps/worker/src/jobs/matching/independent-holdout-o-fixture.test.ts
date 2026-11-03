@@ -7,7 +7,7 @@ import {
 // 验证的是审批输入转写，不运行算法，不提前暴露独立组分数。
 test('O fixture逐字段等于Owner批准的表格，元转整数分且所有标签保留', async () => {
   const doc = await Bun.file(
-    new URL('../../../../../docs/design/issue-322-matching-v2-holdout-3.md', import.meta.url),
+    new URL('./independent-holdout-o-fixture.approved-table.md', import.meta.url),
   ).text()
   const inputTable = doc.split('## 输入与建议标签')[1]?.split('建议标签13是/11否')[0]
   if (!inputTable) throw new Error('缺少批准输入表')
@@ -52,7 +52,7 @@ test('O fixture逐字段等于Owner批准的表格，元转整数分且所有标
 // Owner 裁决的披露不得悄悄消失：已知口径分歧必须同时存在于文档与常量里，且只列 O16。
 test('O16 已知口径分歧在文档里显式披露，且常量与之一致', async () => {
   const doc = await Bun.file(
-    new URL('../../../../../docs/design/issue-322-matching-v2-holdout-3.md', import.meta.url),
+    new URL('./independent-holdout-o-fixture.approved-table.md', import.meta.url),
   ).text()
   expect(doc).toContain('O16 是 Owner 裁决显式披露的已知口径分歧')
   expect(doc).toContain('summary.knownDivergenceIds')

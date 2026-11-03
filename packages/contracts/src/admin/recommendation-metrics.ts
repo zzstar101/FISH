@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 /**
- * 推荐指标契约（Issue #323 / R6 §3.3）：`GET /admin/recommendations/metrics` 的响应形状。
+ * 推荐指标契约（Issue #323 / R6）：`GET /admin/recommendations/metrics` 的响应形状。
  *
  * 与 `AdminOverviewSchema` 同族（#73）：**固定口径的计数卡片**，窗口只能从白名单里选，
  * 每个字段的口径写在字段注释里而不是文档里——读接口的人先看契约。
@@ -87,7 +87,7 @@ export const RecommendationFunnelSchema = z.object({
    * 详情 → 会话。
    *
    * **是下界**：`CHAT_START` 是服务端确证事件，只有客户端在业务请求上带了推荐头才有 `request_id`；
-   * 用户在详情页点"聊一聊"时若没带上下文头，这条会话不会出现在分子里（见设计 §11 第 4 条）。
+   * 用户在详情页点"聊一聊"时若没带上下文头，这条会话不会出现在分子里。
    */
   detailToChatRate: z.number().nonnegative().nullable(),
   chatToTransactionRate: z.number().nonnegative().nullable(),
@@ -170,7 +170,7 @@ export const RecommendationGuardrailsSchema = z.object({
    * 排序请求里"快照 0 行"的比例（分母 = `strategy_version <> 'rec-v1-none'` 的请求数）。
    *
    * **看不到降级请求的空 feed**：降级请求不写快照，它返回了什么库里没有真值 ⇒ 只能把
-   * `degradedFeedRequests` 与这个字段分开看（设计 §11 第 2 条）。
+   * `degradedFeedRequests` 与这个字段分开看。
    */
   emptyRankedFeedRate: z.number().min(0).max(1).nullable(),
   /**
@@ -190,7 +190,7 @@ export const RecommendationGuardrailsSchema = z.object({
    * 陈旧曝光率：归因曝光里，商品**当前** `status <> 'ACTIVE'`（SOLD / RESERVED / OFFLINE）的占比。
    *
    * 用的是"当前"而不是"曝光时"（没有状态历史表）⇒ 它同时把"曝光时已售"和"曝光后才售出"
-   * 算进来，是陈旧曝光的**上界**（设计 §11 第 3 条）。
+   * 算进来，是陈旧曝光的**上界**。
    */
   staleListingExposureRate: z.number().min(0).max(1).nullable(),
   /** 事件写入失败率 = 失败次数 / (成功批数 + 失败次数)；进程内。 */
@@ -226,7 +226,7 @@ export const RecommendationGuardrailsSchema = z.object({
      * `TRANSACTION_START` / `PURCHASE`，见 `RECOMMENDATION_SERVER_CONFIRMED_EVENT_TYPES`）。
      *
      * 契约的输入 schema 允许客户端 POST 全部 12 种 `eventType`（拒绝理由只写日志、不进响应体），
-     * 所以这条原因**真的会发生**，不是理论分支。设计文档 §6.3 最初只列了 4 个桶，
+     * 所以这条原因**真的会发生**，不是理论分支。契约最初只列了 4 个桶，
      * 实现时按 `service.ts` 的真实拒绝分支补齐成 5 个：少列一个桶等于让一类拒收在指标上隐形。
      */
     serverConfirmedEventType: z.number().int().nonnegative(),

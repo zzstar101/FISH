@@ -18,7 +18,7 @@ import { type CommentService, CommentServiceError } from './service'
 export type CommentsRouterOptions = {
   service: CommentService
   /**
-   * #323 §M0：留言成功是服务端确证的行为，由服务端补一条 COMMENT 事件（客户端不报）。
+   * #323 M0：留言成功是服务端确证的行为，由服务端补一条 COMMENT 事件（客户端不报）。
    * 可选依赖：不传就没有埋点，既有测试/其它装配不必知道推荐模块存在。
    */
   recorder?: RecommendationDomainRecorder

@@ -13,7 +13,7 @@ describe('computeFlags', () => {
       'README.md',
       'AGENTS.md',
       'CONTRIBUTING.md',
-      'docs/design/issue-147-transaction-invariants.md',
+      'docs/dev-db-isolation.md',
     ])
     expect(flags).toMatchObject({
       full: false,

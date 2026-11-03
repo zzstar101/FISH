@@ -2,7 +2,7 @@
  * 「我的收藏」的纯逻辑与**演示数据**（不 import Taro / 组件 / 图片资源，
  * `tests/favorites-list.test.ts` 直接 import）。
  *
- * ## 数据口径（依据《四页面并行-收藏历史评论关注》§2；端点随 #394 上线）
+ * ## 数据口径（端点随 #394 上线）
  *
  * **收藏在契约 / API 两层已实现**：契约在 `@fish/contracts/favorites`，端点是
  * `GET /me/favorites`（列表）与 `GET|POST|DELETE /listings/:id/favorite`（单品态与两个幂等写）。

@@ -68,7 +68,7 @@ export const jobs = pgTable(
       .on(sql`(${table.payload}->>'wishId')`)
       .where(sql`${table.type} = 'MATCH_WISH' AND ${table.status} = 'PENDING'`),
     /*
-     * #322 M4 §12.1 遗留缺口：`MATCH_LISTING` 此前**没有** partial unique index，投递侧只能靠
+     * #322 M4 遗留缺口：`MATCH_LISTING` 此前**没有** partial unique index，投递侧只能靠
      * `NOT EXISTS (… status = 'PENDING')` 去重（`apps/worker/src/jobs/matching/enqueue.ts`），
      * 而 `NOT EXISTS` 在并发下不是原子的——两个插入者可能同时通过它，最坏多出一条**幂等**重算。
      * 与 `MATCH_WISH` 同形（谓词必须带 `status = 'PENDING'`：`DONE` 行不能永久占位，否则
@@ -92,8 +92,7 @@ export const jobs = pgTable(
      *
      * 与 EMBED_* 同形（`status = 'PENDING'` 谓词不能省）：画像重算是"按当前数据从 0 全量重算"，
      * 重复投递没有意义，所以"待执行去重"就够；但 RUNNING 期间到达的新行为必须能再排一条，
-     * 否则那批行为要等下一次有人动这个用户才会进画像（`docs/design/issue-322-matching-v2-m1.md`
-     * 记过同一个坑）。
+     * 否则那批行为要等下一次有人动这个用户才会进画像（#322 M1 记过同一个坑）。
      */
     uniqueIndex('jobs_refresh_user_interest_user_id_pending_uidx')
       .on(sql`(${table.payload}->>'userId')`)

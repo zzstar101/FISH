@@ -1,5 +1,5 @@
 /**
- * 离线评估取数层的集成测试（Issue #323 R6 / 设计 §4.3）。
+ * 离线评估取数层的集成测试（Issue #323 R6）。
  *
  * 这里只验证**取数口径**，指标口径由 `eval.test.ts` 的纯函数用例覆盖。重点三项：
  *   1. 事件归因**不用事件自带 `request_id`**，而是按「同身份 + 快照含该商品 + 落在 W 内」重算，
@@ -107,7 +107,7 @@ async function insertItem(
   key: string,
   position: number,
   // 默认值**故意形状不符**（只有 semantic、没有另外 6 个键）：它让绝大多数行走"跳过"路径，
-  // 从而验证"形状不符不能终止整次评估"（§11 第 12 条）。真实 7 键路径由下面最后一个用例专门覆盖。
+  // 从而验证"形状不符不能终止整次评估"。真实 7 键路径由下面最后一个用例专门覆盖。
   rankBreakdown: unknown = {
     semantic: { normalized: 0.5, weight: 0.35, contribution: 0.175 },
     missing: [],

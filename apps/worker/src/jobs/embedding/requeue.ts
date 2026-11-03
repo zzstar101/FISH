@@ -5,7 +5,7 @@
  * 为这个实体排一条 `EMBED_*` —— 除非用户又编辑了一次（API 侧重新投递），或者有人手动跑
  * `bun run embed:backfill`。而 `MATCH_*` 侧一旦发现目标向量缺失/过期就退回 v1 口径
  * （`jobs/matching/engine.ts` 的 v1-fallback），所以一次上游抖动就可能让这个实体的所有匹配
- * 永久停在 v1 上。M1 §12 第 5 条与 M3 §10.6 把这个"3 次失败后无补投"留给了 M4。
+ * 永久停在 v1 上。M1 第 5 条与 M3 把这个"3 次失败后无补投"留给了 M4。
  *
  * 这里的策略是**有界重试**，不是无限重试：
  * - `FAILED` 之后排一条新的 `EMBED_*`，`run_at` 推后 `FAILED_EMBED_RETRY_DELAY_MS`，给上游留出恢复时间；
@@ -184,7 +184,7 @@ export type ExhaustedEmbedRetry = {
 }
 
 /**
- * 列出**额度已用尽**的实体（#322 M4 §12.1 缺口 #2 的收口）。
+ * 列出**额度已用尽**的实体（#322 M4 缺口 #2 的收口）。
  *
  * 为什么需要它：`scheduleFailedEmbedRetry()` 判到 `budget-exhausted` 时只写一行 stderr
  * （`embed.retry`，`apps/worker/src/index.ts`），而 stderr 是**流**不是**状态**：事后没人能回答

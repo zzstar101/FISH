@@ -285,7 +285,7 @@ export function ModerationDetailView({
   )
 }
 
-/** 上游来源标注（#228 §6：含义随 provider 变化，端上只标注来源与请求号）。 */
+/** 上游来源标注（#228：含义随 provider 变化，端上只标注来源与请求号）。 */
 function ProviderLine({ record }: { record: AdminModerationRecord }) {
   if (record.provider === null) {
     return <p className="text-ink-3 text-xs">上游来源：无（#228 之前的历史记录）</p>

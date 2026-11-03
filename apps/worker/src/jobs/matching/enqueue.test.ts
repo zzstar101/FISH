@@ -1,5 +1,5 @@
 /**
- * #322 M4 §12.1「工程缺口一」的回归：`MATCH_LISTING` 的 partial unique index
+ * #322 M4「工程缺口一」的回归：`MATCH_LISTING` 的 partial unique index
  * （`jobs_match_listing_listing_id_pending_uidx`，见 `packages/db/src/schema/jobs.ts`）。
  *
  * 修复前的行为：投递侧（`apps/api/src/modules/listings/store.ts` 等处）是**裸 INSERT**，

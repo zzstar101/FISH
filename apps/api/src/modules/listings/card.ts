@@ -44,8 +44,7 @@ export type ListingCardSource = {
    */
   seller: ListingCardSeller
   /**
-   * 「想要数」= 与该商品已建立会话的买家数（口径见契约 `ListingCardSchema.wants` 与
-   * `docs/design/issue-74-watchers-definition.md`）。
+   * 「想要数」= 与该商品已建立会话的买家数（口径见契约 `ListingCardSchema.wants`）。
    *
    * 与 `seller` 同一取舍：由各读路径的**主查询**带出来（`@fish/db/listing-wants` 的
    * `listingWantsCount`），不在映射层补查 —— 否则一页 50 张卡就是 50 次往返。

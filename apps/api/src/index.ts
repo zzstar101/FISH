@@ -43,7 +43,7 @@ const subscribeTemplatesEnv = loadSubscribeMessageTemplatesEnv()
 // 与兴趣画像因此在线上全部静默落空。
 const recommendationEmbedding = loadRecommendationEmbeddingModel()
 
-// 假数据可见性第三件（设计 §8.2）：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
+// 假数据可见性第三件：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
 if (aiEnv.transport === 'stub') {
   console.warn('[api] AI_POLISH_TRANSPORT=stub：润色返回的是演示文案，不是真实模型输出')
 }

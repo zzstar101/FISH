@@ -1,12 +1,12 @@
 /**
- * 推荐埋点与 Feed 的进程内限流（#323 R6 §8.1，决策 D10 + §2.3 细化）。
+ * 推荐埋点与 Feed 的进程内限流（#323 R6，决策 D10 的细化）。
  *
  * 为什么是进程内令牌桶、不落库：R6 的约束是零 schema 变更（D5），而这里要防的是
  * **脚本刷量**——它只需要"让刷量的成本与线上量级同阶"，不需要跨实例的精确配额。
  * 代价写在明处：多实例部署时每个实例各有一份额度（契约的 `processStartedAt` 已经把
  * "这些数字是单进程的"讲清楚），重启即清零。真要全局配额就得引 Redis，那是本 Issue 的非目标。
  *
- * 为什么匿名要**同时**过会话与 IP 两条桶（§2.3）：事件体里的 `anonymousSessionId` 是客户端自述，
+ * 为什么匿名要**同时**过会话与 IP 两条桶：事件体里的 `anonymousSessionId` 是客户端自述，
  * 换一个 UUID 就是新身份；只按会话限流等于没限流。IP 走 `trustedClientIp`（不可伪造的来源），
  * 无法归因时落到共享兜底桶——fail-closed：宁可让少量正常请求排队，也不能给"换 IP 即免限"留口子。
  *
@@ -36,7 +36,7 @@ export interface TokenBucketLimiterDebug {
 }
 
 /**
- * 被限流时抛出的独立错误（§3.4）。
+ * 被限流时抛出的独立错误。
  *
  * **不复用 `RecommendationServiceError`**：那个类被硬类型化成 `status: 422` + `code: 'VALIDATION_FAILED'`
  * （`service.ts`），把 429 塞进去就得把"只能 422"的类扩成多状态。由 router 的 `instanceof` 分支处理，
@@ -149,7 +149,7 @@ export function createTokenBucketLimiter(options: {
 }
 
 /**
- * 推导一次请求要过的限流主体（§2.3）。
+ * 推导一次请求要过的限流主体。
  *
  * - 登录：`user:<userId>` 一条。**不再叠 IP**——登录身份不可自述伪造，叠上去只会让
  *   "同一 NAT 出口下的多个正常用户"互相抢额度；

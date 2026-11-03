@@ -143,7 +143,7 @@ describe('POST /ai/polish-candidates 接线验收', () => {
     expect(rows[0]?.candidateCount).toBe(1)
     expect(rows[0]?.filteredCount).toBe(2)
     expect(rows[0]?.promptVersion).toBeTruthy()
-    // 表里绝不存用户文本（设计 §6.2）。
+    // 表里绝不存用户文本。
     const serialized = JSON.stringify(rows[0])
     expect(serialized).not.toContain('九成新')
     expect(serialized).not.toContain('13812345678')

@@ -6,7 +6,7 @@ function counts(recorder: ReturnType<typeof createLatencyRecorder>) {
   return recorder.snapshot().map((entry) => [entry.metric, entry.count] as const)
 }
 
-describe('进程内延迟采样（#323 R6 §6.4）', () => {
+describe('进程内延迟采样（#323 R6）', () => {
   it('没采到样时三项齐全，计数为 0、分位为 null', () => {
     const recorder = createLatencyRecorder({ capacity: 8 })
     const snapshot = recorder.snapshot()

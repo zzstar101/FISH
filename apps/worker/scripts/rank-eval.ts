@@ -310,7 +310,7 @@ function renderRetentionNote(since: Date, until: Date, now: Date): string {
   if (since < horizon) {
     notes.push(
       `⚠ 回放起点早于请求上下文保留期（${RECOMMENDATION_CONTEXT_RETENTION_DAYS} 天）：请求/快照侧可能已被清理，` +
-        '相关事件会因归因缺失而静默丢失（§4.4），本次指标偏低。',
+        '相关事件会因归因缺失而静默丢失，本次指标偏低。',
     )
   }
   if (until > now) {

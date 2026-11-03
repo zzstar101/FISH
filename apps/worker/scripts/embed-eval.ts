@@ -33,7 +33,7 @@
 //
 // 批量上限：百炼 `text-embedding-v4` **每请求最多 10 行**，所以这里按 ≤10 条切块
 // （生产的 handler 一次只发 1 条，因此不受这条限制影响）。
-// 输出：每段一行 JSON 事件（`eval.*`），原始数字直接抄进 `docs/design/issue-322-matching-v2-m4.md`。
+// 输出：每段一行 JSON 事件（`eval.*`），原始数字用于锚点重标定。
 // ---------------------------------------------------------------------------
 
 import type { EmbeddingProvider } from '@fish/contracts/embedding/provider'

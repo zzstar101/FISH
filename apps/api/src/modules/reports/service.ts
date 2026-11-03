@@ -23,7 +23,7 @@ import { decodeCursor, encodeCursor } from '../admin/cursor'
 import type { AdminReportRow, ReportRow, ReportStore } from './store'
 
 /**
- * Reports service（#73 治理半场，设计 §6）：权限校验之后 + 数据层之前的业务编排。
+ * Reports service（#73 治理半场）：权限校验之后 + 数据层之前的业务编排。
  *
  * - 与 admin service 同一姿态：只从 store 产出的行构造 DTO，DTO 一律过契约 zod。
  * - **治理动作不在这里**：处理举报只写结果与原因（grill Q9：处理 ≠ 处罚）。
@@ -34,7 +34,7 @@ import type { AdminReportRow, ReportRow, ReportStore } from './store'
  *
  * `code` 除了 `ReportErrorCodeSchema` 里的举报域错误码，还允许 system 域的
  * `VALIDATION_FAILED`（非法 cursor）：与 listings 域同款取舍——各 domain 只声明
- * **新增**的错误码，通用码复用 `system/error.ts`，不自己再抄一份（设计 §9）。
+ * **新增**的错误码，通用码复用 `system/error.ts`，不自己再抄一份。
  */
 export class ReportServiceError extends Error {
   constructor(

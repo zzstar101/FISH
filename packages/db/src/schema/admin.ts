@@ -2,7 +2,7 @@ import { index, jsonb, pgEnum, pgTable, text, uuid } from 'drizzle-orm/pg-core'
 import { createdAt, primaryKey } from './common'
 import { users } from './users'
 
-/** 高风险管理操作的类型（设计 §5 DB CHANGE REQUEST B）。 */
+/** 高风险管理操作的类型（DB CHANGE REQUEST）。 */
 export const adminAuditActionEnum = pgEnum('admin_audit_action', [
   'ADMIN_PROMOTED',
   'MODERATION_DECISION',
@@ -39,12 +39,12 @@ export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
 /**
  * Admin 审计日志（#73）：高风险管理操作的不可抵赖记录。
  *
- * - **只增不删不改**：应用层不提供任何更新 / 删除接口（设计 §4.6 / §8）；本表也没有
+ * - **只增不删不改**：应用层不提供任何更新 / 删除接口；本表也没有
  *   `updated_at`（只有 `created_at`）。
- * - `before` / `after` 是脱敏快照：禁止保存密码哈希、Cookie、完整学号等敏感信息
- *   （设计 §8），写入口（service）负责脱敏。
- * - `actor_user_id` 用 `ON DELETE RESTRICT`：操作者用户不能被级联抹掉，保证可追责
- *   （设计 §5 DB CHANGE REQUEST B）。初始化提升（无既有 actor）时该列可为空。
+ * - `before` / `after` 是脱敏快照：禁止保存密码哈希、Cookie、完整学号等敏感信息，
+ *   写入口（service）负责脱敏。
+ * - `actor_user_id` 用 `ON DELETE RESTRICT`：操作者用户不能被级联抹掉，保证可追责。
+ *   初始化提升（无既有 actor）时该列可为空。
  * - 索引覆盖三种查询路径：按时间倒序（默认列表）、按操作者、按目标对象。
  */
 export const adminAuditLogs = pgTable(

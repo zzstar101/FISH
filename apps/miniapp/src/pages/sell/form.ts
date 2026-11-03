@@ -56,7 +56,7 @@ export function validateSellForm(input: {
  *
  * `category` 与页面的分类选择区同名，此前漏在这里。AI 润色的入参恰好只有
  * title / description / category 三个字段（`packages/contracts/src/ai/schema.ts:24-28`），
- * 漏掉它会让「没选分类」这条服务端错误在界面上完全不可见（设计 §10.3）。
+ * 漏掉它会让「没选分类」这条服务端错误在界面上完全不可见。
  */
 export function sellFieldErrorsFromDetails(
   details: readonly { field: string; message: string }[] | undefined,

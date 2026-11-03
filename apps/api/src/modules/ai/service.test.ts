@@ -131,8 +131,8 @@ describe('八步流水线', () => {
   })
 
   test('标记被整段删掉 → 无处可插提示语，候选原样返回但 outcome 记 TOKEN_LOST', async () => {
-    // §5.7 的"全部标记位换成提示语"只对**还在的**标记位成立：模型整段没写标记时，候选里没有
-    // 可替换的位置，用户拿到的就是"没有联系方式"的那版草稿。§12-5 否掉的是"不可逆替换"
+    // "全部标记位换成提示语"只对**还在的**标记位成立：模型整段没写标记时，候选里没有
+    // 可替换的位置，用户拿到的就是"没有联系方式"的那版草稿。被否掉的是"不可逆替换"
     // （模型根本没见过原文），不是模型自己选择不写。
     const harness = createHarness({ segments: ['九成新，看上的话私我'] })
 
@@ -241,7 +241,7 @@ describe('八步流水线', () => {
 
   test('原文自带联系方式不会让候选全灭（moderation 跑标记版而非回填后全文）', async () => {
     // 若 moderation 跑在回填后的全文上，这里每条候选都会命中 EXTERNAL_CONTACT → REVIEW，
-    // 润色对这批用户永久返回空（设计 §5.6d 的口径）。
+    // 润色对这批用户永久返回空。
     const harness = createHarness({ segments: ['九成新，[fish-contact-1] 详聊'] })
 
     const response = await harness.service.polishCandidates({

@@ -283,7 +283,7 @@ async function main(): Promise<void> {
   const models = await embeddingModels(db)
   const matches = await matchDistribution(db)
   const jobs = await jobStats(db)
-  // #322 M4 §12.1 缺口 #2：额度用尽此前只有一行 stderr（`embed.retry`），事后查不到状态。
+  // #322 M4 缺口 #2：额度用尽此前只有一行 stderr（`embed.retry`），事后查不到状态。
   // 这里按同一判据（同一组常量）把它变成可查询/可聚合的明细与计数。
   const exhaustedRetries = await listExhaustedEmbedRetries(db)
 
@@ -367,7 +367,7 @@ async function main(): Promise<void> {
     .reduce((sum, row) => sum + toNumber(row.rows), 0)
   const jobRows = jobs.reduce((sum, row) => sum + toNumber(row.rows), 0)
   // 失败率的分母只算**已结算**（DONE / FAILED）的 job：PENDING / RUNNING 还没有结果，
-  // 把它们计进分母会系统性低估失败率（口径写在 M4 §7）。
+  // 把它们计进分母会系统性低估失败率。
   const settledJobs = jobs
     .filter((row) => row.status === 'DONE' || row.status === 'FAILED')
     .reduce((sum, row) => sum + toNumber(row.rows), 0)
@@ -390,7 +390,7 @@ async function main(): Promise<void> {
     jobRows,
     settledJobs,
     failedJobs,
-    // #322 M4 §12.1 缺口 #2：`EMBED_*` 补投额度（24 h 内 3 条 `FAILED`）用尽的实体数；
+    // #322 M4 缺口 #2：`EMBED_*` 补投额度（24 h 内 3 条 `FAILED`）用尽的实体数；
     // `stuckEmbedRetries` 是其中**没有待跑任务**的（自动路径已断，需人工 `embed:backfill`）。
     // 仓库没有告警基建，这两个计数是"可查询/可聚合"，不等同于真正的告警通道。
     exhaustedEmbedRetries: exhaustedRetries.length,

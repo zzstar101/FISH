@@ -8,7 +8,7 @@
  *
  * 于是 `MATCH_*` 可能先跑：那时目标实体还没有本模型向量，引擎走 `v1-fallback`（`ranking_version
  * = 1`）并补投一条 `EMBED_*`——而 `EMBED_*` 跑完之后，**没有任何东西会再触发一次匹配**，
- * 这一对就永久停在 v1（M4 §6.1 的"入队序不变量"在重试路径上并不成立）。
+ * 这一对就永久停在 v1（M4 的"入队序不变量"在重试路径上并不成立）。
  *
  * 修法是把不变量的另一半补在**执行侧**：`EMBED_*` 一旦确认向量新鲜（`generated` / `unchanged`）
  * 就补投一条同实体的 `MATCH_*`（调用点见 `apps/worker/src/jobs/embedding/handlers.ts`）。
@@ -17,7 +17,7 @@
  *
  * **去重**：`MATCH_WISH` 和 `MATCH_LISTING` 都有 partial unique index
  * （`jobs_match_wish_wish_id_pending_uidx` / `jobs_match_listing_listing_id_pending_uidx`；
- * 后者是 #322 M4 §12.1 缺口一的收口，见 `packages/db/src/schema/jobs.ts`）。下面的
+ * 后者是 #322 M4 缺口一的收口，见 `packages/db/src/schema/jobs.ts`）。下面的
  * `WHERE NOT EXISTS (… status = 'PENDING')` 保留为**廉价预过滤**：常见路径上（编辑商品时 API
  * 已投过 `MATCH_LISTING`，它还 PENDING）这条 INSERT 直接不插入，不产生一次冲突。但
  * `NOT EXISTS` 与 `INSERT` 之间没有锁，两个插入者可以同时通过它——原子性由索引 +

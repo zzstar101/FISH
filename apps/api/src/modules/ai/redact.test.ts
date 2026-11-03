@@ -171,7 +171,7 @@ describe('回填', () => {
     const description = redactor.redact('电话 13812345678')
 
     // 与"插入空格 / 全角数字"不同：不可见字符在比对前就被剥掉，标记恢复成标准形态，按原样还原
-    // 用户自己的号码——这比换成提示语更符合用户预期（设计 §5.7 已按此口径改写）。
+    // 用户自己的号码——这比换成提示语更符合用户预期。
     expect(redactor.restore('电话 [fish-pho\u200bne-1] 也可以', description)).toEqual({
       text: '电话 13812345678 也可以',
       lost: false,

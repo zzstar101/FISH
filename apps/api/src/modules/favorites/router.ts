@@ -119,7 +119,7 @@ export function createFavoritesRouter({ service, getUserId, recorder }: Favorite
       // 归因上下文（requestId / position / source）从推荐头里读，由 recorder 自己解析。
       // 重复收藏（本来就已收藏）也会记一条：`favorites` 的唯一索引让写入幂等，但接口没有把
       // "这次是否真的新建了关系"暴露出来，而收藏是用户主动动作、重复量有界，不值得为它把
-      // 收藏 store 的返回类型改宽（§11 已知边界）。
+      // 收藏 store 的返回类型改宽（已知边界）。
       if (recorder) {
         await recorder.record(c, { viewerId: c.get('userId'), listingId, eventType: 'FAVORITE' })
       }

@@ -281,7 +281,7 @@ describe('matchListing', () => {
       expect(result).toMatchObject({ matched: 0, downgraded: 1 })
       const rows = await matchRows(listingId, wishId)
       expect(rows).toHaveLength(1)
-      // 65 = 分类 100 + 关键词 0 + 价格 100；低于阈值 → 读接口不会返回它（§9.7）。
+      // 65 = 分类 100 + 关键词 0 + 价格 100；低于阈值 → 读接口不会返回它。
       expect(rows[0]?.score).toBe(65)
       expect(rows[0]?.keywordScore).toBe(0)
       expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)

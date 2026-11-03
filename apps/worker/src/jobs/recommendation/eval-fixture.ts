@@ -1,5 +1,5 @@
 /**
- * `rank:eval --fixture` 的确定性样本（Issue #323 R6 §5.1 / §10.1）。
+ * `rank:eval --fixture` 的确定性样本（Issue #323 R6）。
  *
  * 这份数据的**每一个数字都是手算出来的**，并且 `RANK_EVAL_FIXTURE_EXPECTED` 就是那份手算结果：
  * 指标口径出错时，测试与 CLI 的 `--fixture` 会同时失败。因此它必须保持"人能一眼验算"的规模——
@@ -154,7 +154,7 @@ export const RANK_EVAL_FIXTURE: RankEvalDataset = {
     {
       requestId: 'R3',
       identity: 'session:9',
-      // 降级请求：`rec-v1-none` 不写快照，因此没有位次可评（§5.3）。
+      // 降级请求：`rec-v1-none` 不写快照，因此没有位次可评。
       strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
       requestedAt: new Date('2026-01-11T12:00:00Z'),
       items: [],
@@ -173,7 +173,7 @@ export const RANK_EVAL_FIXTURE: RankEvalDataset = {
       strategyVersion: RANKED_STRATEGY_VERSION,
       requestedAt: new Date('2026-01-12T09:00:00Z'),
       items: [
-        // 形状不符（`null`）：整行跳过，但位次/覆盖仍然统计（§11 第 12 条）。
+        // 形状不符（`null`）：整行跳过，但位次/覆盖仍然统计。
         item('L6', 0, 'popular', null),
         item('L1', 1, 'explore', breakdown(0.6)),
       ],

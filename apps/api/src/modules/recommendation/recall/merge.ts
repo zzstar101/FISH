@@ -38,7 +38,7 @@ export type MergeRecallCandidatesInput = {
    *
    * `null` = **未知**（曝光计数查询失败）：它与"空 Map"（问过了，确实一次都没有）是两件事。
    * 合并层只负责透传这个区别，判断交给排序层——`null` 时 `repeatedExposure` 进 `missing` 且不加
-   * 惩罚，空 Map 时是"确定 0"（R3 §9 待办①）。
+   * 惩罚，空 Map 时是"确定 0"（R3 待办①）。
    */
   impressions: ReadonlyMap<string, number> | null
   /** 类目 → 会话类目亲和（已归一化到 0–1，`findSessionCategoryWeights` 的产出）。 */

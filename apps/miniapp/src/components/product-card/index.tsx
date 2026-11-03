@@ -63,7 +63,7 @@ type ProductCardProps = {
   /** 图片区高度（rpx），由瀑布流按列宽 × 比例算好后传入 */
   imageHeight: number
   /**
-   * 推荐归因（R1 §3.5）：从推荐流点进详情时把它拼进详情页 URL，详情页据此发带 requestId 的事件。
+   * 推荐归因（R1）：从推荐流点进详情时把它拼进详情页 URL，详情页据此发带 requestId 的事件。
    * 搜索 / 相似推荐等入口没有推荐来源，传 `null` 或不传 —— 详情页照样发 DETAIL_VIEW，只是不带归因。
    * 卡片菜单里的 HIDE / FAVORITE / UNFAVORITE 同样用它：来自推荐就带归因，其它入口照发（见下）。
    */

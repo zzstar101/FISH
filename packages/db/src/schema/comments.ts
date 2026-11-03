@@ -12,7 +12,7 @@ import { users } from './users'
  * 「父留言的 parent_id 必须为 NULL」需要跨行断言，CHECK 表达不了；DB 侧只保证
  * 被引用的留言真实存在（外键）与删除级联。
  *
- * 不可变行：只有 `created_at`，没有 `updated_at`（留言不支持编辑；#111 §五 曾把删除列为范围外，
+ * 不可变行：只有 `created_at`，没有 `updated_at`（留言不支持编辑；#111 曾把删除列为范围外，
  * **#195 已把「本人可删除自己的留言」纳入范围**，点赞仍在外）。
  */
 export const comments = pgTable(

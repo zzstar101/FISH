@@ -311,7 +311,7 @@ export type SimilarQuery = {
  * 再取一遍实体（而不是在这里宽表 join 出打分字段），是为了让"召回"与"打分输入"各自只有一处
  * 投影定义——见 `engine.ts` 里两个方向的 `*Columns`。
  *
- * 不建 ANN 索引（M2 实测数据量下 exact scan 足够，见 M2 设计文档 §6）：本函数就是一次
+ * 不建 ANN 索引（M2 实测数据量下 exact scan 足够）：本函数就是一次
  * `ORDER BY embedding <=> $1 LIMIT K` 的全表 exact 扫描。
  *
  * **只召回新鲜向量**：`freshListingsEmbedding()` 把"实体编辑后还没重算向量"的候选挡在

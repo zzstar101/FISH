@@ -23,9 +23,9 @@ import {
  * Admin Domain Contract（Issue #73）。
  *
  * 本目录是管理后台的唯一协议来源：API 与 Web 管理员页面都从这里 import，禁止在别处重复定义
- * 枚举或值域。设计见 `docs/design/issue-73-admin.md`。
+ * 枚举或值域。设计取舍见 Issue #73。
  *
- * 边界（设计 §3.2 / §8）：
+ * 边界：
  * - 普通用户的 `Me` DTO **不**暴露 `role`；只有 `/admin/me` 会返回带 `role` 的管理员资料。
  * - 所有列表统一游标分页（`{ items, nextCursor }`），`limit` 服务端封顶 50。
  * - 审计日志的 `before` / `after` 只允许存**脱敏快照**；禁止密码 / Cookie / 完整学号。
@@ -110,7 +110,7 @@ export type AdminMeResponse = z.infer<typeof AdminMeResponseSchema>
 // 用户查询
 // ---------------------------------------------------------------------------
 
-/** 管理员视角的用户摘要（设计 §4.2）。不返回密码哈希、完整学号等敏感凭据。 */
+/** 管理员视角的用户摘要。不返回密码哈希、完整学号等敏感凭据。 */
 export const AdminUserSummarySchema = z.object({
   id: UserIdSchema,
   /**
@@ -316,7 +316,7 @@ export type AdminListingDetail = z.infer<typeof AdminListingDetailSchema>
 // ---------------------------------------------------------------------------
 
 /**
- * 固定口径的聚合指标（设计 §4.5）。**只提供预定义指标，不接受任意 SQL / 任意聚合表达式**。
+ * 固定口径的聚合指标。**只提供预定义指标，不接受任意 SQL / 任意聚合表达式**。
  *
  * #74 Moderation 落地前不在此返回「待人工审核数 / 近 7 日审核通过·拦截数」——那两个口径依赖
  * #74 的表，先硬编码 0 或假装有值都是错的；#74 冻结后在此增量补充。
@@ -419,7 +419,7 @@ export type AdminAuditLogPage = z.infer<typeof AdminAuditLogPageSchema>
 // ---------------------------------------------------------------------------
 
 /**
- * 审核记录的上游元数据（#228 §6）。`provider` 是这次判定的来源，其余五列的**含义随 provider 变化**，
+ * 审核记录的上游元数据（#228）。`provider` 是这次判定的来源，其余五列的**含义随 provider 变化**，
  * 读的时候必须先看 provider，不能把 `suggestion` / `subLabel` 一律当成腾讯原始结论：
  *
  * - `TENCENT_TMS` / `TENCENT_IMS`：`suggestion` / `label` / `subLabel` / `score` 是腾讯原始结论，
@@ -429,7 +429,7 @@ export type AdminAuditLogPage = z.infer<typeof AdminAuditLogPageSchema>
  *   `providerRequestId` 为 NULL——本地词表没有腾讯的 Label 与 Score，也没有上游请求。
  * - `MANUAL`：人工改判，只有 `provider` 非空，其余五列均为 NULL（人工结论看 `decision` 与审计日志）。
  *
- * **只出现在 Admin 读路径**：普通用户的 Listing 响应永远不带这些字段（#228 §6「不向客户端暴露
+ * **只出现在 Admin 读路径**：普通用户的 Listing 响应永远不带这些字段（#228「不向客户端暴露
  * Label/Score/命中策略」）。`score` 只供审计与策略校准，不参与判定。
  */
 export const AdminModerationProviderSchema = z.enum([
@@ -543,7 +543,7 @@ export type AdminTransactionPage = z.infer<typeof AdminTransactionPageSchema>
 
 export const AdminErrorCodeSchema = z.enum([
   /**
-   * 403：已登录但角色不是 ADMIN，或角色查询失败。**稳定判据**（设计 §3.2）：
+   * 403：已登录但角色不是 ADMIN，或角色查询失败。**稳定判据**：
    * 普通用户访问任何 `/admin/*` 都返回它，不能靠修改前端状态绕过。
    */
   'FORBIDDEN',
@@ -555,9 +555,9 @@ export const AdminErrorCodeSchema = z.enum([
 export type AdminErrorCode = z.infer<typeof AdminErrorCodeSchema>
 
 // ---------------------------------------------------------------------------
-// 查询参数（设计 §4）。`limit` 默认 20、服务端封顶 50；越界 → 422。
+// 查询参数。`limit` 默认 20、服务端封顶 50；越界 → 422。
 // 游标对前端不透明，只校验形态（`min(1)`），内容校验在服务端 `decodeCursor`。
-// 预留给 #74 的 `reviewStatus` 等筛选不再此定义（第 4.3 节待 #74 Contract 冻结）。
+// 预留给 #74 的 `reviewStatus` 等筛选不再此定义（待 #74 Contract 冻结）。
 // ---------------------------------------------------------------------------
 
 export const AdminUsersQuerySchema = z.strictObject({

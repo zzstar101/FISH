@@ -341,7 +341,7 @@ describe('RecommendationFeedResponseSchema', () => {
     views: 0,
   }
 
-  test('parses the #323 §M7 shape', () => {
+  test('parses the #323 M7 shape', () => {
     const parsed = RecommendationFeedResponseSchema.parse({
       requestId,
       strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,

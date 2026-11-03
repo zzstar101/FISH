@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { RECOMMENDATION_CLEANUP_BATCH_SIZE } from '@fish/contracts/recommendation/observability'
 import { parseArgs } from './recommendation-cleanup'
 
-// 清理 CLI 的两个承诺（设计 §10.1「CLI 参数与输出」）：
+// 清理 CLI 的两个承诺：
 // 1. 参数错误必须报错退出：这里数的是"要删的行"，一个静默跑默认批大小的 CLI 会把
 //    `--batch-size=0`（无限批？还是一行？）变成没人知道的行为；
 // 2. `--dry-run` 语义只在参数层（真删/试运行的分支都在 `cleanupExpiredRecommendationData` 里），

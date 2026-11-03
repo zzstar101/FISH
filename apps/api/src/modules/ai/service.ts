@@ -10,7 +10,7 @@ import { createRedactor } from './redact'
 import type { AiPolishStore } from './store'
 
 /**
- * 八步流水线（#141 设计 §5）：鉴权 → 配额占位 → 脱敏 → 调上游 → 解析 → 逐条过滤 → 逐条回填
+ * 八步流水线（#141）：鉴权 → 配额占位 → 脱敏 → 调上游 → 解析 → 逐条过滤 → 逐条回填
  * → 落 outcome / 返回。**顺序即语义**，别在这里重排。
  *
  * 鉴权（第 1 步）由路由的 `requireAuth` 承担，service 只收已鉴权的 `userId`。
@@ -18,7 +18,7 @@ import type { AiPolishStore } from './store'
 export class AiPolishServiceError extends Error {
   constructor(
     readonly status: 429 | 502 | 503 | 504,
-    /** 类型取自契约的错误码枚举，避免抛出的字面量与契约漂移（§13 的"错误码全落地"）。 */
+    /** 类型取自契约的错误码枚举，避免抛出的字面量与契约漂移（"错误码全落地"）。 */
     readonly code: AiPolishErrorCode,
     message: string,
     readonly retryAfterSeconds?: number,
@@ -50,7 +50,7 @@ function modelFor(env: AiPolishEnv): string {
 }
 
 /**
- * 运行期兜底：正常路径在装配层启动时就失败了（设计 §3.2），这里只是不把"配置缺失"误报成上游故障。
+ * 运行期兜底：正常路径在装配层启动时就失败了，这里只是不把"配置缺失"误报成上游故障。
  */
 function isConfigured(env: AiPolishEnv): boolean {
   if (env.baseUrl.trim().length === 0) return false
@@ -61,8 +61,8 @@ function isConfigured(env: AiPolishEnv): boolean {
 }
 
 /**
- * 字段名泄露（设计 §5.6b）：服务端硬校验，不能只靠 prompt——实测模型确实照抄过
- * "标题：/分类：/描述："（设计 §9 探针 2），脏候选会直接污染描述框。
+ * 字段名泄露：服务端硬校验，不能只靠 prompt——实测模型确实照抄过
+ * "标题：/分类：/描述："，脏候选会直接污染描述框。
  * 只看行首（允许前导空白、列表符号、Markdown 强调 / 标题与全角括号修饰），避免误伤正文里正常
  * 提到"描述"二字。修饰符是 #141 二次/三次审查补的：模型加粗（`**描述：**`）与标题
  * （`### 描述：`）都是最常见的输出形态，只认裸写法等于把这道硬校验让给 prompt。
@@ -95,7 +95,7 @@ function describeUpstreamFailure(error: unknown): {
       message: '润色服务暂时不可用，请稍后再试',
     }
   }
-  // 未知异常交给 app.onError（500）。占位行的 outcome 保持 NULL——按 §5.2 的口径仍计入配额，
+  // 未知异常交给 app.onError（500）。占位行的 outcome 保持 NULL——按既定口径仍计入配额，
   // 不会变成"崩一次就白送一次额度"。
   throw error
 }
@@ -186,7 +186,7 @@ export function createAiPolishService(deps: AiPolishServiceDeps): AiPolishServic
           continue
         }
         // d 跑在**回填前的标记版**上：否则原文自带联系方式者，每条候选都会命中 EXTERNAL_CONTACT
-        // → REVIEW，润色对这批用户永久返回空（设计 §5.6d）。BLOCK 与 REVIEW 都丢——REVIEW 会把
+        // → REVIEW，润色对这批用户永久返回空。BLOCK 与 REVIEW 都丢——REVIEW 会把
         // 商品硬推 OFFLINE，用户在发布页看不出掉线原因，比少一条候选糟得多。
         if (
           moderation.moderate({ title: markedTitle, description: segment }).decision !== 'ALLOW'
@@ -197,12 +197,12 @@ export function createAiPolishService(deps: AiPolishServiceDeps): AiPolishServic
 
         // 回填只要求**描述那次脱敏**的标记齐全：候选是描述的改写，标题里的标记天然不会出现在
         // 这里（把它也算"丢失"会在标题含可脱敏内容时把用户自己的联系方式换成提示语）。
-        // 标记被模型**整段删掉**时没有可替换的位置，候选里就是没有这段内容——§5.7 的"全部标记位
-        // 换成提示语"只对**还在的**标记位成立；§12-5 否掉的是"不可逆替换"（模型根本没见过原文），
+        // 标记被模型**整段删掉**时没有可替换的位置，候选里就是没有这段内容——"全部标记位
+        // 换成提示语"只对**还在的**标记位成立；被否掉的是"不可逆替换"（模型根本没见过原文），
         // 不是模型自己选择不写。此时候选照常返回，只记 `outcome=TOKEN_LOST`。
         const restored = redactor.restore(segment, descriptionRedaction)
         if (restored.lost) tokenLost = true
-        // 回填后要再测一次长度（设计 §5.7）：还原的是**用户原文**，它可能比标记长得多
+        // 回填后要再测一次长度：还原的是**用户原文**，它可能比标记长得多
         // （39 字邮箱换掉 13 字 `[fish-mail-1]`）——标记版 ≤500 不代表回填后 ≤500。
         if (!ListingDescriptionSchema.safeParse(restored.text).success) {
           filteredCount += 1

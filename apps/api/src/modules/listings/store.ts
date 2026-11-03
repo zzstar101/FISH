@@ -205,7 +205,7 @@ export type ListingUpdatePlan =
   | { kind: 'blocked'; moderation: ModerationPlan }
 
 /**
- * #228 §6：审核记录里的 provider 元数据。人工改判写 `MANUAL`；#228 之前的历史行为 NULL。
+ * #228：审核记录里的 provider 元数据。人工改判写 `MANUAL`；#228 之前的历史行为 NULL。
  * 只供审计与人工复核，**不向普通用户暴露**（`ruleVersion` 复用为策略版本：本地规则版本 / 腾讯 BizType）。
  */
 export type ModerationTrace = {
@@ -433,7 +433,7 @@ const EDITABLE_COLUMNS = {
   governanceDelistedAt: listings.governanceDelistedAt,
 } as const
 
-/** 审核记录里 provider 元数据列的公共部分（#228 §6）。 */
+/** 审核记录里 provider 元数据列的公共部分（#228）。 */
 function moderationTraceColumns(trace: ModerationTrace) {
   return {
     provider: trace.provider,
@@ -1118,7 +1118,7 @@ async function invalidateStaleEmbeddingWith(
  * #8 的 worker 就再也匹配不到这个商品（详见 `@fish/db/json` 的实测说明）。
  *
  * 两条 job 都撞**部分唯一索引**（`(payload->>'listingId') WHERE type='…' AND status='PENDING'`；
- * `MATCH_LISTING` 那条是 #322 M4 §12.1 缺口一的收口，见 `packages/db/src/schema/jobs.ts`），
+ * `MATCH_LISTING` 那条是 #322 M4 缺口一的收口，见 `packages/db/src/schema/jobs.ts`），
  * 已有一条待跑时再投会撞唯一键——那不是错误，只是"这件事已经排好队了"。但两条的冲突动作
  * **刻意不同**：
  *

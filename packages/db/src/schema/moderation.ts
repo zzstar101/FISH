@@ -9,12 +9,12 @@ export const moderationDecisionEnum = pgEnum('moderation_decision', ['ALLOW', 'B
 /**
  * 商品文本审核记录（`listing_moderation_records`）。
  *
- * `provider* / suggestion / label / subLabel / score` 是 #228 §6 的**可追溯字段**：本地词表
+ * `provider* / suggestion / label / subLabel / score` 是 #228 的**可追溯字段**：本地词表
  * 时代只记命中规则，接腾讯 TMS 后必须能回答「这次判定来自哪个 provider、哪次请求、上游给了
  * 什么标签与置信度」。列可空是为了兼容 #228 之前的历史行（那时没有这些概念）。
  *
  * `ruleVersion` 复用为**策略版本**：本地是 `MODERATION_RULE_VERSION`，腾讯是 `BizType`。
- * 这些字段只供审计与人工复核，**不向普通用户暴露**（#228 §6）。
+ * 这些字段只供审计与人工复核，**不向普通用户暴露**（#228）。
  */
 export const listingModerationRecords = pgTable(
   'listing_moderation_records',

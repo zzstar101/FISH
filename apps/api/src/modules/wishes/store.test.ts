@@ -104,7 +104,7 @@ describe('wishes store (integration)', () => {
     // #322 M4 顺序不变量：创建路径也必须先投 EMBED_WISH、后投 MATCH_WISH。按队列自己的领取键
     // `(run_at, id)`（见 `claimNext`）排序，断的是**入队时刻**的领取序（同事务、run_at 相同）——反序会让
     // 新建愿望的首轮 MATCH 拿不到自己的向量，按 M2 降级契约把所有 match 行落成 v1 且永不重算。
-    // 重试/回收推后 `run_at` 之后的执行序反转是已知边界（M4 §6.1 末尾）。
+    // 重试/回收推后 `run_at` 之后的执行序反转是已知边界（M4）。
     const createdJobs = rows(
       await db.execute(sql`
         SELECT type FROM jobs
@@ -140,7 +140,7 @@ describe('wishes store (integration)', () => {
 
     // #322 M4 顺序不变量：上面的 `ORDER BY type` 只是把两行排出来，**不代表**执行顺序。入队时刻的领取序
     // 由队列的领取键 `(run_at, id)` 决定（见 `claimNext`），这里按它再查一次：EMBED_WISH 必须排在前面。
-    // （重试/回收把 `run_at` 推后之后的执行序反转是已知边界，见 M4 §6.1 末尾。）
+    // （重试/回收把 `run_at` 推后之后的执行序反转是已知边界，见 M4。）
     const claimOrder = rows(
       await db.execute(sql`
         SELECT type FROM jobs

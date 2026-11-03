@@ -1,5 +1,5 @@
 /**
- * 内容安全审核 provider 抽象（#228 §5）。
+ * 内容安全审核 provider 抽象（#228）。
  *
  * 这一层只回答「腾讯 / 本地词表怎么判」，不回答「商品能不能发布」：商品 CREATE/UPDATE 接线、
  * 图片固化与引用、审核记录表都按 #228 的分工另行落地。调用方只看到统一决策
@@ -15,7 +15,7 @@ export const MODERATION_SUGGESTIONS = ['Pass', 'Review', 'Block'] as const
 export type ModerationSuggestion = (typeof MODERATION_SUGGESTIONS)[number]
 
 /**
- * 决策来源（#228 §6 审核记录字段）。适配器只产生这三个值；`MANUAL`（人工改判）属记录层，
+ * 决策来源（#228 审核记录字段）。适配器只产生这三个值；`MANUAL`（人工改判）属记录层，
  * 由 #228 的 Admin 人工队列实现，不在这里预留空值。
  */
 export const MODERATION_PROVIDERS = ['LOCAL', 'TENCENT_TMS', 'TENCENT_IMS'] as const
@@ -28,7 +28,7 @@ export type ModerationTransport = (typeof MODERATION_TRANSPORTS)[number]
  * 单字段 / 单张图的判定。
  *
  * `score` 只供审计与调参：腾讯 Score 是「命中该标签的模型置信度」，不同 Label 之间不可比，
- * 因此适配器不做任何 `score > N => block` 的阈值判断（#228 §2）。判定只看 `Suggestion`。
+ * 因此适配器不做任何 `score > N => block` 的阈值判断（#228）。判定只看 `Suggestion`。
  */
 export type ModerationVerdict = {
   decision: ModerationDecision
@@ -51,7 +51,7 @@ export type TextModerationResult = {
   dataId: string
   /** 策略版本：腾讯 `BizType`，或本地规则版本 `MODERATION_RULE_VERSION`。 */
   policyVersion: string
-  /** 字段聚合结果：BLOCK > REVIEW > ALLOW（#228 §2）。 */
+  /** 字段聚合结果：BLOCK > REVIEW > ALLOW（#228）。 */
   decision: ModerationDecision
   suggestion: ModerationSuggestion
   fields: FieldModerationResult[]
@@ -124,8 +124,8 @@ export function sanitizeUpstreamCode(code: unknown): string | null {
 }
 
 /**
- * 腾讯 `RequestId` 与 `Error.Code` 形状相同（字母数字 `._-`），但同样由上游可控，且设计文档
- * 明确允许把它写进日志：#228 §7 只允许记 RequestId，那就不能让上游用换行/控制字符伪造日志行。
+ * 腾讯 `RequestId` 与 `Error.Code` 形状相同（字母数字 `._-`），但同样由上游可控；
+ * #228 只允许记 RequestId，那就不能让上游用换行/控制字符伪造日志行。
  * 不合规一律置 null——宁可丢掉追踪信息，也不把上游文本放出去。
  */
 export function sanitizeRequestId(value: unknown): string | null {
@@ -136,7 +136,7 @@ export function sanitizeRequestId(value: unknown): string | null {
  * 统一的审核失败错误。
  *
  * 消息**只由本文件按 reason / provider / httpCode / upstreamCode 拼装**，不接受调用方传入的
- * 自由文本：上游返回体可能回显用户原文，SDK 的 `Error.Message` 同样不可信（#228 §7）。
+ * 自由文本：上游返回体可能回显用户原文，SDK 的 `Error.Message` 同样不可信（#228）。
  */
 export class ContentModerationError extends Error {
   readonly reason: ContentModerationFailureReason
@@ -177,7 +177,7 @@ export class ContentModerationError extends Error {
 }
 
 /**
- * 适配器错误 → HTTP 契约（#228 §7）。路由层直接用这个函数，避免各处再抄一遍映射：
+ * 适配器错误 → HTTP 契约（#228）。路由层直接用这个函数，避免各处再抄一遍映射：
  * 审核不可用统一 503 `CONTENT_MODERATION_UNAVAILABLE`；入参不合法是 400。
  *
  * 注意这里**不返回 ALLOW 之类的降级路径**：503 就是 503，调用方不得继续发布。
@@ -193,7 +193,7 @@ export function moderationErrorResponse(error: ContentModerationError): {
 }
 
 /**
- * 风险优先级（#228 §2）：多字段 / 多图聚合取最高风险。
+ * 风险优先级（#228）：多字段 / 多图聚合取最高风险。
  *
  * 空数组**抛错而不是返回 ALLOW**：没有判定结果就是没有结论，返回 ALLOW 会变成一条静默放行
  * 路径（两个 provider 都已先用 `invalid_input` 挡掉「没有可审内容」）。未知判定值同样抛错：

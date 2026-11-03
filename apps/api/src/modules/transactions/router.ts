@@ -18,7 +18,7 @@ import { type TransactionService, TransactionServiceError } from './service'
 export type TransactionsRouterOptions = {
   service: TransactionService
   /**
-   * #323 §M0：交易有两个服务端确证的行为——建行（TRANSACTION_START）与确认成交
+   * #323 M0：交易有两个服务端确证的行为——建行（TRANSACTION_START）与确认成交
    * （PURCHASE）。客户端上报会在断网/重试时丢失或重复，只有服务端知道这两件事真的发生了。
    */
   recorder?: RecommendationDomainRecorder

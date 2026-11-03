@@ -5,7 +5,7 @@ import { ListingIdSchema, ReportIdSchema, UserIdSchema } from '../system/public-
  * Reports Domain Contract（#73 治理半场）。
  *
  * 举报的唯一协议来源：用户端「举报 / 我的举报」与 Admin「举报队列 / 详情 / 处理」都从这里 import，
- * 禁止在别处重复定义枚举或值域。设计见 `docs/design/issue-73-changes.md` §8。
+ * 禁止在别处重复定义枚举或值域。设计取舍见 Issue #73。
  *
  * 边界：
  * - **处理举报 ≠ 处罚用户**：`AdminReportHandleInputSchema` 只写处理结果与原因，下架 / 限制 /

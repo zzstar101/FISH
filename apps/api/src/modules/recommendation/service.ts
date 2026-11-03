@@ -109,7 +109,7 @@ export interface RecommendationService {
 /** 允许的时钟偏差：客户端时钟快于服务端时的容忍上限。 */
 const MAX_CLOCK_SKEW_MS = 10 * 60 * 1_000
 
-/** 事件保留期（#323 §M0 retention 决定）：早于保留期的补发没有价值，直接拒收。 */
+/** 事件保留期（#323 M0 retention 决定）：早于保留期的补发没有价值，直接拒收。 */
 const EVENT_RETENTION_MS = RECOMMENDATION_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1_000
 
 /**
@@ -189,7 +189,7 @@ export function createRecommendationService(deps: {
   /** 便于测试注入固定时钟；缺省取系统时间。 */
   clock?: () => Date
   /**
-   * 进程内计数（#323 R6 §6.3）：事件批写入的尝试/失败、被拒收的原因分布。
+   * 进程内计数（#323 R6）：事件批写入的尝试/失败、被拒收的原因分布。
    *
    * 由 `app.ts` 注入同一个实例（admin service 读它）。缺省不计数——只影响可观测性，
    * 不影响任何写入语义。
@@ -583,7 +583,7 @@ export function createRecommendationService(deps: {
       // `{requestId, listingCursor}`，就能把一次**排序**请求变成 newest 透传：发出去的卡片没有快照行，
       // 它们随后的曝光会被归因层按 `attribution_not_found` 拒收 —— 用户侧表现为数据丢失。
       // 反向同理：`rec-v1-none` 的请求没有快照，snapshot 游标只会翻出空页。
-      // 旧版（R1–R3）游标对应的请求行版本恒为 `rec-v1-none`（见 §7.1），所以这条校验不误伤在途游标。
+      // 旧版（R1–R3）游标对应的请求行版本恒为 `rec-v1-none`，所以这条校验不误伤在途游标。
       const degraded = row.strategyVersion === RECOMMENDATION_STRATEGY_VERSION_NONE
       if (degraded !== (decoded.kind === 'passthrough')) throw invalidCursor()
 
@@ -657,7 +657,7 @@ export function createRecommendationService(deps: {
       // 那是一段永远不可达的死代码，且服务端没有可信的"什么算 fixture"判据。
       // 开发预览不受上述闸门约束（真客户端 + 真 id + 真 requestId 时完全可归因），v1 不引入
       // 客户端自报的流量头（属改写入路径的超范围变更）。
-      // Bot 同理不做 UA / IP 判定（R1 §6 明确不落 UA），只在 guardrail 的 rateLimitedRequests 上可见。
+      // Bot 同理不做 UA / IP 判定（R1 明确不落 UA），只在 guardrail 的 rateLimitedRequests 上可见。
       events.forEach((event, index) => {
         // 服务端确证类事件（评论/会话/交易）不接受客户端上报：这个端点是匿名可写的，照收就等于
         // 任何人都能伪造 PURCHASE / CHAT_START 污染训练数据。这四类的真值只有服务端写路径
