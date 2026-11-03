@@ -10,33 +10,32 @@ mock.module('@tarojs/taro', () => ({
     },
   },
 }))
-const { readAppVersion } = await import('../src/lib/app-meta')
+const { readAppMeta } = await import('../src/lib/app-meta')
 
-describe('实际小程序版本', () => {
-  test('正式版随微信运行时版本变化，不绑定发版常量', () => {
-    account = { miniProgram: { envVersion: 'release', version: '0.0.6' } }
-    expect(readAppVersion()).toBe('v0.0.6')
-    account.miniProgram.version = '0.0.7'
-    expect(readAppVersion()).toBe('v0.0.7')
+describe('实际版本与独立环境标记', () => {
+  test('微信实际版本优先于构建版本，正式版无胶囊', () => {
+    account = { miniProgram: { envVersion: 'release', version: '0.0.7' } }
+    expect(readAppMeta('0.0.6')).toEqual({ version: '0.0.7', environment: null })
   })
-  test('体验版有版本则显示，没有则明确标识体验版', () => {
-    account = { miniProgram: { envVersion: 'trial', version: '0.0.6' } }
-    expect(readAppVersion()).toBe('v0.0.6（体验版）')
-    account.miniProgram.version = ''
-    expect(readAppVersion()).toBe('体验版')
+  test.each([
+    ['develop', '开发版'],
+    ['trial', '体验版'],
+  ])('%s 缺少微信版本时仍显示本次构建版本并另带胶囊', (envVersion, environment) => {
+    account = { miniProgram: { envVersion, version: '' } }
+    expect(readAppMeta('0.0.6')).toEqual({ version: '0.0.6', environment })
+    account.miniProgram.version = '0.0.8'
+    expect(readAppMeta('0.0.6')).toEqual({ version: '0.0.8', environment })
   })
-  test('开发版不冒充线上版本', () => {
+  test('没有任何版本来源时不伪造版本', () => {
     account = { miniProgram: { envVersion: 'develop', version: '' } }
-    expect(readAppVersion()).toBe('开发版')
+    expect(readAppMeta('')).toEqual({ version: '版本未知', environment: '开发版' })
   })
-  test('平台缺少信息或 API 抛错时不伪造版本且不崩溃', () => {
+  test('API 不可用时仍可显示构建版本，环境未知不冒充正式版', () => {
     account = undefined
-    expect(readAppVersion()).toBe('版本未知')
-    account = { miniProgram: { envVersion: 'release', version: '' } }
-    expect(readAppVersion()).toBe('版本未知')
+    expect(readAppMeta('0.0.6')).toEqual({ version: '0.0.6', environment: null })
     throws = true
     try {
-      expect(readAppVersion()).toBe('版本未知')
+      expect(readAppMeta('')).toEqual({ version: '版本未知', environment: null })
     } finally {
       throws = false
     }

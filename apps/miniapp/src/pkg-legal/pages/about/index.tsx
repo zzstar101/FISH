@@ -3,8 +3,8 @@ import Taro from '@tarojs/taro'
 import { useMemo } from 'react'
 import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
+import AppVersion from '@/components/app-version'
 import NavBar from '@/components/nav-bar'
-import { readAppVersion } from '@/lib/app-meta'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
@@ -23,7 +23,7 @@ import './index.scss'
  *   `Taro.getUpdateManager()` 只给回调、没有 `checkNow()`；
  * - 条目行**不加左图标**（一行只放一个信息），只有版本行留图标，用来区分「展示项 / 跳转项」。
  *
- * 与设置页共用微信运行时版本读取；开发版/体验版缺少版本时显示环境名，不伪造版本或构建号。
+ * 与设置页共用实际版本号，开发版/体验版另带小胶囊；微信未返回版本时使用本次构建版本。
  *
  * 品牌标记用真实资产 `BRAND.mark`（`@/assets/brand`；稿的取舍 ②：稿里那个渐变方块 +
  * 「鱼」字是占位，落地整块换成本图）。页脚版权行取稿的原文（来源
@@ -59,7 +59,9 @@ export default function About() {
             <Image className="ab__row-ic-img" src={ICONS.gridFg} mode="aspectFit" />
           </View>
           <Text className="ab__row-label">版本号</Text>
-          <Text className="ab__row-val num">{readAppVersion()}</Text>
+          <View className="ab__row-val">
+            <AppVersion />
+          </View>
         </View>
       </View>
 

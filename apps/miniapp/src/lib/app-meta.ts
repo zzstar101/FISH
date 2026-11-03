@@ -1,17 +1,25 @@
 import Taro from '@tarojs/taro'
 
-/** 读取当前运行包的微信版本；开发/预览环境不能用仓内常量冒充发布版本。 */
-export function readAppVersion(): string {
+declare const __APP_VERSION__: string | undefined
+
+/** 微信实际版本优先；开发/体验包未返回版本时使用与上传版本同源的构建值。 */
+export function readAppMeta(
+  buildVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '',
+): { version: string; environment: '开发版' | '体验版' | null } {
+  const fallback = buildVersion.trim() || '版本未知'
   try {
     const miniProgram = Taro.getAccountInfoSync()?.miniProgram
-    if (miniProgram?.envVersion === 'develop') return '开发版'
-    const version = miniProgram?.version?.trim()
-    if (miniProgram?.envVersion === 'trial') {
-      return version ? `v${version}（体验版）` : '体验版'
+    return {
+      version: miniProgram?.version?.trim() || fallback,
+      environment:
+        miniProgram?.envVersion === 'develop'
+          ? '开发版'
+          : miniProgram?.envVersion === 'trial'
+            ? '体验版'
+            : null,
     }
-    return version ? `v${version}` : '版本未知'
   } catch {
-    // H5 预览或旧运行环境可能没有此 API；不让元信息影响页面可用性。
-    return '版本未知'
+    // H5 预览或旧环境可能没有此 API；不让元信息影响页面可用性。
+    return { version: fallback, environment: null }
   }
 }

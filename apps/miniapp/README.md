@@ -54,13 +54,18 @@ worktree** 里构建，不要用带未提交改动的工作区：
 
 ```bash
 set -e   # 构建或 ES5 检查失败就停下，绝不上传半成品
-TARO_APP_ID=wx61b67a115826647e TARO_APP_API_BASE=https://yuxiaoyingai.com/api bun run build:miniapp
+VERSION=0.0.6  # 本次上传版本：构建与 upload 必须共用此值
+TARO_APP_VERSION="$VERSION" TARO_APP_ID=wx61b67a115826647e TARO_APP_API_BASE=https://yuxiaoyingai.com/api bun run build:miniapp
 
 CLI=/Applications/wechatwebdevtools.app/Contents/MacOS/cli   # macOS 默认安装位置
 $CLI islogin                                                 # 未登录：$CLI login 扫码
 $CLI open --project "$PWD/apps/miniapp/dist"                 # 先打开一次，否则 upload 可能报「需要重新登录」
-$CLI upload --project "$PWD/apps/miniapp/dist" -v 0.0.1 -d "内部测试 0.0.1（origin/main <sha>）"
+$CLI upload --project "$PWD/apps/miniapp/dist" -v "$VERSION" -d "内部测试 $VERSION（origin/main <sha>）"
 ```
+
+关于页与设置页优先显示微信 `getAccountInfoSync().miniProgram.version`；开发版/体验版旁边另有环境胶囊。
+微信未返回版本时，显示构建时注入的 `TARO_APP_VERSION`，因此必须与上传 `-v` 使用同一值；
+两者均未提供时显示「版本未知」，不会把某个旧版本写死为兜底。本地开发也可显式设置该变量。
 
 构建到上传之间不要在同一个 worktree 里再跑别的构建（包括 `dev:miniapp` 的 watch）：它们共用 `dist/`，
 上传的产物可能混进另一份 AppID / API 配置。
