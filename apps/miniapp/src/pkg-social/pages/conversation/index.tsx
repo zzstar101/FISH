@@ -316,12 +316,12 @@ export default function Conversation() {
    */
   const [tailAnchorFlip, setTailAnchorFlip] = useState(false)
   /**
-   * 输入行**实测**高度（设备 px，0 = 还没量到），语音态与键盘态共用同一个值（#560）。
+   * 输入行**实测**高度（设备 px，0 = 还没量到）。
    *
-   * 「按住说话」是固定 68 的盒子，而 `autoHeight` 的输入框输入两三行就会比它高几十 px，
-   * 这时切态消息流会矮/高一大截 —— 违反「两态 `.conv__scroll` 可见高度差 = 0」。所以切
-   * 之前量下输入行的真实高度，语音态用内联 `minHeight` 顶到同一高度；反向切回时输入框
-   * 内容没变、`autoHeight` 自己就回到同一高度，两边自然相等。
+   * 它已经不是布局来源了（#560 安卓真机的根因修掉之后）：输入框在两态之间**常驻**，语音态
+   * 只是把它 `opacity: 0` 藏起来，`bar` 的高度自始至终由这一个输入框决定，不需要再拿实测
+   * 高度去给「按住说话」顶 `minHeight`。现在它的用途只剩记账：`onLineChange` 拿它算
+   * 「这次长高了多少」，交给贴底判据（`growBottomAllowance`），所以仍要跟着事件更新。
    *
    * 来源两处：`onLineChange`（行数一变就报高度，打字时最及时）与几何量测（进页面 / 切态
    * 后各量一次，兜住「一进页面就带多行草稿」这种没有行数变化事件的情况）。
@@ -2481,9 +2481,9 @@ export default function Conversation() {
     /**
      * 切态这一批（#560）：收面板 + 切语音态 + 重指尾行，**同一批**落地。
      *
-     * 键盘高度不在这批里 —— 它由平台事件单调收到 0，和本批没有时序耦合。输入行两态同盒
-     * （`inputRowPx` 顶住 `minHeight`），这一批本身不改变输入栏高度，用户看到的是「按住
-     * 说话」原地换上去；键盘按自己的动画滑走。
+     * 键盘高度不在这批里 —— 它由平台事件单调收到 0，和本批没有时序耦合。输入框两态常驻
+     * （语音态只 `opacity: 0`，不卸载重挂），这一批根本不改变输入栏高度，用户看到的是
+     * 「按住 说话」原地换上去；键盘按自己的动画滑走。
      */
     keepTailAnchored()
     setPanelOpen(false)
@@ -3149,7 +3149,7 @@ export default function Conversation() {
             })
             scrollViewportRef.current = viewport.height
           }
-          // 语音态没有 `.conv__input`：量不到就沿用旧值，不归零（归零会让「按住说话」跳回 68）
+          // 输入框两态常驻，语音态也量得到；量不到（首帧、老基础库）就沿用旧值，不归零
           const inputRow = res?.[1] as { height?: number } | undefined
           const inputHeight = inputRow?.height
           if (typeof inputHeight === 'number' && inputHeight > 0) writeInputRowPx(inputHeight)
@@ -3960,33 +3960,46 @@ export default function Conversation() {
             />
           </View>
 
-          {voiceMode ? (
-            /*
-              按住说话：`onTouchStart` 起录、`onTouchEnd` 松开就发、`onTouchCancel`
-              手指滑出即放弃。微信的 `RecorderManager` 只有「停」没有「撤销」，
-              取消只能靠不把这段音频交给上传。
-            */
-            /*
-              两态同盒模型（#560）：`autoHeight` 的输入框输入两三行就比「按住说话」的 68 高
-              几十 px，而切态时消息流的可视高度不许因此变一下。这里用实测的输入行高度
-              （`inputRowPx`）作 `minHeight`，语音态与键盘态占同一块高度；量不到值时退回
-              scss 里的 68（首帧、老基础库不报 `onLineChange` 的情况）。
-            */
-            <View
-              className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
-              style={inputRowPx > 0 ? { minHeight: `${inputRowPx}px` } : undefined}
-              onTouchStart={startVoice}
-              onTouchMove={moveVoice}
-              onTouchEnd={endVoice}
-              onTouchCancel={() => finishVoice(true)}
-            >
-              <Text className="conv__hold-tx">
-                {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
-              </Text>
-            </View>
-          ) : (
+          {/*
+            输入框**常驻不卸载**（#560 安卓真机的根因）：切语音态时把它卸载再挂回来，
+            新挂载的 `<Textarea autoHeight>` 在拿到真实宽度之前会按最窄宽排版、把占位文字
+            折成三行，`onLineChange` 报出 85/100 的高度，下一拍才塌回 30/48 —— 输入栏先上提
+            52px 再回落，就是 Owner 说的「底部空缺」。
+
+            保持挂载就没有这段瞬态：两态共用同一块输入行，`bar` 的高度自始至终由这一个
+            输入框决定（语音态也如此，只是把它藏起来）。所以语音态不再需要拿
+            `inputRowPx` 去给「按住说话」顶一个 `minHeight` —— 那条桥本身就是对
+            「输入行会消失」的补偿。
+          */}
+          <View className="conv__rowwrap">
+            {voiceMode ? (
+              /*
+                按住说话：`onTouchStart` 起录、`onTouchEnd` 松开就发、`onTouchCancel`
+                手指滑出即放弃。微信的 `RecorderManager` 只有「停」没有「撤销」，
+                取消只能靠不把这段音频交给上传。
+
+                绝对定位盖满整行（`conv__rowwrap` 是它的定位父级）：高度跟着输入行走，
+                多行草稿切到语音态时手势区也是同样的高度。
+              */
+              <View
+                className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
+                onTouchStart={startVoice}
+                onTouchMove={moveVoice}
+                onTouchEnd={endVoice}
+                onTouchCancel={() => finishVoice(true)}
+              >
+                <Text className="conv__hold-tx">
+                  {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
+                </Text>
+              </View>
+            ) : null}
             <Textarea
               className="conv__input"
+              /*
+                语音态只藏不卸载：`opacity: 0` 让它不参与视觉，`pointerEvents: 'none'`
+                把触摸让给上面那层 `conv__hold`。
+              */
+              style={voiceMode ? { opacity: 0, pointerEvents: 'none' } : undefined}
               value={inputValue}
               placeholder="发消息…"
               placeholderClass="conv__input-ph"
@@ -4002,14 +4015,14 @@ export default function Conversation() {
               adjustPosition={false}
               cursorSpacing={0}
               /*
-                `autoHeight` 的输入框每多一行就高 30 多 px，语音态要跟着用同一高度（#560 的
-                两态同盒模型）。`onLineChange` 直接给设备 px 高度，比在渲染期猜行数准 ——
-                `event.detail.height` 就是这个输入行的实测高度。
+                `onLineChange` 直接给设备 px 高度，比在渲染期猜行数准 —— `event.detail.height`
+                就是这个输入行的实测高度。它已经不用来给语音态顶 `minHeight` 了（输入框常驻，
+                高度自己就在），但仍然要记：下面第一句把它折算成「本页刚让出多少消息流高度」。
 
-                同时**当场**把「本页刚让出多少消息流高度」交给贴底判据：输入框一变高，原生层
-                会截断越界偏移并立刻抛 `bindscroll`，而量测 effect 还要等下一帧的 `nextTick`；
-                等它回来，这次滚动早被判成「用户在翻历史」，之后切态 / 开面板的重锚全被守卫
-                挡掉，最新一条就压在视口外几十 px 回不来（#561 的复发路径）。
+                **当场**把缩量交给贴底判据：输入框一变高，原生层会截断越界偏移并立刻抛
+                `bindscroll`，而量测 effect 还要等下一帧的 `nextTick`；等它回来，这次滚动
+                早被判成「用户在翻历史」，之后切态 / 开面板的重锚全被守卫挡掉，最新一条就
+                压在视口外几十 px 回不来（#561 的复发路径）。
                 记账口径（累加 / 边界 / `ref` 为 0 表示还没量到或刚清空）全在
                 `growBottomAllowance` 里 —— 这里只管把值交过去。
               */
@@ -4048,7 +4061,7 @@ export default function Conversation() {
               }}
               onInput={(event) => setInputValue(event.detail.value)}
             />
-          )}
+          </View>
 
           <View className={`conv__plus${panelOpen ? ' is-open' : ''}`} onClick={togglePanel}>
             <Image className="conv__plus-ic" src={ICONS.plusBrand} mode="aspectFit" />

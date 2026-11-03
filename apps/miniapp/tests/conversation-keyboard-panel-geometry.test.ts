@@ -975,7 +975,7 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(textarea).toContain('cursorSpacing={0}')
   })
 
-  test('两态同盒模型：语音态用实测输入行高度顶到同一高度，切态消息流不跳', async () => {
+  test('两态不卸载输入框：语音态只把它藏起来（挂载瞬态就是「先上提再回落」的根因）', async () => {
     const source = squash(await pageSource())
     // 输入框每多一行就往回报一次实测高度（设备 px），比在渲染期猜行数准。
     // `tag()` 会在 `onLineChange` 里的 `>` 处截断，切到下一个属性为止
@@ -991,13 +991,33 @@ describe('键盘高度是单一真源（#560）', () => {
     const grownAt = textarea.indexOf('growBottomAllowance({')
     expect(grownAt).toBeGreaterThan(-1)
     expect(grownAt).toBeLessThan(textarea.indexOf('writeInputRowPx(height)'))
-    // 「按住说话」拿同一个值当 `minHeight`：不然多行输入后切语音，消息流会突然长高一大截
-    // （`tag()` 同样会在 `inputRowPx > 0` 的 `>` 处截断，切到下一个事件绑定为止）
-    const hold = slice(source, '<View className={`conv__hold', 'onTouchStart={startVoice}')
-    expect(hold).toContain('minHeight: `$' + '{inputRowPx}px`')
-    expect(hold).toContain('inputRowPx > 0')
-    // 量不到值时退回 scss 的 68（首帧 / 老基础库不报 onLineChange）
-    expect(await styleSource()).toContain('height: 68px')
+
+    /**
+     * 结构判据（顶替原来的「语音态用 `inputRowPx` 顶 `minHeight`」）：
+     * 卸载重挂 `<Textarea autoHeight>`，新节点在拿到真实宽度前会按最窄宽排版、把占位文字
+     * 折成三行报 85/100，下一拍才塌回 48 —— 输入栏那一帧「先上提再回落」就是它。所以
+     * 输入框必须**常驻**：全页只有一个 `<Textarea>`，且它不在任何条件渲染里。
+     */
+    expect(source.split('<Textarea').length - 1).toBe(1)
+    const rowwrap = slice(source, '<View className="conv__rowwrap">', 'onLineChange=')
+    expect(rowwrap).toContain('<Textarea')
+    // 语音态那支在输入框之前就关掉了（`) : null}`）：输入框不在 `voiceMode ?` 的分支里
+    const holdToTextarea = slice(source, 'onTouchCancel={() => finishVoice(true)}', '<Textarea')
+    expect(holdToTextarea).toContain(') : null}')
+    // 语音态只藏不卸载：藏了还要让出手势，否则原生输入框的点击层照样抢焦点
+    expect(rowwrap).toContain('style={voiceMode ? { opacity: 0, pointerEvents: ')
+
+    /**
+     * scss 侧同样钉住：`conv__rowwrap` 是「按住说话」的定位父级；`.conv__hold` 改成盖满整行
+     * 的绝对定位块、**不再写死 68**（否则多行草稿切语音时手势区矮一截）；输入框的
+     * `min-height: 68px` 保留 —— 单行时输入栏高度必须还是这个自然高。
+     */
+    const style = squash(await styleSource())
+    expect(slice(style, '.conv__rowwrap {', '}')).toContain('position: relative')
+    const holdStyle = slice(style, '.conv__hold {', '&:active')
+    expect(holdStyle).toContain('position: absolute')
+    expect(holdStyle).not.toContain('height: 68px')
+    expect(slice(style, '.conv__input {', '}')).toContain('min-height: 68px')
   })
 
   test('发送清空输入后，输入行高度真源跟着回落（否则下一轮切语音又把消息流顶矮一截）', async () => {
