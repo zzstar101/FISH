@@ -1260,3 +1260,34 @@ export function shouldDropReplyOnSendFailure(code: string | undefined): boolean 
 
 /** 摘掉引用后的提示文案（失败气泡留在原地，用户可以再点重试） */
 export const REPLY_DROPPED_TIP = '引用的消息已失效，已去掉引用'
+
+/**
+ * 「贴底」判定的容差（设备 px，与 `ScrollView.onScroll` 的刻度同口径）。
+ *
+ * 留一点余量：`autoHeight` 输入框长高、语音/键盘两态输入栏高度差、iOS 的取整都会让
+ * 底部差上几个 px，这一档必须仍算贴底 —— 否则用户明明看着最新一条，面板一开合却不跟着
+ * 重指尾行（#561 的「跳回顶部」）。
+ */
+export const BOTTOM_SLACK_PX = 24
+
+/**
+ * 消息流此刻是不是贴着底部（#561）。
+ *
+ * `onScroll` 的 `detail` 只有 `scrollTop` / `scrollHeight`，**不含视口高度**，所以视口要
+ * 自己量一次再传进来；判据就是「视口下沿离内容下沿还差多少」。
+ *
+ * 视口还没量到（`0`）时按贴底处理：页面本来就是打开即贴底，此时量测通常只差一帧；
+ * 而误判成「没贴底」的代价是把 #561 原样还回去（偏移丢了没人重指），误判成「贴底」
+ * 最多是多滚一次「本来就在底部」的底。取舍偏向后者。
+ */
+export function isNearBottom(input: {
+  scrollTop: number
+  scrollHeight: number
+  viewportHeight: number
+}): boolean {
+  const { scrollTop, scrollHeight, viewportHeight } = input
+  if (viewportHeight <= 0) return true
+  // 内容不足一屏：没有可滚的，恒贴底
+  if (scrollHeight <= viewportHeight) return true
+  return scrollHeight - scrollTop - viewportHeight <= BOTTOM_SLACK_PX
+}
