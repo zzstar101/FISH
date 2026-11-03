@@ -397,9 +397,11 @@ export default function Search() {
               失败时也不显示，免得把「没加载出来」说成「一件都没有」。
               但它是**常驻盒子**（#564）：请求途中只加 `is-wait` 把它藏起来，绝不卸载 ——
               整块卸载会让下方瀑布流上移 88rpx，结果回来再插回去，用户看到的就是
-              「切个排序，列表先上抽一下又弹回来」。藏起来时保留旧文案，连换行后的高度都一致。 */}
+              「切个排序，列表先上抽一下又弹回来」。藏起来时保留旧文案，连换行后的高度都一致。
+              例外是**结果为空**（首次搜索 / `failed` 时 `results` 恒为空）：下方没有卡片可被顶动，
+              这时挂着「藏起来的 88rpx」只剩一条纯空白带，故直接不挂。 */}
           {/* 计数报**搜索结果**（服务端给的条数），本机隐藏的另说一句 —— 两件事实都不含糊 */}
-          {isNumber ? null : (
+          {isNumber || (results.length === 0 && (loading || failed)) ? null : (
             <View className={`search__meta${loading || failed ? ' is-wait' : ''}`}>
               <Text>为你找到</Text>
               <Text className="search__meta-num num">{results.length}</Text>
