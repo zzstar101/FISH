@@ -623,19 +623,24 @@
  * 本节只有三块：气泡内摘引、输入栏上方的引用栏、撤回碑。
  */
 
-/* 气泡内的摘引（稿子 .quote）：左侧竖线 + 单行截断的摘引文案，点它定位原消息 */
+/* 气泡内的摘引（#596 第 4 点）：**双重气泡** —— 外层是消息气泡，这一块是内层
+   「更浅一档的圆角方块」，小块下方才是回复正文。
+   旧的「左侧 5px 竖线 + 无底色」形态已废弃：竖线在深色气泡上几乎看不见，
+   双层底色才能把「被引用的那句话」和正文分开。
+   DOM 结构本来就是这个顺序（气泡 > 摘引块 > 正文，`index.tsx:3886-3896`），
+   所以这里只加底色/圆角/内边距，**不需要改 tsx**。 */
 .conv__quote {
   display: flex;
   align-items: center;
   min-height: 40px;
-  padding: 4px 0 4px 16px;
+  padding: 10px 16px;
   margin-bottom: 10px;
-  border-left: 5px solid var(--accent-mid);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
+  background: var(--quote-bg);
 
-  /* 我方气泡是渐变底，竖线与文字都要换成白色系才看得清 */
+  /* 我方气泡是深青纯色底，内嵌块只能**压深**（见 `_token-vars.scss` 的 `--quote-bg-mine`） */
   &.is-mine {
-    border-left-color: rgba(255, 255, 255, 0.72);
+    background: var(--quote-bg-mine);
   }
 }
 
@@ -648,16 +653,23 @@
   @include ellipsis;
 
   .conv__quote.is-mine & {
-    color: rgba(255, 255, 255, 0.86);
+    color: #fff;
   }
 }
 
 /*
- * 媒体气泡上方的引用条在气泡**外面**，底下是页面 --bg，不是我方气泡的渐变底。
- * 复用 `.is-mine` 的白字会变成近白底上的白字（对比度约 1.1:1），发送方看不见。
+ * 媒体消息的摘引在气泡**外面**（`index.tsx:2628` 的 `renderMediaQuote`），
+ * 底下是页面 --grad-page 而不是我方深青气泡 —— 所以无论有没有 `.is-mine`
+ * 都必须走「浅块 + 深字」，否则就是白字压浅底（约 1.1:1，发送方看不见）。
+ * 选择器写成 `.conv__quote--floating.is-mine` 是为了压过上面 `.conv__quote.is-mine`
+ * 的两类名权重。
  */
 .conv__quote--floating {
-  border-left-color: var(--accent-mid);
+  background: var(--quote-bg);
+
+  &.is-mine {
+    background: var(--quote-bg);
+  }
 
   .conv__quote-tx {
     color: var(--muted-2);
