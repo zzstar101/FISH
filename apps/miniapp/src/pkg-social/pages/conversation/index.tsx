@@ -82,7 +82,6 @@ import {
   canRetry,
   canRetryMedia,
   clearDeferredReload,
-  DEFAULT_PANEL_HEIGHT_PX,
   type DeferredReload,
   deferReload,
   growBottomAllowance,
@@ -125,6 +124,7 @@ import {
   resetDeferredReload,
   resolveBottomInset,
   resolveConvState,
+  resolvePanelHeightPx,
   resolveSentinel,
   settleSend,
   shouldDropReplyOnSendFailure,
@@ -314,16 +314,6 @@ export default function Conversation() {
    */
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   /**
-   * 「+」面板的高度（设备 px，#597）：取**见过的最高的那把键盘**，从没量到过就落到
-   * `DEFAULT_PANEL_HEIGHT_PX`。
-   *
-   * 为什么必须跟键盘等高：面板与键盘占的是屏幕底部**同一块**区域。等高了，键盘 ↔ 面板
-   * 切换时底部底座总高不变 → `.conv__scroll` 一次都不用变，消息流既不位移也不被截断
-   * （#597 现象一、现象三的根都在「连着变两次」）；键盘本来就没开时，也只是面板那一次。
-   * 高度只由 `onKeyboardHeightChange` 记录（见那里的注释），别处不许写。
-   */
-  const [panelHeightPx, setPanelHeightPx] = useState(DEFAULT_PANEL_HEIGHT_PX)
-  /**
    * 尾行锚点的交替位（#561）：`scrollIntoView` 的值不变时原生层不会重滚，几何一变
    * （键盘升降、面板开合）就得换一个**同位**锚点再指一次，见 `tailAnchorId`。
    */
@@ -470,11 +460,6 @@ export default function Conversation() {
    */
   const keyboardHeightRef = useRef(0)
   const keyboardClosingRef = useRef(false)
-  /**
-   * `panelHeightPx` 的同步镜像（#597）：键盘事件里要拿上一帧的值比「这把键盘是不是更高」，
-   * 等一轮渲染再读 state 拿到的是旧值。
-   */
-  const panelHeightPxRef = useRef(DEFAULT_PANEL_HEIGHT_PX)
   /**
    * 面板展开态的同步镜像（#597）：键盘事件是常驻订阅，回调里读 `panelOpen` 只会拿到订阅
    * 那一刻的旧值。面板展开期间底部高度由面板占，键盘事件的升降**不产生布局变化**，
@@ -2681,16 +2666,14 @@ export default function Conversation() {
     }
     /**
      * 面板是**底部底座里独立的一块**（#597）：它不再长在输入栏的文档流里，而是绝对定位贴住
-     * 输入栏底边、高度由 `resolveBottomInset` 内联成「上次键盘高度」。键盘收走与面板出现占的
-     * 是同一块高度，所以底部底座总高在切换前后相等，消息流**一次都不变** —— 改前是流内块，
+     * 输入栏底边、高度由内容自己撑（`panelHeight` 只决定底座让位带多高）。改前是流内块，
      * 键盘先收一截、面板再长一截，消息流连着变矮两次，原生层把越界的偏移截断后没人推回底部，
      * 看起来就是「整页移一下 + 掉到底」（#597 现象一）。
      *
-     * 三件事仍然压进同一批（收键盘 / 重指尾行 / 开面板）：`keepTailAnchored` 兜住「这把键盘
-     * 从没量到过」时的那次真实几何变化（一进页面就点「+」：底部从 `env(safe-area)` 直接长成
-     * 面板高）。键盘高度**同样不在这批里归零**：它是平台事件的产物（`nextKeyboardInset`），
-     * 自己归零就是拿本页布局去和系统收键盘动画抢时序 —— #560 电的正是这一下。
-     * 收键盘与意图闩 / 活性哨兵一起走 `collapseKeyboard()`。
+     * 三件事仍然压进同一批（收键盘 / 重指尾行 / 开面板）：`keepTailAnchored` 兜住这一下的
+     * 几何变化（底部从 `env(safe-area)` 长成面板高）。键盘高度**同样不在这批里归零**：它是
+     * 平台事件的产物（`nextKeyboardInset`），自己归零就是拿本页布局去和系统收键盘动画抢时序
+     * —— #560 电的正是这一下。收键盘与意图闩 / 活性哨兵一起走 `collapseKeyboard()`。
      */
     collapseKeyboard()
     keepTailAnchored()
@@ -3094,17 +3077,40 @@ export default function Conversation() {
     : undefined
 
   /**
-   * 底部底座为「键盘 / 面板」让出的高度（设备 px，#597）。**唯一真源**：
-   * `.conv__bar` 的下内边距与 `.conv__panel` 的内联高度都取它，两者因此永远等高 ——
-   * 键盘 ↔ 面板切换时底座总高不变，`.conv__scroll` 的高度一次都不用变。
+   * 「+」面板自己要占的高度（设备 px，#597 追加任务）：内容高 + 底部安全区。
    *
-   * 判据全在 `view.ts` 的 `resolveBottomInset()`：键盘态就是键盘高度；面板态取「上次键盘
-   * 高度」（用正在收起的键盘高度会让底座跟着键盘动画连跳几档，正是 #597 现象一）。
+   * 与键盘高度**解耦** —— 面板有三格图标，撑成一把键盘那么高只会留一片空白（Owner 在
+   * 演示截图里的「展开后下方位置太空了」）。公式在 `view.ts` 的 `resolvePanelHeightPx()`
+   * 里，rpx 数逐项对应 `index.scss` 的 `.conv__panel` / `.conv__ptile*`。
+   *
+   * 每页只算一次：窗口尺寸与安全区在页面生命周期内不变，且面板高度不参与任何滚动判定
+   * （它只决定底座让位带的高度），不需要跟着渲染变。
+   */
+  const panelHeight = useMemo(() => {
+    try {
+      const info = Taro.getWindowInfo()
+      // 安全区下沿 = 屏幕底 − safeArea.bottom（拿不到安全区就当 0，面板那条 env 也就不生效）
+      const safeAreaBottom = info.safeArea
+        ? Math.max(0, info.screenHeight - info.safeArea.bottom)
+        : 0
+      return resolvePanelHeightPx({ windowWidth: info.windowWidth, safeAreaBottom })
+    } catch {
+      // 老基础库拿不到窗口信息：按 375 宽、无安全区估，别让面板塌成 0
+      return resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 0 })
+    }
+  }, [])
+
+  /**
+   * 底部底座为「键盘 / 面板」让出的高度（设备 px，#597）。**唯一真源**：
+   * `.conv__bar` 的下内边距取它，`.conv__panel` 自己的内容高度另由 `panelHeight` 定。
+   *
+   * 判据全在 `view.ts` 的 `resolveBottomInset()`：键盘态就是键盘高度；面板态取 `panelHeight`
+   * （用正在收起的键盘高度会让底座跟着键盘动画连跳几档，正是 #597 现象一）。
    */
   const bottomInset = resolveBottomInset({
     panelOpen,
     keyboardHeight,
-    lastKeyboardHeight: panelHeightPx,
+    panelHeight,
   })
 
   /**
@@ -3166,14 +3172,6 @@ export default function Conversation() {
       keyboardHeightRef.current = step.inset
       setKeyboardHeight(step.inset)
       /**
-       * 面板高度跟着「见过的最高的键盘」走（#597）：只在**变高**时写，收到 0 / 收起动画的
-       * 中间值都不动它 —— 面板要的是「上一次键盘有多高」，不是此刻键盘在哪。
-       */
-      if (step.inset > panelHeightPxRef.current) {
-        panelHeightPxRef.current = step.inset
-        setPanelHeightPx(step.inset)
-      }
-      /**
        * **面板 → 键盘**的交接（#597）：面板展开时点输入框，**不在聚焦当拍收面板**，改在
        * 键盘真落地第一帧再收 —— 这是同一块高度在换占用者，必须等新占用者到了才让位。
        *
@@ -3182,9 +3180,10 @@ export default function Conversation() {
        * 先塌空、视口放大一整把键盘，下一拍平台报高度再长回来。端上就是「输入栏先掉到屏幕
        * 底、下方空一片、再被顶上去」，是现象一的镜像，幅度比改前还大。
        *
-       * 这一拍底座从面板高换成键盘高：两者量级相同，差值只是「这把键盘 − 历史最大键盘」
-       * （即 F2 的有意取舍），一次到位。`panelOpenRef` 直接写 false 再 setState：下面那句
-       * 重指尾行在同一次回调里就按「面板已收」判，位置不会漏锚。
+       * 这一拍底座从「面板内容高」换成键盘高：面板不再与键盘等高（#597 追加任务），差值就是
+       * 「这把键盘 − 面板内容高」，会**一次**变高 —— 这是预期行为（宁可一次让位，也不要留
+       * 一片空面板）。`panelOpenRef` 直接写 false 再 setState：下面那句重指尾行在同一次回调里
+       * 就按「面板已收」判，位置不会漏锚。
        *
        * 「是不是新占用者到了」全部交给 `shouldHandOffToKeyboard` 判 —— 页面里不自己写条件，
        * 否则少一条判据（尤其是 `!step.closing`）在源码钉桩之外测不出来：
@@ -4226,14 +4225,18 @@ export default function Conversation() {
 
         {/*
         「+」面板（稿子 3 格）：图片 / 拍照 / 商品。**不在输入栏的文档流里**（#597）——
-        它绝对定位在底部底座上、贴住屏幕底边，高度内联成 `bottomInset`（= 上次键盘高度），
-        正好把输入栏为键盘让出的那条下内边距填满。于是「面板出现」与「键盘收起」是**同一个
-        高度**，消息流高度一次都不用变。改前它是输入栏里的流内块：键盘先收一截、面板再长一截，
-        消息流连着变矮两次，原生层把越界的偏移截断后没有任何指令把它推回底部 —— 端上就是
-        「整页移一下 + 掉到最底」（#597 现象一、现象三）。
+        它绝对定位在底部底座上、贴住屏幕底边，高度由内容自己撑开（`height: auto`），
+        底座按 `panelHeight`（内容高 + 安全区）给它让位，正好填满输入栏那条下内边距。
+        所以「面板出现」是一次到位的高度变化，不是键盘收起那样连跳几档。
+
+        高度**与键盘无关**（#597 追加任务）：面板内容只有三格，按上次键盘高撑开会留一片
+        空白。因此键盘 ↔ 面板切换时底座会一次变高/变矮（差一个「键盘高 − 面板高」）——
+        预期行为，换来的是一点空白都没有的面板。改前它是输入栏里的流内块：键盘先收一截、
+        面板再长一截，消息流连着变矮两次，原生层把越界的偏移截断后没有任何指令把它推回
+        底部 —— 端上就是「整页移一下 + 掉到最底」（#597 现象一、现象三）。
       */}
         {panelOpen ? (
-          <View className="conv__panel" style={{ height: `${bottomInset}px` }}>
+          <View className="conv__panel">
             {PANEL_TILES.map((tile) => (
               <View key={tile.key} className="conv__ptile" onClick={() => panelAction(tile.key)}>
                 <View className="conv__ptile-disc">

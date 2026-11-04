@@ -1275,33 +1275,69 @@ export const REPLY_DROPPED_TIP = '引用的消息已失效，已去掉引用'
 export const BOTTOM_SLACK_PX = 24
 
 /**
- * 「+」面板在**从没量到过键盘**时的高度兜底（设备 px，#597）。
+ * 「+」面板自身内容的几何（rpx，#597 追加任务）。
  *
- * 面板的正确高度是「上一次键盘有多高」：两者占的是屏幕底部的同一块区域，等高了，
- * 键盘 ↔ 面板切换时底部底座总高不变，消息流的高度就不会跟着变两次。量不到（用户
- * 一进页面就点「+」、或页面在无键盘设备上打开）时给一个常见手机键盘的量级，
- * 让面板至少占住那块地方，而不是贴着输入栏长出一条两行的窄条。
+ * 面板高度**不再等于键盘高度**：三格图标的实际内容只有这么高，按「上次键盘高」撑开会把
+ * 下方一大片留成空白（Owner 在演示截图里提的「展开后下方位置太空了」）。面板高度改为
+ * 「内容自己多高就多高」，与键盘彻底解耦 —— 代价是键盘 ↔ 面板切换时底部底座会**一次**
+ * 变高/变矮（差一个「键盘高 − 面板高」）。这是有意的取舍：宁可让消息流一次性让位，
+ * 也不要留一片空面板。
+ *
+ * 四个数是 `index.scss` 的真源，改 scss 必须同步改这里（单测钉住两边一致）：
+ * - `PANEL_PADDING_RPX`：`.conv__panel` 的 `padding: 24px 28px calc(24px + env(...))` 上下两段
+ * - `PANEL_DISC_RPX`：`.conv__ptile-disc` 的 `width/height: 104px`
+ * - `PANEL_TILE_GAP_RPX`：`.conv__ptile` 的 `gap: 12px`（圆钮与文字之间）
+ * - `PANEL_LABEL_RPX`：`.conv__ptile-label` 的 `font-size: 22px` 一行文字。scss 没写
+ *   `line-height`，按常见的 1.36 倍字号估成 30；误差几个 rpx 由面板上方那条 `$bar-gap-px`
+ *   缝隙吸收，面板本身用 `height: auto` 撑开，绝不会因此裁掉格子。
  */
-export const DEFAULT_PANEL_HEIGHT_PX = 260
+export const PANEL_PADDING_RPX = 48
+export const PANEL_DISC_RPX = 104
+export const PANEL_TILE_GAP_RPX = 12
+export const PANEL_LABEL_RPX = 30
+
+/** 「+」面板的内容高度（rpx）= 上下内边距 + 圆钮 + 间隙 + 一行文字 */
+export const PANEL_CONTENT_RPX =
+  PANEL_PADDING_RPX + PANEL_DISC_RPX + PANEL_TILE_GAP_RPX + PANEL_LABEL_RPX
+
+/**
+ * 面板该给自己留多高（设备 px，#597 追加任务）：内容高度（rpx 换算）+ 底部安全区。
+ *
+ * `designWidth = 750`，所以 scss 里的 `1px` 就是 `1rpx`，rpx → 设备 px 只差一个
+ * `windowWidth / 750`（375 宽的屏上 194rpx ≈ 97px）。
+ *
+ * 为什么把安全区加进来：`.conv__panel` 自己的 `padding-bottom` 里带
+ * `env(safe-area-inset-bottom)`，面板真的会比「纯内容」高出一条安全区。底座让给它的
+ * 高度必须把这条算进去，否则面板会盖到输入行上。
+ */
+export function resolvePanelHeightPx(input: {
+  windowWidth: number
+  safeAreaBottom: number
+}): number {
+  const { windowWidth, safeAreaBottom } = input
+  // 量不到窗口宽度时按 375 宽（750 的一半）估，别让 rpx 换算退化成 0
+  const scale = windowWidth > 0 ? windowWidth / 750 : 0.5
+  return Math.round(PANEL_CONTENT_RPX * scale) + Math.max(0, Math.round(safeAreaBottom))
+}
 
 /**
  * 底部底座用什么高度（设备 px，#597）—— 键盘与「+」面板**互斥**，谁在场就用谁的。
  *
  * 面板展开时**不看** `keyboardHeight`：那一刻键盘正在收起（平台事件一路单调递减），
- * 用它的中间值会把底部底座连着改好几次，消息流就跟着抖好几次。面板的高度在点「+」的
- * 当拍就已经是终值（上一次键盘高度），所以底部高度**一次**到位、之后不再变。
+ * 用它的中间值会把底部底座连着改好几次，消息流就跟着抖好几次。面板高度在渲染当拍就是
+ * 终值（`resolvePanelHeightPx` 从内容算出来，见上），所以底部高度**一次**到位、之后不再变。
  *
  * 收起面板时回到 `keyboardHeight`：键盘本来就没开就是 0（内联样式整段不写，
- * `.conv__bar` 自己的 `env(safe-area-inset-bottom)` 生效）。
+ * `.conv__bottom` 自己的 `env(safe-area-inset-bottom)` 生效）。
  */
 export function resolveBottomInset(input: {
   panelOpen: boolean
   keyboardHeight: number
-  lastKeyboardHeight: number
+  panelHeight: number
 }): number {
-  const { panelOpen, keyboardHeight, lastKeyboardHeight } = input
+  const { panelOpen, keyboardHeight, panelHeight } = input
   if (!panelOpen) return Math.max(0, keyboardHeight)
-  return lastKeyboardHeight > 0 ? lastKeyboardHeight : DEFAULT_PANEL_HEIGHT_PX
+  return Math.max(0, panelHeight)
 }
 
 /**

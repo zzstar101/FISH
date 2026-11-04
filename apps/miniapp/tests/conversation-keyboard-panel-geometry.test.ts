@@ -1,13 +1,18 @@
 import { describe, expect, test } from 'bun:test'
 import {
   BOTTOM_SLACK_PX,
-  DEFAULT_PANEL_HEIGHT_PX,
   growBottomAllowance,
   isNearBottom,
   mergeViewportShrink,
   nextKeyboardInset,
+  PANEL_CONTENT_RPX,
+  PANEL_DISC_RPX,
+  PANEL_LABEL_RPX,
+  PANEL_PADDING_RPX,
+  PANEL_TILE_GAP_RPX,
   planScrollFix,
   resolveBottomInset,
+  resolvePanelHeightPx,
   resolveSentinel,
   shouldHandOffToKeyboard,
   stickAfterScroll,
@@ -203,15 +208,15 @@ describe('贴底容差的记账口径（#560/#561，纯函数表驱动）', () =
 
   test('面板开合那一次缩量不记进余量（#597：主动切换不是「内容长高」）', () => {
     /**
-     * 面板占掉一整把键盘的高度：记进余量就等于把「贴底」一次放宽到面板那么高。
-     * 翻历史的人下一次开面板时，可视高度骤降几百 px，判定会把「他离底还很远」误读成
+     * 面板占掉一整块底部（内容高 + 安全区）：记进余量就等于把「贴底」一次放宽到面板那么高。
+     * 翻历史的人下一次开面板时，可视高度骤降一两百 px，判定会把「他离底还很远」误读成
      * 「贴底」→ 重锚把他从历史里拽到最新一条（#597 现象三）。
      */
     expect(
       mergeViewportShrink({
         allowance: 0,
         prevViewport: 600,
-        nextViewport: 600 - DEFAULT_PANEL_HEIGHT_PX,
+        nextViewport: 600 - resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 34 }),
         panelTransition: true,
       }),
     ).toBe(0)
@@ -230,94 +235,123 @@ describe('贴底容差的记账口径（#560/#561，纯函数表驱动）', () =
 })
 
 describe('底部底座的高度真源（#597，纯函数表驱动）', () => {
+  /** 面板在 375 宽（designWidth 的一半）、34pt 安全区的 iPhone 上占多高：194rpx → 97px，再加 34 */
+  const panelOn375 = resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 34 })
+
   test('键盘态取键盘高度，键盘收起就是不占', () => {
     expect(
-      resolveBottomInset({ panelOpen: false, keyboardHeight: 280, lastKeyboardHeight: 0 }),
+      resolveBottomInset({ panelOpen: false, keyboardHeight: 280, panelHeight: panelOn375 }),
     ).toBe(280)
     expect(
-      resolveBottomInset({ panelOpen: false, keyboardHeight: 0, lastKeyboardHeight: 280 }),
+      resolveBottomInset({ panelOpen: false, keyboardHeight: 0, panelHeight: panelOn375 }),
     ).toBe(0)
     // 负值（有的机型收起时报一次）当 0，别给它一个负内边距
-    expect(
-      resolveBottomInset({ panelOpen: false, keyboardHeight: -12, lastKeyboardHeight: 0 }),
-    ).toBe(0)
+    expect(resolveBottomInset({ panelOpen: false, keyboardHeight: -12, panelHeight: 0 })).toBe(0)
   })
 
-  test('面板态取「上次键盘高度」，与此刻的键盘高度无关', () => {
+  test('面板态取「面板自己的内容高」，与此刻的键盘高度无关', () => {
     /**
      * 开面板那一刻键盘正在单调收起（280 → 196 → 0）。面板高度必须**一次**到位：
      * 跟着 `keyboardHeight` 走就会让底座连跳三档，正是 #597 现象一（整页移动 / 消息流抽搐）。
+     *
+     * 面板高度也**不再**取「上次/最高键盘高」（#597 追加任务）：三格图标撑成一把键盘高
+     * 只会在下面留一片空白。大屏外接键盘（430 那种）同样不许把面板抬起来。
      */
-    expect(
-      resolveBottomInset({ panelOpen: true, keyboardHeight: 280, lastKeyboardHeight: 280 }),
-    ).toBe(280)
-    expect(
-      resolveBottomInset({ panelOpen: true, keyboardHeight: 196, lastKeyboardHeight: 280 }),
-    ).toBe(280)
-    expect(
-      resolveBottomInset({ panelOpen: true, keyboardHeight: 0, lastKeyboardHeight: 280 }),
-    ).toBe(280)
+    for (const keyboardHeight of [280, 196, 0, 430]) {
+      expect(resolveBottomInset({ panelOpen: true, keyboardHeight, panelHeight: panelOn375 })).toBe(
+        panelOn375,
+      )
+    }
   })
 
-  test('从没量到过键盘时，面板落一个合理默认高（不是 0，也不能是整屏）', () => {
-    const fallback = resolveBottomInset({
-      panelOpen: true,
-      keyboardHeight: 0,
-      lastKeyboardHeight: 0,
-    })
-    expect(fallback).toBe(DEFAULT_PANEL_HEIGHT_PX)
-    // 兜底得落在一把手机键盘的量级里：太小面板里放不下三个 104px 圆钮，太大就顶掉半屏消息
-    expect(fallback).toBeGreaterThan(180)
-    expect(fallback).toBeLessThan(360)
+  test('面板高度只由内容与安全区决定（rpx → px 换算 + 安全区叠加）', () => {
+    // 750 宽 = designWidth：scss 里的 1px 就是 1rpx，换算比 1
+    expect(resolvePanelHeightPx({ windowWidth: 750, safeAreaBottom: 0 })).toBe(PANEL_CONTENT_RPX)
+    // 375 宽（常见 iPhone）：194rpx → 97px
+    expect(resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 0 })).toBe(
+      Math.round(PANEL_CONTENT_RPX / 2),
+    )
+    // 414 宽（Plus / Max）：四舍五入到整数，不吐小数
+    expect(resolvePanelHeightPx({ windowWidth: 414, safeAreaBottom: 0 })).toBe(
+      Math.round((PANEL_CONTENT_RPX * 414) / 750),
+    )
+    // 安全区原样叠在内容高之上（面板自己的 padding-bottom 里也带 env，两边必须对齐）
+    expect(resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 34 })).toBe(
+      Math.round(PANEL_CONTENT_RPX / 2) + 34,
+    )
+    // 负的安全区当 0
+    expect(resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: -10 })).toBe(
+      Math.round(PANEL_CONTENT_RPX / 2),
+    )
+    // 量不到窗口宽度（老基础库）按 375 估：不许退化成 0，也不能是整屏
+    const fallback = resolvePanelHeightPx({ windowWidth: 0, safeAreaBottom: 0 })
+    expect(fallback).toBeGreaterThan(60)
+    expect(fallback).toBeLessThan(140)
+    // 面板整体得落在「三个 104rpx 圆钮放得下、又不至于顶掉半屏消息」的量级里
+    expect(panelOn375).toBeGreaterThan(100)
+    expect(panelOn375).toBeLessThan(200)
   })
 
-  test('键盘 ↔ 面板互相切换时底座总高不变（三现象的共同前提）', () => {
-    const keyboardUp = resolveBottomInset({
-      panelOpen: false,
-      keyboardHeight: 280,
-      lastKeyboardHeight: 280,
-    })
-    const panelOpen = resolveBottomInset({
-      panelOpen: true,
-      keyboardHeight: 0,
-      lastKeyboardHeight: 280,
-    })
-    expect(panelOpen).toBe(keyboardUp)
+  test('面板高的四个分项与 index.scss 的真源逐项一致（改 scss 不改常量必红）', async () => {
+    /**
+     * 面板的**实际**高度由 scss 决定（内容撑开，`height: auto`），而底座让位带的高度由
+     * `view.ts` 的常量算 —— 两边必须逐项对齐，否则面板要么盖住输入行、要么在下面留一条缝。
+     * 这条用例就是那把锁：改 scss 的内边距 / 圆钮尺寸 / 间隙 / 字号而不改常量，这里必红。
+     */
+    const css = await styleSource()
+    const panel = slice(css, '.conv__panel {', '}')
+    const disc = slice(css, '.conv__ptile-disc {', '}')
+    const tile = slice(css, '.conv__ptile {', '}')
+    const label = slice(css, '.conv__ptile-label {', '}')
+    // 上下内边距各一半（scss 的 24px + 24px）
+    expect(panel).toContain(`padding: ${PANEL_PADDING_RPX / 2}px 28px`)
+    expect(disc).toContain(`width: ${PANEL_DISC_RPX}px`)
+    expect(disc).toContain(`height: ${PANEL_DISC_RPX}px`)
+    expect(tile).toContain(`gap: ${PANEL_TILE_GAP_RPX}px`)
+    expect(label).toContain('font-size: 22px')
+    // 文字那一行按 1.2~1.6 倍字号估；超出这个区间说明估算离实际太远，该改成读实测
+    expect(PANEL_LABEL_RPX).toBeGreaterThanOrEqual(22 * 1.2)
+    expect(PANEL_LABEL_RPX).toBeLessThanOrEqual(22 * 1.6)
+    // 总和必须等于四项之和（防止有人只改一项却忘了总和是派生的）
+    expect(PANEL_CONTENT_RPX).toBe(
+      PANEL_PADDING_RPX + PANEL_DISC_RPX + PANEL_TILE_GAP_RPX + PANEL_LABEL_RPX,
+    )
+    // 面板内容必须比它得到的让位带矮一截（`.conv__bar` 的 `$bar-gap-px` 那条缝）
+    expect(panelOn375 - Math.round(PANEL_CONTENT_RPX / 2)).toBe(34)
   })
 
-  test('面板态 → 聚焦输入框 → 键盘首帧：交接前后底座等高，中间不许塌成 0（#597 F1）', () => {
+  test('面板态 → 聚焦输入框 → 键盘首帧：中间不许塌成 0，交接只变一次（#597 F1）', () => {
     /**
      * 反方向（面板 → 键盘）的交接序列。焦点落在输入框时键盘还没起来，这一刻若就
      * `setPanelOpen(false)`，`resolveBottomInset` 只能拿到 `keyboardHeight === 0`（开面板
      * 走过 `collapseKeyboard()`）→ 底座直落 0、视口放大一整把键盘，下一拍平台报高度再长回来：
      * 「输入栏先掉到屏幕底、下方空一片、再被顶上去」，正是现象一的镜像。
      * 所以收起时刻必须推迟到键盘真落地第一帧 —— 页面就是这么接的（见下一条源码断言）。
+     *
+     * 面板不再与键盘等高（#597 追加任务），第 ③ 帧底座会**一次**从面板高换成键盘高，
+     * 差值 = 键盘高 − 面板高。这是预期行为：只变一次，且任何一档都不是 0。
      */
-    const last = 280
     const steps = [
-      // ① 面板展开：占住上次键盘那块高度
+      // ① 面板展开：占住面板内容那一条
       { label: '① 面板态', panelOpen: true, keyboardHeight: 0 },
       // ② 聚焦当拍（键盘仍未落地）：仍然是面板态，高度不许动
       { label: '② 聚焦当拍', panelOpen: true, keyboardHeight: 0 },
-      // ③ 键盘首帧到达：同一帧里收面板、落地键盘高度 —— 交接无缝
-      { label: '③ 键盘首帧', panelOpen: false, keyboardHeight: last },
+      // ③ 键盘首帧到达：同一帧里收面板、落地键盘高度 —— 交接一次到位
+      { label: '③ 键盘首帧', panelOpen: false, keyboardHeight: 280 },
     ]
     const heights = steps.map((step) =>
       resolveBottomInset({
         panelOpen: step.panelOpen,
         keyboardHeight: step.keyboardHeight,
-        lastKeyboardHeight: last,
+        panelHeight: panelOn375,
       }),
     )
-    for (const [index, height] of heights.entries()) {
-      expect({ step: steps[index].label, height }).toEqual({
-        step: steps[index].label,
-        height: last,
-      })
-    }
-    // 反面：这就是「当拍关」会塌成的那一档，钉住禁令（0 意味着视口凭空放大一整把键盘）
+    expect(heights).toEqual([panelOn375, panelOn375, 280])
+    // 序列里任何一档都不许是 0（0 = 视口凭空放大一整把键盘，就是「当拍塌空」那一档）
+    expect(heights.every((height) => height > 0)).toBe(true)
+    // 反面：这就是「当拍关」会塌成的那一档，钉住禁令
     expect(
-      resolveBottomInset({ panelOpen: false, keyboardHeight: 0, lastKeyboardHeight: last }),
+      resolveBottomInset({ panelOpen: false, keyboardHeight: 0, panelHeight: panelOn375 }),
     ).toBe(0)
   })
 })
@@ -981,14 +1015,13 @@ describe('键盘高度是单一真源（#560）', () => {
      */
     expect(body).not.toContain('setKeyboardHeight(step.inset) keepTailAnchored()')
     expect(body).toContain('if (!panelOpenRef.current) keepTailAnchored()')
-    // 面板高度＝见过的最高的键盘：只在变高时记，收到 0 / 收起中间值都不缩
-    expect(body).toContain('if (step.inset > panelHeightPxRef.current) {')
-    expect(body).toContain('panelHeightPxRef.current = step.inset')
-    expect(body).toContain('setPanelHeightPx(step.inset)')
-    // 先记面板高度、再判要不要重锚：顺序反了，第一次开键盘那次就少记一档
-    expect(body.indexOf('setPanelHeightPx(step.inset)')).toBeLessThan(
-      body.indexOf('if (!panelOpenRef.current) keepTailAnchored()'),
-    )
+    /**
+     * 面板高度**不再**跟着键盘走（#597 追加任务）：三格图标按键盘高撑开会留一片空白。
+     * 键盘事件里那条「见过的最高的键盘」的记录必须整段消失 —— 留着它面板就又被抬回键盘高。
+     */
+    expect(source).not.toContain('panelHeightPxRef')
+    expect(source).not.toContain('setPanelHeightPx')
+    expect(body).not.toContain('if (step.inset > panelHeightPxRef.current) {')
     /**
      * **面板 → 键盘**的交接（#597 F1）：收到「键盘真落地第一帧」才收面板，不在聚焦当拍收。
      * 当拍收的话底座从面板高直落 0（键盘高度此刻还是 0），视口先放大一整把键盘再缩回来。
@@ -1239,10 +1272,14 @@ describe('键盘高度是单一真源（#560）', () => {
     const derived =
       'bottomInset > 0 ? { paddingBottom: `calc($' + '{bottomInset}px + 16rpx)` } : undefined'
     expect(bar).toContain(derived)
-    // 输入栏与面板**同一个真源**（#597）：等高了，键盘 ↔ 面板切换时底座总高才不变
+    // 底部高度由纯函数派生（#597）：键盘态取键盘高度，面板态取面板自己的内容高
     expect(source).toContain(
-      'const bottomInset = resolveBottomInset({ panelOpen, keyboardHeight, ' +
-        'lastKeyboardHeight: panelHeightPx,',
+      'const bottomInset = resolveBottomInset({ panelOpen, keyboardHeight, panelHeight,',
+    )
+    // 面板高度从窗口宽度 + 安全区算一次（#597 追加任务）：不再依赖「见过的最高的键盘」
+    expect(source).toContain('const panelHeight = useMemo(')
+    expect(source).toContain(
+      'resolvePanelHeightPx({ windowWidth: info.windowWidth, safeAreaBottom })',
     )
     // 键盘收起时不内联，样式里那条带 safe-area 的内边距照旧生效
     expect(await styleSource()).toContain(
@@ -1253,22 +1290,26 @@ describe('键盘高度是单一真源（#560）', () => {
   test('面板是底部底座里的吸底浮层，不在输入栏的文档流里（#597）', async () => {
     const source = squash(await pageSource())
     const style = await styleSource()
-    // 结构：面板与输入栏同一个父级（`.conv__bottom`），且面板高度取同一个真源
+    // 结构：面板与输入栏同一个父级（`.conv__bottom`）
     expect(source).toContain('<View className="conv__bottom">')
-    expect(tag(source, '<View className="conv__panel"')).toContain(
-      'style={{ height: `$' + '{bottomInset}px` }}',
-    )
+    /**
+     * 面板高度由**内容自己撑开**（#597 追加任务）：不能再内联「上次键盘高」，
+     * 否则三格图标下面又是一片空白（Owner 的演示截图）。
+     */
+    expect(
+      tag(source, '<View className="conv__panel"').startsWith('<View className="conv__panel">'),
+    ).toBe(true)
     // 面板必须**在输入栏之外**：`.conv__bar` 的片段一直切到面板标签之前，中间得先出现底座的闭合
     const barToPanel = slice(source, '<View className="conv__bar"', '<View className="conv__panel"')
     expect(barToPanel).toContain('</View> </View>')
-    // 样式：面板绝对定位贴底、由 JSX 内联高度决定占位；容器提供定位父级
+    // 样式：面板绝对定位贴底、高度由内容决定；容器提供定位父级
     const panel = style.slice(
       style.indexOf('.conv__panel {'),
       style.indexOf('}', style.indexOf('.conv__panel {')),
     )
     expect(panel).toContain('position: absolute')
     expect(panel).toContain('bottom: 0')
-    // 高度不能写死在样式里（键盘高度是运行期量到的），否则吸底浮层会盖住消息流
+    // 高度不能写死在样式里（底座让位带的高度是运行期按窗口宽度 / 安全区算的）
     expect(panel).not.toContain('height:')
     expect(
       style.slice(

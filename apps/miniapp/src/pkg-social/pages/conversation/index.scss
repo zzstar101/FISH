@@ -1105,14 +1105,15 @@
 }
 
 /* 面板：**吸底浮层**，不再是输入栏里的流内块（#597）。
-   它绝对定位在 `.conv__bottom` 里、贴住屏幕底边，高度由 JSX 内联成 `resolveBottomInset()`
-   （= 上次键盘高度），正好填满输入栏为键盘让出的那条下内边距 —— 所以面板出现与键盘收起
-   占的是同一块高度，消息流高度既不变一次、也不被裁（改前是流内块，撑高输入栏，消息流
-   连着变矮两次）。
+   它绝对定位在 `.conv__bottom` 里、贴住屏幕底边，高度由**内容自己撑开**（`height: auto`）——
+   就是三格图标的实际高度，与键盘高度**解耦**（#597 追加任务：按上次键盘高撑开会在面板下方
+   留一大片空白）。底座让出多少高度由 `view.ts` 的 `resolvePanelHeightPx()` 算（= 这里的上下
+   内边距 + 圆钮 + 间隙 + 一行文字 + 底部安全区），JSX 内联成 `.conv__bar` 的下内边距。
+   于是键盘 ↔ 面板切换时底座会**一次**变高/变矮（差一个「键盘高 − 面板高」），这是预期行为。
    `z-index: 21`：输入栏自己是不透明的（`background: var(--surface)` + `z-index: 20`），
    它的盒子连内边距一起铺满整个底座，面板要画在那条内边距带上就必须压过它一格。
-   面板高度恒等于那条内边距减去 16px，所以这一格只会盖住**内边距**、不会盖住输入行本身
-   （两者永不重叠）。 */
+   面板内容恒比那条让位带矮 16px（`$bar-gap-px`），所以这一格只会盖住**内边距**、不会盖住
+   输入行本身（两者永不重叠）；文字行高的估算误差也由这 16px 吸收。 */
 .conv__panel {
   position: absolute;
   left: 0;
@@ -1123,7 +1124,9 @@
   align-items: flex-start;
   gap: 20px;
   /* 水平 28px = 老版「输入栏 24px 内边距 + 面板 4px」，三格与旧版的视觉位置保持一致；
-     下内边距带上安全区，面板贴到屏幕底边时格子不会掉进 home indicator 里 */
+     下内边距带上安全区，面板贴到屏幕底边时格子不会掉进 home indicator 里。
+     下面三个数与 `view.ts` 的 `PANEL_PADDING_RPX` / `PANEL_DISC_RPX` / `PANEL_TILE_GAP_RPX` /
+     `PANEL_LABEL_RPX` 一一对应，改这里必须同步改那里（单测钉住两边一致） */
   padding: 24px 28px calc(24px + env(safe-area-inset-bottom));
   background: var(--surface);
   border-top: 2px solid var(--accent-faint);
