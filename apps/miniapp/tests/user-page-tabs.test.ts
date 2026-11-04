@@ -390,6 +390,16 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(body).not.toContain("'USER_NOT_FOUND'")
   })
 
+  test('续页失败留一个可点的出口：列表尾部换成带码的重试行（复审 M1）', async () => {
+    // 修复前：`items.length > 0` 时只走 `list-end` 的「仅显示最近 N 件」—— 一句正常文案、
+    // 零诊断、没出口；失败空态的门是 `page.failed && items.length === 0`，够不着；
+    // 而滚底闸门又挡着 `page.failed` ⇒ 续页失败是死端，网络恢复也不会自愈。
+    const retry = slice(await page, 'page.failed && items.length > 0 ? (', "end === 'end'")
+    expect(retry).toContain('void loadSegment(page.nextCursor)')
+    expect(retry).toContain(`${'${'}segmentErrorSuffix(page.error)}`)
+    expect(retry).toContain('没拉到更多')
+  })
+
   test('接线：段失败后滚底不再重打同一个游标', async () => {
     // 段级失败（含续页 404 降级）后 `nextCursor` 还留着：不挡 `page.failed`，
     // 用户每上滑一次就重打同一游标、再失败一次

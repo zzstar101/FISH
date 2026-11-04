@@ -249,8 +249,9 @@ export default function UserHome() {
   /**
    * 滚到底补下一页。`onScrollToLower` 在内容不满一屏时也会触发，
    * 所以「没有下一页」与「正在拉」都必须先挡住，不能只靠事件本身。
-   * `page.failed` 同样要挡（#598）：段级失败（含续页 404 降级）后 `nextCursor` 还留着，
-   * 不挡的话用户每上滑一次就重打同一个游标、再失败一次 —— 想再试得走「重试」那颗钮。
+   * `page.failed` 同样要挡（#598）：失败后 `nextCursor` 还留着，不挡的话用户每上滑一次就
+   * 重打同一个游标、再失败一次。重试入口是**显式**的：首屏失败走列表空态那颗「重试」，
+   * 续页失败走列表尾部那行「没拉到更多…点这里重试」（见 `page.failed && items.length > 0`）。
    */
   const onScrollToLower = useCallback(() => {
     if (loadState !== 'ok') return
@@ -1204,7 +1205,23 @@ export default function UserHome() {
                 或该段真总数大于已展示条数时改说「仅显示最近 N 件」，不能宣称 TA 就这些
                 （判定见 `./list-end.ts`）。
                 两条都**不带总数**：稿的 N 是列表长度，与服务端 COUNT 口径不同，带上会打架。 */}
-            {end === 'end' ? (
+            {/* 续页失败（#598 复审 M1）：商品已经在屏上、只是「更多」没拉到。
+                既不能整块换成上面的失败空态（那会把已展示的商品一起藏掉），也不能让
+                `list-end` 继续报「仅显示最近 N 件」这种正常文案 —— 一句好话、零诊断、没出口。
+                这里就地给一行可点的重试：`nextCursor` 还在，点一下就是重打同一游标。 */}
+            {page.failed && items.length > 0 ? (
+              <View
+                className="uhome__list-end uhome__list-end--tap"
+                hoverClass="uhome__list-end--tap"
+                onClick={() => void loadSegment(page.nextCursor)}
+              >
+                <View className="uhome__list-end-line" />
+                <Text className="uhome__list-end-txt num">
+                  {`没拉到更多${segmentErrorSuffix(page.error)}，点这里重试`}
+                </Text>
+                <View className="uhome__list-end-line" />
+              </View>
+            ) : end === 'end' ? (
               <View className="uhome__list-end">
                 <View className="uhome__list-end-line" />
                 <Text className="uhome__list-end-txt num">已经到底了</Text>
