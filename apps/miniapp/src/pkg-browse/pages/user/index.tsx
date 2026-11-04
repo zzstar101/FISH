@@ -23,6 +23,7 @@ import {
   loadPublicUserHome,
   loadPublicUserListingsPage,
   MOCK_FALLBACK_ENABLED,
+  type PublicUserFailure,
 } from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
 import { outOfMarketLabel } from '@/features/listing/status-mark'
@@ -36,6 +37,7 @@ import { goBackOrHome } from '@/lib/nav-back'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
+import { homeFailureText } from './home-failure'
 import { userListEnd } from './list-end'
 import type { Segment, SegmentErrorInfo, SegmentPage } from './segment-page'
 import {
@@ -110,6 +112,12 @@ export default function UserHome() {
   const isSelf = authedUser !== null && authedUser.id === userId
 
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
+  /**
+   * 整页失败带的错误码（#607）。与分段那条路径的 `page.error` 同源同形状 —— 三个终态里
+   * 只有 `failed` 有话说：`notFound` 是「后端说这个人不存在」，不该在空态上贴一个 404 码。
+   * `null` = 没有可显示的错误码（存在性判断漂移那支），文案退到不带码的通用句。
+   */
+  const [homeError, setHomeError] = useState<PublicUserFailure | null>(null)
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
   /**
    * 列表口径（#581）：**页内切换**，不换页面实例 —— 不 `navigateTo`、不写 URL 参数、
@@ -138,6 +146,8 @@ export default function UserHome() {
       // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
       setLoadState('loading')
       setProfile(null)
+      // 上一轮的码也要清掉：否则重试期间的空态头里会挂着上一次的错误码（#607）。
+      setHomeError(null)
       const initial = target ?? segmentOfTab(tabParam)
       // 先作废在途请求并领本轮代号：上一轮还没回来的响应（含列表页）一个字段都不许写进
       // 新一轮。`sent` 还兼着挡**本轮自己**的过期回填（#598 复审 F1）：整页 failed 态的页头
@@ -166,6 +176,8 @@ export default function UserHome() {
       // 本轮已被后来的一次 `load` / 切段作废：一个字段都不写（见上面 `sent` 的说明）
       if (sent !== generation.current) return
       if (result.status !== 'ok') {
+        // `failed` 把读取层带上来的码落到页面上（#607）；`notFound` 没有码可言。
+        setHomeError(result.status === 'failed' ? result.error : null)
         setLoadState(result.status)
         return
       }
@@ -1128,7 +1140,10 @@ export default function UserHome() {
             {loadState === 'failed' ? (
               <LoadError
                 title="主页加载失败"
-                text="网络异常，请重试"
+                // 码要落到端上（#607）：这句以前是写死的「网络异常，请重试」，422 / 401 / 5xx
+                // 全长得一样，真机上没有 Console 就无从区分「版本不匹配」「会话失效」「服务端挂了」。
+                // 与分段那条路径共用 `segmentErrorSuffix`，只是前半句不同（见 ./home-failure.ts）。
+                text={homeFailureText(homeError)}
                 onRetry={() => {
                   // 保住用户已经切到的段（`load()` 无参会被 `?tab=` 拽回初值），并把滚动挪回
                   // 顶部：`ScrollView` 自 #598 起常驻，`scrollTop` 会留着，而 `glassOn` /
