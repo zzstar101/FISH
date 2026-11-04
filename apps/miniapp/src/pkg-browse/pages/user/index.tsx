@@ -345,10 +345,11 @@ export default function UserHome() {
    * 位置。不补偿就会漏掉「先在骨架屏上滚了一段、数据随后才到」这一档：那时视口坐标比
    * 内容坐标小一整个 `scrollTop`，算出的阈值偏小，标题会在昵称还看得见时就冒出来。
    *
-   * **量的节点是签名行（没有签名时退回头像行）**，与稿 `syncNav` 同一口径
-   * （`p = $('psign'); if (!p || !p.offsetHeight) p = $('profile')`）—— 稿的判据是
-   * 「身份块整行滚干净才补标题」，签名行是身份块的最后一行；量到数据行（`.uhome__stats`）
-   * 底边会让标题整整晚一行才出现。
+   * **量的节点是身份区里最低的那一行**：签名行 `#uhome-psign` / 头像行 `#uhome-profile` /
+   * 本人态提示行 `#uhome-selfnote`（#578，只在 `isSelf` 渲染），三者 rect 底边取 max。
+   * 与稿 `syncNav` 同一口径（`p = $('psign'); if (!p || !p.offsetHeight) p = $('profile')`），
+   * 只是稿里没有提示行这一档 —— 稿的判据是「身份块整行滚干净才补标题」，所以谁最低就量谁
+   * 的底边；量到数据行（`.uhome__stats`）底边会让标题整整晚一行才出现。
    *
    * 量不到（节点未上屏 / 选择器失效）时兜底 `IDENTITY_FALLBACK`：与 home 页的 `pinAt`
    * 兜底同理 —— 不给兜底会变成「标题永远不出现」，给个偏大的估计值最多让标题晚一点
@@ -367,6 +368,8 @@ export default function UserHome() {
         .boundingClientRect()
         .select('#uhome-profile')
         .boundingClientRect()
+        .select('#uhome-selfnote')
+        .boundingClientRect()
         .exec((res) => {
           /** 节点在屏且真有高度才算数（`height === 0` 说明它没渲染 / 被裁） */
           const pick = (i: number): { top: number; height: number } | undefined => {
@@ -376,10 +379,15 @@ export default function UserHome() {
               return undefined
             return { top, height }
           }
-          // 签名行缺失（无签名的用户）时退回头像行，与稿一致
-          const rect = pick(0) ?? pick(1)
-          identityBottomAt.current = rect
-            ? rect.top + scrollTopRef.current + rect.height
+          // 三个节点里取**最低**那行的底边：签名行缺失时退回头像行，但本人态多出来的
+          // 提示行（#578）比头像行还低 —— 只退到头像行会让阈值少 22（行距）+ 88（行高）
+          // = 110 设计 px，提示行还在屏上时居中标题就淡入了。他人主页没有提示行，
+          // `pick(2)` 自然是 undefined，max 退化成稿里的「签名行 ?? 头像行」。
+          const bottoms = [pick(0), pick(1), pick(2)]
+            .filter((r): r is { top: number; height: number } => r !== undefined)
+            .map((r) => r.top + r.height)
+          identityBottomAt.current = bottoms.length
+            ? Math.max(...bottoms) + scrollTopRef.current
             : IDENTITY_FALLBACK
           const nextTitled = scrollTopRef.current >= identityBottomAt.current - 6
           setTitled((prev) => (prev === nextTitled ? prev : nextTitled))
@@ -963,9 +971,12 @@ export default function UserHome() {
                     ≈ 100rpx）与左右各 28rpx 内边距，主句落到一行只剩约 500rpx ——
                     整句 19 字（≈437rpx）会顶满整行且没有主次；拆成主句 + 一行小字，
                     一眼先读到结论。
-                    整行可点（88px = 44pt 触摸高度，见 scss），不做成 tiny 链接。 */}
+                    整行可点（88px = 44pt 触摸高度，见 scss），不做成 tiny 链接。
+                    `id` 参与滚动联动的身份区测量：无签名时它是身份区最低的一行，
+                    `measureIdentity()` 取三行底边的 max（见该函数注释）。 */}
                 {isSelf ? (
                   <View
+                    id="uhome-selfnote"
                     className="uhome__selfnote"
                     hoverClass="uhome__selfnote--tap"
                     onClick={goMyProfile}
