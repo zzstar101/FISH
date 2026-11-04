@@ -14,6 +14,8 @@
  *
  * 新增图标：先画 svg，再在这里登记要用的 tone，跑 `bun run --filter @fish/miniapp icons`。
  * 不用的 tone 不要登记 —— `tests/lib-icons.test.ts` 会拦「导出了但没人引用」的条目。
+ * 显示尺寸只用 24/32/40/48 四档；各档适用哪种场景见 `apps/miniapp/DESIGN.md` §6
+ * 「图标显示尺寸四档的场景口径」（草案，待 Owner 拍板）。
  */
 export const TONES = {
   brand: '#4285FF', // --brand
