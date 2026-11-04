@@ -932,6 +932,15 @@ export default function Conversation() {
       deferredRef.current = deferReload(deferredRef.current)
       return
     }
+    if (action !== 'refresh-silent') {
+      /**
+       * 三态穷尽：新增取值必须在这里显式接线。用 `never` 断言而不是 `else` 兜底，
+       * 是为了让漏接在**类型层**报错 —— 否则将来加一个非 silent 的取值会被静默
+       * 当成「后台刷新」执行。
+       */
+      const unhandled: never = action
+      throw new Error(`[miniapp] 未处理的返回动作：${String(unhandled)}`)
+    }
     deferredRef.current = clearDeferredReload(deferredRef.current)
     /**
      * **必须 silent**（#608）：返回本页时屏幕上已经有完整内容，走非 silent 的 `load()`

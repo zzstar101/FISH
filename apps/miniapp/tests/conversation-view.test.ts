@@ -814,6 +814,38 @@ describe('showReloadAction —— 返回本页的动作（#608）', () => {
   })
 })
 
+/**
+ * `useDidShow` 的返回刷新接线（#608）。
+ *
+ * 上面两条只锁「该不该刷」，锁不住「用什么方式刷」—— 把 didShow 里那句改回裸
+ * `loadRef.current()`（首屏加载、整页闪 loading）时纯函数用例仍然全绿。页面组件没有
+ * 渲染测试基建（见文件头），所以按仓库既有手法读源码文本钉住这段接线
+ * （同 `tests/conversation-tx-bar-wiring.test.ts`）。
+ */
+describe('useDidShow 的返回刷新接线（#608）', () => {
+  const didShowBlock = async (): Promise<string> => {
+    const code = await Bun.file(
+      new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url),
+    ).text()
+    const from = code.indexOf('useDidShow(() => {')
+    expect(from, '页面里应出现 useDidShow 块').toBeGreaterThanOrEqual(0)
+    const to = code.indexOf('useDidHide(() => {', from)
+    expect(to, 'useDidHide 应出现在 useDidShow 之后').toBeGreaterThan(from)
+    // 剥掉注释再断言：注释里留一份同名语句不能冒充接线
+    return code
+      .slice(from, to)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '')
+  }
+
+  test('返回刷新走后台刷新（silent），没有裸 load()', async () => {
+    const block = await didShowBlock()
+    expect(block).toContain('showReloadAction(')
+    expect(block).toContain('loadRef.current({ silent: true })')
+    expect(block).not.toContain('loadRef.current()')
+  })
+})
+
 describe('DeferredReload 状态机 —— 「发送中返回」延后到发送落定再补刷新（#170 D）', () => {
   /**
    * 走一遍完整回路：发起 n 次发送、再落定 m 次（同一 epoch）。
