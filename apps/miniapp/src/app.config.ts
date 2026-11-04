@@ -9,6 +9,23 @@ export default defineAppConfig({
     'pages/profile/index',
   ],
   lazyCodeLoading: 'requiredComponents',
+  /**
+   * 分包预下载：首页停下来之后，**在 Wi-Fi 下**先把 `pkg-browse` 下下来。
+   *
+   * 为什么是 `pkg-browse`：首页卡片点进去的详情页、右上角搜索、我的发布、收藏、浏览记录
+   * 全在这个分包里，是首页之后最常走的一步；而小程序默认是「点进去才开始下分包」，
+   * 那一下的等待全落在用户身上（用户反馈的「点开要等一下」有它一份）。
+   *
+   * 为什么限 `wifi`：`preloadRule` 的 `network` 不写就是 `all`，4G 下等于在用户没开口时
+   * 花他的流量下一整个分包。Wi-Fi（含开发者工具 / 真机连着 Wi-Fi）才预下载，
+   * 蜂窝网络保持微信默认的按需下载 —— 这是视觉零变化、也不偷流量的折中。
+   */
+  preloadRule: {
+    'pages/home/index': {
+      network: 'wifi',
+      packages: ['pkg-browse'],
+    },
+  },
   subPackages: [
     {
       root: 'pkg-browse',

@@ -17,6 +17,7 @@ import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
 import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
+import { readHomeFeedSnapshot, writeHomeFeedSnapshot } from '@/features/home/feed-cache'
 import type { FeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { flushRecommendationQueue } from '@/features/recommendation/queue'
@@ -112,6 +113,19 @@ export default function Home() {
   const reqSeq = useRef(0)
 
   /**
+   * 屏幕上**当前这批数据**（以及它属于哪个分类）的镜像。
+   *
+   * 存在的唯一理由：`load()` 失败时要判断「能不能不清屏」（见 `applyLoadResult` 的
+   * `previous`），而 `load` 是随渲染重建的闭包，读不到最新的 `items` / `loadedFor`。
+   * 只在两处更新：一次**成功**加载的结转之后、进页快照上屏时。失败本身不更新 ——
+   * 失败保留的就是它，这正是「留着」的语义。
+   */
+  const lastGoodRef = useRef<{
+    items: MockListing[]
+    loadedFor: ListingCategory | 'ALL' | null
+  }>({ items: [], loadedFor: null })
+
+  /**
    * 埋点上下文：本次推荐请求的 `requestId` 与「公开 id → 全局 position」。
    *
    * 退 mock（演示构建）或分类列表时 `requestId` 为 `null` —— 此时**不发** IMPRESSION /
@@ -159,7 +173,16 @@ export default function Home() {
     setHiddenIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
   }
 
-  const load = async (next: ListingCategory | 'ALL') => {
+  /**
+   * 拉一次列表并结转到屏幕上。
+   *
+   * 返回值给「用户主动点的那一次」（下拉刷新）用：`failed` = 这次真的失败了，
+   * `held` = 失败但屏幕上的旧数据留住了（见 `applyLoadResult` 的 `previous`）。
+   * 静默重试（进页 / 切分类）不读返回值 —— 它们失败时用户看得见的反馈是错误块或旧列表本身。
+   */
+  const load = async (
+    next: ListingCategory | 'ALL',
+  ): Promise<{ failed: boolean; held: boolean }> => {
     const seq = reqSeq.current + 1
     reqSeq.current = seq
     // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
@@ -170,7 +193,7 @@ export default function Home() {
     const result =
       next === 'ALL' ? await loadHomeFeed('ALL') : await loadCategoryListings(next, '综合')
     // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
-    if (seq !== reqSeq.current) return
+    if (seq !== reqSeq.current) return { failed: false, held: false }
     /*
       本地隐藏名单在这里过滤（R1 没有服务端隐藏接口，见 `recommendation/hidden`）。
       过滤发生在**取数之后、上屏之前**：`positions` 仍按服务端那份 feed 的原始下标算，
@@ -180,26 +203,58 @@ export default function Home() {
     const visible = result.items.filter((item) => !hidden.has(item.id))
     /*
       三件套一次结转（纯函数，`./list-state.ts`）。`loadedFor` 的口径：
-      成功 → 置为 `next`；**失败 → 作废为 `null`**（失败时 `items` 已被清成空数组，
-      屏幕上没有属于任何分类的有效数据）。若失败时保留旧值，当失败的目标分类恰是
-      上次成功过的那个时（失败后点「重试」、下拉刷新失败后重试、失败后切回该分类），
-      `loadedFor === category` 成立，请求在途期间 `failed` 已清、`items` 仍为空 →
-      渲染空态「这个分类还没有闲置」，把「没读到」说成「这个分类没货」。作废后
-      `loadedFor !== category` 全程成立，重试期间由骨架屏接管；空态只在**真的成功
-      拿到空列表**时出现。判定逻辑与用例见 `./list-state.ts`。
+      成功 → 置为 `next`；失败 → 看屏幕上有没有**同一分类**的旧数据：
+        · 有 → 留着（`previous`），`loadedFor` 保持 `next`、`failed` 压成 false →
+          列表原地不动，重试在途也不会闪骨架屏；
+        · 没有 → 作废为 `null` + `failed: true` → 错误块。
+      后者的理由不变：失败时 `items` 已清空，屏幕上没有属于任何分类的有效数据；若保留旧值，
+      失败后重试期间 `loadedFor === category` 成立而 `items` 为空 → 渲染「这个分类还没有
+      闲置」，把「没读到」说成「这个分类没货」。判定逻辑与用例见 `./list-state.ts`。
     */
-    const applied = applyLoadResult({ requested: next, items: visible, failed: result.failed })
+    const applied = applyLoadResult({
+      requested: next,
+      items: visible,
+      failed: result.failed,
+      previous: lastGoodRef.current,
+    })
+    /*
+      快照只在**真实接口成功**之后写：演示构建的 mock 数据写进去，下次进页就会把假商品
+      当成上一次的真实结果上屏；失败结果更不能写 —— 那是把「没读到」存成「读到过」。
+    */
+    if (result.fromApi && !result.failed) writeHomeFeedSnapshot(next, applied.items)
     // 上下文与列表同一次渲染生效：曝光观察器建起来时就已经能拿到 requestId 与序号
     setFeedContext({
       requestId: result.requestId ?? null,
       positions: result.positions ?? new Map(),
     })
+    if (!applied.failed)
+      lastGoodRef.current = { items: applied.items, loadedFor: applied.loadedFor }
     setItems(applied.items)
     setFailed(applied.failed)
     setLoadedFor(applied.loadedFor)
+    return { failed: result.failed, held: result.failed && !applied.failed }
   }
 
   useLoad(() => {
+    /*
+      进页先上屏上一次的快照（SWR 的「旧」那一半），再发请求。
+      没有快照时这段是空转，行为与之前完全一致（骨架屏 → 列表）。
+
+      ⚠️ 快照**不能**带归因：这批商品不是这次请求下发的，`requestId` 与 `position` 都不存在，
+      契约强制 IMPRESSION / QUICK_SKIP 必须带它们（见 `feedContext` 注释）—— 所以这里
+      `requestId` 明确置 `null`，曝光观察器对这批一件都不会发。
+    */
+    const snapshot = readHomeFeedSnapshot('ALL')
+    if (snapshot) {
+      const hidden = new Set(readHiddenListingIds())
+      const items = snapshot.items.filter((item) => !hidden.has(item.id))
+      if (items.length > 0) {
+        lastGoodRef.current = { items, loadedFor: 'ALL' }
+        setItems(items)
+        setLoadedFor('ALL')
+        setFeedContext({ requestId: null, positions: new Map() })
+      }
+    }
     void load('ALL')
   })
 
@@ -225,7 +280,15 @@ export default function Home() {
   // 下拉刷新重拉**当前分类**：在「教材书籍」里下拉刷新却跳回「推荐」，
   // 等于把用户刚选好的分类弄丢了。
   usePullDownRefresh(() => {
-    void load(category).then(() => Taro.stopPullDownRefresh())
+    void load(category).then((outcome) => {
+      Taro.stopPullDownRefresh()
+      /*
+        失败但旧数据留住了（`held`）：列表不动，用户看不出「这次刷了个寂寞」——
+        必须给一句话，否则下拉刷新看起来像没反应。没有旧数据可留时不弹：
+        那时屏幕上已经是带重试按钮的错误块，再叠一个 toast 是重复告知。
+      */
+      if (outcome.held) Taro.showToast({ title: '刷新失败，请稍后再试', icon: 'none' })
+    })
   })
 
   const [left, right] = useMemo(() => splitColumns(items), [items])

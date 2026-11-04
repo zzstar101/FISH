@@ -141,3 +141,98 @@ describe('一次加载的完整结转（rebase 审查 P1 的回归锁）', () =>
     ).toBe('skeleton')
   })
 })
+
+/**
+ * 失败**不清屏**（用户反馈：加载失败时整页白掉 / 只剩一块「加载失败」）。
+ *
+ * 规则改动只发生在一种情形：失败时屏幕上已经有**同一分类**的数据（上一次成功的结果，
+ * 或进页时的快照）。此时留着它，`failed` 压成 false，让列表原地不动；其余情形
+ * （首次进页就失败、旧数据属于别的分类）与修复前完全一致 —— 清屏 + 错误块。
+ */
+describe('失败时留住旧数据（不清屏）', () => {
+  test('同一分类的旧数据 → 留着，不落错误态、不落骨架屏', () => {
+    const onScreen = { items: ['a', 'b', 'c'], loadedFor: 'ALL' as const }
+    const state = applyLoadResult({
+      requested: 'ALL',
+      items: [],
+      failed: true,
+      previous: onScreen,
+    })
+    expect(state.items).toEqual(['a', 'b', 'c'])
+    // 压成 false 而不是「failed 为真但渲染列表」：homeListState 里 failed 优先级最高，
+    // 想留旧数据就不能让那一支成立
+    expect(state.failed).toBe(false)
+    expect(state.loadedFor).toBe('ALL')
+    expect(
+      homeListState({
+        loadedFor: state.loadedFor,
+        category: 'ALL',
+        failed: state.failed,
+        itemCount: state.items.length,
+      }),
+    ).toBe('list')
+  })
+
+  test('旧数据属于别的分类 → 仍然清屏报错：旧商品不冒充新分类', () => {
+    const state = applyLoadResult({
+      requested: 'BOOKS',
+      items: [],
+      failed: true,
+      previous: { items: ['a', 'b'], loadedFor: 'ALL' },
+    })
+    expect(state.items).toEqual([])
+    expect(state.failed).toBe(true)
+    expect(state.loadedFor).toBeNull()
+    expect(
+      homeListState({
+        loadedFor: state.loadedFor,
+        category: 'BOOKS',
+        failed: state.failed,
+        itemCount: 0,
+      }),
+    ).toBe('error')
+  })
+
+  test('没有可留的数据（首次进页就失败）→ 与修复前一致：错误块', () => {
+    for (const previous of [undefined, { items: [], loadedFor: 'ALL' as const }]) {
+      const state = applyLoadResult({ requested: 'ALL', items: [], failed: true, previous })
+      expect(state.items).toEqual([])
+      expect(state.failed).toBe(true)
+      expect(state.loadedFor).toBeNull()
+    }
+  })
+
+  test('留住旧数据之后的重试在途：列表原地不动，不闪骨架屏、更不落空态', () => {
+    const held = applyLoadResult({
+      requested: 'ALL',
+      items: [],
+      failed: true,
+      previous: { items: ['a', 'b'], loadedFor: 'ALL' },
+    })
+    // 再点重试：load 先 setFailed(false)，这批旧数据仍在屏幕上
+    expect(
+      homeListState({
+        loadedFor: held.loadedFor,
+        category: 'ALL',
+        failed: false,
+        itemCount: held.items.length,
+      }),
+    ).toBe('list')
+    // 旧数据全被「不感兴趣」隐藏（visibleCount = 0）时才是空态 —— 与成功拿到空列表同一判定
+    expect(
+      homeListState({ loadedFor: held.loadedFor, category: 'ALL', failed: false, itemCount: 0 }),
+    ).toBe('empty')
+  })
+
+  test('成功那一支不受 previous 影响（旧数据不会被当成新结果）', () => {
+    const state = applyLoadResult({
+      requested: 'ALL',
+      items: ['新'],
+      failed: false,
+      previous: { items: ['旧'], loadedFor: 'ALL' },
+    })
+    expect(state.items).toEqual(['新'])
+    expect(state.failed).toBe(false)
+    expect(state.loadedFor).toBe('ALL')
+  })
+})

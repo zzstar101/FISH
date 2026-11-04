@@ -46,9 +46,23 @@ export function homeListState(input: {
  * 一次加载结束后的三件套结转（组件 `load()` 的 await 尾巴）。
  *
  * 组件在过期检查之后调用它，把三个 setState 变成一次纯计算：
- * - `items` 永远是这批结果（失败时是空数组 —— 失败即清屏，与修复前一致）；
- * - `failed` 透传；
- * - `loadedFor` 由 `resolveLoadedFor` 决定（修复点：失败作废，见下）。
+ * - `items`：成功时是这批结果；**失败时若屏幕上已有同一分类的旧数据，就留着它**；
+ * - `failed`：透传，但在「留旧数据」那一支被压成 `false`（见下）；
+ * - `loadedFor` 由 `resolveLoadedFor` 决定（修复点：真失败作废，见下）。
+ *
+ * **为什么失败不再无条件清屏**（用户反馈：加载失败时整页白掉 / 只剩错误块）：
+ * 清屏本身没错，错在「没有可留的东西时也清」。用户已经看过一屏商品，下拉刷新失败时
+ * 把它换成一块「加载失败」，等于用一次网络抖动抹掉他正在看的内容。所以现在分两种失败：
+ *
+ * - 屏幕上有**同一分类**的旧数据（上一次成功的结果或进页时的快照）→ 留着，`failed` 压成
+ *   `false`：列表原地不动，立刻再点重试也有东西可看。此时 `loadedFor` 保持 `requested`，
+ *   于是重试在途走的仍是「列表」，不会闪骨架屏、更不会落到空态。
+ * - 没有可留的（首次进页就失败、或旧数据属于**别的分类**）→ 与之前完全一致：清屏 +
+ *   `loadedFor` 作废为 `null` + `failed: true` → 错误块。
+ *
+ * 压成 `false` 而不是「`failed` 为真但渲染列表」：`homeListState` 里 `failed` 是最高的
+ * 优先级（「加载不出来」不是「恰好没有商品」），两者同时为真时它必须报错 ——
+ * 想留旧数据，就不能让这一支成立。真正的失败反馈走 `load()` 的调用方（下拉刷新弹 toast）。
  *
  * 「失败后重试在途 → 骨架屏」这条链只有整个函数都在测试里才能锁住：
  * 单测 `homeListState` 锁不住它（`loadedFor: null` 的形状在修复前后都说得通），
@@ -61,11 +75,34 @@ export function applyLoadResult<T>(result: {
   items: T[]
   /** 这次加载是否失败（生产口径） */
   failed: boolean
+  /**
+   * 失败的这一刻**屏幕上正显示的**那批数据（及它属于哪个分类）。
+   *
+   * 只在失败时有意义：它是「能不能不清屏」的唯一判据。成功时不看它。
+   * 不传 = 屏幕上没有可留的数据（首次进页），行为与修复前一致。
+   */
+  previous?: {
+    items: readonly T[]
+    loadedFor: ListingCategory | 'ALL' | null
+  }
 }): {
   items: T[]
   failed: boolean
   loadedFor: ListingCategory | 'ALL' | null
 } {
+  const previous = result.previous
+  if (
+    result.failed &&
+    previous &&
+    previous.loadedFor === result.requested &&
+    previous.items.length > 0
+  ) {
+    return {
+      items: [...previous.items],
+      failed: false,
+      loadedFor: result.requested,
+    }
+  }
   return {
     items: result.items,
     failed: result.failed,
