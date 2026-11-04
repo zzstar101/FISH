@@ -24,6 +24,7 @@ import {
   isStaleMediaTask,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
+  keepsEarlierPages,
   lastTxAcceptedId,
   listingStatusText,
   localReplyExcerpt,
@@ -32,6 +33,7 @@ import {
   mergePushedMedia,
   mergePushedMessage,
   mergeRefreshedMedia,
+  mergeRefreshedMessages,
   mergeTimeline,
   messageActions,
   messageReadLabel,
@@ -1315,6 +1317,112 @@ describe('mergeRefreshedMedia —— 后台刷新落地时不抹掉刷新期间�
       new Set(['m1']),
     )
     expect(merged).toEqual([])
+  })
+
+  test('比快照更早的已加载媒体页保留（与消息流对称，#610）', () => {
+    const merged = mergeRefreshedMedia(
+      [
+        picture('p1', '2026-09-21T09:00:00.000Z'), // 更早一页
+        picture('p2', '2026-09-21T10:00:00.000Z'), // 第一页
+      ],
+      [picture('p2', '2026-09-21T10:00:00.000Z')],
+      new Set(['p1', 'p2']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['p1', 'p2'])
+  })
+})
+
+/**
+ * #610：刷新落地不得缩短已加载窗口。
+ *
+ * 刷新的快照只含**第一页**。旧规则把「发起刷新时已显示的 id」整体当基线丢弃，于是用户
+ * 翻过的更早页每次刷新（从子页返回 / 发送落定补刷 / 断线重连补刷）都整段消失；
+ * `nextCursor` 还被顶成第一页游标，下一次上翻重拉同一页。
+ */
+describe('mergeRefreshedMessages —— 刷新不得缩短已加载窗口（#610）', () => {
+  test('比快照更早的已加载页保留（翻过的历史不蒸发）', () => {
+    const merged = mergeRefreshedMessages(
+      [
+        text('m1', '2026-09-21T09:00:00.000Z'), // 更早一页
+        text('m2', '2026-09-21T09:05:00.000Z'),
+        text('m3', '2026-09-21T10:00:00.000Z'), // 第一页
+      ],
+      [text('m3', '2026-09-21T10:00:00.000Z'), text('m4', '2026-09-21T10:00:10.000Z')],
+      new Set(['m1', 'm2', 'm3']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1', 'm2', 'm3', 'm4'])
+  })
+
+  test('落在快照窗口内、又在 baseIds 里的旧条目仍以快照为准', () => {
+    const merged = mergeRefreshedMessages(
+      [
+        text('m0', '2026-09-21T09:59:00.000Z'),
+        text('m1', '2026-09-21T10:00:02.000Z'), // 窗口内但快照不再返回 → 丢弃
+        text('m2', '2026-09-21T10:00:05.000Z'),
+      ],
+      [text('m0', '2026-09-21T09:59:00.000Z'), text('m2', '2026-09-21T10:00:05.000Z')],
+      new Set(['m0', 'm1', 'm2']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m0', 'm2'])
+  })
+
+  test('刷新发起之后才落地的消息仍然补回（baseIds 之外）', () => {
+    const merged = mergeRefreshedMessages(
+      [text('m2', '2026-09-21T10:00:05.000Z'), text('m3', '2026-09-21T10:00:06.000Z')],
+      [text('m2', '2026-09-21T10:00:05.000Z')],
+      new Set(['m2']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m2', 'm3'])
+  })
+
+  test('空快照当作「没有窗口」：baseIds 内的旧条目照旧丢弃（不虚构历史）', () => {
+    const merged = mergeRefreshedMessages(
+      [text('m1', '2026-09-21T10:00:00.000Z')],
+      [],
+      new Set(['m1']),
+    )
+    expect(merged).toEqual([])
+  })
+})
+
+describe('keepsEarlierPages —— 保留了更早页就不许顶掉分页游标（#610）', () => {
+  test('列表里有比快照更早的条目 → true（沿用现有游标）', () => {
+    expect(
+      keepsEarlierPages(
+        [text('m1', '2026-09-21T09:00:00.000Z'), text('m2', '2026-09-21T10:00:00.000Z')],
+        [text('m2', '2026-09-21T10:00:00.000Z')],
+      ),
+    ).toBe(true)
+  })
+
+  test('列表最旧就是快照最旧 → false（可以用快照游标）', () => {
+    expect(
+      keepsEarlierPages(
+        [text('m2', '2026-09-21T10:00:00.000Z')],
+        [text('m2', '2026-09-21T10:00:00.000Z')],
+      ),
+    ).toBe(false)
+  })
+
+  test('空快照 → false', () => {
+    expect(keepsEarlierPages([text('m1', '2026-09-21T10:00:00.000Z')], [])).toBe(false)
+  })
+})
+
+/**
+ * 游标守卫的接线：判据层只能证明「该不该守」，钉住页面里那两个调用点是否真的守了
+ * —— 手法同本文件的返回刷新接线用例。
+ */
+describe('刷新落地的游标守卫接线（#610）', () => {
+  test('nextCursor / mediaCursor 都由 keepsEarlierPages 守卫', async () => {
+    const code = await Bun.file(
+      new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url),
+    ).text()
+    const stripped = code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    const guardedBy = (call: string) =>
+      new RegExp(`keepsEarlierPages\\([^)]*\\)[\\s\\S]{0,160}${call}`)
+    expect(stripped).toMatch(guardedBy('setNextCursor\\(page\\.nextCursor\\)'))
+    expect(stripped).toMatch(guardedBy('setMediaCursor\\(mediaPage\\.nextCursor\\)'))
   })
 })
 

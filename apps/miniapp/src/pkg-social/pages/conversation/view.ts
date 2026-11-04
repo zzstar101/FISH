@@ -1016,13 +1016,71 @@ export function mergeRefreshedMedia(
   baseIds: ReadonlySet<string>,
 ): MediaMessageDto[] {
   const seen = new Set(incoming.map((item) => item.id))
+  const oldest = oldestOf(incoming)
   const carried: MediaMessageDto[] = []
   for (const item of previous) {
-    if (baseIds.has(item.id) || seen.has(item.id)) continue
+    if (seen.has(item.id)) continue
+    if (isOlderThanSnapshot(item, oldest)) {
+      seen.add(item.id)
+      carried.push(item)
+      continue
+    }
+    if (baseIds.has(item.id)) continue
     seen.add(item.id)
     carried.push(item)
   }
   return sortMessages([...incoming, ...carried])
+}
+
+/** 与 `sortMessages` 同口径的先后比较：`(createdAt, id)` */
+function isOlderThan(
+  item: { id: string; createdAt: string },
+  other: { id: string; createdAt: string },
+): boolean {
+  const at = Date.parse(item.createdAt)
+  const bt = Date.parse(other.createdAt)
+  if (at !== bt) return at < bt
+  return item.id < other.id
+}
+
+/** 快照里最旧的那一条；空快照返回 `null`（当作「没有窗口」，不据此保留历史） */
+function oldestOf<T extends { id: string; createdAt: string }>(items: readonly T[]): T | null {
+  let oldest: T | null = null
+  for (const item of items) {
+    if (oldest === null || isOlderThan(item, oldest)) oldest = item
+  }
+  return oldest
+}
+
+/**
+ * 比快照最旧一条更早的条目要不要保留（#610）。
+ *
+ * 刷新的快照只含**第一页**，永远不会带回用户已经翻过的更早页。旧实现拿「发起刷新时
+ * 已显示的全部 id」当基线，把这些更早的条目一并丢掉 —— 每次刷新（从子页返回、发送落定
+ * 后补刷、断线重连补刷）都把已加载的历史整段抹掉，`nextCursor` 还被重置成第一页游标，
+ * 下一次上翻重拉同一页、出现重复条目。
+ */
+function isOlderThanSnapshot(
+  item: { id: string; createdAt: string },
+  oldest: { id: string; createdAt: string } | null,
+): boolean {
+  return oldest !== null && isOlderThan(item, oldest)
+}
+
+/**
+ * 这次刷新合并是否会**保留比快照更早的条目**（#610）。
+ *
+ * 组件据此决定能不能用快照的游标顶掉现有分页游标：保留了更早页时，现有游标仍指向
+ * 「我们最旧那条之前」，必须沿用；顶掉就退回第一页游标、下次上翻重拉同一页。
+ */
+export function keepsEarlierPages(
+  previous: readonly { id: string; createdAt: string }[],
+  incoming: readonly { id: string; createdAt: string }[],
+): boolean {
+  const oldest = oldestOf(incoming)
+  if (oldest === null) return false
+  const incomingIds = new Set(incoming.map((item) => item.id))
+  return previous.some((item) => !incomingIds.has(item.id) && isOlderThan(item, oldest))
 }
 
 /**
@@ -1035,8 +1093,11 @@ export function mergeRefreshedMedia(
  *
  * 合并规则（`baseIds` = 本次刷新**发起时**消息流里的 id 快照）：
  * - 以服务端快照为准：它可能包含对方刚发来的新消息，也可能修正本地顺序；
+ * - **比快照最旧一条更早**的旧条目一律保留（#610）—— 快照只含第一页，永远不会带回
+ *   用户已经翻过的更早页；按旧规则（基线内即丢弃）每次刷新都把已加载历史整段抹掉；
  * - 额外保留 `baseIds` 之外、且不在快照里的消息 —— 那些是刷新发起**之后**才确认
  *   落地的（本地乐观气泡被服务端返回替换的那一刻）；
+ * - 落在快照窗口内、又在 `baseIds` 里的旧条目仍以快照为准（服务端不再返回 = 已删除）；
  * - 按 id 去重后交给 `sortMessages` 定序，实时推送送来的同一条不会重复。
  */
 export function mergeRefreshedMessages(
@@ -1045,9 +1106,16 @@ export function mergeRefreshedMessages(
   baseIds: ReadonlySet<string>,
 ): MessageDto[] {
   const seen = new Set(incoming.map((item) => item.id))
+  const oldest = oldestOf(incoming)
   const carried: MessageDto[] = []
   for (const item of previous) {
-    if (baseIds.has(item.id) || seen.has(item.id)) continue
+    if (seen.has(item.id)) continue
+    if (isOlderThanSnapshot(item, oldest)) {
+      seen.add(item.id)
+      carried.push(item)
+      continue
+    }
+    if (baseIds.has(item.id)) continue
     seen.add(item.id)
     carried.push(item)
   }

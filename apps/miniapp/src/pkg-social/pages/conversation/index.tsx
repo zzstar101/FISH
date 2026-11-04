@@ -97,6 +97,7 @@ import {
   isStaleMediaTask,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
+  keepsEarlierPages,
   lastTxAcceptedId,
   listingStatusText,
   localReplyExcerpt,
@@ -771,8 +772,9 @@ export default function Conversation() {
        * 这条**不再只属于 silent**（#89 实时通道）：推送随时可能落在一次非 silent 重拉的
        * 在途期（最典型的是 `useDidShow` 从子页返回时的重拉），而历史快照可能拍在那条消息
        * commit 之前 —— 整份替换会把它抹掉，且 20s 详情轮询不刷消息流，用户要等到下一次
-       * 重拉才看得见。`mergeRefreshedMessages` 的规则不变：基准集之内的旧条目仍以服务端
-       * 快照为准（翻过的更早一页照旧被丢弃），只有「发起之后才出现」的才补回。
+       * 重拉才看得见。`mergeRefreshedMessages` 的规则：比快照**更早**的已加载条目保留
+       * （翻过的更早页不再被丢弃，#610），窗口内以服务端快照为准，只有「发起之后才出现」
+       * 的才补回。
        */
       const baseIds = new Set(messagesRef.current.map((item) => item.id))
       /** 媒体半边同理（见下）：silent 合并要按**发起时**的媒体 id 集做并集 */
@@ -855,7 +857,12 @@ export default function Conversation() {
             setMessages((prev) =>
               keepRecalledTombstones(prev, mergeRefreshedMessages(prev, page.items, baseIds)),
             )
-            setNextCursor(page.nextCursor)
+            /**
+             * 合并保留了「比快照更早」的已加载页时，**不能**用快照的游标顶掉现有游标
+             * （#610）：快照只含第一页，它的游标指向第一页之前，顶掉就会让下一次上翻
+             * 重拉同一页、出现重复条目。现有游标仍指向我们最旧那条之前，沿用即可。
+             */
+            if (!keepsEarlierPages(messagesRef.current, page.items)) setNextCursor(page.nextCursor)
           }
           /**
            * 消息区的落态**在守卫之外**（#608 审查第 3 条）：守卫只挡「拿失败快照覆盖已经在
@@ -885,7 +892,10 @@ export default function Conversation() {
                 mergeRefreshedMedia(prev, mediaPage.items, mediaBaseIds),
               ),
             )
-            setMediaCursor(mediaPage.nextCursor)
+            /** 与消息流的游标同理（#610）：保留了更早的媒体页就不能被快照游标顶掉 */
+            if (!keepsEarlierPages(mediaRef.current, mediaPage.items)) {
+              setMediaCursor(mediaPage.nextCursor)
+            }
           }
 
           /**
