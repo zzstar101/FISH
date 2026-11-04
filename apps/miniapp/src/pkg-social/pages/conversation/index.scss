@@ -577,8 +577,13 @@
 }
 
 .conv__bubble.is-mine {
-  background: var(--grad-brand);
-  border-color: transparent;
+  /* 纯色 + 无描边（#596 第 3 点）：
+     ①基类那条 `border: 2px solid` 原先是「透明描边占位」，现在直接去掉（盒高 −4px；
+       本页几何全部运行时实测，贴底与尾行锚点不受影响）；
+     ②底色由渐变 `--grad-brand` 换成压深的纯青 `--bubble-mine` —— 白字压原色 #19d4ff
+       只有 1.76:1，压深后 4.62:1（AA 正文线 4.5:1）。 */
+  background: var(--bubble-mine);
+  border: none;
 }
 
 .conv__bubble-tx {
@@ -592,9 +597,12 @@
   color: #fff;
 }
 
-/* 发送失败的文本：虚线红描边 + 灰字（稿子 .bubble.is-failed） */
+/* 发送失败的文本：虚线红描边 + 灰字（稿子 .bubble.is-failed）
+   宽度要显式写回：`.conv__bubble.is-mine` 现在是 `border: none`（宽度 0），
+   只补 style/color 的话自己发失败的那条会连虚线框一起消失（改动前靠基类的 2px 撑着）。 */
 .conv__bubble.is-failed {
   background: var(--ice);
+  border-width: 2px;
   border-style: dashed;
   border-color: var(--danger-line);
 }
@@ -939,7 +947,9 @@
   color: var(--muted-2);
 
   &.is-mine {
-    color: rgba(255, 255, 255, 0.86);
+    /* 白字透明度压到 0.86 时在 `--bubble-mine` 上只有 3.85:1，不到 AA 正文线；
+       时长是 23px 小字，所以这里用纯白（4.62:1）。 */
+    color: #fff;
   }
 }
 
