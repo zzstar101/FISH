@@ -612,6 +612,13 @@
   color: var(--muted-2);
 }
 
+/* 顺序兜底（PR #602 复审）：`.is-mine` 的 `border: none` 与 `.is-failed` 的 `border-width: 2px`
+   权重相同 (0,2,0)，虚线框在不在只取决于两条规则的先后。这里用 (0,3,0) 把它钉住 ——
+   以后谁挪动上面两条的位置，自己发失败的那条也不会丢掉虚线框。 */
+.conv__bubble.is-mine.is-failed {
+  border-width: 2px;
+}
+
 .conv__time {
   font-size: 20px;
   color: var(--muted-2);
@@ -681,7 +688,8 @@
 
 /*
  * 媒体消息的摘引在气泡**外面**（`index.tsx:2628` 的 `renderMediaQuote`），
- * 底下是页面 --grad-page 而不是我方深青气泡 —— 所以无论有没有 `.is-mine`
+ * 底下是列表本身的 `--bg`（`index.scss:18-24` 的 `.conv__list`，不是 `--grad-page`：那条渐变在
+ * 页头，列表这里是纯色）—— 所以无论有没有 `.is-mine`
  * 都必须走「蓝块 + 深字」，否则就是白字压浅底（约 1.1:1，发送方看不见）。
  * 宿主本身就是浅蓝渐变，只靠底色分不出来（`--accent-mid` 压页头只有 1.15:1），
  * 所以这里再加一条 `--line` 描边（压页头 1.44:1、压最浅处 #f7faff 1.67:1）。
@@ -689,9 +697,14 @@
  * `.conv__quote.is-mine` 才翻白。末尾那条 `.is-mine` 反色是给**将来**兜底的
  * （`renderMediaQuote` 目前恒不产出 is-mine 类），写成四个类名 (0,4,0)，
  * 稳定高过 `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，不靠源序。
+ *
+ * 底色那条也一样要**自己抬高权重**（PR #602 复审）：`.conv__quote.is-mine { background:
+ * var(--quote-bg-mine) }` 是 (0,2,0)，与 `.conv__quote--floating.is-mine` 同权重 ——
+ * 只靠源序赢。这里两个选择器都带上一层 `.conv__quote`，变成 (0,2,0) / (0,3,0)，
+ * 浮动摘引的蓝底不再依赖书写顺序。
  */
-.conv__quote--floating,
-.conv__quote--floating.is-mine {
+.conv__quote.conv__quote--floating,
+.conv__quote.conv__quote--floating.is-mine {
   background: var(--accent-mid);
   border: 1px solid var(--line);
 }
