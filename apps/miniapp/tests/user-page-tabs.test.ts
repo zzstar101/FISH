@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   emptyPage,
   firstPageOf,
-  reloadRequiredOnSwitch,
   segmentErrorInfo,
   segmentErrorSuffix,
   segmentOfTab,
@@ -167,9 +166,9 @@ describe('他人主页接线（#581）', () => {
     expect(body).not.toContain("setLoadState('notFound')")
     expect(slice(body, 'if (next === null) {', 'return')).toContain('failed: true, error: gone')
 
-    // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据之前
+    // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据
+    // 之前；#598 复审 F1 起代号顺带留在 `sent` 里，供 await 之后比对（见「切段自愈」那组）
     const reload = slice(code, 'const load = useCallback(', 'if (userId ===')
-    // #598 复审 F1 起代号顺带留在 `sent` 里，供 await 之后比对（见「切段自愈」那组）
     expect(reload.replace(/\s+/g, ' ')).toContain(
       'const sent = ++generation.current inFlight.current = false',
     )
@@ -178,7 +177,7 @@ describe('他人主页接线（#581）', () => {
     )
     // 两个 callback 都必须把 `seg` 放进依赖：少了它，切段后闭包仍是旧段的快照
     expect(code).toContain('    [seg, userId],')
-    expect(code).toContain('    [load, loadState, scrollToBody, seg],')
+    expect(code).toContain('    [scrollToBody, seg],')
   })
 
   test('空页就补拉第一页（切段后 / 深链进已售出都靠它），失败后不自动重试', async () => {
@@ -313,24 +312,14 @@ describe('shouldRefetch / totalOf / segTitleOf —— 口径的单一来源（#5
 describe('切段自愈与段级失败（#598）', () => {
   const page = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
 
-  test('整页终态下切段必须整页重来，不算「只换这一段的数据」', () => {
-    // 页头（资料）都没到 ⇒ 只重置 page 没用：`shouldRefetch` 要求 `loadState === 'ok'`
-    expect(reloadRequiredOnSwitch('notFound')).toBe(true)
-    expect(reloadRequiredOnSwitch('failed')).toBe(true)
-    // 资料已在（ok）或首屏在拉（loading）时只换这一段，别让整页白闪一下
-    expect(reloadRequiredOnSwitch('ok')).toBe(false)
-    expect(reloadRequiredOnSwitch('loading')).toBe(false)
-    // 段失败后切段：page 整份重置、加载态仍是 ok ⇒ 补拉 effect 一定发请求
+  test('段失败后切段会重新发请求：page 整份重置、加载态仍是 ok', () => {
+    // 段级失败后切段：`switchSegment` 把 page 整份换成 `emptyPage()`（`failed` / `loading`
+    // 一并复位），而 `loadState` 仍是 `'ok'` ⇒ 补拉 effect 的 `shouldRefetch` 为真、会发请求。
+    // 反面就是原缺陷：`loadState` 停在 `notFound` / `failed` 时 `shouldRefetch` 恒假，
+    // 切段连请求都不发（这正是验收①的判据）。
     expect(shouldRefetch('ok', emptyPage())).toBe(true)
-  })
-
-  test('接线：终态下切段由 load(next) 接管，目标段随参数带过去', async () => {
-    const body = slice(await page, 'const switchSegment = useCallback(', 'const openSoldListings')
-    expect(body).toContain('if (reloadRequiredOnSwitch(loadState)) void load(next)')
-    // 不带目标段的话，整页重来一遍后段会被 `?tab=` 初值拽回在售
-    expect(await page).toContain('const initial = target ?? segmentOfTab(tabParam)')
-    // 依赖里少了 `load` / `loadState`，回调拿到的都是旧闭包
-    expect(await page).toContain('    [load, loadState, scrollToBody, seg],')
+    expect(shouldRefetch('failed', emptyPage())).toBe(false)
+    expect(shouldRefetch('notFound', emptyPage())).toBe(false)
   })
 
   test('接线：整页重载要领本轮代号，await 之后比对，晚到的响应不许回填', async () => {
@@ -347,6 +336,14 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(guardAt).toBeGreaterThan(awaitAt)
     // 目标段仍随参数带过去，否则整页重来后被 `?tab=` 拽回在售
     expect(await page).toContain('const initial = target ?? segmentOfTab(tabParam)')
+  })
+
+  test('切段只动这一段：终态两格直接 load(next)，不在 switchSegment 里抄一条够不着的分支', async () => {
+    // 行为口径：`switchSegment` 的调用方只有页头那两格，而它们在 `profile` 非空
+    // （`loadState === 'ok'`）时才渲染 —— 终态判断写在这里是零行为覆盖的死分支。
+    const body = slice(await page, 'const switchSegment = useCallback(', 'const openSoldListings')
+    expect(body).not.toContain('reloadRequiredOnSwitch')
+    expect(body).toContain('    [scrollToBody, seg],')
   })
 
   test('错误标识从 ApiError 的形状里取，取不到就记 UNKNOWN（不伪装成某个码）', () => {
@@ -385,6 +382,14 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(body).not.toContain('console.warn(')
   })
 
+  test('段级 404 用端上自造的码，不借服务端的 USER_NOT_FOUND', async () => {
+    // `features/user/api.ts` 已把 404 折成 `null`，服务端的码到不了这一层：借服务端那个码会
+    // 把「页主注销」和「这段列表不可见」混成一句误导诊断（复审 F6）
+    const body = slice(await page, 'const loadSegment = useCallback(', 'const items = page.items')
+    expect(body).toContain("code: 'LISTING_NOT_FOUND'")
+    expect(body).not.toContain("'USER_NOT_FOUND'")
+  })
+
   test('接线：段失败后滚底不再重打同一个游标', async () => {
     // 段级失败（含续页 404 降级）后 `nextCursor` 还留着：不挡 `page.failed`，
     // 用户每上滑一次就重打同一游标、再失败一次
@@ -418,6 +423,10 @@ describe('整页终态也留得住页头两格（#598 验收②）', () => {
       ") : loadState === 'notFound' ? null : (",
     )
     expect(head).toContain('className="uhome__stats"')
+    // 复审 F2：`NavBar` 是透明覆盖层，降级页头也得有 `.uhome__identity` 那层让位
+    // （`identityTopGap` = 导航条总高 + 16），否则两格画进状态栏 / 返回钮那一带
+    expect(head).toContain('className="uhome__identity"')
+    expect(head).toContain(`${'${'}identityTopGap}px`)
     expect(head).toContain("onClick={() => void load('ACTIVE')}")
     expect(head).toContain("onClick={() => void load('SOLD')}")
     // 终态下点两格若走 `switchSegment`，会被「同段早退」吃掉（`next === seg` 直接返回），
@@ -426,6 +435,18 @@ describe('整页终态也留得住页头两格（#598 验收②）', () => {
     // 资料压根没到：不编一个假人，昵称 / 头像 / 关注钮一概不画
     expect(head).not.toContain('uhome__pname')
     expect(head).not.toContain('uhome__avatar')
+  })
+
+  test('整页失败的重试钮：保住当前段、给一句人话、并把滚动挪回顶部', async () => {
+    const err = slice(await page, 'title="主页加载失败"', 'onAction')
+    // 复审 F8：`load()` 无参会被 `?tab=` 拽回初值，用户已经切到的段就丢了
+    expect(err).toContain('void load(seg)')
+    expect(err).not.toContain('void load()')
+    // 复审 F7：整页路径上也得有可读的失败说明，不能只剩一个标题
+    expect(err).toContain('text="网络异常，请重试"')
+    // 复审 F10：`ScrollView` 自本单起常驻，`scrollTop` 会留着而顶栏两态已复位 ——
+    // 不归位就是「导航条透明、居中标题不出现」直到用户再滚一次
+    expect(err).toContain('backToTop()')
   })
 
   test('notFound 不画两格（页主不存在，没有可切的段）', async () => {

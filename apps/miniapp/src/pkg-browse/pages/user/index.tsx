@@ -42,7 +42,6 @@ import {
   emptyPage,
   firstPageOf,
   mergeSegmentPage,
-  reloadRequiredOnSwitch,
   segmentErrorInfo,
   segmentErrorSuffix,
   segmentOfTab,
@@ -132,8 +131,8 @@ export default function UserHome() {
    */
   const inFlight = useRef(false)
 
-  // `target` 只在「切段自愈」时给：整页已是终态（notFound / failed）时切段要整页重来，
-  // 而重来一遍不能又被 `?tab=` 初值拽回原来那段（#598），所以目标段随参数带过去。
+  // `target` 只在「整页终态下点页头两格」时给：资料都没到，只能整页重来，而重来一遍不能
+  // 又被 `?tab=` 初值拽回原来那段（#598），所以目标段随参数带过去。
   const load = useCallback(
     async (target?: Segment) => {
       // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
@@ -152,8 +151,8 @@ export default function UserHome() {
       // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
       setSeg(initial)
       setPage(emptyPage())
-      // 顶栏两态也要跟着复位：失败态会把 `ScrollView` 整块卸载，重试时它是新挂载的，
-      // 而这两个 page 级 state 会留着上一轮的值。
+      // 顶栏两态也要跟着复位：它们按滚动量算，整页重来后内容全换了，上一轮的值不再成立
+      // （`ScrollView` 自 #598 起常驻，重试不再靠卸载重挂来复位这两个 state）。
       setGlassOn(false)
       setTitled(false)
 
@@ -200,7 +199,10 @@ export default function UserHome() {
           // 段级 404（页主在这一步注销 / 该段不可见）：**只降级这一段**。
           // 不能整页退到 notFound —— 那会把 `ScrollView` 连页头那两格一起卸载，用户切一次段
           // 就丢掉整页，且 `loadState` 成了终态、补拉 effect 恒假，怎么切都出不来（#598）。
-          const gone: SegmentErrorInfo = { code: 'USER_NOT_FOUND', status: 404 }
+          // 码是**端上自造**的（`features/user/api.ts` 已把 404 折成 `null`，服务端的码到不了
+          // 这里），不借服务端那个 `USER_NOT_FOUND` 用 —— 借了会把「页主注销」与「这段列表
+          // 不可见」混成一句误导诊断（#598 复审 F6；口径另开单）。
+          const gone: SegmentErrorInfo = { code: 'LISTING_NOT_FOUND', status: 404 }
           console.error('[miniapp] 他人主页：该段列表 404', seg, gone.code, gone.status)
           setPage((prev) => ({ ...prev, loading: false, failed: true, error: gone }))
           return
@@ -355,12 +357,11 @@ export default function UserHome() {
       setSeg(next)
       setPage(emptyPage()) // 新段从第一页拉，不继承上一段的游标与失败态
       scrollToBody()
-      // 整页已是终态（`notFound` / `failed`：资料都没到）时，只换这一段的数据没有意义 ——
-      // `shouldRefetch` 硬要求 `loadState === 'ok'`，补拉 effect 恒假，于是「失败过一次之后
-      // 怎么切都出不来」（#598）。这种情况整页重来，目标段随 `load(next)` 一起带过去。
-      if (reloadRequiredOnSwitch(loadState)) void load(next)
+      // 整页终态（`notFound` / `failed`）下这两格根本不走这里：`switchSegment` 的调用方只有
+      // 页头那两格，而它们在 `profile` 非空（即 `loadState === 'ok'`）时才渲染。终态下另有
+      // 一条路直接 `load(next)`（见降级页头），别在这儿再加一条同样够不着的分支。
     },
-    [load, loadState, scrollToBody, seg],
+    [scrollToBody, seg],
   )
 
   const openSoldListings = useCallback(() => switchSegment('SOLD'), [switchSegment])
@@ -1029,27 +1030,30 @@ export default function UserHome() {
               </View>
             ) : loadState === 'failed' ? (
               /* 整页加载失败（#598 验收②）：两格必须还在、还能点 —— 点一下就是「按这一段
-                 整页重拉」。这里直接 `load(next)` 而不是走 `reloadRequiredOnSwitch`：整页重来
-                 后 `load` 会按调用方指名的段走，否则会被 `?tab=` 拽回原段。
+                 整页重拉」，目标段随 `load(next)` 带过去（不带就被 `?tab=` 拽回原段）。
                  资料没到 ⇒ 头像 / 昵称 / 关注钮一概不画（不编一个假人），计数也无从谈起、
                  退成 `--`；只保留两格与它们各自的点击。
-                 notFound（页主不存在）不画两格：那个人没有列表可切，点了也没有意义。 */
-              <View className="uhome__stats">
-                <View
-                  className="uhome__stat uhome__stat--link"
-                  hoverClass="uhome__stat--tap"
-                  onClick={() => void load('ACTIVE')}
-                >
-                  <Text className="uhome__stat-num num">--</Text>
-                  <Text className="uhome__stat-label">在售</Text>
-                </View>
-                <View
-                  className="uhome__stat uhome__stat--link"
-                  hoverClass="uhome__stat--tap"
-                  onClick={() => void load('SOLD')}
-                >
-                  <Text className="uhome__stat-num num">--</Text>
-                  <Text className="uhome__stat-label">卖出</Text>
+                 notFound（页主不存在）不画两格：那个人没有列表可切，点了也没有意义。
+                 `.uhome__identity` + `identityTopGap` 与另两态同口径：`NavBar` 是透明覆盖层，
+                 少了这层让位，两格会顶到状态栏 / 返回钮那一带（#598 复审 F2）。 */
+              <View className="uhome__identity" style={{ marginTop: `${identityTopGap}px` }}>
+                <View className="uhome__stats">
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={() => void load('ACTIVE')}
+                  >
+                    <Text className="uhome__stat-num num">--</Text>
+                    <Text className="uhome__stat-label">在售</Text>
+                  </View>
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={() => void load('SOLD')}
+                  >
+                    <Text className="uhome__stat-num num">--</Text>
+                    <Text className="uhome__stat-label">卖出</Text>
+                  </View>
                 </View>
               </View>
             ) : loadState === 'notFound' ? null : (
@@ -1121,7 +1125,18 @@ export default function UserHome() {
             </View>
 
             {loadState === 'failed' ? (
-              <LoadError title="主页加载失败" onRetry={() => void load()} />
+              <LoadError
+                title="主页加载失败"
+                text="网络异常，请重试"
+                onRetry={() => {
+                  // 保住用户已经切到的段（`load()` 无参会被 `?tab=` 拽回初值），并把滚动挪回
+                  // 顶部：`ScrollView` 自 #598 起常驻，`scrollTop` 会留着，而 `glassOn` /
+                  // `titled` 已按「整页重来」复位 —— 不归位就是「导航条透明、居中标题不出现」
+                  // 直到用户再滚一次（#598 复审 F8/F10）。
+                  backToTop()
+                  void load(seg)
+                }}
+              />
             ) : loadState === 'notFound' ? (
               <EmptyState
                 title="用户不存在"
