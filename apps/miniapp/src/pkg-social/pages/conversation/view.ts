@@ -1275,6 +1275,36 @@ export const REPLY_DROPPED_TIP = '引用的消息已失效，已去掉引用'
 export const BOTTOM_SLACK_PX = 24
 
 /**
+ * 「+」面板在**从没量到过键盘**时的高度兜底（设备 px，#597）。
+ *
+ * 面板的正确高度是「上一次键盘有多高」：两者占的是屏幕底部的同一块区域，等高了，
+ * 键盘 ↔ 面板切换时底部底座总高不变，消息流的高度就不会跟着变两次。量不到（用户
+ * 一进页面就点「+」、或页面在无键盘设备上打开）时给一个常见手机键盘的量级，
+ * 让面板至少占住那块地方，而不是贴着输入栏长出一条两行的窄条。
+ */
+export const DEFAULT_PANEL_HEIGHT_PX = 260
+
+/**
+ * 底部底座用什么高度（设备 px，#597）—— 键盘与「+」面板**互斥**，谁在场就用谁的。
+ *
+ * 面板展开时**不看** `keyboardHeight`：那一刻键盘正在收起（平台事件一路单调递减），
+ * 用它的中间值会把底部底座连着改好几次，消息流就跟着抖好几次。面板的高度在点「+」的
+ * 当拍就已经是终值（上一次键盘高度），所以底部高度**一次**到位、之后不再变。
+ *
+ * 收起面板时回到 `keyboardHeight`：键盘本来就没开就是 0（内联样式整段不写，
+ * `.conv__bar` 自己的 `env(safe-area-inset-bottom)` 生效）。
+ */
+export function resolveBottomInset(input: {
+  panelOpen: boolean
+  keyboardHeight: number
+  lastKeyboardHeight: number
+}): number {
+  const { panelOpen, keyboardHeight, lastKeyboardHeight } = input
+  if (!panelOpen) return Math.max(0, keyboardHeight)
+  return lastKeyboardHeight > 0 ? lastKeyboardHeight : DEFAULT_PANEL_HEIGHT_PX
+}
+
+/**
  * 消息流此刻是不是贴着底部（#561）。
  *
  * `onScroll` 的 `detail` 只有 `scrollTop` / `scrollHeight`，**不含视口高度**，所以视口要
@@ -1380,13 +1410,21 @@ export function growBottomAllowance(input: {
  * 与 `growBottomAllowance` 的累加互补 —— 量测是事后的一帧，布局没落定时可能报 0；
  * 直接覆盖会把 `onLineChange` 刚记下的增量清零，而原生那次滚动事件正好在这之后到达。
  * 首次量测（`prevViewport <= 0`）没有可比对象，算出来会是整个视口高，等于一次放到最松。
+ *
+ * **面板开合那一次不记账**（`panelTransition`，#597）：那是用户主动切换底部底座，
+ * 不是内容长高。把它记进容差等于把「贴底」判据一次性放宽到面板那么高 —— 用户明明在
+ * 翻历史，下一次开面板却被判成贴底，尾行锚点一翻就把他拽到底（#597 现象三）。
+ * 归零而不是「保持原值」：切换这一刻几何是全新的，判据应当回到最严格的那一档。
  */
 export function mergeViewportShrink(input: {
   allowance: number
   prevViewport: number
   nextViewport: number
+  /** 这次量测是不是「面板开合」引起的几何变化 */
+  panelTransition?: boolean
 }): number {
-  const { allowance, prevViewport, nextViewport } = input
+  const { allowance, prevViewport, nextViewport, panelTransition } = input
+  if (panelTransition) return 0
   if (!(prevViewport > 0) || !(nextViewport > 0)) return allowance
   const shrunkBy = prevViewport - nextViewport
   if (shrunkBy <= 0) return allowance
