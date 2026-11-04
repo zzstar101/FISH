@@ -434,9 +434,10 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
-  /* 左右 32 → 16（= 屏宽 750rpx 下 8pt）：Owner 要求头像离屏幕边缘 8px（#596 演示反馈）。
-     头像贴边距离只由这条左右内边距决定，行内 gap 只影响头像与气泡之间。 */
-  padding: 24px 16px 6px;
+  /* 左右回到 32（= 屏宽 750rpx 下 16pt）：与上方商品摘要条 `.conv__pbar` 的
+     `margin: 20px 32px 0` 同一栅格（#596 演示反馈：两边宽距要跟其它布局的外边距对齐）。
+     头像再往外挑 16px（见 `.conv__ava` 的负外边距），所以头像贴边仍是 16px = 8pt。 */
+  padding: 24px 32px 6px;
 }
 
 /* 日期分隔（稿子 .daysep）：蓝底小胶囊，与系统灰胶囊区分 */
@@ -523,12 +524,15 @@
 }
 
 /* 头像：60 → 76px（#596 第 1 点，Owner 要求明显放大）。
-   ⚠️ 76 这个数**同时**写在下面 `.conv__col` 的 `calc(100% - 92px)` 里（92 = 76 + 行 gap 16），
-   两处必须一起改，只改一处会让长消息溢出到对侧。 */
+   ⚠️ 76 这个数**同时**写在下面 `.conv__col` 的 `calc(100% - 76px)` 里，
+   两处必须一起改，只改一处会让长消息溢出到对侧。
+   负外边距：气泡列按 32px 栅格，头像单独往外挑 16px 贴着屏边（Owner 要求头像更靠边缘），
+   所以头像实际离屏幕 32 - 16 = 16px = 8pt。 */
 .conv__ava {
   width: 76px;
   height: 76px;
   flex: 0 0 auto;
+  margin-left: -16px;
   border-radius: 50%;
   overflow: hidden;
   display: flex;
@@ -562,12 +566,19 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-  /* 让出头像 + 间距，气泡列不吃满整行（头像 76 + `.conv__row` gap 16 = 92） */
-  max-width: calc(100% - 92px);
+  /* 让出头像（76）：`.conv__row` 的 gap 16 由 `100%` 之外的负外边距抵掉 ——
+     头像往外挑 16px 后整行可用宽是 `100% + 16px`，减去头像 76 就是 `100% - 76px`。 */
+  max-width: calc(100% - 76px);
 }
 
 .conv__row.is-mine .conv__col {
   align-items: flex-end;
+}
+
+/* 我的行是 row-reverse（头像在右），往外挑要改成右边 */
+.conv__row.is-mine .conv__ava {
+  margin-left: 0;
+  margin-right: -16px;
 }
 
 /* 文本气泡：上限 200pt、圆角 12pt 均匀（带头像后不再要小尾巴角） */
