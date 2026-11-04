@@ -659,6 +659,22 @@
 }
 
 /*
+ * 失败态反色（PR #602 审查 A）：失败气泡的底色是浅灰 `--ice`，而待发条目**恒**渲染
+ * `.conv__quote.is-mine`（`index.tsx:3685-3691`），上面那条白字压「--ice + 黑」只剩
+ * 1.50:1，发送方看不见自己引用了什么。这里把失败态的内层块退回浅蓝底
+ * （`--accent-mid` 压 `--ice` 1.28:1），文字无条件按深色算（`--muted-2` 压
+ * `--accent-mid` 6.28:1）。文字那条写成四层类名 (0,4,0)，稳定压过
+ * `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，不靠源序。
+ */
+.conv__bubble.is-failed .conv__quote {
+  background: var(--accent-mid);
+}
+
+.conv__bubble.is-failed .conv__quote .conv__quote-tx {
+  color: var(--muted-2);
+}
+
+/*
  * 媒体消息的摘引在气泡**外面**（`index.tsx:2628` 的 `renderMediaQuote`），
  * 底下是页面 --grad-page 而不是我方深青气泡 —— 所以无论有没有 `.is-mine`
  * 都必须走「浅块 + 深字」，否则就是白字压浅底（约 1.1:1，发送方看不见）。
