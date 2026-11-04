@@ -115,18 +115,14 @@ describe('homeFailureText：整页失败态的正文（#607）', () => {
   })
 
   test('网络异常翻成人话，不摆一个 status 0 出来', () => {
-    const text = homeFailureText({ code: 'UNKNOWN', status: 0 })
-
-    expect(text).toBe('主页没加载出来（网络异常，请重试）')
-    expect(text).not.toContain('0')
+    // 整句钉死：`status: 0` 若被原样拼进文案，这里立刻变红
+    expect(homeFailureText({ code: 'UNKNOWN', status: 0 })).toBe(
+      '主页没加载出来（网络异常，请重试）',
+    )
   })
 
   test('没有码时退到通用句：不留空括号、不出现 undefined', () => {
-    const text = homeFailureText(null)
-
-    expect(text).toBe('主页没加载出来，请稍后重试')
-    expect(text).not.toContain('（')
-    expect(text).not.toContain('undefined')
+    expect(homeFailureText(null)).toBe('主页没加载出来，请稍后重试')
   })
 
   test('三条路径的文案两两不同：注销 / 网络 / 服务端各自可辨（#607 验收 ③）', () => {
@@ -168,8 +164,6 @@ describe('接线：页面把码接进 LoadError，不再写死一句「网络异
     const source = await page
     const load = slice(source, 'const load = useCallback(', 'const loadSegment = useCallback(')
     expect(load).toContain("setHomeError(result.status === 'failed' ? result.error : null)")
-    // 重试要先清残留，否则 spinner 里挂着上一轮的码
-    expect(load).toContain('setHomeError(null)')
 
     const failed = slice(source, "{loadState === 'failed' ? (", ") : loadState === 'notFound' ? (")
     expect(failed).toContain('text={homeFailureText(homeError)}')

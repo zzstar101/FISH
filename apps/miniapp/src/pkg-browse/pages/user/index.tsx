@@ -146,7 +146,11 @@ export default function UserHome() {
       // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
       setLoadState('loading')
       setProfile(null)
-      // 上一轮的码也要清掉：否则重试期间的空态头里会挂着上一次的错误码（#607）。
+      // 上一轮的码也跟着复位。**目前这行是防御性的、不修画面**：`homeError` 只在
+      // `loadState === 'failed'` 那支里被读，而 `loadState` 在同一个同步块里已回到 `loading`
+      // （React 批处理成一次渲染，中途那一帧渲染的是骨架屏）——所以码清不清都不会被打出来。
+      // 留着是为了「一轮请求的所有残留都在入口处清干净」这条一致性，别据此推断 `LoadError`
+      // 在加载中仍然挂着（它没有）。
       setHomeError(null)
       const initial = target ?? segmentOfTab(tabParam)
       // 先作废在途请求并领本轮代号：上一轮还没回来的响应（含列表页）一个字段都不许写进
