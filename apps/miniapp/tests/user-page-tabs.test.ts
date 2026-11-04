@@ -312,14 +312,19 @@ describe('shouldRefetch / totalOf / segTitleOf —— 口径的单一来源（#5
 describe('切段自愈与段级失败（#598）', () => {
   const page = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
 
-  test('段失败后切段会重新发请求：page 整份重置、加载态仍是 ok', () => {
-    // 段级失败后切段：`switchSegment` 把 page 整份换成 `emptyPage()`（`failed` / `loading`
-    // 一并复位），而 `loadState` 仍是 `'ok'` ⇒ 补拉 effect 的 `shouldRefetch` 为真、会发请求。
-    // 反面就是原缺陷：`loadState` 停在 `notFound` / `failed` 时 `shouldRefetch` 恒假，
-    // 切段连请求都不发（这正是验收①的判据）。
+  test('切段后一定重新发请求：switchSegment 整份换成 emptyPage()，补拉 effect 由假转真', async () => {
+    // 行为（#582 既有口径）：`shouldRefetch` 只在 `!loaded && !loading && !failed` 时放行，
+    // `failed` 一律不自动重试 —— 所以「切段能不能重新拉」全看这一段有没有被整份重置。
     expect(shouldRefetch('ok', emptyPage())).toBe(true)
     expect(shouldRefetch('failed', emptyPage())).toBe(false)
     expect(shouldRefetch('notFound', emptyPage())).toBe(false)
+    // 接线：`failed: true` 的页面只有被整份换成 `emptyPage()` 才会重新为真。
+    // 删掉这一句 ⇒ 段失败后切段静默、连请求都不发（本用例变红）。
+    const body = slice(await page, 'const switchSegment = useCallback(', 'const openSoldListings')
+    expect(body).toContain('setPage(emptyPage())')
+    // 同时作废在途的旧段响应并放开闩，否则新段第一次补拉会被 `inFlight` 挡回
+    expect(body).toContain('generation.current += 1')
+    expect(body).toContain('inFlight.current = false')
   })
 
   test('接线：整页重载要领本轮代号，await 之后比对，晚到的响应不许回填', async () => {
@@ -336,14 +341,6 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(guardAt).toBeGreaterThan(awaitAt)
     // 目标段仍随参数带过去，否则整页重来后被 `?tab=` 拽回在售
     expect(await page).toContain('const initial = target ?? segmentOfTab(tabParam)')
-  })
-
-  test('切段只动这一段：终态两格直接 load(next)，不在 switchSegment 里抄一条够不着的分支', async () => {
-    // 行为口径：`switchSegment` 的调用方只有页头那两格，而它们在 `profile` 非空
-    // （`loadState === 'ok'`）时才渲染 —— 终态判断写在这里是零行为覆盖的死分支。
-    const body = slice(await page, 'const switchSegment = useCallback(', 'const openSoldListings')
-    expect(body).not.toContain('reloadRequiredOnSwitch')
-    expect(body).toContain('    [scrollToBody, seg],')
   })
 
   test('错误标识从 ApiError 的形状里取，取不到就记 UNKNOWN（不伪装成某个码）', () => {
@@ -388,6 +385,9 @@ describe('切段自愈与段级失败（#598）', () => {
     const body = slice(await page, 'const loadSegment = useCallback(', 'const items = page.items')
     expect(body).toContain("code: 'LISTING_NOT_FOUND'")
     expect(body).not.toContain("'USER_NOT_FOUND'")
+    // 只钉常量名是假绿：把这一支整个退回 `setLoadState('notFound')` 时上面两条仍会绿。
+    // 真正的验收③是「404 只降级这一段列表」，所以必须钉住它写的是段内 `failed` + 码。
+    expect(slice(body, 'if (next === null) {', 'return')).toContain('failed: true, error: gone')
   })
 
   test('续页失败留一个可点的出口：列表尾部换成带码的重试行（复审 M1）', async () => {
