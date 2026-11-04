@@ -367,6 +367,17 @@ describe('切段自愈与段级失败（#598）', () => {
     // 只 `console.warn(error)` 一句、不带码，真机验收（拿不到 Console）就没法区分 422 与 5xx
     expect(body).not.toContain('console.warn(')
   })
+
+  test('接线：段失败后滚底不再重打同一个游标', async () => {
+    // 段级失败（含续页 404 降级）后 `nextCursor` 还留着：不挡 `page.failed`，
+    // 用户每上滑一次就重打同一游标、再失败一次
+    const body = slice(
+      await page,
+      'const onScrollToLower = useCallback(',
+      'const [left, right] = useMemo(',
+    )
+    expect(body).toContain('page.loading || page.failed || page.nextCursor === null')
+  })
 })
 
 describe('整页终态也留得住页头两格（#598 验收②）', () => {

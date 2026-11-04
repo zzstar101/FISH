@@ -240,10 +240,12 @@ export default function UserHome() {
   /**
    * 滚到底补下一页。`onScrollToLower` 在内容不满一屏时也会触发，
    * 所以「没有下一页」与「正在拉」都必须先挡住，不能只靠事件本身。
+   * `page.failed` 同样要挡（#598）：段级失败（含续页 404 降级）后 `nextCursor` 还留着，
+   * 不挡的话用户每上滑一次就重打同一个游标、再失败一次 —— 想再试得走「重试」那颗钮。
    */
   const onScrollToLower = useCallback(() => {
     if (loadState !== 'ok') return
-    if (page.loading || page.nextCursor === null) return
+    if (page.loading || page.failed || page.nextCursor === null) return
     void loadSegment(page.nextCursor)
   }, [loadSegment, loadState, page])
 
