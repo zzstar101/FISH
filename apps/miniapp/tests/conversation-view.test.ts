@@ -1414,15 +1414,38 @@ describe('keepsEarlierPages —— 保留了更早页就不许顶掉分页游标
  * —— 手法同本文件的返回刷新接线用例。
  */
 describe('刷新落地的游标守卫接线（#610）', () => {
-  test('nextCursor / mediaCursor 都由 keepsEarlierPages 守卫', async () => {
+  test('刷新块里的 nextCursor / mediaCursor 都由 keepsEarlierPages 守卫，且极性正确', async () => {
     const code = await Bun.file(
       new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url),
     ).text()
     const stripped = code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
-    const guardedBy = (call: string) =>
-      new RegExp(`keepsEarlierPages\\([^)]*\\)[\\s\\S]{0,160}${call}`)
-    expect(stripped).toMatch(guardedBy('setNextCursor\\(page\\.nextCursor\\)'))
-    expect(stripped).toMatch(guardedBy('setMediaCursor\\(mediaPage\\.nextCursor\\)'))
+    /**
+     * 只看 `load()` 里刷新落地那一段：`loadEarlier` 自己也有一处
+     * `setNextCursor(page.nextCursor)`（翻页后游标就该前进），不在本单守卫范围。
+     */
+    const from = stripped.indexOf('const baseIds = new Set(')
+    const to = stripped.indexOf('void markConversationRead(')
+    expect(from, '刷新块起点应存在').toBeGreaterThan(0)
+    expect(to, '刷新块终点应存在').toBeGreaterThan(from)
+    const refreshBlock = stripped.slice(from, to)
+    /**
+     * 必须连**极性**一起钉住：只要求「判据与写入相邻」的话，把守卫写反
+     * （`if (keepsEarlierPages(...)) setNextCursor(...)` —— 保留了更早页时反而顶掉游标）
+     * 同样能通过，而游标被顶掉正是本单要防的核心。
+     * 同时断言「写入次数 == 被守卫的次数」：漏守一处就红。
+     */
+    const assertGuarded = (call: string) => {
+      const pattern = new RegExp(call, 'g')
+      const calls = refreshBlock.match(pattern) ?? []
+      const guarded =
+        refreshBlock.match(
+          new RegExp(`if \\(!keepsEarlierPages\\([^)]*\\)\\)[\\s\\S]{0,120}${call}`, 'g'),
+        ) ?? []
+      expect(calls.length, `${call} 在刷新块里应出现一次`).toBe(1)
+      expect(guarded.length, `${call} 必须由 !keepsEarlierPages 守卫`).toBe(calls.length)
+    }
+    assertGuarded('setNextCursor\\(page\\.nextCursor\\)')
+    assertGuarded('setMediaCursor\\(mediaPage\\.nextCursor\\)')
   })
 })
 

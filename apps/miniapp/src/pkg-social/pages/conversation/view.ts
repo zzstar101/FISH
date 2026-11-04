@@ -1059,6 +1059,13 @@ function oldestOf<T extends { id: string; createdAt: string }>(items: readonly T
  * 已显示的全部 id」当基线，把这些更早的条目一并丢掉 —— 每次刷新（从子页返回、发送落定
  * 后补刷、断线重连补刷）都把已加载的历史整段抹掉，`nextCursor` 还被重置成第一页游标，
  * 下一次上翻重拉同一页、出现重复条目。
+ *
+ * **保留区不参与后续快照校正**（审查记录了两个 medium）：刷新只拉第一页，所以保留下来的
+ * 更早页不会再被 `load()` 校正 —— 那一段里的「对方撤回」只能靠实时通道
+ * （`message.recalled` 走 `applyRecalled`，不区分条目来自哪一页）收回来；实时断线期间
+ * 发生的撤回要等用户离开重进本页才会消失。另一个前提是**消息只软撤回、不做硬删**
+ * （服务端只有 `recalled_at` 更新，没有 DELETE），否则这些条目会被永久保留成幽灵消息。
+ * 两条都记在这里，改合并语义前先确认前提还成立。
  */
 function isOlderThanSnapshot(
   item: { id: string; createdAt: string },
