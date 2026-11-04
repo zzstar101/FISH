@@ -5,10 +5,11 @@
  * `usePullDownRefresh` / `usePageScroll`）—— 那几个由页面自己持有（见 `pages/orders-buy`），
  * 因为仓库里没有「页面级 hook 写在子组件里」的先例，不想把页面行为赌在这上面。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadOrders } from '@/features/fetchers'
+import { listSnapshots } from '@/features/list-snapshots'
 import type { FailureKind } from '@/features/load-failure'
-import type { OrderCardView } from './adapt'
+import { type OrderCardView, toOrderCard } from './adapt'
 
 /** 状态筛选的键：`ALL` + 契约的三个交易状态 */
 export type StatusKey = 'ALL' | OrderCardView['status']
@@ -75,6 +76,14 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
    * 刷新途中切页）。只有最后一次发出的请求可以落地，其余按过期丢弃。
    */
   const requestId = useRef(0)
+  const displayedRevision = useRef(listSnapshots.revision(role))
+  const hasData = useRef(false)
+  useEffect(
+    () => () => {
+      requestId.current += 1
+    },
+    [],
+  )
 
   /**
    * 身份切换的**渲染期重置**（adjust-state-during-render，React 官方推荐的
@@ -90,13 +99,18 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
    */
   const [identity, setIdentity] = useState<string | null>(null)
   const identityState = nextIdentityState(identity, userId)
-  if (identityState === 'reset') {
+  const previousRole = useRef(role)
+  if (identityState === 'reset' || previousRole.current !== role) {
+    previousRole.current = role
     setIdentity(userId)
     requestId.current += 1
-    setItems([])
-    setLoading(true)
+    const cached = listSnapshots.read(role, userId)
+    setItems(cached?.items.map((dto) => toOrderCard(dto)) ?? [])
+    setLoading(cached === null)
+    hasData.current = cached !== null
+    displayedRevision.current = listSnapshots.revision(role)
     setFailureKind(null)
-    setTruncated(false)
+    setTruncated(cached?.truncated ?? false)
   }
 
   /**
@@ -108,19 +122,36 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
   userIdRef.current = userId
 
   const reload = useCallback(
-    (options?: { keepList?: boolean }): Promise<void> => {
+    (_options?: { keepList?: boolean }): Promise<void> => {
       /*
        * 登录态未就绪 / 已退出：**不发请求**。`/transactions` 整条挂在 requireAuth 之下，
        * 这个时点发出去必然 401 —— 演示构建还会被那次 401 退成 mock。页面在
        * `authed` 之后由登录态 effect 补一次，请求不会丢。
        */
       if (userIdRef.current === null) return Promise.resolve()
-
+      const ticket = listSnapshots.begin(role, userIdRef.current)
+      if (!ticket) return Promise.resolve()
+      if (displayedRevision.current !== listSnapshots.revision(role)) {
+        // A known local mutation must not reappear when returning from a child page.
+        setItems([])
+        setTruncated(false)
+        hasData.current = false
+        displayedRevision.current = listSnapshots.revision(role)
+      }
       const id = requestId.current + 1
       requestId.current = id
-      if (!options?.keepList) setLoading(true)
+      // keepList cannot keep rows that a mutation has already invalidated.
+      if (!hasData.current) setLoading(true)
       return loadOrders(role).then((result) => {
         if (requestId.current !== id) return
+        if (!listSnapshots.isCurrent(ticket)) {
+          if (listSnapshots.isOwner(ticket)) {
+            setLoading(false)
+            // The read was fenced by a mutation, not an authoritative empty result.
+            setFailureKind('server')
+          }
+          return
+        }
         /*
          * 失败时**不动** `items` / `truncated`：`loadOrders` 失败一律给空数组，直接写进去
          * 就等于「把用户已经读到的订单清空」—— 下拉刷新失败时尤其糟（阅读位置白丢）。
@@ -128,6 +159,8 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
          * `LoadError` 追加在列表下面；一条都没有时才用它顶替列表），比清空诚实也更可用。
          */
         if (result.failureKind === null) {
+          if (result.snapshot) listSnapshots.write(ticket, result.snapshot)
+          hasData.current = true
           setItems(result.items)
           setTruncated(result.truncated)
         }

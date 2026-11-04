@@ -15,6 +15,7 @@
  */
 import type { Me } from '@fish/contracts/auth/user'
 import { useSyncExternalStore } from 'react'
+import { listSnapshots } from '@/features/list-snapshots'
 import { syncRecommendationViewer } from '@/features/recommendation/queue'
 import { ApiError, isUnauthenticatedError } from '@/lib/request'
 import { clearSession, onSessionCleared, readSession } from '@/lib/session'
@@ -37,6 +38,8 @@ let snapshot: AuthSnapshot = DEMO_AUTH_ENABLED
   ? { status: 'authed', user: DEMO_USER }
   : { status: 'unknown', user: null }
 
+if (DEMO_AUTH_ENABLED) listSnapshots.syncAccount(DEMO_USER.id)
+
 const listeners = new Set<() => void>()
 
 function emit(next: AuthSnapshot, viewerKnown = true): void {
@@ -51,6 +54,7 @@ function emit(next: AuthSnapshot, viewerKnown = true): void {
     是登录态）。这种情况只把队列的身份闸门关掉（`undefined` = 身份不明），绝不当成匿名 ——
     否则待发队列会按仍然有效的登录 Cookie 投出去，那正是要修的串号。
   */
+  listSnapshots.syncAccount(viewerKnown ? (next.user?.id ?? null) : undefined)
   syncRecommendationViewer(viewerKnown ? (next.user?.id ?? null) : undefined)
   for (const listener of listeners) listener()
 }

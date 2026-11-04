@@ -2,6 +2,9 @@ import { describe, expect, mock, test } from 'bun:test'
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 
+// Domain APIs now invalidate display snapshots through the Taro storage boundary.
+mock.module('@tarojs/taro', () => ({ default: {} }))
+
 /**
  * `fetchMyListings` 的翻页上限与「这份列表是不是全部」。
  *

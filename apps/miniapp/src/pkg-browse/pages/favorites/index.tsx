@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
@@ -11,7 +11,8 @@ import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { createConversation, describeCreateConversationFailure } from '@/features/chat/api'
-import { fetchMyFavorites, setFavorite } from '@/features/favorites/api'
+import { fetchMyFavorites, removeFavorites } from '@/features/favorites/api'
+import { type FavoritesSnapshot, listSnapshots } from '@/features/list-snapshots'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { type Cancellable, cancellable } from '@/lib/cancellable'
 import { formatAmount } from '@/lib/money'
@@ -91,6 +92,7 @@ type FavoritesLoad = {
   items: FavoriteItem[]
   /** 服务端 `total`：**全量**收藏数，不是这一页 / 这一次翻页的长度 */
   total: number
+  snapshot?: FavoritesSnapshot
 }
 
 /**
@@ -119,30 +121,32 @@ function failureText(caught: unknown): string {
  * **失败不在这里吞**：直接抛给 `startLoad`，由它转成页面的失败态 ——
  * 用空态冒充失败会让用户以为自己的收藏丢了。
  */
-async function loadFavorites(): Promise<FavoritesLoad> {
+async function loadFavorites(isCurrent: () => boolean): Promise<FavoritesLoad> {
   if (DEMO_MODE) {
     const items = await loadDemoFavorites()
     return { items, total: items.length }
   }
   // 一屏的「收藏时间」必须共用同一把尺子（见 `toFavoriteItems` 的 `nowMs` 约定）
   const nowMs = Date.now()
-  const items: FavoriteItem[] = []
+  const items: FavoritesSnapshot['items'] = []
   let total = 0
   let cursor: string | undefined
   for (let page = 0; page < MAX_PAGES; page += 1) {
+    if (!isCurrent()) throw new Error('List request retired')
     const response = await fetchMyFavorites(cursor)
-    items.push(...toFavoriteItems(response.items, nowMs))
+    if (response.nextCursor !== null && response.nextCursor === cursor) break
+    items.push(...response.items)
     total = response.total
     if (response.nextCursor === null) break
     cursor = response.nextCursor
   }
-  return { items, total }
+  return { items: toFavoriteItems(items, nowMs), total, snapshot: { items, total } }
 }
 
 export default function Favorites() {
   const authStatus = useAuthGuard()
   const auth = useAuth()
-  const userId = auth.user?.id ?? null
+  const userId = authStatus === 'authed' ? (auth.user?.id ?? null) : null
 
   const [items, setItems] = useState<FavoriteItem[]>([])
   /** 服务端 `total`：判断列表有没有取全（决定末尾写不写「已显示全部」） */
@@ -162,6 +166,11 @@ export default function Favorites() {
   const [selected, setSelected] = useState<string[]>([])
   /** 「取消收藏」在途：挡住连点，避免同一批被写两遍 */
   const [removing, setRemoving] = useState(false)
+  const removingRef = useRef(false)
+  const hasData = useRef(false)
+  const displayedRevision = useRef(listSnapshots.revision('favorites'))
+  const userIdRef = useRef(userId)
+  userIdRef.current = userId
   /**
    * 「聊一聊」在飞的单飞锁。用 ref 而不是 state：这个锁**不参与渲染**（没有任何 JSX
    * 读它），而 state 在同一帧内读到的还是旧值 —— 同帧双击会两次都读到 `false`，
@@ -178,7 +187,7 @@ export default function Favorites() {
    * 换成 `useEffect(() => setItems([]), [userId])` 不行：effect 在 commit 之后才跑，
    * 泄漏帧照样存在。
    */
-  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  const [prevUserId, setPrevUserId] = useState<string | null>(null)
   /**
    * 聊一聊迟到回调的**世代令牌**（同 `pkg-browse/pages/listing-detail` 的 `epochRef`
    * 口径）：换账号（下面的渲染期重置）与**离开本页**（加载 effect 的清理）都 +1。
@@ -190,15 +199,19 @@ export default function Favorites() {
   if (prevUserId !== userId) {
     setPrevUserId(userId)
     inFlight.current?.cancel()
-    setItems([])
-    setTotal(0)
+    const cached = listSnapshots.read('favorites', userId)
+    setItems(cached ? toFavoriteItems(cached.items, Date.now()) : [])
+    setTotal(cached?.total ?? 0)
+    hasData.current = cached !== null
+    displayedRevision.current = listSnapshots.revision('favorites')
     setError(null)
-    setLoading(true)
+    setLoading(cached === null)
     setSegment('sale')
     // 选中集合是按 id 记的，换账号后必须一并清掉，否则会「勾着上一个人的宝贝」
     setManaging(false)
     setSelected([])
     setRemoving(false)
+    removingRef.current = false
     // 在飞的建会话属于上一个账号：迟到响应不许再压出会话页，锁也一并放开
     chattingRef.current = false
     chatEpochRef.current += 1
@@ -214,8 +227,22 @@ export default function Favorites() {
    * 依赖里没有会变的东西，所以身份不变时它不会让 effect 多跑。
    */
   const startLoad = useCallback(async (): Promise<FavoritesLoad | null> => {
+    if (removingRef.current) return null
+    const ticket = listSnapshots.begin('favorites', userIdRef.current)
+    if (!ticket) return null
+    if (displayedRevision.current !== listSnapshots.revision('favorites')) {
+      setItems([])
+      setTotal(0)
+      hasData.current = false
+      displayedRevision.current = listSnapshots.revision('favorites')
+    }
     inFlight.current?.cancel()
-    const current = cancellable(loadFavorites, () => true)
+    const current = cancellable(
+      () => loadFavorites(() => listSnapshots.isCurrent(ticket)),
+      () => true,
+    )
+    const canApply = () => !current.isCancelled() && listSnapshots.isCurrent(ticket)
+    if (!hasData.current) setLoading(true)
     inFlight.current = current
     setError(null)
     let next: FavoritesLoad | null
@@ -223,15 +250,28 @@ export default function Favorites() {
       next = await current.promise
     } catch (caught) {
       // 已经被后一次读取顶掉 / 已卸载之后才失败的：那次失败不属于这一屏，不写状态
-      if (current.isCancelled()) return null
+      if (!canApply()) {
+        if (!current.isCancelled() && listSnapshots.isOwner(ticket)) {
+          setLoading(false)
+          setError('收藏正在更新，请稍后重试')
+        }
+        return null
+      }
       setLoading(false)
-      setItems([])
-      setTotal(0)
       setError(failureText(caught))
       return null
     }
     // `null` = 已被取消（换账号 / 卸载 / 被后一次读取顶掉）：整份结果丢弃，不写状态
     if (next === null) return null
+    if (!canApply()) {
+      if (!current.isCancelled() && listSnapshots.isOwner(ticket)) {
+        setLoading(false)
+        setError('收藏正在更新，请稍后重试')
+      }
+      return null
+    }
+    if (next.snapshot) listSnapshots.write(ticket, next.snapshot)
+    hasData.current = true
     setItems(next.items)
     setTotal(next.total)
     setLoading(false)
@@ -242,7 +282,6 @@ export default function Favorites() {
 
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null) return
-    setLoading(true)
     void startLoad()
     // 取消的是**最新**那次：卸载时可能还有一次下拉刷新在飞
     return () => {
@@ -251,6 +290,23 @@ export default function Favorites() {
       chatEpochRef.current += 1
     }
   }, [authStatus, userId, startLoad])
+
+  // The auth effect owns first entry; didShow only refreshes a page returning from hide.
+  const hidden = useRef(false)
+  useDidHide(() => {
+    hidden.current = true
+    inFlight.current?.cancel()
+    // navigateTo hides without unmounting: retire writes and release this generation's locks.
+    chatEpochRef.current += 1
+    chattingRef.current = false
+    removingRef.current = false
+    setRemoving(false)
+  })
+  useDidShow(() => {
+    if (!hidden.current) return
+    hidden.current = false
+    if (authStatus === 'authed' && userId !== null) void startLoad()
+  })
 
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
@@ -429,7 +485,7 @@ export default function Favorites() {
       toast('还没有选中宝贝')
       return
     }
-    if (removing) return
+    if (removingRef.current) return
     const realIds = items
       .filter((item) => selected.includes(item.id) && !item.demo)
       .map((item) => item.id)
@@ -438,22 +494,22 @@ export default function Favorites() {
       return
     }
 
+    const owner = listSnapshots.owner()
+    const epoch = chatEpochRef.current
+    if (!listSnapshots.isOwner(owner)) return
+    const isActive = () => chatEpochRef.current === epoch && listSnapshots.isOwner(owner)
+    removingRef.current = true
+    inFlight.current?.cancel()
+    setLoading(false)
     setRemoving(true)
-    const failed: string[] = []
-    let removed = 0
-    for (const id of realIds) {
-      try {
-        await setFavorite(id, false)
-        removed += 1
-      } catch {
-        failed.push(id)
-      }
-    }
+    const { removedIds, failed } = await removeFavorites(realIds, isActive)
+    if (!isActive()) return
+    removingRef.current = false
     setRemoving(false)
-
+    displayedRevision.current = listSnapshots.revision('favorites')
+    const removed = removedIds.size
     if (removed > 0) {
-      const keep = new Set(failed)
-      setItems((prev) => prev.filter((item) => keep.has(item.id)))
+      setItems((prev) => prev.filter((item) => !removedIds.has(item.id)))
       setTotal((prev) => Math.max(0, prev - removed))
     }
     setSelected(failed)
@@ -543,6 +599,11 @@ export default function Favorites() {
       <View className="fav__gap" />
 
       <View className="fav__body">
+        {error !== null && items.length > 0 ? (
+          <View className="fav__skel-hint" onClick={() => void startLoad()}>
+            <Text>{error} · 点此重试</Text>
+          </View>
+        ) : null}
         {loading ? (
           <View className="fav__skeleton">
             {[0, 1, 2].map((i) => (
@@ -565,7 +626,7 @@ export default function Favorites() {
               <Text className="fav__skel-hint-tx">正在读取收藏…</Text>
             </View>
           </View>
-        ) : error !== null ? (
+        ) : error !== null && items.length === 0 ? (
           /*
             失败态**不能**用空态冒充：空列表是「你真的没有收藏」，读失败是「这次没读到」——
             混在一起，用户会以为自己的收藏丢了。所以这一支单独渲染，并给一个重试出口。
@@ -576,7 +637,6 @@ export default function Favorites() {
             icon={ICONS.boxMuted}
             actionText="重试"
             onAction={() => {
-              setLoading(true)
               void startLoad()
             }}
           />
