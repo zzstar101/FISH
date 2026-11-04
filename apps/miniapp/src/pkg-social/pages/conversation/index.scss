@@ -594,8 +594,9 @@
   /* 纯色 + 无描边（#596 第 3 点）：
      ①基类那条 `border: 2px solid` 原先是「透明描边占位」，现在直接去掉（盒高 −4px；
        本页几何全部运行时实测，贴底与尾行锚点不受影响）；
-     ②底色由渐变 `--grad-brand` 换成压深的纯蓝 `--bubble-mine` —— 白字压原色 #19d4ff
-       只有 1.76:1，压深后 4.77:1（AA 正文线 4.5:1；具体色值见 `_token-vars.scss`）。 */
+     ②底色由渐变 `--grad-brand` 换成单色 `--bubble-mine`（#19d2ff）；
+     ③这块底色**只能配深字**（`--fg` = 8.71:1，白字只有 1.79:1），所以下面
+       `.is-mine` 那一族文字全部是深的，别再改回白字 —— 见 `_token-vars.scss`。 */
   background: var(--bubble-mine);
   border: none;
 }
@@ -607,8 +608,10 @@
   word-break: break-all;
 }
 
+/* 我方气泡正文：深字（`--fg` 压 #19d2ff 8.71:1）。原来是白字 —— 那在 `--bubble-mine`
+   还是深蓝时是对的，改浅后白字只剩 1.79:1，阅读不了（#596 无障碍验收）。 */
 .conv__bubble.is-mine .conv__bubble-tx {
-  color: #fff;
+  color: var(--fg);
 }
 
 /* 发送失败的文本：虚线红描边 + 灰字（稿子 .bubble.is-failed）
@@ -662,9 +665,10 @@
   border-radius: var(--r-sm);
   background: var(--accent-mid);
 
-  /* 我方气泡是深蓝纯色底，浅块压上去看不见，只能**压深**（`--quote-bg-mine` 是 28%
-     黑，叠在 `--bubble-mine` 上得 #295099，与气泡底 1.63:1，白字 7.77:1）。设计稿原话
-     是「浅一档」，但白字压浅蓝块只有 1.x:1 —— 深色宿主上「更深」才是同一个层次语义。 */
+  /* 我方气泡是浅青蓝纯色底（#19d2ff），浅块压上去反而糊在一起，所以内层块用**深一档**
+     的纯色 `--quote-bg-mine`（#14a8cc = 气泡底每通道 ×0.8，Owner 原话「深 20%」）：
+     块 vs 气泡 1.56:1 分得出层次，块内深字 `--fg` 5.58:1。设计稿原话是「浅一档」，
+     但浅底上再浅就没有块了 —— 深浅方向随宿主走才是同一个层次语义。 */
   &.is-mine {
     background: var(--quote-bg-mine);
   }
@@ -678,18 +682,23 @@
   color: var(--muted-2);
   @include ellipsis;
 
+  /* 我方内层块上要深字。这里不能用次级灰：`--muted-2` 压 #14a8cc 只有 3.12:1，
+     低于 AA 正文线（22px 常规字，不适用大字豁免），`--fg` 是 5.58:1。 */
   .conv__quote.is-mine & {
-    color: #fff;
+    color: var(--fg);
   }
 }
 
 /*
- * 失败态反色（PR #602 审查 A）：失败气泡的底色是浅灰 `--ice`，而待发条目**恒**渲染
- * `.conv__quote.is-mine`（`index.tsx:3685-3691`）→ 白字压「--ice + 14% 黑」（当时的
- * `--quote-bg-mine` 旧值）只剩 1.50:1，发送方看不见自己引用了什么。这里把失败态的内层块
- * 也退回浅蓝底（`--accent-mid` 压 `--ice` 1.28:1），文字无条件按深色算
- * （`--muted-2` 压 `--accent-mid` 6.28:1）。文字那条写成四层类名 (0,4,0)，
- * 稳定压过 `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，不靠源序。
+ * 失败态反色（PR #602 审查 A）：失败气泡的底色是浅灰 `--ice`（不是 `--bubble-mine`），
+ * 而待发条目**恒**渲染 `.conv__quote.is-mine`（`index.tsx:3685-3691`）。
+ * 所以失败态一律把内层块拉回浅蓝 `--accent-mid`，与「他人发的失败条目」同形态 ——
+ * 不让它跟着 `.is-mine` 变成 #14a8cc 深块：那会在浅灰气泡里出现一块突兀的深青，
+ * 同一个人同一屏出现两种引用块形态。可辨性/可读性都够：块压 `--ice` 1.28:1
+ * （宿主是纯色浅灰、块是饱和浅蓝，肉眼分得出），块内 `--muted-2` 压 `--accent-mid` 6.28:1
+ * （改 `color: var(--fg)` 前的旧白字在这块上只有 1.x:1，那才是原 bug）。
+ * 文字那条写成四层类名 (0,4,0)，稳定压过 `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，
+ * 不靠源序。
  */
 .conv__bubble.is-failed .conv__quote {
   background: var(--accent-mid);
@@ -937,9 +946,10 @@
   align-items: center;
   justify-content: center;
 
-  /* 我方：白底 + 品牌色三角（气泡本身是渐变底，实心圆钮会糊在一起） */
+  /* 我方：深色实心钮 + 白三角（气泡底色 #19d2ff 很浅，白圆钮压上去只有 1.79:1，
+     达不到非文本 3:1 的辨识线；`--fg` 圆钮是 8.71:1，三角白字 15.62:1）。 */
   &.is-mine {
-    background: var(--surface);
+    background: var(--fg);
   }
 }
 
@@ -953,8 +963,9 @@
   margin-left: 5px;
 }
 
+/* 我方钮是深底，三角跟着翻白（基类就是 `--surface`，这里写出来是为了别被上游改灰） */
 .conv__play.is-mine .conv__play-glyph {
-  border-left-color: var(--brand-deep);
+  border-left-color: var(--surface);
 }
 
 /* 暂停态：两根竖条。用 border-left/right 画，避免再引一份图标 */
@@ -971,9 +982,9 @@
 }
 
 .conv__play.is-pause.is-mine .conv__play-glyph {
-  border-left-color: var(--brand-deep);
-  border-right-color: var(--brand-deep);
-  background: var(--brand-deep);
+  border-left-color: var(--surface);
+  border-right-color: var(--surface);
+  background: var(--surface);
 }
 
 .conv__wave {
@@ -988,9 +999,10 @@
   border-radius: 4px;
   background: var(--accent-mid);
 
-  /* 我方：白 66% 的竖条 */
+  /* 我方：`--fg` 66%（叠在 #19d2ff 上得 #185f7f，压气泡 3.92:1）—— 非文本图形 3:1 线以上。
+     原来是白 66%，压浅青底只剩 1.43:1，等于没有波形。 */
   &.is-mine {
-    background: rgba(255, 255, 255, 0.66);
+    background: rgba(23, 35, 61, 0.66);
   }
 
   /* 已播部分高亮 */
@@ -998,8 +1010,9 @@
     background: var(--brand-deep);
   }
 
+  /* 我方已播：实心深色（8.71:1），与未播的 66% 一档拉开 */
   &.is-mine.is-on {
-    background: var(--surface);
+    background: var(--fg);
   }
 }
 
@@ -1008,10 +1021,10 @@
   font-size: var(--fs-xs);
   color: var(--muted-2);
 
+  /* 我方气泡是浅青底，时长是小字 + 次要信息，所以用 `--fg` 72%（叠在 #19d2ff 上得
+     #185473，4.58:1，刚过 AA 正文线；再往下调就破了）。 */
   &.is-mine {
-    /* 白字透明度压到 0.86 时在 `--bubble-mine` 上只有 3.98:1，不到 AA 正文线；
-       时长是 23px 小字，所以这里用纯白（4.77:1）。 */
-    color: #fff;
+    color: rgba(23, 35, 61, 0.72);
   }
 }
 
