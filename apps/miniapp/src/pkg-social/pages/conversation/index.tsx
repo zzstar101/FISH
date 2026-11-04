@@ -127,7 +127,7 @@ import {
   settleSend,
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
-  shouldReloadOnShow,
+  showReloadAction,
   sortMessages,
   startMediaRetry,
   stickAfterScroll,
@@ -920,20 +920,27 @@ export default function Conversation() {
     const sending =
       pendingRef.current.some((item) => item.status === 'sending') ||
       pendingMediaRef.current.some((item) => item.status === 'uploading')
-    if (
-      !shouldReloadOnShow({
-        loadedOnce: loadedOnceRef.current,
-        authed: authedRef.current,
-        hasUserId: userIdRef.current !== null,
-        sending,
-      })
-    ) {
-      // 有在途发送时记下待刷新；其余情况（首次显示 / 未登录）不需要补
-      if (sending) deferredRef.current = deferReload(deferredRef.current)
+    const action = showReloadAction({
+      loadedOnce: loadedOnceRef.current,
+      authed: authedRef.current,
+      hasUserId: userIdRef.current !== null,
+      sending,
+    })
+    if (action === 'none') return
+    if (action === 'defer') {
+      // 有在途发送时记下待刷新，等当前 epoch 的发送落定后由 `doSend` 的 finally 补
+      deferredRef.current = deferReload(deferredRef.current)
       return
     }
     deferredRef.current = clearDeferredReload(deferredRef.current)
-    loadRef.current()
+    /**
+     * **必须 silent**（#608）：返回本页时屏幕上已经有完整内容，走非 silent 的 `load()`
+     * 会把 `convState` / `msgState` 打回 `loading`，渲染层在 `convState !== 'ok'` 处早退，
+     * 整页被替换成「正在加载会话…」再重建 —— 闪骨架、滚动位置被拽回最新一条、输入栏与
+     * 键盘状态被重置。silent 的详情 / 交易进度 / 消息与媒体合并 / 已读上报一件不少，
+     * 失败时还不会把已经在屏幕上的内容降级成错误卡。
+     */
+    loadRef.current({ silent: true })
   })
   useDidHide(() => {
     visibleRef.current = false

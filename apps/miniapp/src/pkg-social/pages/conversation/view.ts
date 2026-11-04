@@ -1004,6 +1004,33 @@ export function shouldReloadOnShow(input: {
 }
 
 /**
+ * 页面重新显示时的动作（#608）。
+ *
+ * `'refresh-silent'` 是**后台刷新**，不是首屏加载：返回本页时屏幕上已经有完整内容，
+ * 把 `convState` / `msgState` 打回 `loading` 会让渲染层在 `convState !== 'ok'` 处早退，
+ * 整页（顶栏、商品条、消息流、输入栏）被替换成「正在加载会话…」再重建 —— 用户看到的是
+ * 闪一下、滚动位置被拽回最新一条、输入栏与键盘状态被重置。详情 / 交易进度 / 消息与媒体
+ * 合并 / 已读上报在 silent 分支里一件不少，所以这里**一律走后台刷新**。
+ *
+ * 三态而不是布尔，是因为取值本身就规定了组件该怎么调 `load()`：
+ * - `'none'`：首次显示（让渡给登录态 effect，冷启动不双发）或登录态未就绪，什么都不做；
+ * - `'defer'`：有在途发送（文本 sending / 媒体 uploading），此刻重拉会把 `epoch` +1、
+ *   在途响应被判过期，乐观气泡永远停在「发送中」——只记待刷新，落定后补（见 `DeferredReload`）；
+ * - `'refresh-silent'`：其余情况，`load({ silent: true })`。
+ */
+export type ShowReloadAction = 'none' | 'defer' | 'refresh-silent'
+
+export function showReloadAction(input: {
+  loadedOnce: boolean
+  authed: boolean
+  hasUserId: boolean
+  sending: boolean
+}): ShowReloadAction {
+  if (input.sending) return 'defer'
+  return shouldReloadOnShow(input) ? 'refresh-silent' : 'none'
+}
+
+/**
  * 会话详情态。`loading` 是页面自己的在途态；其余三个来自 `loadConversation`
  * （`features/fetchers.ts`：ok / missing / failed）。
  */

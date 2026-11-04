@@ -46,6 +46,7 @@ import {
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
   shouldReloadOnShow,
+  showReloadAction,
   sortMessages,
   startMediaRetry,
   systemPillText,
@@ -785,6 +786,31 @@ describe('shouldReloadOnShow —— 返回本页时是否立刻重拉（#170 D�
 
   test('有在途发送 → 不立刻重拉（否则 epoch+1 把乐观气泡卡在「发送中」）', () => {
     expect(shouldReloadOnShow({ ...base, sending: true })).toBe(false)
+  })
+})
+
+/**
+ * #608：返回刷新必须走**后台刷新**。
+ *
+ * 锁的是取值而不是布尔 —— `'refresh-silent'` 这个字面量本身就规定了组件要调
+ * `load({ silent: true })`。一旦有人把 didShow 的刷新改回首屏加载（把整页推回
+ * `loading`、闪骨架、丢滚动位置），这里必须变红。
+ */
+describe('showReloadAction —— 返回本页的动作（#608）', () => {
+  const base = { loadedOnce: true, authed: true, hasUserId: true, sending: false }
+
+  test('正常返回 → 后台刷新，不是首屏加载', () => {
+    expect(showReloadAction(base)).toBe('refresh-silent')
+  })
+
+  test('首次显示 / 登录态未就绪 → 什么都不做（首次拉取让渡给登录态 effect）', () => {
+    expect(showReloadAction({ ...base, loadedOnce: false })).toBe('none')
+    expect(showReloadAction({ ...base, authed: false })).toBe('none')
+    expect(showReloadAction({ ...base, hasUserId: false })).toBe('none')
+  })
+
+  test('有在途发送 → 只记待刷新，落定后再补（否则 epoch+1 卡住乐观气泡）', () => {
+    expect(showReloadAction({ ...base, sending: true })).toBe('defer')
   })
 })
 
