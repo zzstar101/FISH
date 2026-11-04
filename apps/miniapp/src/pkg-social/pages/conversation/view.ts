@@ -1327,8 +1327,9 @@ export function resolvePanelHeightPx(input: {
  * 用它的中间值会把底部底座连着改好几次，消息流就跟着抖好几次。面板高度在渲染当拍就是
  * 终值（`resolvePanelHeightPx` 从内容算出来，见上），所以底部高度**一次**到位、之后不再变。
  *
- * 收起面板时回到 `keyboardHeight`：键盘本来就没开就是 0（内联样式整段不写，
- * `.conv__bottom` 自己的 `env(safe-area-inset-bottom)` 生效）。
+ * 收起面板时回到 `keyboardHeight`：键盘本来就没开就是 0（内联样式整段不写 ——
+ * `resolveBottomReserveStyles` 那一路让 `.conv__bottom` 自己的 `env(safe-area-inset-bottom)`
+ * 生效，安全区在收起态只由底座算这一次）。
  */
 export function resolveBottomInset(input: {
   panelOpen: boolean
@@ -1338,6 +1339,50 @@ export function resolveBottomInset(input: {
   const { panelOpen, keyboardHeight, panelHeight } = input
   if (!panelOpen) return Math.max(0, keyboardHeight)
   return Math.max(0, panelHeight)
+}
+
+/**
+ * 输入行上下基础间距（rpx，#577）。
+ *
+ * 与 `index.scss` 里的 `$bar-gap-px` **必须是同一个数**（有单测钉住两边相等）：
+ * 样式表拿它写输入栏收起态的内边距，这里拿它拼占用态的内联 `calc()`，两边不一致就是
+ * 「键盘开着和收起时输入行上下的留白不一样」。
+ */
+export const BAR_GAP_RPX = 16
+
+/**
+ * 底部底座让高的样式（#577）：底部保留量只由**一个占用者**决定，安全区只算一次。
+ *
+ * 收起态返回 `undefined`，让样式表里 `.conv__bottom` 的 `env(safe-area-inset-bottom)` 生效
+ * —— **不能**返回 `'0px'`，那等于把安全区清零，iOS 上控件直接坐进 home indicator。
+ * #577 明确要保留必要手势区，不为「三端视觉等距」把它抹掉。
+ *
+ * 占用态（键盘 / 「+」面板）要同时做两件事：
+ * - **底座的内边距清零**：占用者自己已经把屏幕底部那块高度占了（键盘高度本身就覆盖了
+ *   home indicator 区），底座再留一份安全区就是第二次计数 —— 端上表现为「输入栏离键盘上沿
+ *   还空一条」，正是 #577 第 5 条要消的空白；
+ * - **输入栏下内边距 = 占位高度 + 基础间距**。占位高度是运行期量到的设备 px，只能内联
+ *   （内联不过 pxtransform，先例见 `components/back-top/index.tsx`）；基础间距按 rpx 写，
+ *   与样式表的 `$bar-gap-px` 同源。
+ *
+ * 这个函数只认「占位高度」这一个入参，**不关心谁在占用**：键盘态与面板态给出的是同一种
+ * 字符串形态（只是数值不同）。#597 追加任务之后面板高不再等于键盘高（面板按内容撑开），
+ * 两种占用态之间切换时底座会**一次**变高/变矮（差一个「键盘高 − 面板高」）—— 那是 #597 的
+ * 有意取舍，这里不掺和，也不在样式层补第二个补偿。
+ */
+export interface BottomReserveStyles {
+  /** 底部底座（`.conv__bottom`）的内联样式：占用态把安全区内衬让出来 */
+  bottom: { paddingBottom: string } | undefined
+  /** 输入栏（`.conv__bar`）的内联样式：占用态的下内边距 */
+  bar: { paddingBottom: string } | undefined
+}
+
+export function resolveBottomReserveStyles(bottomInset: number): BottomReserveStyles {
+  if (!(bottomInset > 0)) return { bottom: undefined, bar: undefined }
+  return {
+    bottom: { paddingBottom: '0px' },
+    bar: { paddingBottom: `calc(${bottomInset}px + ${BAR_GAP_RPX}rpx)` },
+  }
 }
 
 /**

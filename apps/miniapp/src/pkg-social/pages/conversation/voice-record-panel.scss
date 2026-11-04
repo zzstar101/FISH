@@ -2,8 +2,9 @@
  * 录音反馈面板（#535）。
  *
  * 挂在 `.conv__bar`（`position: relative`）内部，靠 `bottom: calc(100% + 12px)` 浮在输入栏上方；
- * bar 带 `padding-bottom: env(safe-area-inset-bottom)`，面板相对的是 padding box，
- * 安全区不会改变它的偏移；引用栏 / 「+」面板把 bar 撑高时面板自动上移。
+ * 百分比相对的是 bar 的 padding box 高度，所以 bar 底下那截内边距（收起态 = `$bar-gap-px` +
+ * 底座的安全区，占用态 = 键盘/面板占位高度，见 `.conv__bottom`）再高再低，它离输入栏顶边的
+ * 距离都恒为 12px；引用栏把 bar 撑高时面板自动上移。
  *
  * 波形用 `transform: scaleY()`（不触发布局），只有「是否高亮」由取消态决定。
  */

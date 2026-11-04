@@ -123,6 +123,7 @@ import {
   recallFailureText,
   resetDeferredReload,
   resolveBottomInset,
+  resolveBottomReserveStyles,
   resolveConvState,
   resolvePanelHeightPx,
   resolveSentinel,
@@ -3133,6 +3134,18 @@ export default function Conversation() {
   })
 
   /**
+   * 底部保留量的样式（#577）：**同一个占用者、同一份安全区**，只算一次。
+   *
+   * 收起态两项都是 `undefined` —— 内联整段不写，`.conv__bottom` 的
+   * `env(safe-area-inset-bottom)` 与 `.conv__bar` 的 `$bar-gap-px` 照旧生效。
+   * 占用态（键盘 / 面板）底座的安全区内衬清零、输入栏下内边距改成
+   * `calc(占位高度 + $bar-gap-px)`：占用者自己已经把屏幕底部那块高度占了，
+   * 再留一份安全区就是第二次计数（端上就是「输入栏离键盘上沿还空一条」）。
+   * 判据在 `view.ts` 的 `resolveBottomReserveStyles()`，两条分支都有表驱动单测。
+   */
+  const bottomReserve = resolveBottomReserveStyles(bottomInset)
+
+  /**
    * 记下一处输入行实测高度（#560 两态同盒模型的第二个真源）。
    *
    * `state` 供渲染（语音态 `minHeight`），`ref` 供**同步**读上一次的实测值 —— 判断「这次
@@ -4063,33 +4076,38 @@ export default function Conversation() {
 
       {/*
         底部底座（#597）：输入栏 + 「+」面板是**同一块屏幕底部区域**的两个占用者 —— 键盘开着
-        时由输入栏的下内边距占，面板开着时由面板自己占，两者高度同为
-        `resolveBottomInset()`（面板高度 = 上次键盘高度）。等高了，切换时底座总高不变，
-        `.conv__scroll` 的高度一次都不用变，消息流既不位移也不被裁（#597 三现象的根）。
+        时由输入栏的下内边距占，面板开着时由面板自己占，占多少由 `resolveBottomInset()` 给
+        （键盘态 = 键盘高度；面板态 = 面板自己的内容高 + 安全区，见 `resolvePanelHeightPx()`）。
 
-        结构边界（#577 会基于本容器做输入栏的跨端高度/安全区统一）：本容器只管「贴底 +
-        给面板当定位父级 + 提供粘滞层」，输入栏自己的几何（内边距、48/68px 尺寸、安全区）
-        一律留在 `.conv__bar`，不要把具体数值写进这里。
+        面板高度**不再等于**键盘高度（#597 追加任务）：三格图标的内容撑不满一把键盘，按键盘高
+        撑开会留一片空白。所以键盘 ↔ 面板的交接会让底座**一次**变高/变矮（差一个「键盘高 −
+        面板高」），消息流跟着让位一次 —— 这是有意的取舍，换来面板不空、且中间不出现塌成 0
+        的那一档（聚焦当拍不收面板，见键盘订阅里的交接判据 `shouldHandOffToKeyboard`）。
+
+        结构边界（#577 已按此落地）：本容器承担「贴底 + 背景铺到窗口底边 + 底部安全区（唯一一处）
+        + 给面板当定位父级」，输入栏自己的几何（内边距、68px 控件、间距）一律留在
+        `.conv__bar`；安全区数值只写在 scss 的 `.conv__bottom` 上，占用态由内联清零，不在这里
+        写第二份数字。
       */}
-      <View className="conv__bottom">
+      <View className="conv__bottom" style={bottomReserve.bottom}>
         {/*
         输入栏（稿子 .composer）：语音/键盘切换 + 自动长高输入框 + 「+」+ 发送。
         空内容时「发送」置灰（稿子 .send.is-off）。
 
-        底座占位高度是**运行期**量到的设备 px，只能内联给：内联样式不过 pxtransform
-        （先例 `components/back-top/index.tsx:26-36` 的「请直接传 rpx 字符串」），
-        所以占位直接写 px、本栏自己的 16pt 内边距按设计稿写 rpx。底座高度为 0 时既不留
-        任何内联值，`.conv__bar` 的 `env(safe-area-inset-bottom)` 照旧生效。
+        下内边距（#577）：收起态由 scss 的 `$bar-gap-px` + `.conv__bottom` 的安全区承担，
+        这里不内联；底座被占用（键盘 / 「+」面板）时才内联
+        `calc(占位高度 + $bar-gap-px)` —— 占位高度是运行期量到的设备 px，只能内联
+        （内联样式不过 pxtransform，先例 `components/back-top/index.tsx` 的「请直接传 rpx 字符串」），
+        基础间距按 rpx 写、与 scss 同一个数。这一拍同时把底座的安全区内衬清零
+        （`bottomReserve.bottom`）：占用者自己已经占了那块高度，安全区再留一次就是重复计数。
+        两条分支都在 `resolveBottomReserveStyles()` 里，别再在 JSX 里现算条件。
 
         键盘那一路只会**一路变小**（`nextKeyboardInset` 的单调阶梯）：收键盘动画期间平台连报的
         中间值被压成一条向下的序列，输入栏不会在中途被顶回去一下（#560 安卓真机的「先上提、
         再回落」）。面板那一路是常量（`resolveBottomInset` 不看正在收缩的键盘），所以开面板
         时底座高度**一次**到位，不会跟着键盘动画连跳几档（#597 现象一）。
       */}
-        <View
-          className="conv__bar"
-          style={bottomInset > 0 ? { paddingBottom: `calc(${bottomInset}px + 16rpx)` } : undefined}
-        >
+        <View className="conv__bar" style={bottomReserve.bar}>
           {/* 录音反馈面板（#535）：计时与波形在子组件内部，消息流不随秒数重渲染 */}
           {recording ? <VoiceRecordPanel cancelArmed={cancelArmed} /> : null}
           {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}

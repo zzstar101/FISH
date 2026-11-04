@@ -1264,15 +1264,15 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('inputFocusedRef.current = false')
   })
 
-  test('底部底座的占位高度由真源派生，收起时不内联（env 安全区照旧生效）', async () => {
+  test('底部底座的让高样式由纯函数派生，收起态交给 scss 的安全区（#577）', async () => {
     const source = squash(await pageSource())
-    // 标签跨多行、`style` 里还有比较运算符，`tag()` 切不准：切到下一个子节点为止
+    // 标签跨多行，`tag()` 切不准：切到下一个子节点为止
     const bar = slice(source, '<View className="conv__bar"', '{recording ?')
-    // 页面里写的字面量就是这个表达式（`${` 拆成两段拼，免得被当成模板串插值）
-    const derived =
-      'bottomInset > 0 ? { paddingBottom: `calc($' + '{bottomInset}px + 16rpx)` } : undefined'
-    expect(bar).toContain(derived)
-    // 底部高度由纯函数派生（#597）：键盘态取键盘高度，面板态取面板自己的内容高
+    // 内联样式整段来自纯函数（两条分支、含「安全区只算一次」的口径都在 view.ts 里）：
+    // 页面里不许再自己现算条件，否则「回滚这一行」除了源码钉桩没人测得到
+    expect(bar).toContain('style={bottomReserve.bar}')
+    expect(source).toContain('<View className="conv__bottom" style={bottomReserve.bottom}>')
+    expect(source).toContain('const bottomReserve = resolveBottomReserveStyles(bottomInset)')
     expect(source).toContain(
       'const bottomInset = resolveBottomInset({ panelOpen, keyboardHeight, panelHeight,',
     )
@@ -1281,17 +1281,20 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(source).toContain(
       'resolvePanelHeightPx({ windowWidth: info.windowWidth, safeAreaBottom })',
     )
-    // 键盘收起时不内联，样式里那条带 safe-area 的内边距照旧生效
-    expect(await styleSource()).toContain(
-      'padding: 16px 24px calc(16px + env(safe-area-inset-bottom))',
+    // 收起态不内联任何值，安全区由底座那条 env 内边距照旧生效（#577：只算这一次）
+    const style = squash(await styleSource())
+    expect(slice(style, '.conv__bottom {', '}')).toContain(
+      'padding-bottom: env(safe-area-inset-bottom)',
     )
+    // 输入栏自己不再算安全区：写了就是跟底座重复计数
+    expect(slice(style, '.conv__bar {', '}')).not.toContain('env(safe-area-inset-bottom)')
   })
 
   test('面板是底部底座里的吸底浮层，不在输入栏的文档流里（#597）', async () => {
     const source = squash(await pageSource())
     const style = await styleSource()
-    // 结构：面板与输入栏同一个父级（`.conv__bottom`）
-    expect(source).toContain('<View className="conv__bottom">')
+    // 结构：面板与输入栏同一个父级（`.conv__bottom`，内联让高由 #577 的纯函数给）
+    expect(source).toContain('<View className="conv__bottom" style={bottomReserve.bottom}>')
     /**
      * 面板高度由**内容自己撑开**（#597 追加任务）：不能再内联「上次键盘高」，
      * 否则三格图标下面又是一片空白（Owner 的演示截图）。
@@ -1398,14 +1401,15 @@ describe('键盘高度是单一真源（#560）', () => {
     /**
      * scss 侧同样钉住：`conv__rowwrap` 是「按住说话」的定位父级；`.conv__hold` 改成盖满整行
      * 的绝对定位块、**不再写死 68**（否则多行草稿切语音时手势区矮一截）；输入框的
-     * `min-height: 68px` 保留 —— 单行时输入栏高度必须还是这个自然高。
+     * `min-height` 保留 —— 单行时输入栏高度必须还是「控件高」这个数（#577 起走 token，
+     * 与三颗钮同源，见 `conversation-bottom-bar-layout.test.ts`）。
      */
     const style = squash(await styleSource())
     expect(slice(style, '.conv__rowwrap {', '}')).toContain('position: relative')
     const holdStyle = slice(style, '.conv__hold {', '&:active')
     expect(holdStyle).toContain('position: absolute')
     expect(holdStyle).not.toContain('height: 68px')
-    expect(slice(style, '.conv__input {', '}')).toContain('min-height: 68px')
+    expect(slice(style, '.conv__input {', '}')).toContain('min-height: $bar-control-px')
   })
 
   test('发送清空输入后，输入行高度真源跟着回落（否则下一轮切语音又把消息流顶矮一截）', async () => {

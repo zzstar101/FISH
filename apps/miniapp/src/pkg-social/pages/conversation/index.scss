@@ -922,39 +922,61 @@
 
 /* ---------------------------------------------------------------- 输入栏 */
 
-/* 底部底座（#597）：输入栏 + 「+」面板的公共容器。
+/*
+ * 输入栏几何口径（#577）。三端统一靠的是**同一个数**，不是三处分别写对 ——
+ * 之前 68 在四个控件上各写一遍、176 只写在输入框上，谁改一处就再也对不齐。
+ *
+ * 数值仍是设计稿 pt × 2（见文件头）：Taro 的 `designWidth` 是 750，wxss 里 1px = 1rpx，
+ * 所以 `68px` 落盘就是 `68rpx`。**不要**在这里写 rpx，全仓 scss 都按 px 写。
+ */
+$bar-control-px: 68px; // 空内容/单行：输入框与语音、加号、发送三颗钮同高（34pt）
+$bar-gap-px: 16px; // 输入行上下基础间距（8pt），上下都用它
+$bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后输入框内部滚动
+
+/* 底部底座（#597 / #577）：输入栏 + 「+」面板的公共容器。
    - `position: relative`：面板是它的绝对定位子元素，得有个定位父级；
    - `flex: 0 0 auto`：高度由内容（输入栏 + 下内边距）说了算，不参与瓜分剩余高度；
-   - `z-index: 20`：整块压在消息流（1）之上，面板与输入栏都在同一层里，不会互相夹。
-   结构约定：本容器**不放任何具体尺寸/安全区数值** —— 输入栏几何归 `.conv__bar`，
-   面板高度由 JSX 内联（`resolveBottomInset`）。#577 会基于它做跨端高度/安全区统一。 */
+   - `z-index: 20`：整块压在消息流（1）之上，面板与输入栏都在同一层里，不会互相夹；
+   - `background`（#577）：它是 flex 列的最后一个孩子，背景得由它一直铺到**小程序窗口底边**
+     那一条（收起态的安全区内衬就画在这里），否则底栏和窗口之间会露出一条底色缝；
+   - `padding-bottom: env(safe-area-inset-bottom)`（#577）：**安全区在本页只算这一次**。
+     键盘/面板展开时它由 JS 内联清零（`resolveBottomReserveStyles`），因为占用者自己已经把
+     屏幕底部那块高度占了；收起态才由这里兜住 home indicator。
+   结构约定：本容器只承担「贴底 + 背景 + 安全区 + 面板定位父级」，输入栏自己的几何
+   （内边距、68px 控件、间距）一律留在 `.conv__bar`。 */
 .conv__bottom {
   position: relative;
   z-index: 20;
   flex: 0 0 auto;
+  background: var(--surface);
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
-/* 吸底（flex 列的最后一个固定块）+ 安全区内衬；语音/加号/发送与输入框顶边对齐 */
+/* 吸底（flex 列的最后一个固定块）；语音/加号/发送与输入框底边对齐。
+   上下基础间距只用 `$bar-gap-px`：下边距在占用态会被 JS 内联覆盖成
+   `calc(占位高度 + $bar-gap-px)`，所以这里**不写安全区**，写了就是第二次计数。 */
 .conv__bar {
   position: relative;
   z-index: 20;
   flex: 0 0 auto;
   background: var(--surface);
   border-top: 2px solid var(--border);
-  padding: 16px 24px calc(16px + env(safe-area-inset-bottom));
+  padding: $bar-gap-px 24px;
 }
 
+/* 输入行：`flex-end`（#577）—— 多行输入把行撑高时，三颗钮跟着底边对齐、不被拉伸
+   （它们是 `flex: 0 0 auto` + 固定高，既压不扁也伸不上去）。单行时四者等高，看不出差别。 */
 .conv__bar-row {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 16px;
 }
 
-/* 语音/键盘切换（稿子 .cbtn）：68px 圆，按下（语音态）走淡品牌底 */
+/* 语音/键盘切换（稿子 .cbtn）：控件高的正圆，按下（语音态）走淡品牌底 */
 .conv__cbtn {
   flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: $bar-control-px;
+  height: $bar-control-px;
   border-radius: 50%;
   background: var(--ice);
   border: 2px solid var(--border);
@@ -973,14 +995,22 @@
   height: 40px;
 }
 
-/* 输入框：单行 34pt 起，随内容长高（上限 88pt），长文本能全看见 */
+/*
+ * 输入框：单行 = 控件高（`$bar-control-px`，与三颗钮同一个数），随内容长高到上限
+ * `$bar-input-max-px`，超出后由原生在框内滚动、光标跟着走。
+ *
+ * 上下 padding **不是拍出来的数**，而是 `(控件高 − 行高) / 2`：这样单行时盒高（border-box）
+ * 正好等于控件高，`--fs-body` 以后换字号也不会悄悄比按钮高出一截（改前写死 14px：
+ * 28px × 1.4 = 39.2 + 28 = 67.2，靠 `min-height: 68px` 兜到 68，文字比预算低 0.4px 居中）。
+ * `1.4em` 就是下面那条 `line-height: 1.4`，改一个另一个必须跟着改 —— 两处同一个数，别分家。
+ */
 .conv__input {
   flex: 1;
   min-width: 0;
   width: auto;
-  min-height: 68px;
-  max-height: 176px;
-  padding: 14px 24px;
+  min-height: $bar-control-px;
+  max-height: $bar-input-max-px;
+  padding: calc((#{$bar-control-px} - 1.4em) / 2) 24px;
   border-radius: 34px;
   background: var(--ice);
   font-size: var(--fs-body);
@@ -1052,8 +1082,8 @@
 /* 「+」：展开态深墨底 + 图标转白 + 转 45°（语义从「更多」变成「收起」） */
 .conv__plus {
   flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: $bar-control-px;
+  height: $bar-control-px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1083,7 +1113,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 68px;
+  height: $bar-control-px;
   padding: 0 30px;
   border-radius: var(--r-pill);
   background: var(--brand-deep);
@@ -1123,8 +1153,11 @@
   display: flex;
   align-items: flex-start;
   gap: 20px;
-  /* 水平 28px = 老版「输入栏 24px 内边距 + 面板 4px」，三格与旧版的视觉位置保持一致；
-     下内边距带上安全区，面板贴到屏幕底边时格子不会掉进 home indicator 里。
+  /* 水平 28px = 老版「输入栏 24px 内边距 + 面板 4px」，三格与旧版的视觉位置保持一致。
+     下内边距带安全区（#577）：面板展开时它是**占用者**，`.conv__bottom` 的安全区内衬已被
+     `resolveBottomReserveStyles` 内联清零，所以这里的 env 是那个状态下唯一一次计数 ——
+     面板高度 = 内容高 + 这条安全区（`resolvePanelHeightPx`），贴到屏幕底边时格子不会掉进
+     home indicator 里。
      下面三个数与 `view.ts` 的 `PANEL_PADDING_RPX` / `PANEL_DISC_RPX` / `PANEL_TILE_GAP_RPX` /
      `PANEL_LABEL_RPX` 一一对应，改这里必须同步改那里（单测钉住两边一致） */
   padding: 24px 28px calc(24px + env(safe-area-inset-bottom));
