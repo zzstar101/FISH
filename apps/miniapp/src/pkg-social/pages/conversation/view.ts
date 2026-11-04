@@ -1305,6 +1305,33 @@ export function resolveBottomInset(input: {
 }
 
 /**
+ * 这一帧键盘上报是不是「新占用者到了」——**面板 → 键盘**的交接判据（#597）。
+ *
+ * 面板展开时点输入框，底部那块高度在换占用者：面板让位、键盘接上。但新占用者要等**真落地
+ * 那一帧**才认，否则底座会先塌空一次（`resolveBottomInset` 那一刻只能拿到还没落地的键盘高度）。
+ *
+ * 三条缺一不可：
+ * - 面板开着：没面板就没有交接；
+ * - 这一帧不是**收键盘动画**（`closing`）：动画里每帧高度都 `> 0`，可那是**旧占用者在退场**。
+ *   把它当成新键盘到了，就会出现「键盘开着点『+』，面板约 40ms 就自己消失」—— 点「+」当拍
+ *   走过 `collapseKeyboard()`，平台接着把收键盘拆成若干递减帧（#560 的既有前提）；
+ * - 高度 `> 0`：真落地了。
+ *
+ * `closing` 由 `nextKeyboardInset` 维护（意图闩 + 尾巴窗口），这里只做判据，不自己维护第二条
+ * 状态链 —— 判据必须在纯函数里，否则「回滚这一行」在源码钉桩之外没人能测出来。
+ */
+export function shouldHandOffToKeyboard(input: {
+  panelOpen: boolean
+  closing: boolean
+  inset: number
+}): boolean {
+  const { panelOpen, closing, inset } = input
+  if (!panelOpen) return false
+  if (closing) return false
+  return inset > 0
+}
+
+/**
  * 消息流此刻是不是贴着底部（#561）。
  *
  * `onScroll` 的 `detail` 只有 `scrollTop` / `scrollHeight`，**不含视口高度**，所以视口要

@@ -9,6 +9,7 @@ import {
   planScrollFix,
   resolveBottomInset,
   resolveSentinel,
+  shouldHandOffToKeyboard,
   stickAfterScroll,
 } from '../src/pkg-social/pages/conversation/view'
 
@@ -318,6 +319,113 @@ describe('底部底座的高度真源（#597，纯函数表驱动）', () => {
     expect(
       resolveBottomInset({ panelOpen: false, keyboardHeight: 0, lastKeyboardHeight: last }),
     ).toBe(0)
+  })
+})
+
+describe('交接判据：这一帧键盘上报算不算「新占用者到了」（#597，纯函数表驱动）', () => {
+  /**
+   * 光有「面板 → 键盘推迟到键盘帧」还不够（P1 复审阻断）：收键盘动画的每一帧高度都 `> 0`，
+   * 而点「+」当拍就走过 `collapseKeyboard()`，平台紧接着把收键盘拆成若干递减帧。判据里少了
+   * `!closing`，键盘**开着**点「+」会在第一帧（250 那类中间值）被当成「新键盘到了」，面板
+   * 约 40ms 就自己消失、底座一路连降 —— 现象一原样复发，比改前更糟。
+   *
+   * 这张表是纯函数层面的直接钉桩：喂的是 `nextKeyboardInset` 真实产出的三元组，页面里只
+   * 调用这一个判据。**回滚页面那行条件改动，本组必须变红**（`closing: true` 那几行）。
+   */
+  const cases: {
+    label: string
+    panelOpen: boolean
+    closing: boolean
+    inset: number
+    handOff: boolean
+  }[] = [
+    {
+      label: '面板态 + 键盘首帧真落地',
+      panelOpen: true,
+      closing: false,
+      inset: 280,
+      handOff: true,
+    },
+    {
+      label: '面板态 + 更矮的键盘真落地',
+      panelOpen: true,
+      closing: false,
+      inset: 196,
+      handOff: true,
+    },
+    { label: '面板态 + 还没落地', panelOpen: true, closing: false, inset: 0, handOff: false },
+    // ↓ 这一组就是 P1：键盘开着点「+」后，平台报来的收键盘动画帧 —— 一律不许交接
+    {
+      label: '面板态 + 收键盘动画首帧',
+      panelOpen: true,
+      closing: true,
+      inset: 280,
+      handOff: false,
+    },
+    {
+      label: '面板态 + 收键盘动画中间帧',
+      panelOpen: true,
+      closing: true,
+      inset: 250,
+      handOff: false,
+    },
+    { label: '面板态 + 收键盘动画尾帧', panelOpen: true, closing: true, inset: 60, handOff: false },
+    { label: '面板态 + 收干净', panelOpen: true, closing: true, inset: 0, handOff: false },
+    {
+      label: '没有面板：无所谓交不交接',
+      panelOpen: false,
+      closing: false,
+      inset: 280,
+      handOff: false,
+    },
+    { label: '没有面板 + 收键盘', panelOpen: false, closing: true, inset: 250, handOff: false },
+  ]
+
+  for (const item of cases) {
+    test(`交接判据：${item.label} → ${item.handOff}`, () => {
+      expect({
+        handOff: shouldHandOffToKeyboard({
+          panelOpen: item.panelOpen,
+          closing: item.closing,
+          inset: item.inset,
+        }),
+      }).toEqual({ handOff: item.handOff })
+    })
+  }
+
+  test('两条主路径的整条帧序列：键盘开着点「+」一次都不交接，面板态点输入框只交接一次', () => {
+    /**
+     * 路径 A：键盘开着（280）点「+」 —— 点「+」当拍 `collapseKeyboard()` 置 `closing`，平台随后
+     * 报 250 / 180 / 60 / 0。这一段是**旧占用者退场**，面板必须一路留着，底座高度恒为面板高。
+     */
+    const openingPanel = [
+      { inset: 280, closing: true },
+      { inset: 250, closing: true },
+      { inset: 180, closing: true },
+      { inset: 60, closing: true },
+      { inset: 0, closing: false },
+    ]
+    expect(
+      openingPanel.map((frame) => shouldHandOffToKeyboard({ panelOpen: true, ...frame })),
+    ).toEqual([false, false, false, false, false])
+
+    /**
+     * 路径 B：面板态点输入框 —— 直到键盘真落地那一帧才交接。按页面里的真实写法（判据成立就
+     * 立刻把 `panelOpenRef` 写成 false）逐帧模拟，交接**恰好一次**，后续帧不再重复 setState。
+     */
+    const openingKeyboard = [
+      { inset: 0, closing: false },
+      { inset: 280, closing: false },
+      { inset: 280, closing: false },
+    ]
+    let panelOpenRef = true
+    const decisions = openingKeyboard.map((frame) => {
+      const handOff = shouldHandOffToKeyboard({ panelOpen: panelOpenRef, ...frame })
+      if (handOff) panelOpenRef = false
+      return handOff
+    })
+    expect(decisions).toEqual([false, true, false])
+    expect(decisions.filter(Boolean)).toHaveLength(1)
   })
 })
 
@@ -884,12 +992,21 @@ describe('键盘高度是单一真源（#560）', () => {
     /**
      * **面板 → 键盘**的交接（#597 F1）：收到「键盘真落地第一帧」才收面板，不在聚焦当拍收。
      * 当拍收的话底座从面板高直落 0（键盘高度此刻还是 0），视口先放大一整把键盘再缩回来。
+     *
+     * 判据本身在纯函数 `shouldHandOffToKeyboard` 里（P1）：页面只许**调用**它，不许自己写
+     * 条件 —— 少一条 `!step.closing` 就会让「键盘开着点『+』」的收键盘动画帧被当成新键盘到了。
+     * 上面那组表驱动直接钉住这条判据，这里钉的是「页面确实走它」。
      */
-    expect(body).toContain('if (panelOpenRef.current && step.inset > 0) {')
+    expect(body).toContain('shouldHandOffToKeyboard({')
+    expect(body).toContain('panelOpen: panelOpenRef.current')
+    expect(body).toContain('closing: step.closing')
+    expect(body).toContain('inset: step.inset')
+    // 自己手写条件的老写法必须消失（回滚成它 = 丢掉 closing 判据）
+    expect(body).not.toContain('if (panelOpenRef.current && step.inset > 0) {')
     expect(body).toContain('panelOpenRef.current = false')
     expect(body).toContain('setPanelOpen(false)')
     // 交接必须在「要不要重指尾行」之前：同一帧里先让位，那句判断才看得见 panelOpenRef=false
-    expect(body.indexOf('if (panelOpenRef.current && step.inset > 0) {')).toBeLessThan(
+    expect(body.indexOf('shouldHandOffToKeyboard({')).toBeLessThan(
       body.indexOf('if (!panelOpenRef.current) keepTailAnchored()'),
     )
     expect(source).toContain('Taro.onKeyboardHeightChange(onHeightChange)')
@@ -1064,9 +1181,17 @@ describe('键盘高度是单一真源（#560）', () => {
     /**
      * #541 的契约（聚焦输入框算点面板外部）仍然成立，但**不在这一拍收**（#597 F1）：
      * 那一刻键盘高度还是 0，底座会直落到底、视口放大一整把键盘再被顶回来。收起推到了
-     * 键盘真落地第一帧（键盘订阅里那条 `if (panelOpenRef.current && step.inset > 0)`）。
+     * 键盘真落地第一帧（键盘订阅里那条 `shouldHandOffToKeyboard(...)`）。
+     *
+     * 唯一的例外是**降级路径**（P2）：基础库 < 2.7.0 没有 `onKeyboardHeightChange`，订阅直接
+     * 返回了，没有「键盘落地那一帧」可等 —— 那条路上只能在聚焦当拍收，否则 #541 彻底失效。
+     * 所以这里钉的不是「onFocus 里没有 setPanelOpen」，而是「它只出现在那个降级守卫里、且只有
+     * 一处」：既挡住退回「无条件当拍收」，也挡住删掉降级兜底。
      */
-    expect(focus).not.toContain('setPanelOpen(false)')
+    expect(focus).toContain(
+      "if (typeof Taro.onKeyboardHeightChange !== 'function') { keepTailAnchored() setPanelOpen(false) }",
+    )
+    expect(focus.split('setPanelOpen(false)')).toHaveLength(2)
     // 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」会被尾巴判据吞掉，输入栏被新键盘盖住
     expect(focus).toContain('keyboardClosedAtRef.current = 0')
     expect(focus).toContain('keyboardClosingRef.current = false')

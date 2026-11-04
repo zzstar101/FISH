@@ -125,12 +125,15 @@ describe('会话页「+」面板点外部收起（#541/#597）', () => {
      * 聚焦输入框仍然算「点面板外部」→ 面板照样收。但**不在聚焦当拍收**（#597 F1）：
      * 那一刻键盘高度还是 0，底座会直落到底、视口放大一整把键盘，再被键盘顶回来。
      * 收起改挂在键盘真落地第一帧，由 `conversation-keyboard-panel-geometry.test.ts`
-     * 钉住那一段（`if (panelOpenRef.current && step.inset > 0)`）。
+     * 钉住那一段（`shouldHandOffToKeyboard({ panelOpen, closing: step.closing, inset })`）。
+     *
+     * 唯一例外是降级路径（基础库 < 2.7.0 没有 `onKeyboardHeightChange`，P2）：没有键盘帧可等，
+     * 只能在聚焦当拍收 —— 见 geometry 测试里对那个守卫的钉桩。
      */
     expect(source).toContain('onFocus={() => {')
     const focusAt = source.indexOf('onFocus={() => {')
     const focusBody = source.slice(focusAt, source.indexOf('onBlur={() => {', focusAt))
-    expect(focusBody).not.toContain('setPanelOpen(false)')
+    expect(focusBody).toContain("if (typeof Taro.onKeyboardHeightChange !== 'function') {")
     // 开面板退回键盘态的互斥规则（abortRecording + setVoiceMode(false)）仍在 togglePanel 里
     const toggleAt = source.indexOf('const togglePanel = () => {')
     const setterAt = source.indexOf('setPanelOpen(!panelOpen)', toggleAt)

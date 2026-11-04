@@ -129,6 +129,7 @@ import {
   settleSend,
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
+  shouldHandOffToKeyboard,
   shouldReloadOnShow,
   sortMessages,
   startMediaRetry,
@@ -3184,8 +3185,20 @@ export default function Conversation() {
        * 这一拍底座从面板高换成键盘高：两者量级相同，差值只是「这把键盘 − 历史最大键盘」
        * （即 F2 的有意取舍），一次到位。`panelOpenRef` 直接写 false 再 setState：下面那句
        * 重指尾行在同一次回调里就按「面板已收」判，位置不会漏锚。
+       *
+       * 「是不是新占用者到了」全部交给 `shouldHandOffToKeyboard` 判 —— 页面里不自己写条件，
+       * 否则少一条判据（尤其是 `!step.closing`）在源码钉桩之外测不出来：
+       * 键盘**开着**点「+」会走 `collapseKeyboard()`，平台随后把收键盘拆成若干递减帧
+       * （250/180/60…），那些帧高度都 `> 0`、`closing` 为真 —— 认成「新键盘到了」，面板
+       * 就会在点「+」后约 40ms 自己消失，底座一路连降（现象一原样复发）。
        */
-      if (panelOpenRef.current && step.inset > 0) {
+      if (
+        shouldHandOffToKeyboard({
+          panelOpen: panelOpenRef.current,
+          closing: step.closing,
+          inset: step.inset,
+        })
+      ) {
         panelOpenRef.current = false
         setPanelOpen(false)
       }
@@ -4163,6 +4176,12 @@ export default function Conversation() {
                    * 收到键盘真落地第一帧时再收，见键盘订阅里的交接那一段。
                    * 「点输入框也算点面板外部」的可见契约不变（#541）。
                    *
+                   * 唯一例外是**降级路径**（基础库 < 2.7.0 没有 `onKeyboardHeightChange`，
+                   * 上面那条订阅直接返回了，见 `typeof Taro.onKeyboardHeightChange` 那一段）：
+                   * 没有「键盘真落地那一帧」可等，收面板只能退回聚焦当拍，否则面板再也收不起来、
+                   * #541 的契约在这条路上彻底失效。那条路上也不存在交接两拍 —— 没有键盘高度
+                   * 真源，底座高度在面板开时恒为面板高、关时恒为 0，没有中间态可塌。
+                   *
                    * 用户点输入框 = 明确要键盘（#560）：收尾尾巴窗口、意图闩、哨兵账本立刻作废。
                    *
                    * 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」（切输入法、候选栏收起）
@@ -4171,6 +4190,10 @@ export default function Conversation() {
                    * `inputFocusedRef` 是活性哨兵唯一可信的**意图**信号：还在输入框里就说明键盘
                    * 大概率真开着，到点绝不猜 0（见 `armKeyboardSentinel`）。
                    */
+                  if (typeof Taro.onKeyboardHeightChange !== 'function') {
+                    keepTailAnchored()
+                    setPanelOpen(false)
+                  }
                   inputFocusedRef.current = true
                   keyboardClosedAtRef.current = 0
                   keyboardClosingRef.current = false
