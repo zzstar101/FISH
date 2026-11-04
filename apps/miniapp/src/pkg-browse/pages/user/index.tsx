@@ -843,19 +843,13 @@ export default function UserHome() {
         actions={navReportAction}
       />
 
-      {loadState === 'failed' ? (
-        <LoadError title="主页加载失败" onRetry={() => void load()} />
-      ) : loadState === 'notFound' ? (
-        <EmptyState
-          title="用户不存在"
-          text="这个主页的主人可能已注销，或链接已失效"
-          icon={ICONS.boxMuted}
-          actionText="返回"
-          onAction={() => {
-            goBackOrHome()
-          }}
-        />
-      ) : (
+      {/* 三条加载态（loading / ok / 整页终态）共用**同一个**滚区（#598 验收②）：
+          整页 failed / notFound 原来是把 ScrollView 整块换掉，页头（含在售 / 卖出两格）
+          也跟着被卸载 —— 终态下切段无从点起，用户只剩一块报错。现在报错块退到列表区里
+          就地渲染（见下面列表区的第一条分支），页头与两格照常挂载。
+          这层的 `{ … }` 是有意的：它让整块 ScrollView 不必为条件退让而重排缩进，
+          #578 正在同一个文件的页头与两格里改东西，diff 越小越好合。 */}
+      {
         <ScrollView
           className="uhome__scroll"
           scrollY
@@ -1024,7 +1018,32 @@ export default function UserHome() {
                   </View>
                 ) : null}
               </View>
-            ) : (
+            ) : loadState === 'failed' ? (
+              /* 整页加载失败（#598 验收②）：两格必须还在、还能点 —— 点一下就是「按这一段
+                 整页重拉」。这里直接 `load(next)` 而不是走 `reloadRequiredOnSwitch`：整页重来
+                 后 `load` 会按调用方指名的段走，否则会被 `?tab=` 拽回原段。
+                 资料没到 ⇒ 头像 / 昵称 / 关注钮一概不画（不编一个假人），计数也无从谈起、
+                 退成 `--`；只保留两格与它们各自的点击。
+                 notFound（页主不存在）不画两格：那个人没有列表可切，点了也没有意义。 */
+              <View className="uhome__stats">
+                <View
+                  className="uhome__stat uhome__stat--link"
+                  hoverClass="uhome__stat--tap"
+                  onClick={() => void load('ACTIVE')}
+                >
+                  <Text className="uhome__stat-num num">--</Text>
+                  <Text className="uhome__stat-label">在售</Text>
+                </View>
+                <View
+                  className="uhome__stat uhome__stat--link"
+                  hoverClass="uhome__stat--tap"
+                  onClick={() => void load('SOLD')}
+                >
+                  <Text className="uhome__stat-num num">--</Text>
+                  <Text className="uhome__stat-label">卖出</Text>
+                </View>
+              </View>
+            ) : loadState === 'notFound' ? null : (
               /* 资料没拿到之前先给页头骨架：头像盘 + 昵称条 + 关注钮占位 + 数据行条
                   （稿 04 帧的页头骨架）。
                   **关注钮要占位**（#188 起它是真实钮：已登录且非本人主页时必然渲染），
@@ -1082,10 +1101,29 @@ export default function UserHome() {
                   件数取该段的服务端真总数（在售 `activeCount` / 已售出 `soldCount`），
                   不用 items.length —— 列表是分页的，用它会在还没加载完时低报。 */}
               <Text className="uhome__sect-title">{`TA 的${segTitle}`}</Text>
-              <Text className="uhome__sect-cnt num">{profile ? `${segTotal} 件` : '加载中'}</Text>
+              <Text className="uhome__sect-cnt num">
+                {/* 整页终态时下面那块是报错，不是「还在拉」，别在这儿写「加载中」 */}
+                {loadState === 'failed' || loadState === 'notFound'
+                  ? ''
+                  : profile
+                    ? `${segTotal} 件`
+                    : '加载中'}
+              </Text>
             </View>
 
-            {loadState === 'loading' || (!page.loaded && !page.failed) ? (
+            {loadState === 'failed' ? (
+              <LoadError title="主页加载失败" onRetry={() => void load()} />
+            ) : loadState === 'notFound' ? (
+              <EmptyState
+                title="用户不存在"
+                text="这个主页的主人可能已注销，或链接已失效"
+                icon={ICONS.boxMuted}
+                actionText="返回"
+                onAction={() => {
+                  goBackOrHome()
+                }}
+              />
+            ) : loadState === 'loading' || (!page.loaded && !page.failed) ? (
               <View className="uhome__grid">
                 {[0, 1, 2, 3].map((i) => (
                   <View key={`sk-${i}`} className="uhome__skel">
@@ -1157,7 +1195,7 @@ export default function UserHome() {
             ) : null}
           </View>
         </ScrollView>
-      )}
+      }
 
       {/* 回到顶部（内滚容器版：滚回由 scrollIntoView 锚点完成，见 backToTop） */}
       <BackTop show={showTop} onTop={backToTop} />

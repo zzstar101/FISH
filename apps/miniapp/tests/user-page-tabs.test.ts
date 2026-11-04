@@ -368,3 +368,44 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(body).not.toContain('console.warn(')
   })
 })
+
+describe('整页终态也留得住页头两格（#598 验收②）', () => {
+  const page = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
+
+  test('报错块落在滚区之内：ScrollView 不再被整页终态整块换掉', async () => {
+    const code = await page
+    const scrollAt = code.indexOf('<ScrollView')
+    const loadErrorAt = code.indexOf('title="主页加载失败"')
+    expect(scrollAt).toBeGreaterThan(-1)
+    // 修复前是 `{loadState === 'failed' ? <LoadError …/> : … : (<ScrollView>`：报错块在滚区
+    // **外面**、两者互斥 ⇒ 页头（含在售 / 卖出两格）跟着 ScrollView 一起被卸载，
+    // 整页终态下用户连「切段重试」都点不到
+    expect(loadErrorAt).toBeGreaterThan(scrollAt)
+  })
+
+  test('整页 failed 时降级页头只留两格，各自点了就按该段整页重拉', async () => {
+    const head = slice(
+      await page,
+      ") : loadState === 'failed' ? (",
+      ") : loadState === 'notFound' ? null : (",
+    )
+    expect(head).toContain('className="uhome__stats"')
+    expect(head).toContain("onClick={() => void load('ACTIVE')}")
+    expect(head).toContain("onClick={() => void load('SOLD')}")
+    // 终态下点两格若走 `switchSegment`，会被「同段早退」吃掉（`next === seg` 直接返回），
+    // 页面看着有按钮、点了没反应 —— 所以这两格直接 `load(next)`
+    expect(head).not.toContain('openActiveListings')
+    // 资料压根没到：不编一个假人，昵称 / 头像 / 关注钮一概不画
+    expect(head).not.toContain('uhome__pname')
+    expect(head).not.toContain('uhome__avatar')
+  })
+
+  test('notFound 不画两格（页主不存在，没有可切的段）', async () => {
+    expect(await page).toContain(") : loadState === 'notFound' ? null : (")
+  })
+
+  test('标题行在整页终态下不再谎称「加载中」', async () => {
+    const cnt = slice(await page, 'className="uhome__sect-cnt num"', '</Text>')
+    expect(cnt).toContain("loadState === 'failed' || loadState === 'notFound'")
+  })
+})
