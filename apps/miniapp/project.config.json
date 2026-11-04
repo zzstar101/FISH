@@ -1,10 +1,10 @@
 {
   "miniprogramRoot": "dist/",
-  "projectname": "fish-miniapp-602-visual",
+  "projectname": "fish-miniapp",
   "description": "FISH 校内二手交易平台小程序客户端",
   "appid": "wx61b67a115826647e",
   "setting": {
-    "urlCheck": false,
+    "urlCheck": true,
     "es6": false,
     "enhance": false,
     "compileHotReLoad": false,
