@@ -625,9 +625,12 @@
  */
 
 /* 气泡内的摘引（#596 第 4 点）：**双重气泡** —— 外层是消息气泡，这一块是内层
-   「更浅一档的圆角方块」，小块下方才是回复正文。
+   「浅一档的圆角方块」，小块下方才是回复正文。
    旧的「左侧 5px 竖线 + 无底色」形态已废弃：竖线在深色气泡上几乎看不见，
    双层底色才能把「被引用的那句话」和正文分开。
+   浅色宿主（他人气泡 / 失败态）复用既有令牌 `--accent-mid`（#c6dcff）：压白气泡
+   1.39:1、压失败态 `--ice` 1.28:1，肉眼分得出层次；原先的 `--accent-weak`
+   (#eff5ff) 压白气泡只有 1.10:1，等于裸文字 + padding（PR #602 审查 B）。
    DOM 结构本来就是这个顺序（气泡 > 摘引块 > 正文，`index.tsx:3886-3896`），
    所以这里只加底色/圆角/内边距，**不需要改 tsx**。 */
 .conv__quote {
@@ -637,9 +640,11 @@
   padding: 10px 16px;
   margin-bottom: 10px;
   border-radius: var(--r-sm);
-  background: var(--quote-bg);
+  background: var(--accent-mid);
 
-  /* 我方气泡是深青纯色底，内嵌块只能**压深**（见 `_token-vars.scss` 的 `--quote-bg-mine`） */
+  /* 我方气泡是深青纯色底，浅块压上去看不见，只能**压深**（`--quote-bg-mine` 是 28%
+     黑，叠在 `--bubble-mine` 上得 #065b72，与气泡底 1.65:1，白字 7.64:1）。设计稿原话
+     是「浅一档」，但白字压浅蓝块只有 1.x:1 —— 深色宿主上「更深」才是同一个层次语义。 */
   &.is-mine {
     background: var(--quote-bg-mine);
   }
@@ -660,11 +665,11 @@
 
 /*
  * 失败态反色（PR #602 审查 A）：失败气泡的底色是浅灰 `--ice`，而待发条目**恒**渲染
- * `.conv__quote.is-mine`（`index.tsx:3685-3691`），上面那条白字压「--ice + 黑」只剩
- * 1.50:1，发送方看不见自己引用了什么。这里把失败态的内层块退回浅蓝底
- * （`--accent-mid` 压 `--ice` 1.28:1），文字无条件按深色算（`--muted-2` 压
- * `--accent-mid` 6.28:1）。文字那条写成四层类名 (0,4,0)，稳定压过
- * `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，不靠源序。
+ * `.conv__quote.is-mine`（`index.tsx:3685-3691`）→ 白字压「--ice + 14% 黑」（当时的
+ * `--quote-bg-mine` 旧值）只剩 1.50:1，发送方看不见自己引用了什么。这里把失败态的内层块
+ * 也退回浅蓝底（`--accent-mid` 压 `--ice` 1.28:1），文字无条件按深色算
+ * （`--muted-2` 压 `--accent-mid` 6.28:1）。文字那条写成四层类名 (0,4,0)，
+ * 稳定压过 `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，不靠源序。
  */
 .conv__bubble.is-failed .conv__quote {
   background: var(--accent-mid);
@@ -677,20 +682,22 @@
 /*
  * 媒体消息的摘引在气泡**外面**（`index.tsx:2628` 的 `renderMediaQuote`），
  * 底下是页面 --grad-page 而不是我方深青气泡 —— 所以无论有没有 `.is-mine`
- * 都必须走「浅块 + 深字」，否则就是白字压浅底（约 1.1:1，发送方看不见）。
- * 选择器写成 `.conv__quote--floating.is-mine` 是为了压过上面 `.conv__quote.is-mine`
- * 的两类名权重。
+ * 都必须走「蓝块 + 深字」，否则就是白字压浅底（约 1.1:1，发送方看不见）。
+ * 宿主本身就是浅蓝渐变，只靠底色分不出来（`--accent-mid` 压页头只有 1.15:1），
+ * 所以这里再加一条 `--line` 描边（压页头 1.44:1、压最浅处 #f7faff 1.67:1）。
+ * 文字不用单独覆盖：`.conv__quote-tx` 基类本来就是 `--muted-2`（深字），只有
+ * `.conv__quote.is-mine` 才翻白。末尾那条 `.is-mine` 反色是给**将来**兜底的
+ * （`renderMediaQuote` 目前恒不产出 is-mine 类），写成四个类名 (0,4,0)，
+ * 稳定高过 `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，不靠源序。
  */
-.conv__quote--floating {
-  background: var(--quote-bg);
+.conv__quote--floating,
+.conv__quote--floating.is-mine {
+  background: var(--accent-mid);
+  border: 1px solid var(--line);
+}
 
-  &.is-mine {
-    background: var(--quote-bg);
-  }
-
-  .conv__quote-tx {
-    color: var(--muted-2);
-  }
+.conv__quote.conv__quote--floating.is-mine .conv__quote-tx {
+  color: var(--muted-2);
 }
 
 /* 撤回碑（稿子 .recalled）：灰底小胶囊，体积与 SYSTEM 胶囊一致但不占整行 */
