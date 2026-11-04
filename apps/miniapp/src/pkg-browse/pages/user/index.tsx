@@ -42,6 +42,7 @@ import {
   emptyPage,
   firstPageOf,
   mergeSegmentPage,
+  reloadRequiredOnSwitch,
   segmentOfTab,
   segTitleOf,
   shouldRefetch,
@@ -129,41 +130,46 @@ export default function UserHome() {
    */
   const inFlight = useRef(false)
 
-  const load = useCallback(async () => {
-    // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
-    setLoadState('loading')
-    setProfile(null)
-    const initial = segmentOfTab(tabParam)
-    // 先作废在途请求：上一轮还没回来的响应（含列表页）一个字段都不许写进新一轮
-    generation.current += 1
-    inFlight.current = false
-    // 段回到深链口径（`?tab=` 初值）。`load` 目前只在挂载与整页重试时调用，那时用户还没
-    // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
-    setSeg(initial)
-    setPage(emptyPage())
-    // 顶栏两态也要跟着复位：失败态会把 `ScrollView` 整块卸载，重试时它是新挂载的，
-    // 而这两个 page 级 state 会留着上一轮的值。
-    setGlassOn(false)
-    setTitled(false)
+  // `target` 只在「切段自愈」时给：整页已是终态（notFound / failed）时切段要整页重来，
+  // 而重来一遍不能又被 `?tab=` 初值拽回原来那段（#598），所以目标段随参数带过去。
+  const load = useCallback(
+    async (target?: Segment) => {
+      // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
+      setLoadState('loading')
+      setProfile(null)
+      const initial = target ?? segmentOfTab(tabParam)
+      // 先作废在途请求：上一轮还没回来的响应（含列表页）一个字段都不许写进新一轮
+      generation.current += 1
+      inFlight.current = false
+      // 段回到深链口径（`?tab=` 初值）。`load` 的常规入口是挂载与整页重试，那时用户还没
+      // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
+      setSeg(initial)
+      setPage(emptyPage())
+      // 顶栏两态也要跟着复位：失败态会把 `ScrollView` 整块卸载，重试时它是新挂载的，
+      // 而这两个 page 级 state 会留着上一轮的值。
+      setGlassOn(false)
+      setTitled(false)
 
-    if (userId === '') {
-      // 没有 id 就没有"这个人"，不猜测是谁。
-      setLoadState('notFound')
-      return
-    }
+      if (userId === '') {
+        // 没有 id 就没有"这个人"，不猜测是谁。
+        setLoadState('notFound')
+        return
+      }
 
-    const result = await loadPublicUserHome(userId)
-    if (result.status !== 'ok') {
-      setLoadState(result.status)
-      return
-    }
-    setProfile(result.profile)
-    // 首屏那一页：「在售」段直接吃本次响应，「已售出」段拿到空页、由下面的 effect 补拉。
-    // 代价是已售出视图会多取一页用不上的在售列表（拆成两次请求会把 notFound / failed
-    // 的判定口径一分为二，不值得）。
-    setPage(firstPageOf(initial, result))
-    setLoadState('ok')
-  }, [tabParam, userId])
+      const result = await loadPublicUserHome(userId)
+      if (result.status !== 'ok') {
+        setLoadState(result.status)
+        return
+      }
+      setProfile(result.profile)
+      // 首屏那一页：「在售」段直接吃本次响应，「已售出」段拿到空页、由下面的 effect 补拉。
+      // 代价是已售出视图会多取一页用不上的在售列表（拆成两次请求会把 notFound / failed
+      // 的判定口径一分为二，不值得）。
+      setPage(firstPageOf(initial, result))
+      setLoadState('ok')
+    },
+    [tabParam, userId],
+  )
 
   /**
    * 拉当前口径的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
@@ -182,8 +188,11 @@ export default function UserHome() {
         // 切过段 / 重载过：这一份响应作废，一个字段都不写（连 `finally` 也不归还闩）
         if (sent !== generation.current) return
         if (next === null) {
-          // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
-          setLoadState('notFound')
+          // 段级 404（页主在这一步注销 / 该段不可见）：**只降级这一段**。
+          // 不能整页退到 notFound —— 那会把 `ScrollView` 连页头那两格一起卸载，用户切一次段
+          // 就丢掉整页，且 `loadState` 成了终态、补拉 effect 恒假，怎么切都出不来（#598）。
+          console.error('[miniapp] 他人主页：该段列表 404', seg)
+          setPage((prev) => ({ ...prev, loading: false, failed: true }))
           return
         }
         setPage((prev) => ({
@@ -331,8 +340,12 @@ export default function UserHome() {
       setSeg(next)
       setPage(emptyPage()) // 新段从第一页拉，不继承上一段的游标与失败态
       scrollToBody()
+      // 整页已是终态（`notFound` / `failed`：资料都没到）时，只换这一段的数据没有意义 ——
+      // `shouldRefetch` 硬要求 `loadState === 'ok'`，补拉 effect 恒假，于是「失败过一次之后
+      // 怎么切都出不来」（#598）。这种情况整页重来，目标段随 `load(next)` 一起带过去。
+      if (reloadRequiredOnSwitch(loadState)) void load(next)
     },
-    [scrollToBody, seg],
+    [load, loadState, scrollToBody, seg],
   )
 
   const openSoldListings = useCallback(() => switchSegment('SOLD'), [switchSegment])

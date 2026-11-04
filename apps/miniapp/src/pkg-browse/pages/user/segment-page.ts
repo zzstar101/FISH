@@ -51,6 +51,16 @@ export const shouldRefetch = (
   page: { loaded: boolean; loading: boolean; failed: boolean },
 ): boolean => loadState === 'ok' && !page.loaded && !page.loading && !page.failed
 
+/**
+ * 整页加载态是终态时，切段不能只换这一段的数据 —— 页头（资料）根本没到，得整页重来。
+ *
+ * `shouldRefetch` 硬要求 `loadState === 'ok'`（见上）：`notFound` / `failed` 下补拉 effect
+ * 恒为假，于是「失败过一次之后怎么切都出不来」（#598）。这两个状态下切段要让 `load()`
+ * 重新接管，目标段由 `load(target)` 带过去（否则会被 `?tab=` 初值拽回在售段）。
+ */
+export const reloadRequiredOnSwitch = (loadState: UserHomeLoadState): boolean =>
+  loadState === 'notFound' || loadState === 'failed'
+
 /** 页头与列表共用的那两个数（服务端给的 `activeCount` / `soldCount`）。 */
 export type UserCounts = { activeCount: number; soldCount: number }
 

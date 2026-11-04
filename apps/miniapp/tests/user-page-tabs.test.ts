@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  emptyPage,
   firstPageOf,
+  reloadRequiredOnSwitch,
   segmentOfTab,
   segTitleOf,
   shouldRefetch,
@@ -110,7 +112,7 @@ describe('他人主页接线（#581）', () => {
     expect(code).toContain('useState<Segment>(() => segmentOfTab(tabParam))')
     // 整页重载也从 `?tab=` 重算，不留「沿用当前段」的镜像
     const reload = slice(code, 'const load = useCallback(', 'if (userId ===')
-    expect(reload).toContain('const initial = segmentOfTab(tabParam)')
+    expect(reload).toContain('const initial = target ?? segmentOfTab(tabParam)')
     // 算出来的口径要真的被用上：换段与首屏都不许绕过它写死 ACTIVE
     expect(reload).toContain('setSeg(initial)')
     expect(code).toContain('setPage(firstPageOf(initial, result))')
@@ -155,8 +157,10 @@ describe('他人主页接线（#581）', () => {
     expect(body.indexOf('if (sent !== generation.current) return')).toBeLessThan(
       body.indexOf('mergeSegmentPage(prev, next, cursor)'),
     )
-    // 用户在这一步消失了（读取层把 404 折成 null）：整页退到 notFound，而不是当成列表失败
-    expect(body).toContain("setLoadState('notFound')")
+    // 段级 404（读取层把 404 折成 null）只降级这一段（#598）：整页 notFound 会把 `ScrollView`
+    // 连页头两格一起卸载，`loadState` 还成终态、补拉 effect 恒假 —— 切一次段就再也出不来
+    expect(body).not.toContain("setLoadState('notFound')")
+    expect(slice(body, 'if (next === null) {', 'return')).toContain('failed: true')
 
     // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据之前
     const reload = slice(code, 'const load = useCallback(', 'if (userId ===')
@@ -168,7 +172,7 @@ describe('他人主页接线（#581）', () => {
     )
     // 两个 callback 都必须把 `seg` 放进依赖：少了它，切段后闭包仍是旧段的快照
     expect(code).toContain('    [seg, userId],')
-    expect(code).toContain('    [scrollToBody, seg],')
+    expect(code).toContain('    [load, loadState, scrollToBody, seg],')
   })
 
   test('空页就补拉第一页（切段后 / 深链进已售出都靠它），失败后不自动重试', async () => {
@@ -288,5 +292,36 @@ describe('shouldRefetch / totalOf / segTitleOf —— 口径的单一来源（#5
   test('分段名两段不许互换', () => {
     expect(segTitleOf('ACTIVE')).toBe('在售')
     expect(segTitleOf('SOLD')).toBe('已售出')
+  })
+})
+
+/**
+ * #598：切段失败后「怎么切都出不来」。
+ *
+ * 根因是 `loadState` 成了终态而 `shouldRefetch` 硬要求 `'ok'` —— 补拉 effect 恒假，
+ * 一次 404 / 一次失败之后切段连请求都不发；段级 404 还会把整页打成 notFound，
+ * 连 `ScrollView` 和页头那两格一起卸载。下面两条用例固定这两处修复。
+ */
+describe('切段自愈与段级失败（#598）', () => {
+  const page = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
+
+  test('整页终态下切段必须整页重来，不算「只换这一段的数据」', () => {
+    // 页头（资料）都没到 ⇒ 只重置 page 没用：`shouldRefetch` 要求 `loadState === 'ok'`
+    expect(reloadRequiredOnSwitch('notFound')).toBe(true)
+    expect(reloadRequiredOnSwitch('failed')).toBe(true)
+    // 资料已在（ok）或首屏在拉（loading）时只换这一段，别让整页白闪一下
+    expect(reloadRequiredOnSwitch('ok')).toBe(false)
+    expect(reloadRequiredOnSwitch('loading')).toBe(false)
+    // 段失败后切段：page 整份重置、加载态仍是 ok ⇒ 补拉 effect 一定发请求
+    expect(shouldRefetch('ok', emptyPage())).toBe(true)
+  })
+
+  test('接线：终态下切段由 load(next) 接管，目标段随参数带过去', async () => {
+    const body = slice(await page, 'const switchSegment = useCallback(', 'const openSoldListings')
+    expect(body).toContain('if (reloadRequiredOnSwitch(loadState)) void load(next)')
+    // 不带目标段的话，整页重来一遍后段会被 `?tab=` 初值拽回在售
+    expect(await page).toContain('const initial = target ?? segmentOfTab(tabParam)')
+    // 依赖里少了 `load` / `loadState`，回调拿到的都是旧闭包
+    expect(await page).toContain('    [load, loadState, scrollToBody, seg],')
   })
 })
