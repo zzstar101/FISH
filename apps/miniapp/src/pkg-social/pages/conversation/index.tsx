@@ -133,7 +133,9 @@ import {
   stickAfterScroll,
   systemPillText,
   type TxBarAction,
+  type TxStageAction,
   txBarView,
+  txStageView,
 } from './view'
 import VoiceRecordPanel from './voice-record-panel'
 import { applyVoiceAutoStop, applyVoiceRelease, isVoiceCancelArmed } from './voice-recording-view'
@@ -2706,6 +2708,17 @@ export default function Conversation() {
   }
 
   /**
+   * 「我的评价」（#613 ⑤）：「前往查看评价」的去向。
+   *
+   * `?seg=trade` 让评论页进页就停在「交易评价」段（缺省仍是「全部」）—— 评价写在面交页，
+   * 用户点这颗钮就是来找自己给出去的那条评价，落「全部」还得再切一次段。
+   * 用 `navigateTo`：评论页不在 TabBar 里（主包 tab 只有 5 个，见 `app.config.ts`）。
+   */
+  const openMyReviews = () => {
+    void Taro.navigateTo({ url: '/pkg-browse/pages/comments/index?seg=trade' })
+  }
+
+  /**
    * 「+」面板的三格：商品卡进发送选择页（#359）；图片走相册、拍照走相机
    * （两者只是 `Taro.chooseMedia` 的 `sourceType` 差别，对发送流程没有区别）。
    */
@@ -3336,7 +3349,7 @@ export default function Conversation() {
     const goOrders = () => {
       void Taro.navigateTo({ url: ordersUrl })
     }
-    let label = systemPillText(message.content)
+    let label = systemPillText(message.content, conversation.role)
     if (historical) label = '已接受交易 · 查看本笔'
     else if (noIdHint) label = '已接受交易 · 请从「我的订单」查看'
     return (
@@ -3499,6 +3512,27 @@ export default function Conversation() {
   const secondaryTxBar = txBar.secondary ?? null
 
   /**
+   * 消息流末尾的交易进度块（#613）：胶囊 + 气泡。
+   *
+   * 判据与顶部状态条同源（`./view` 的 `txStageView` 按同一套规则判），只是表达位置不同：
+   * 顶部是「商品 + 状态词 + 一颗钮」，这里是「阶段陈述 + 居中卡 + 当前动作」。
+   *
+   * 故意**不接** `fallbackTxId`：顶部那条在「消息里有 `tx.accepted`、交易行却没取回来」时
+   * 退回「交易状态待更新 / 查看交易码」，那是给用户一条兜底入口；而这块只有在拿到交易行
+   * （或一条还没落表的提案）时才知道该画哪一档，没有交易行就整块不渲染 —— 避免画一张
+   * 猜出来的卡片。失败 / 无关 / 提案已被现实覆盖时同样返回 `null`，不重复喊话。
+   */
+  const txStage = txStageView({
+    role: conversation.role,
+    listingStatus: listing.status,
+    listing: { title: listing.title, coverUrl: listing.coverUrl },
+    tx: txFailed ? cachedTx : txLoad.tx,
+    lastEvent: lastTxEvent,
+    reviewed,
+    failed: txFailed,
+  })
+
+  /**
    * 顶部状态条动作区的分发：主钮传 `txBar.action`（默认取它），次要钮（`拒绝`）显式传入
    * 自己的动作。两颗钮都必须先 `stopPropagation` —— 外层整条是「点进商品详情」。
    */
@@ -3512,6 +3546,7 @@ export default function Conversation() {
     if (action.kind === 'reject') return declineProposal()
     if (action.kind === 'code') return openMeetup(action.transactionId)
     if (action.kind === 'review') return openMeetup(action.transactionId)
+    if (action.kind === 'reviews') return openMyReviews()
     if (action.kind === 'scan') {
       void Taro.navigateTo({ url: SCAN_CODE_PAGE })
       return
@@ -3909,7 +3944,82 @@ export default function Conversation() {
                 )
               })}
 
-              {entries.length === 0 ? (
+              {/*
+                交易进度块（#613）：阶段胶囊 + 交易气泡，贴在消息流末尾。
+
+                它**不是消息**：不进 `entries`、不参与已读回执 / 长按菜单 / 日期分隔，
+                也不吃消息的左右分侧布局 —— 居中一块，谁看都是同一张卡。动作与顶部状态条
+                同一套分发（`runTxBarAction`），所以气泡里点「确认 / 拒绝」与顶部等效。
+
+                胶囊可空：提案 / 接受 / 拒绝三档的说法由流里那条 SYSTEM 灰胶囊承担
+                （`systemPillText` 按角色出文案），这块只在成交档（交易成功 / 交易全流程
+                完成）补胶囊 —— 同一句话不在会话里说两遍。已取消档整块不出：顶部状态条
+                已经写着「交易已取消」。
+              */}
+              {txStage ? (
+                <View className="conv__txstage">
+                  {txStage.capsule ? (
+                    <View className="conv__txstage-pill">
+                      <Text className="conv__txstage-pill-tx">{txStage.capsule.label}</Text>
+                    </View>
+                  ) : null}
+                  {txStage.bubble ? (
+                    <View className="conv__txstage-card">
+                      {txStage.bubble.title === null ? null : (
+                        <Text className="conv__txstage-title">{txStage.bubble.title}</Text>
+                      )}
+                      <View className="conv__txstage-item">
+                        <View className="conv__txstage-thumb">
+                          {txStage.bubble.coverUrl ? (
+                            <Image
+                              className="conv__txstage-img"
+                              src={txStage.bubble.coverUrl}
+                              mode="aspectFill"
+                            />
+                          ) : (
+                            <Image
+                              className="conv__txstage-ph"
+                              src={ICONS.imageMuted}
+                              mode="aspectFit"
+                            />
+                          )}
+                        </View>
+                        <View className="conv__txstage-main">
+                          <Text className="conv__txstage-nm">{txStage.bubble.listingTitle}</Text>
+                          {/* 成交价 ≠ 挂价：提案态取提案金额，成交后取交易行的 amountCents。
+                              提案没带金额（脏数据）时宁可不画价格，也不凭空造一个。 */}
+                          {txStage.bubble.amountCents === null ? null : (
+                            <Text className="conv__txstage-price num">
+                              {'¥'}
+                              <Text className="conv__txstage-price-n">
+                                {formatAmount(txStage.bubble.amountCents)}
+                              </Text>
+                            </Text>
+                          )}
+                        </View>
+                        {txStage.bubble.actions.length === 0 ? null : (
+                          <View className="conv__txstage-acts">
+                            {txStage.bubble.actions.map((item: TxStageAction) => (
+                              <View
+                                key={`${item.action.kind}-${item.label}`}
+                                className={`conv__txstage-act${item.variant === 'ghost' ? ' is-ghost' : ''}`}
+                                onClick={(event: { stopPropagation: () => void }) =>
+                                  runTxBarAction(event, item.action)
+                                }
+                              >
+                                <Text>{item.label}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {/* 有进度块时不再画「还没有消息」空态：两句话互相矛盾 */}
+              {entries.length === 0 && txStage === null ? (
                 <View className="conv__empty">
                   <Text className="conv__empty-title">还没有消息</Text>
                   <Text className="conv__empty-text">在下面打个招呼吧</Text>

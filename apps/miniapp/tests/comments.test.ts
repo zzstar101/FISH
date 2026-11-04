@@ -13,6 +13,7 @@ import {
   ratingChipOf,
   SEGMENTS,
   segmentOf,
+  segmentOfParam,
   shortCategoryLabel,
   toMyCommentFromCommentItem,
   toMyCommentFromReviewItem,
@@ -422,5 +423,22 @@ describe('我的评论 · 开关接线（load.ts 真读两个开关）', () => {
     const mod = await import('../src/features/comments/load')
     // 只认 mock 回退的实现会在这里得到 true —— 这正是本用例要拦的
     expect(mod.DEMO_COMMENTS_ENABLED).toBe(false)
+  })
+})
+
+describe('segmentOfParam —— 「我的评价」进页分段（#613 ⑤）', () => {
+  test('认得出三段，其余（含缺失 / 数组 / 脏值）回落「全部」', () => {
+    expect(segmentOfParam('trade')).toBe('trade')
+    expect(segmentOfParam('listing')).toBe('listing')
+    expect(segmentOfParam('all')).toBe('all')
+    expect(segmentOfParam(undefined)).toBe('all')
+    expect(segmentOfParam('')).toBe('all')
+    expect(segmentOfParam('TRADE')).toBe('all')
+    expect(segmentOfParam('nope')).toBe('all')
+  })
+
+  test('同参数传成数组时取第一个（Taro 解析 query 会把重复键收成数组）', () => {
+    expect(segmentOfParam(['trade', 'listing'])).toBe('trade')
+    expect(segmentOfParam([])).toBe('all')
   })
 })
