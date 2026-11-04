@@ -8,6 +8,14 @@
 > 本手册只描述部署，不改变任何业务/契约行为。生产形态与 [architecture.md](architecture.md) §4 的
 > 本地拓扑**同构**，区别只是应用由 systemd 托管、前面多一个反向代理提供 HTTPS。
 
+> ⚠️ **小程序端与 API 必须同一提交基线**。小程序是独立发布通道（微信审核 + 灰度），端上构建一旦发出去就
+> 收不回来；而契约是 `strictObject`（未知查询键直接 422），端上多带一个参数、服务端还是旧构建，整条链路就失败。
+> 实测案例：[#599](https://github.com/zzstar101/FISH/issues/599) —— 端上 `GET /users/:id/listings?status=SOLD`
+> 先发、API 仍是含 #592 之前的构建，每次切段都 422，端上只表现为「刷新不出来」。
+>
+> 因此：**涉及契约的变更必须先部署 API、再发小程序**；每次部署后核对「线上 API 提交」与「当前小程序构建所依赖的契约」一致。
+> 端上排查清单见 [miniapp-dev-workflow.md](miniapp-dev-workflow.md) §4 第 5 条。
+
 ## 0. 拓扑与不变量
 
 ```text
