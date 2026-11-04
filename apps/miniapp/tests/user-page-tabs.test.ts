@@ -169,10 +169,11 @@ describe('他人主页接线（#581）', () => {
 
     // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据之前
     const reload = slice(code, 'const load = useCallback(', 'if (userId ===')
+    // #598 复审 F1 起代号顺带留在 `sent` 里，供 await 之后比对（见「切段自愈」那组）
     expect(reload.replace(/\s+/g, ' ')).toContain(
-      'generation.current += 1 inFlight.current = false',
+      'const sent = ++generation.current inFlight.current = false',
     )
-    expect(reload.indexOf('generation.current += 1')).toBeLessThan(
+    expect(reload.indexOf('const sent = ++generation.current')).toBeLessThan(
       reload.indexOf('setPage(emptyPage())'),
     )
     // 两个 callback 都必须把 `seg` 放进依赖：少了它，切段后闭包仍是旧段的快照
@@ -330,6 +331,22 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(await page).toContain('const initial = target ?? segmentOfTab(tabParam)')
     // 依赖里少了 `load` / `loadState`，回调拿到的都是旧闭包
     expect(await page).toContain('    [load, loadState, scrollToBody, seg],')
+  })
+
+  test('接线：整页重载要领本轮代号，await 之后比对，晚到的响应不许回填', async () => {
+    // 失败条件（复审 F1）：`load` 只写 `generation.current += 1`、不把代号留在 `sent` 里，
+    // await 之后也没有比对 ⇒ 整页 failed 态的页头两格连点（在售→卖出，两格相邻、现实可达）
+    // 时 SOLD 的响应先回、ACTIVE 的后回，结果是 `seg === 'SOLD'` 却摆着一份在售首屏，
+    // 而 `loaded: true` 让 `shouldRefetch` 恒假，没有任何一条路会再修它。
+    const body = slice(await page, 'const load = useCallback(', 'const loadSegment = useCallback(')
+    expect(body).toContain('const sent = ++generation.current')
+    const awaitAt = body.indexOf('await loadPublicUserHome(userId)')
+    const guardAt = body.indexOf('if (sent !== generation.current) return')
+    expect(awaitAt).toBeGreaterThan(-1)
+    // 比对必须在 await **之后**：写在前面等于没写
+    expect(guardAt).toBeGreaterThan(awaitAt)
+    // 目标段仍随参数带过去，否则整页重来后被 `?tab=` 拽回在售
+    expect(await page).toContain('const initial = target ?? segmentOfTab(tabParam)')
   })
 
   test('错误标识从 ApiError 的形状里取，取不到就记 UNKNOWN（不伪装成某个码）', () => {

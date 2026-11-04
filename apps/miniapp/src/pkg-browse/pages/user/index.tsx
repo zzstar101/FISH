@@ -140,8 +140,13 @@ export default function UserHome() {
       setLoadState('loading')
       setProfile(null)
       const initial = target ?? segmentOfTab(tabParam)
-      // 先作废在途请求：上一轮还没回来的响应（含列表页）一个字段都不许写进新一轮
-      generation.current += 1
+      // 先作废在途请求并领本轮代号：上一轮还没回来的响应（含列表页）一个字段都不许写进
+      // 新一轮。`sent` 还兼着挡**本轮自己**的过期回填（#598 复审 F1）：整页 failed 态的页头
+      // 两格相邻，连点「在售→卖出」现实可达 —— 后一次 `load` 会把代号再 +1，前一次的
+      // `loadPublicUserHome` 回来对不上就整包丢掉。不挡的话 SOLD 响应先回、ACTIVE 后回，
+      // 结果是 `seg === 'SOLD'` 却摆着一份在售首屏，而 `loaded: true` 让 `shouldRefetch`
+      // 恒假，没有任何一条路会再修它。
+      const sent = ++generation.current
       inFlight.current = false
       // 段回到深链口径（`?tab=` 初值）。`load` 的常规入口是挂载与整页重试，那时用户还没
       // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
@@ -159,6 +164,8 @@ export default function UserHome() {
       }
 
       const result = await loadPublicUserHome(userId)
+      // 本轮已被后来的一次 `load` / 切段作废：一个字段都不写（见上面 `sent` 的说明）
+      if (sent !== generation.current) return
       if (result.status !== 'ok') {
         setLoadState(result.status)
         return
