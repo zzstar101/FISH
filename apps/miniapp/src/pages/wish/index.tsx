@@ -16,7 +16,7 @@ import { consumeWishesDirty } from '@/features/wish/refresh'
 import { categoryLabel, WISH_CATEGORIES } from '@/lib/listing-labels'
 import { formatAmount, formatYuan } from '@/lib/money'
 import { isApiError } from '@/lib/request'
-import { notifyTabbarRoute } from '@/lib/tabbar-sync'
+import { useTabTransition } from '@/lib/use-tab-transition'
 import { POOL_MIN_COUNT } from '@/lib/wish-pool'
 import type { MockWish, MockWishPoolItem } from '@/mock/api'
 import { wishHitLink } from './list-state'
@@ -175,7 +175,7 @@ export default function Wish() {
     void load(true)
   })
   // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
-  useDidShow(notifyTabbarRoute)
+  const tabContentClass = useTabTransition()
 
   const mineList = mineFilter === 'ALL' ? mine : mine.filter((wish) => wish.status === mineFilter)
   const poolList = poolFilter === 'ALL' ? pool : pool.filter((item) => item.category === poolFilter)
@@ -280,7 +280,7 @@ export default function Wish() {
       />
       <View className="wish__header-gap" />
 
-      <View className="wish__body">
+      <View className={`wish__body ${tabContentClass}`}>
         {state === 'loading' ? (
           <View className="wishempty">
             <Text className="wishempty__title">正在加载…</Text>

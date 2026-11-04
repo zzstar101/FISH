@@ -18,7 +18,7 @@ import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
-import { notifyTabbarRoute } from '@/lib/tabbar-sync'
+import { useTabTransition } from '@/lib/use-tab-transition'
 import { acceptsRefreshedProfile, isLatestLoad, isNotOlderThan, shouldRefreshOnShow } from './view'
 import './index.scss'
 
@@ -215,7 +215,7 @@ export default function Profile() {
   authedRef.current = authStatus === 'authed'
   userIdRef.current = authUser?.id ?? null
   // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
-  useDidShow(notifyTabbarRoute)
+  const tabContentClass = useTabTransition()
   useDidShow(() => {
     const firstShow = skipFirstShowRef.current
     skipFirstShowRef.current = false
@@ -561,7 +561,10 @@ export default function Profile() {
     return (
       <View className="profile">
         <View className="profile__hero-bg" />
-        <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
+        <View
+          className={`profile__body ${tabContentClass}`}
+          style={{ paddingTop: `${navHeight + 8}px` }}
+        >
           <View className="profile__card profile__guest">
             <View className="profile__guest-av">
               <Image className="profile__guest-ic" src={ICONS.userFg} mode="aspectFit" />
@@ -595,7 +598,10 @@ export default function Profile() {
     return (
       <View className="profile">
         <View className="profile__hero-bg" />
-        <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
+        <View
+          className={`profile__body ${tabContentClass}`}
+          style={{ paddingTop: `${navHeight + 8}px` }}
+        >
           <View className="profile__card profile__guest">
             <Text className="profile__guest-text">正在恢复登录状态…</Text>
           </View>
@@ -646,7 +652,10 @@ export default function Profile() {
     <View className="profile">
       <View className="profile__hero-bg" />
 
-      <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
+      <View
+        className={`profile__body ${tabContentClass}`}
+        style={{ paddingTop: `${navHeight + 8}px` }}
+      >
         {/* 个人头部：头像 / 昵称 + 认证胶囊 / 签名 / 扫码（与头像同行对齐）。
             头像与昵称都是「编辑资料」入口（#86 B）：微信不开放读取头像昵称，
             只能由用户在编辑页主动选，所以这里既没有单独的「编辑」行也不显示假头像 */}
