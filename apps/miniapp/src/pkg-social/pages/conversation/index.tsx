@@ -2697,7 +2697,8 @@ export default function Conversation() {
   }
 
   /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541/#597）—— 消息流的 `onTouchStart`、
-   *  页头空白、输入框聚焦。不碰已输入文字、不 blur 输入框；底部底座从面板高缩回键盘高
+   *  页头空白、点面板里的格子。聚焦输入框也收，但要等键盘落地（交接在键盘订阅里，见那里）。
+   *  不碰已输入文字、不 blur 输入框；底部底座从面板高缩回键盘高
    *  （键盘没开就是 0），位置仍交给同一个守卫决定（贴底继续贴底，翻历史原地不动）。 */
   const dismissPanel = () => {
     keepTailAnchored()
@@ -3170,6 +3171,23 @@ export default function Conversation() {
       if (step.inset > panelHeightPxRef.current) {
         panelHeightPxRef.current = step.inset
         setPanelHeightPx(step.inset)
+      }
+      /**
+       * **面板 → 键盘**的交接（#597）：面板展开时点输入框，**不在聚焦当拍收面板**，改在
+       * 键盘真落地第一帧再收 —— 这是同一块高度在换占用者，必须等新占用者到了才让位。
+       *
+       * 为什么不能在聚焦当拍收：那一刻 `resolveBottomInset` 只能从「面板高」直落到
+       * `keyboardHeight`，而它此刻还是 0（开面板时走过 `collapseKeyboard()`）→ 底部底座
+       * 先塌空、视口放大一整把键盘，下一拍平台报高度再长回来。端上就是「输入栏先掉到屏幕
+       * 底、下方空一片、再被顶上去」，是现象一的镜像，幅度比改前还大。
+       *
+       * 这一拍底座从面板高换成键盘高：两者量级相同，差值只是「这把键盘 − 历史最大键盘」
+       * （即 F2 的有意取舍），一次到位。`panelOpenRef` 直接写 false 再 setState：下面那句
+       * 重指尾行在同一次回调里就按「面板已收」判，位置不会漏锚。
+       */
+      if (panelOpenRef.current && step.inset > 0) {
+        panelOpenRef.current = false
+        setPanelOpen(false)
       }
       /**
        * 只要真落地了新高度就重指尾行 —— 开键盘时视口变矮同样要重锚，不是只在收到 0 时。
@@ -4138,8 +4156,13 @@ export default function Conversation() {
                   writeInputRowPx(height)
                 }}
                 onFocus={() => {
-                  setPanelOpen(false)
                   /**
+                   * 面板**不在这一拍收**（#597 F1）：点输入框、键盘被叫起来，是底部那块高度
+                   * 在换占用者 —— 新占用者（键盘）还没到，先让位就会塌空一次（底座直落到 0、
+                   * 视口放大一整把键盘），端上是「输入栏先掉到屏幕底、再被顶上去」。
+                   * 收到键盘真落地第一帧时再收，见键盘订阅里的交接那一段。
+                   * 「点输入框也算点面板外部」的可见契约不变（#541）。
+                   *
                    * 用户点输入框 = 明确要键盘（#560）：收尾尾巴窗口、意图闩、哨兵账本立刻作废。
                    *
                    * 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」（切输入法、候选栏收起）

@@ -283,6 +283,42 @@ describe('底部底座的高度真源（#597，纯函数表驱动）', () => {
     })
     expect(panelOpen).toBe(keyboardUp)
   })
+
+  test('面板态 → 聚焦输入框 → 键盘首帧：交接前后底座等高，中间不许塌成 0（#597 F1）', () => {
+    /**
+     * 反方向（面板 → 键盘）的交接序列。焦点落在输入框时键盘还没起来，这一刻若就
+     * `setPanelOpen(false)`，`resolveBottomInset` 只能拿到 `keyboardHeight === 0`（开面板
+     * 走过 `collapseKeyboard()`）→ 底座直落 0、视口放大一整把键盘，下一拍平台报高度再长回来：
+     * 「输入栏先掉到屏幕底、下方空一片、再被顶上去」，正是现象一的镜像。
+     * 所以收起时刻必须推迟到键盘真落地第一帧 —— 页面就是这么接的（见下一条源码断言）。
+     */
+    const last = 280
+    const steps = [
+      // ① 面板展开：占住上次键盘那块高度
+      { label: '① 面板态', panelOpen: true, keyboardHeight: 0 },
+      // ② 聚焦当拍（键盘仍未落地）：仍然是面板态，高度不许动
+      { label: '② 聚焦当拍', panelOpen: true, keyboardHeight: 0 },
+      // ③ 键盘首帧到达：同一帧里收面板、落地键盘高度 —— 交接无缝
+      { label: '③ 键盘首帧', panelOpen: false, keyboardHeight: last },
+    ]
+    const heights = steps.map((step) =>
+      resolveBottomInset({
+        panelOpen: step.panelOpen,
+        keyboardHeight: step.keyboardHeight,
+        lastKeyboardHeight: last,
+      }),
+    )
+    for (const [index, height] of heights.entries()) {
+      expect({ step: steps[index].label, height }).toEqual({
+        step: steps[index].label,
+        height: last,
+      })
+    }
+    // 反面：这就是「当拍关」会塌成的那一档，钉住禁令（0 意味着视口凭空放大一整把键盘）
+    expect(
+      resolveBottomInset({ panelOpen: false, keyboardHeight: 0, lastKeyboardHeight: last }),
+    ).toBe(0)
+  })
 })
 
 describe('键盘高度阶梯：收起动画的中间值不许当终值（#560 安卓真机）', () => {
@@ -845,6 +881,17 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body.indexOf('setPanelHeightPx(step.inset)')).toBeLessThan(
       body.indexOf('if (!panelOpenRef.current) keepTailAnchored()'),
     )
+    /**
+     * **面板 → 键盘**的交接（#597 F1）：收到「键盘真落地第一帧」才收面板，不在聚焦当拍收。
+     * 当拍收的话底座从面板高直落 0（键盘高度此刻还是 0），视口先放大一整把键盘再缩回来。
+     */
+    expect(body).toContain('if (panelOpenRef.current && step.inset > 0) {')
+    expect(body).toContain('panelOpenRef.current = false')
+    expect(body).toContain('setPanelOpen(false)')
+    // 交接必须在「要不要重指尾行」之前：同一帧里先让位，那句判断才看得见 panelOpenRef=false
+    expect(body.indexOf('if (panelOpenRef.current && step.inset > 0) {')).toBeLessThan(
+      body.indexOf('if (!panelOpenRef.current) keepTailAnchored()'),
+    )
     expect(source).toContain('Taro.onKeyboardHeightChange(onHeightChange)')
     expect(source).toContain('Taro.offKeyboardHeightChange(onHeightChange)')
     // 卸载时把哨兵的定时器一起收掉（R2 清理点之二）
@@ -1014,8 +1061,12 @@ describe('键盘高度是单一真源（#560）', () => {
   test('用户点输入框＝明确要键盘：收尾尾巴窗口与意图闩立刻作废（B2）', async () => {
     const source = squash(await pageSource())
     const focus = slice(source, 'onFocus={() => {', 'onInput=')
-    // #541：聚焦输入框仍然收起面板
-    expect(focus).toContain('setPanelOpen(false)')
+    /**
+     * #541 的契约（聚焦输入框算点面板外部）仍然成立，但**不在这一拍收**（#597 F1）：
+     * 那一刻键盘高度还是 0，底座会直落到底、视口放大一整把键盘再被顶回来。收起推到了
+     * 键盘真落地第一帧（键盘订阅里那条 `if (panelOpenRef.current && step.inset > 0)`）。
+     */
+    expect(focus).not.toContain('setPanelOpen(false)')
     // 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」会被尾巴判据吞掉，输入栏被新键盘盖住
     expect(focus).toContain('keyboardClosedAtRef.current = 0')
     expect(focus).toContain('keyboardClosingRef.current = false')
