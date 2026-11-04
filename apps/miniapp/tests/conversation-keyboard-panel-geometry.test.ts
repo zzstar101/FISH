@@ -1321,6 +1321,41 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(panel).not.toContain('margin-top')
   })
 
+  test('面板落地后按「展开当拍是否贴底」再锚一次尾行（#597 追加任务）', async () => {
+    /**
+     * `togglePanel` 里那次 `keepTailAnchored()` 跑在 `setPanelOpen` **之前**，锚的是「面板还没
+     * 占位」的旧几何；面板一落地消息流又矮一截，最后一条就被输入栏截掉了。所以展开当拍记一份
+     * 贴底快照，等面板几何落地那一次量测再按它补锚一次。
+     *
+     * 记的必须是**判据**：翻历史翻到一半的人，展开面板后不许被拽回底部（#597 现象三）。
+     */
+    const source = squash(await pageSource())
+    // 快照本身要有存放处
+    expect(source).toContain('const panelOpenStickRef = useRef(false)')
+    const toggle = slice(source, 'const togglePanel = () => {', 'const dismissPanel = () => {')
+    // 只在**展开**分支里记（收起不需要：视口变高不会截断尾行）
+    expect(toggle).toContain('panelOpenStickRef.current = stickBottomRef.current')
+    expect(toggle.indexOf('panelOpenStickRef.current = stickBottomRef.current')).toBeLessThan(
+      toggle.indexOf('setPanelOpen(!panelOpen)'),
+    )
+    // 落地后取走标志：三个条件缺一不可（是面板引起的几何变化 / 面板确实开着 / 当时贴底）
+    const measure = slice(
+      source,
+      'const panelTransition = panelGeomRef.current',
+      'bottomGapAllowanceRef.current = mergeViewportShrink({',
+    )
+    expect(measure).toContain(
+      'const reopenTailAnchor = panelTransition && panelOpenRef.current && panelOpenStickRef.current',
+    )
+    expect(measure).toContain('if (reopenTailAnchor) panelOpenStickRef.current = false')
+    // 补锚必须发生在**量完几何之后**：这一帧的视口才是最终几何
+    const exec = slice(source, 'const reopenTailAnchor', '}, [keyboardHeight, panelOpen')
+    expect(exec).toContain('if (reopenTailAnchor) keepTailAnchored()')
+    expect(exec.indexOf('writeInputRowPx(inputHeight)')).toBeLessThan(
+      exec.indexOf('if (reopenTailAnchor) keepTailAnchored()'),
+    )
+  })
+
   test('输入框不再让平台自己推页面（两套补偿叠加就是抽搐的来源）', async () => {
     const textarea = tag(squash(await pageSource()), '<Textarea')
     expect(textarea).toContain('className="conv__input"')

@@ -473,6 +473,12 @@ export default function Conversation() {
    */
   const panelGeomRef = useRef(false)
   /**
+   * 展开面板那一刻用户是不是贴着底部（#597 追加任务）：面板几何落地后据此决定要不要
+   * **再**指一次尾行。`true` 表示「落地后再锚一次」，由量测 effect 取走并清掉；
+   * 展开时没贴底的人保持 `false`，落地后不会被拽回底部。
+   */
+  const panelOpenStickRef = useRef(false)
+  /**
    * 意图闩的起点高度与「收尾尾巴」记录（#560 R1/R3）：`closing` 是**页面要求收起**的意图，
    * 不是从高度符号反推的 —— 安卓上切输入法 / 候选栏伸缩会让键盘「没关、只是变矮」，拿
    * 「变矮」当「开始收起」就会把闩误置、之后所有变高都被丢弃，内边距停在小值、更高的那把
@@ -2663,6 +2669,16 @@ export default function Conversation() {
     if (!panelOpen) {
       abortRecording()
       setVoiceMode(false)
+      /**
+       * 展开这一下顺手记「此刻是否贴底」（#597 追加任务）：下面那次 `keepTailAnchored` 跑在
+       * `setPanelOpen` **之前**，锚的是「面板还没占位」的旧几何；面板落地后消息流又矮了一截，
+       * 尾行会被输入栏截掉。等面板几何落地那一次量测（量测 effect 里的
+       * `reopenTailAnchor`）再按这里记下的判据重指一次。
+       *
+       * 记的是**判据**不是「一定要贴底」：展开时不贴底的人，落地后也不许被拽回底部
+       * （#597 现象三的原罪）。
+       */
+      panelOpenStickRef.current = stickBottomRef.current
     }
     /**
      * 面板是**底部底座里独立的一块**（#597）：它不再长在输入栏的文档流里，而是绝对定位贴住
@@ -2674,6 +2690,9 @@ export default function Conversation() {
      * 几何变化（底部从 `env(safe-area)` 长成面板高）。键盘高度**同样不在这批里归零**：它是
      * 平台事件的产物（`nextKeyboardInset`），自己归零就是拿本页布局去和系统收键盘动画抢时序
      * —— #560 电的正是这一下。收键盘与意图闩 / 活性哨兵一起走 `collapseKeyboard()`。
+     *
+     * 面板落地后还要**再**锚一次（见上面的 `panelOpenStickRef` 与量测 effect）：这一批里
+     * 那次锚定发生在面板占位之前，不足以保住尾行。
      */
     collapseKeyboard()
     keepTailAnchored()
@@ -3257,6 +3276,13 @@ export default function Conversation() {
      */
     const panelTransition = panelGeomRef.current
     panelGeomRef.current = false
+    /**
+     * 面板落地后要不要**再锚一次**尾行（#597 追加任务）：`togglePanel` 里那次 `keepTailAnchored`
+     * 锚在面板占位**之前**的旧几何上，面板一落地消息流又矮一截，最后一条会被输入栏截掉。
+     * 判据用展开当拍的贴底快照（`panelOpenStickRef`），所以展开时在翻历史的人不会被拽回底部。
+     */
+    const reopenTailAnchor = panelTransition && panelOpenRef.current && panelOpenStickRef.current
+    if (reopenTailAnchor) panelOpenStickRef.current = false
     void Taro.nextTick(() => {
       Taro.createSelectorQuery()
         .select('.conv__scroll')
@@ -3282,6 +3308,8 @@ export default function Conversation() {
           const inputRow = res?.[1] as { height?: number } | undefined
           const inputHeight = inputRow?.height
           if (typeof inputHeight === 'number' && inputHeight > 0) writeInputRowPx(inputHeight)
+          // 面板已经落地（这一帧的视口就是最终几何）：按展开当拍的贴底快照补一次尾行锚点
+          if (reopenTailAnchor) keepTailAnchored()
         })
     })
     return () => {
