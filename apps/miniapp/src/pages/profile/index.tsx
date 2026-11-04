@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useDidShow } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BADGE } from '@/assets/badge'
 import { BRAND } from '@/assets/brand'
@@ -120,6 +120,17 @@ export default function Profile() {
    * 刘海与原生胶囊上。数值来源与 `top-bar` 一致（`@/lib/nav-metrics`）。
    */
   const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
+
+  /**
+   * 切走时暂停页头动效。tab 页常驻不销毁 —— `useDidShow`/`useDidHide` 只是切显隐，
+   * 页面藏起来后 `heroGlow`(opacity) 与 `heroSweep`(transform) 仍按帧推进，白占合成器。
+   * 加一个 class 让 WXSS 把 `animation-play-state` 置 paused：从当前帧冻结，
+   * 回到本页继续跑，观感与不暂停完全一致（规则见 index.scss）。
+   */
+  const [pageHidden, setPageHidden] = useState(false)
+  useDidShow(() => setPageHidden(false))
+  useDidHide(() => setPageHidden(true))
+  const pageClass = pageHidden ? 'profile profile--anim-paused' : 'profile'
 
   const { status: authStatus, user: authUser } = useAuth()
   /** 只有**确定**未登录才显示登录引导（`unknown` = 冷启动 `GET /me` 还没回来） */
@@ -559,7 +570,7 @@ export default function Profile() {
    */
   if (anonymous) {
     return (
-      <View className="profile">
+      <View className={pageClass}>
         <View className="profile__hero-bg" />
         <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
           <View className="profile__card profile__guest">
@@ -593,7 +604,7 @@ export default function Profile() {
    */
   if (authStatus === 'unknown') {
     return (
-      <View className="profile">
+      <View className={pageClass}>
         <View className="profile__hero-bg" />
         <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
           <View className="profile__card profile__guest">
@@ -643,7 +654,7 @@ export default function Profile() {
   )
 
   return (
-    <View className="profile">
+    <View className={pageClass}>
       <View className="profile__hero-bg" />
 
       <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
