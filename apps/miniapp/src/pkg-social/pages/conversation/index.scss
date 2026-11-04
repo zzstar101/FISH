@@ -434,7 +434,9 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
-  padding: 24px 32px 6px;
+  /* 左右 32 → 16（= 屏宽 750rpx 下 8pt）：Owner 要求头像离屏幕边缘 8px（#596 演示反馈）。
+     头像贴边距离只由这条左右内边距决定，行内 gap 只影响头像与气泡之间。 */
+  padding: 24px 16px 6px;
 }
 
 /* 日期分隔（稿子 .daysep）：蓝底小胶囊，与系统灰胶囊区分 */
@@ -581,8 +583,8 @@
   /* 纯色 + 无描边（#596 第 3 点）：
      ①基类那条 `border: 2px solid` 原先是「透明描边占位」，现在直接去掉（盒高 −4px；
        本页几何全部运行时实测，贴底与尾行锚点不受影响）；
-     ②底色由渐变 `--grad-brand` 换成压深的纯青 `--bubble-mine` —— 白字压原色 #19d4ff
-       只有 1.76:1，压深后 4.62:1（AA 正文线 4.5:1）。 */
+     ②底色由渐变 `--grad-brand` 换成压深的纯蓝 `--bubble-mine` —— 白字压原色 #19d4ff
+       只有 1.76:1，压深后 4.77:1（AA 正文线 4.5:1；具体色值见 `_token-vars.scss`）。 */
   background: var(--bubble-mine);
   border: none;
 }
@@ -649,8 +651,8 @@
   border-radius: var(--r-sm);
   background: var(--accent-mid);
 
-  /* 我方气泡是深青纯色底，浅块压上去看不见，只能**压深**（`--quote-bg-mine` 是 28%
-     黑，叠在 `--bubble-mine` 上得 #065b72，与气泡底 1.65:1，白字 7.64:1）。设计稿原话
+  /* 我方气泡是深蓝纯色底，浅块压上去看不见，只能**压深**（`--quote-bg-mine` 是 28%
+     黑，叠在 `--bubble-mine` 上得 #295099，与气泡底 1.63:1，白字 7.77:1）。设计稿原话
      是「浅一档」，但白字压浅蓝块只有 1.x:1 —— 深色宿主上「更深」才是同一个层次语义。 */
   &.is-mine {
     background: var(--quote-bg-mine);
@@ -996,8 +998,8 @@
   color: var(--muted-2);
 
   &.is-mine {
-    /* 白字透明度压到 0.86 时在 `--bubble-mine` 上只有 3.85:1，不到 AA 正文线；
-       时长是 23px 小字，所以这里用纯白（4.62:1）。 */
+    /* 白字透明度压到 0.86 时在 `--bubble-mine` 上只有 3.98:1，不到 AA 正文线；
+       时长是 23px 小字，所以这里用纯白（4.77:1）。 */
     color: #fff;
   }
 }
