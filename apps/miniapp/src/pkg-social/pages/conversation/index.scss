@@ -496,9 +496,12 @@
   flex-direction: row-reverse;
 }
 
+/* 头像：60 → 76px（#596 第 1 点，Owner 要求明显放大）。
+   ⚠️ 76 这个数**同时**写在下面 `.conv__col` 的 `calc(100% - 92px)` 里（92 = 76 + 行 gap 16），
+   两处必须一起改，只改一处会让长消息溢出到对侧。 */
 .conv__ava {
-  width: 60px;
-  height: 60px;
+  width: 76px;
+  height: 76px;
   flex: 0 0 auto;
   border-radius: 50%;
   overflow: hidden;
@@ -533,8 +536,8 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-  /* 让出头像 + 间距，气泡列不吃满整行 */
-  max-width: calc(100% - 76px);
+  /* 让出头像 + 间距，气泡列不吃满整行（头像 76 + `.conv__row` gap 16 = 92） */
+  max-width: calc(100% - 92px);
 }
 
 .conv__row.is-mine .conv__col {
