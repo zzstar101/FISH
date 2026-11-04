@@ -763,6 +763,18 @@ export default function UserHome() {
     void Taro.navigateTo({ url: `/pkg-trade/pages/report-user/index?${query}` })
   }
 
+  /**
+   * 本人态的出口（#578）：回「我的」。
+   *
+   * `pages/profile` 是**原生 TabBar 页**，只能 `switchTab`（`navigateTo` 会失败），
+   * 写法与 `apps/miniapp/src/pkg-auth/pages/verify/index.tsx:345-348` 的「返回我的主页」同款：
+   * 失败兜底提示，不静默吞掉。
+   */
+  const goMyProfile = () =>
+    void Taro.switchTab({ url: '/pages/profile/index' }).catch(
+      () => void Taro.showToast({ title: '打开失败，请重试', icon: 'none' }),
+    )
+
   /** 顶栏举报钮（Owner 拍板：贴微信胶囊放）。仅非本人主页渲染，见 isSelf。 */
   const navReportAction =
     profile && !isSelf ? (
@@ -939,6 +951,39 @@ export default function UserHome() {
                     <View className="uhome__follow-skel" />
                   ) : null}
                 </View>
+
+                {/* 本人态提示（#578）：本人访问自己的公开主页时，页头给一句
+                    「这是你的公开主页」+ 回「我的」的出口。没有这一行，这一屏与他人主页
+                    长得一模一样 —— 关注钮 / 举报钮在本人态本来就不渲染（`canFollow` /
+                    `navReportAction` 的 `!isSelf` 判据**不动**），空出来的位置没人解释。
+                    文案口径对齐 PC 站同款本人态分支
+                    （`apps/web-pc/src/features/user-profile/user-profile-page.tsx:106-109`
+                    的「这是你的公开主页 · 去个人中心」）。
+                    两行而不是一行：右端要让出「回我的 ›」（3 字 ≈ 72rpx + 间距 + 24 图标
+                    ≈ 100rpx）与左右各 28rpx 内边距，主句落到一行只剩约 500rpx ——
+                    整句 19 字（≈437rpx）会顶满整行且没有主次；拆成主句 + 一行小字，
+                    一眼先读到结论。
+                    整行可点（88px = 44pt 触摸高度，见 scss），不做成 tiny 链接。 */}
+                {isSelf ? (
+                  <View
+                    className="uhome__selfnote"
+                    hoverClass="uhome__selfnote--tap"
+                    onClick={goMyProfile}
+                  >
+                    <View className="uhome__selfnote-copy">
+                      <Text className="uhome__selfnote-title">这是你的公开主页</Text>
+                      <Text className="uhome__selfnote-sub">别人看到的就是这一页</Text>
+                    </View>
+                    <View className="uhome__selfnote-exit">
+                      <Text className="uhome__selfnote-exit-txt">回我的</Text>
+                      <Image
+                        className="uhome__selfnote-exit-ic"
+                        src={ICONS.chevronRightMuted}
+                        mode="aspectFit"
+                      />
+                    </View>
+                  </View>
+                ) : null}
 
                 {/* 个性签名（稿 `.psign`）：头像行的**下一行、独占全宽** ——
                     稿把「校区 · 加入天数」换成签名，正是为了吃到全宽（和关注钮挤同一行
