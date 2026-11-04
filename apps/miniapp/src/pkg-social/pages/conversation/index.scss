@@ -106,44 +106,66 @@
   pointer-events: none;
 }
 
+/*
+ * 昵称在上、活跃信息在下（#596 第 2 点）。
+ *
+ * 只改列方向就够：DOM 里昵称 `<Text>` 本来就排在 presence 之前（`index.tsx:3564-3575`），
+ * `flex-direction: column` 直接把它俩叠成两行，**不需要动 tsx 结构**。
+ *
+ * 关键在高度预算：`.conv__title` 的盒高就是 `contentHeight`（胶囊那一段，实测 40~48
+ * 设备 px，见 `lib/nav-metrics.ts:110` 的 `gap × 2 + capsuleHeight`）。两行若按默认行高
+ * 1.4 排是 ~42px，会撑破这个盒子、垂直居中整体偏移 —— 所以行高收到 1.2、行间隙 2px，
+ * 两行合计 ~36px，稳稳落在盒内。
+ */
 .conv__title-in {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 2px;
   min-width: 0;
+  max-width: 100%;
+  line-height: 1.2;
 }
 
 .conv__title-nm {
   /* 父级 `.conv__title` 是盖在返回钮上的纯定位层（pointer-events: none），
      昵称要接 #517 的主页点击，必须在这里单独恢复事件。 */
   pointer-events: auto;
-  flex: 0 1 auto;
+  /* 列方向下 flex 的伸展轴变成纵向：原来的 `flex: 0 1 auto` 会让昵称在纵向空间不足时
+     被**压扁**（配合下面的 `overflow: hidden` 就是裁掉字头字尾）。横向省略改由
+     `max-width: 100%` 承担，`nowrap` + ellipsis 照旧生效。 */
+  flex: 0 0 auto;
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 34px;
+  /* 与活跃信息 16px 成 2.5×（Owner 要 2~3×） */
+  font-size: 40px;
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: 0.01em;
 }
 
 /*
- * 在线态（#359 第五点）：顶部栏用户名隔壁，一行「绿点 + 文案」。
+ * 在线态（#359 第五点）：顶栏**第二行**、昵称正下方（#596 第 2 点），「绿点 + 文案」。
  *
- * `flex: 0 0 auto` + 昵称自己的 ellipsis：长昵称先省略，在线态永远留在标题行内
+ * `flex: 0 0 auto` + 昵称自己的 ellipsis：长昵称先省略，在线态永远留在标题块内
  * （`.conv__title-in` 的 `maxWidth` 是胶囊避让宽度，超出会被裁）。
- * 绿点用系统成功色 `--ok`，离线压成中性灰；字号比昵称小一档（24px）。
+ * 绿点用系统成功色 `--ok`，离线压成中性灰；字号按 Owner 的 2.5× 口径落到 16px
+ * （原 24px，昵称同时从 34px 提到 40px），绿点同比缩到 8px。
  */
 .conv__presence {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  max-width: 100%;
 }
 
 .conv__presence-dot {
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--muted);
 }
@@ -153,8 +175,9 @@
 }
 
 .conv__presence-tx {
-  font-size: 24px;
+  font-size: 16px;
   font-weight: 400;
+  line-height: 1.2;
   color: var(--muted);
 }
 
