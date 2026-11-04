@@ -6,18 +6,18 @@
 
 ## 1. 口径：每个数归谁管
 
-| 选择器           | 承担                                                       | 值 / 真源                                                                                 |
-| ---------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `.conv`          | 整页弹性列                                                 | `height: 100vh; display: flex; flex-direction: column; overflow: hidden`                  |
-| `.conv__scroll`  | 消息流                                                     | `flex: 1; min-height: 120px`（短屏兜底，不参与贴底计算）                                  |
-| `.conv__bottom`  | **贴底 + 底栏底色 + 底部安全区（唯一一处）+ 面板定位父级** | `flex: 0 0 auto; background: var(--surface); padding-bottom: env(safe-area-inset-bottom)` |
-| `.conv__bar`     | 输入栏自己的几何                                           | `padding: $bar-gap-px 24px`（=`16px`，**不含** env）                                      |
-| `.conv__bar-row` | 输入行                                                     | `display: flex; align-items: flex-end; gap: 16px`                                         |
-| `.conv__cbtn`    | 语音/键盘切换                                              | `68px × 68px` 正圆                                                                        |
-| `.conv__plus`    | 「+」                                                      | `68px × 68px` 正圆                                                                        |
-| `.conv__send`    | 发送                                                       | `height: 68px`（宽度随文案）                                                              |
-| `.conv__input`   | 输入框                                                     | `min-height: 68px; max-height: 176px; padding: calc((68px - 1.4em) / 2) 24px`             |
-| `.conv__panel`   | 「+」面板（吸底浮层）                                      | 高度由 JSX 内联（=`resolveBottomInset()`）                                                |
+| 选择器           | 承担                                                       | 值 / 真源                                                                                                                                         |
+| ---------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.conv`          | 整页弹性列                                                 | `height: 100vh; display: flex; flex-direction: column; overflow: hidden`                                                                          |
+| `.conv__scroll`  | 消息流                                                     | `flex: 1; min-height: 120px`（短屏兜底，不参与贴底计算）                                                                                          |
+| `.conv__bottom`  | **贴底 + 底栏底色 + 底部安全区（唯一一处）+ 面板定位父级** | `flex: 0 0 auto; background: var(--surface); padding-bottom: env(safe-area-inset-bottom)`                                                         |
+| `.conv__bar`     | 输入栏自己的几何                                           | `padding: $bar-gap-px 24px`（=`16px`，**不含** env）                                                                                              |
+| `.conv__bar-row` | 输入行                                                     | `display: flex; align-items: flex-end; gap: 16px`                                                                                                 |
+| `.conv__cbtn`    | 语音/键盘切换                                              | `68px × 68px` 正圆                                                                                                                                |
+| `.conv__plus`    | 「+」                                                      | `68px × 68px` 正圆                                                                                                                                |
+| `.conv__send`    | 发送                                                       | `height: 68px`（宽度随文案）                                                                                                                      |
+| `.conv__input`   | 输入框                                                     | `min-height: 68px; max-height: 176px; padding: calc((68px - 1.4em) / 2) 24px`                                                                     |
+| `.conv__panel`   | 「+」面板（吸底浮层）                                      | 高度由**内容自己撑开**（`height: auto`，内容 ≈ `PANEL_CONTENT_RPX` 194rpx + 安全区）；底座让给它的高度由 `view.ts` 的 `resolvePanelHeightPx()` 算 |
 
 三个 token 在 `apps/miniapp/src/pkg-social/pages/conversation/index.scss` 顶部（`$bar-control-px: 68px`、
 `$bar-gap-px: 16px`、`$bar-input-max-px: 176px`）。`apps/miniapp/config/index.ts:34` 是 `designWidth: 750`，
@@ -25,9 +25,12 @@
 
 ### 为什么安全区只算一次
 
-改前 `.conv__bar` 自带 `padding-bottom: calc(16px + env(safe-area-inset-bottom))`，同时页面上没有第二层底座；
-面板与键盘都是「站在输入栏里」。改后底部是**两层**（`.conv__bottom` 包 `.conv__bar`），env 如果再出现在
-`.conv__bar` 上，就会与底座的 env **相加两次**（iPhone 上多 34pt 空白）。所以：
+基线（#597 起）就已经有 `.conv__bottom` 这层底座（`position: relative / z-index: 20 / flex: 0 0 auto`，
+无 background、无 padding），但**安全区写在 `.conv__bar` 自己的 `padding-bottom: calc(16px + env(...))` 里**
+——所以基线也算 1 次，本单做的是把承载者从 `bar` **搬家**到底座，并让「占用态清零」变成显式的、可断言的规则。
+搬家的理由是原来的写法没法表达「占用态不再留安全区」：env 混在 `calc(16px + env())` 里，键盘一开只能整段内联覆盖，
+底座有没有留那一份完全看不出来。现在 env 只出现在 `.conv__bottom`，`.conv__bar` 上若再写一次就会与底座
+**相加两次**（iPhone 上多 34pt 空白）——这条是**预防性**约束，不是"改前是错的"。所以：
 
 - **收起态**：`.conv__bottom` 的内联样式为 `undefined` → scss 的 env 生效，算 **1 次**；`.conv__bar` 只留
   `$bar-gap-px` 基础间距。底座背景铺到窗口底边，家指示条那一条也是底栏的底色，不再露缝。
@@ -94,7 +97,8 @@ console.log('inset-bottom(css px)', i.windowHeight - i.safeArea.bottom)
 
 - **S1** 空内容、未聚焦（收起态）
 - **S2** 单行有字、未聚焦
-- **S3** 四行以上（到 `176px` 上限，输入框内部滚动）
+- **S3** 四行左右的满内容（到 `176px` 上限，输入框内部滚动）：内容区 = 176 − 2×14.4 = 147.2rpx ≈ **3.75 行**，
+  所以第 4 行是**部分可见**（4 整行需要 185.6rpx）—— 这是上限的必然结果，不是截断缺陷
 - **S4** 键盘展开（`autoHeight` 单行）
 - **S5** 「+」面板展开（键盘收起后）
 - **S6** 语音态（按住说话，单行草稿）
@@ -118,7 +122,8 @@ console.log('inset-bottom(css px)', i.windowHeight - i.safeArea.bottom)
    —— 目视：底栏下沿与屏幕下沿之间**没有**一条异色缝。
 2. **四控件同高**：S1/S2/S6 下 `.conv__input.height === .conv__cbtn.height === .conv__plus.height ===
    .conv__send.height`（容差 1px，都应为 34pt × `pixelRatio`）。
-3. **间距 16rpx**：S1 下 `.conv__bar-row.top - .conv__bar.top === 16rpx`、
+3. **间距 16rpx**：S1 下 `.conv__bar-row.top - .conv__bar.top === 16rpx + 2rpx`（**已含** `.conv__bar` 的
+   `border-top: 2px`，行盒从 border 内侧算起；按 16rpx 判会假失败）、
    `.conv__bar.bottom - .conv__bar-row.bottom === 16rpx`（rpx→px 按屏宽/750 换算；仅在 `.conv__bottom`
    无内联 padding 时成立）。
 4. **安全区只算一次**：S1 下 `.conv__bottom` 的下内边距 = `inset-bottom`（**不是** `inset-bottom + 16rpx`，

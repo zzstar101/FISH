@@ -196,4 +196,14 @@ describe('底座的接线（#577）', () => {
     // 输入栏必须在底座里面（底座负责贴底与安全区，输入栏只负责自己那圈内边距）
     expect(source.indexOf('<View className="conv__bar"')).toBeGreaterThan(bottom)
   })
+
+  // 变异守卫（审查 M4）：删掉任一处 `style={...}` 接线，结算出来的样式就再也没人用 —— 纯函数单测不会红，只能在这里抓
+  test('两处内联都接到同一个派生结果上', async () => {
+    const source = squash(await pageSource())
+    expect(source).toContain('const bottomReserve = resolveBottomReserveStyles(bottomInset)')
+    const bottomAt = source.indexOf('<View className="conv__bottom"')
+    expect(source.slice(bottomAt, bottomAt + 200)).toContain('style={bottomReserve.bottom}')
+    const barAt = source.indexOf('<View className="conv__bar"')
+    expect(source.slice(barAt, barAt + 200)).toContain('style={bottomReserve.bar}')
+  })
 })
