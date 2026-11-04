@@ -33,6 +33,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import UserAvatar from '@/components/user-avatar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -143,7 +144,6 @@ function matchBudgetText(wish: WishSummary): string {
 type CommentNode = {
   id: string
   authorName: string
-  authorInitial: string
   /**
    * 作者公开 id / 头像（#517）。
    * `null` 只出现在「没有真实数据」的两处：本地乐观占位与演示 mock 留言 —— 此时不跳主页。
@@ -174,7 +174,6 @@ function localComment(content: string): CommentNode {
     // 前缀是 `view.ts` 的判据常量：切号清场靠它认出「还没被服务端确认」的占位
     id: `${PENDING_COMMENT_PREFIX}${localSeq}`,
     authorName: '我',
-    authorInitial: '我',
     authorId: null,
     authorAvatarUrl: null,
     isSeller: false,
@@ -199,8 +198,6 @@ function dtoToNode(comment: CommentDto): CommentNode {
   return {
     id: comment.id,
     authorName: comment.author.nickname,
-    // 头像契约里可为 null；昵称首字兜底，与 mock 的 authorInitial 同语义
-    authorInitial: comment.author.nickname.trim().charAt(0) || '鱼',
     // #517：契约 `CommentAuthorSchema` 自带 id/avatarUrl，原样带到页面节点
     authorId: comment.author.id,
     authorAvatarUrl: comment.author.avatarUrl,
@@ -216,7 +213,6 @@ function mockCommentToNode(comment: MockComment): CommentNode {
   return {
     id: comment.id,
     authorName: comment.authorName,
-    authorInitial: comment.authorInitial,
     // MockComment 没有作者 id/头像（见 mock/types.ts）：不编假身份，点击时给一句提示
     authorId: null,
     authorAvatarUrl: null,
@@ -228,10 +224,9 @@ function mockCommentToNode(comment: MockComment): CommentNode {
 }
 
 /**
- * 留言头像（#517）。
- *
- * 有真实头像就显示图片；URL 失效时回退昵称首字 —— 只判 `authorAvatarUrl`
- * 是否为空不够，断网/CDN 404 时 `<Image>` 会留下一个空白圆。
+ * 留言头像（#517）：统一走 `UserAvatar` —— 有图渲真图，图挂了（断网 / CDN 404）
+ * 回落同一张默认头像，不再退昵称首字（#618：留言区与其它头像位同一个观感）。
+ * 失败重试也交给它：记住的是「哪张 URL 失败过」，作者换头像后自动重新尝试。
  */
 function CommentAvatar({
   node,
@@ -242,25 +237,12 @@ function CommentAvatar({
   reply?: boolean
   onOpen: () => void
 }) {
-  const [failed, setFailed] = useState(false)
-  // 同一 comment id 复用组件时，头像 URL 可能变（作者换头像/重试成功）；
-  // 不重置的话一次 404 会把首字回退永久锁死到组件卸载。
-  useEffect(() => {
-    if (node.authorAvatarUrl) setFailed(false)
-  }, [node.authorAvatarUrl])
   return (
-    <View className={`detail__cav${reply ? ' detail__cav--reply' : ''}`} onClick={onOpen}>
-      {node.authorAvatarUrl && !failed ? (
-        <Image
-          className="detail__cav-img"
-          src={node.authorAvatarUrl}
-          mode="aspectFill"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <Text className="detail__cav-text">{node.authorInitial}</Text>
-      )}
-    </View>
+    <UserAvatar
+      className={`detail__cav${reply ? ' detail__cav--reply' : ''}`}
+      src={node.authorAvatarUrl}
+      onClick={onOpen}
+    />
   )
 }
 
@@ -1658,7 +1640,7 @@ export default function ListingDetail() {
             {/* ---------------------------------------------------- 卖家 */}
             <View className="detail__seller-section">
               <View className="detail__seller" onClick={openSellerHome}>
-                <Image className="detail__avatar" src={data.seller.avatarUrl} mode="aspectFill" />
+                <UserAvatar className="detail__avatar" src={data.seller.avatarUrl} />
                 <View className="detail__sinfo">
                   {/* 昵称行只有昵称 + 认证勾（稿子口径）：校区不在这里显示 */}
                   <View className="detail__sname">

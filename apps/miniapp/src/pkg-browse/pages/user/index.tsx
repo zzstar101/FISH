@@ -10,6 +10,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuth } from '@/features/auth/store'
 import { fetchBlockState, setBlock } from '@/features/blocks/api'
 import {
@@ -859,21 +860,8 @@ export default function UserHome() {
               <View className="uhome__identity" style={{ marginTop: `${identityTopGap}px` }}>
                 <View className="uhome__profile" id="uhome-profile">
                   {/* 头像：契约的 `PublicUserProfileSchema.avatarUrl` 真实存在（可空），
-                      有图就渲染真图；只有「没有图」才退昵称首字 —— 首字是缺图的降级呈现，
-                      不是这个人的身份。首字降级与 `conversation` 同款
-                      （`watchers` 的缺图降级是 `—`，不是首字，别照抄那一处）。
-                      不做占位色块：本页有首字可退，比通用色块更可辨。 */}
-                  <View className="uhome__avatar">
-                    {profile.avatarUrl ? (
-                      <Image
-                        className="uhome__avatar-img"
-                        src={profile.avatarUrl}
-                        mode="aspectFill"
-                      />
-                    ) : (
-                      <Text className="uhome__avatar-tx">{profile.nickname.slice(0, 1)}</Text>
-                    )}
-                  </View>
+                      有图就渲染真图；没有图渲统一默认头像（#618），不再拿昵称首字顶替。 */}
+                  <UserAvatar className="uhome__avatar" src={profile.avatarUrl} />
                   <View className="uhome__pinfo">
                     <View className="uhome__nameRow">
                       <Text className="uhome__pname">{profile.nickname}</Text>

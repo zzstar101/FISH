@@ -1,4 +1,9 @@
 @use "./styles/tokens";
+/* 统一头像的样式（`components/user-avatar/index.scss`）在这里全局引一次：
+   它被 17 个页面/组件共用，若由组件自己 `import './index.scss'`，webpack 只能把同一份 CSS
+   按各 chunk 的引用顺序塞进去，`mini-css-extract-plugin` 会报 "Conflicting order"
+   （与 `top-bar/index.scss` 等共享组件互相插队）。样式文件仍放在组件目录下。 */
+@use "./components/user-avatar/index";
 
 /**
  * 全局壳样式。

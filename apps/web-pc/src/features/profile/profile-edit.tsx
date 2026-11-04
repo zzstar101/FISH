@@ -189,13 +189,7 @@ function ProfileEditForm({
 
         <form className="space-y-5" onSubmit={(event) => void submit(event)}>
           <div className="flex items-center gap-5 rounded-2xl bg-surface-2 p-4">
-            <UserAvatar
-              avatarUrl={previewUrl ?? me.avatarUrl}
-              className="size-20"
-              emoji={me.nickname.slice(0, 1)}
-              fallbackClassName="text-2xl"
-              size="xl"
-            />
+            <UserAvatar avatarUrl={previewUrl ?? me.avatarUrl} className="size-20" size="xl" />
             <div className="min-w-0">
               <label
                 className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-full border border-line bg-surface px-4 font-medium text-sm transition-colors hover:bg-brand-soft hover:text-brand"

@@ -99,11 +99,7 @@ export function WatchersPanelView({
           <ul className="divide-y divide-line" data-slot="watcher-list">
             {items.map((item) => (
               <li className="flex items-center gap-3 py-3 first:pt-0" key={item.user.id}>
-                <UserAvatar
-                  avatarUrl={item.user.avatarUrl}
-                  emoji={item.user.nickname.slice(0, 1)}
-                  size="default"
-                />
+                <UserAvatar avatarUrl={item.user.avatarUrl} size="default" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium text-sm">{item.user.nickname}</p>
                   <p className="mt-0.5 text-ink-3 text-xs">

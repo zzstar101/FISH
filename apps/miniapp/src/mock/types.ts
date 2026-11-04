@@ -52,7 +52,8 @@ export type { AuthStatus }
 export type MockUser = {
   id: string
   nickname: string
-  avatarUrl: string
+  /** 头像 URL；`null` = 没有图（#618 起由 `components/user-avatar` 画统一默认头像） */
+  avatarUrl: string | null
   authStatus: AuthStatus
   /**
    * mock 专属：设计稿详情页要展示「卖出 9 件 · 好评率 100%」。

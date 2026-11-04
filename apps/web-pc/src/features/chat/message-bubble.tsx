@@ -137,13 +137,7 @@ export function MessageBubble({
   const senderName = message.sender?.nickname ?? '用户'
   return (
     <div className={`flex gap-2.5 ${isMine ? 'justify-end' : 'justify-start'}`}>
-      {isMine ? null : (
-        <UserAvatar
-          avatarUrl={message.sender?.avatarUrl ?? null}
-          emoji={senderName.slice(0, 1)}
-          size="sm"
-        />
-      )}
+      {isMine ? null : <UserAvatar avatarUrl={message.sender?.avatarUrl ?? null} size="sm" />}
       <div className={`group flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
         {isMine ? null : <p className="mb-1 text-ink-3 text-xs">{senderName}</p>}
         {message.type === 'LISTING' ? (

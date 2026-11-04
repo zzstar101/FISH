@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { BADGE } from '@/assets/badge'
 import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
+import UserAvatar from '@/components/user-avatar'
 import {
   applyProfile,
   clearLocalSession,
@@ -651,14 +652,8 @@ export default function Profile() {
             头像与昵称都是「编辑资料」入口（#86 B）：微信不开放读取头像昵称，
             只能由用户在编辑页主动选，所以这里既没有单独的「编辑」行也不显示假头像 */}
         <View className="profile__head">
-          <View className="profile__avatar" onClick={openEditProfile}>
-            {/* 契约 `MeSchema.avatarUrl` 可为 null：空就画人形占位，不拿别人的头像顶上 */}
-            {user.avatarUrl ? (
-              <Image className="profile__avatar-img" src={user.avatarUrl} mode="aspectFill" />
-            ) : (
-              <Image className="profile__avatar-ph" src={ICONS.userFg} mode="aspectFit" />
-            )}
-          </View>
+          {/* 契约 `MeSchema.avatarUrl` 可为 null：空就画统一默认头像，不拿别人的头像顶上 */}
+          <UserAvatar className="profile__avatar" src={user.avatarUrl} onClick={openEditProfile} />
           <View className="profile__info">
             <View className="profile__name-row">
               <Text className="profile__name" onClick={openEditProfile}>

@@ -260,11 +260,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               params={{ userId: item.seller.id }}
               to="/users/$userId"
             >
-              <UserAvatar
-                avatarUrl={item.seller.avatarUrl}
-                emoji={item.seller.nickname.slice(0, 1)}
-                size="lg"
-              />
+              <UserAvatar avatarUrl={item.seller.avatarUrl} size="lg" />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{item.seller.nickname}</p>
                 <div className="mt-1.5">
