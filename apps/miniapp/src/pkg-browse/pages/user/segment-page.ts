@@ -10,6 +10,17 @@ import type { MockListing } from '@/mock/types'
 /** 他人主页的两个分段：在售 / 已售出。取值域与契约 `PublicUserListingsQuerySchema.status` 逐字对齐。 */
 export type Segment = 'ACTIVE' | 'SOLD'
 
+/**
+ * 段内失败的错误标识（#598）：`ApiError` 的 `code` / `status`。
+ *
+ * 端上（真机、Owner 验收）看不到 Console，所以失败原因要能写进页面文案 ——
+ * 422（参数 / 契约不符）、401（会话失效）、5xx（服务端）在端上不能长得一模一样。
+ */
+export type SegmentErrorInfo = { code: string; status: number }
+
+/** 认不出形状的异常（网络断开、超时、第三方库抛错）统一记成这个，不伪装成某个错误码。 */
+export const UNKNOWN_SEGMENT_ERROR: SegmentErrorInfo = { code: 'UNKNOWN', status: 0 }
+
 /** 一段列表的视图状态。 */
 export type SegmentPage<T extends { id: string } = MockListing> = {
   items: T[]
@@ -18,6 +29,8 @@ export type SegmentPage<T extends { id: string } = MockListing> = {
   loaded: boolean
   loading: boolean
   failed: boolean
+  /** 最近一次失败的错误标识；开拉 / 成功 / 切段都会清掉。 */
+  error: SegmentErrorInfo | null
 }
 
 /** 空段（未加载）。页内切段就是整份重置成它。 */
@@ -27,6 +40,7 @@ export const emptyPage = <T extends { id: string } = MockListing>(): SegmentPage
   loaded: false,
   loading: false,
   failed: false,
+  error: null,
 })
 
 /** 读取层交回来的一页（不含视图三态）。 */
@@ -50,6 +64,36 @@ export const shouldRefetch = (
   loadState: UserHomeLoadState,
   page: { loaded: boolean; loading: boolean; failed: boolean },
 ): boolean => loadState === 'ok' && !page.loaded && !page.loading && !page.failed
+
+/**
+ * 从一个抛出来的异常里取 `code` / `status`。
+ *
+ * 按**形状**判（`name` + `code` + `status` 三特征同时成立），不 import `lib/request` 的
+ * `isApiError`：那个守卫在 request 模块里，import 它会把 Taro 拖进这个纯模块（`bun test`
+ * 直接吃它）。理由与 `features/blocks/view.ts` 的 `apiErrorShapeOf` 同款 —— 小程序按页面
+ * 分 chunk 打包后 `instanceof` 会静默为 false，形状判别才是唯一可靠依据。
+ */
+export function segmentErrorInfo(error: unknown): SegmentErrorInfo {
+  if (typeof error !== 'object' || error === null) return UNKNOWN_SEGMENT_ERROR
+  const shaped = error as { name?: unknown; code?: unknown; status?: unknown }
+  if (shaped.name !== 'ApiError') return UNKNOWN_SEGMENT_ERROR
+  if (typeof shaped.code !== 'string' || typeof shaped.status !== 'number') {
+    return UNKNOWN_SEGMENT_ERROR
+  }
+  return { code: shaped.code, status: shaped.status }
+}
+
+/**
+ * 列表失败文案的尾巴：`（错误码 VALIDATION_FAILED 422）`。
+ *
+ * `status <= 0` 说明压根没走到响应（超时 / 断网，`lib/request` 只在非 2xx 时抛 `ApiError`），
+ * 那就说人话，不摆一个 `0` 出来；没有失败态时不留空括号。
+ */
+export function segmentErrorSuffix(error: SegmentErrorInfo | null): string {
+  if (error === null) return ''
+  if (error.status <= 0) return '（网络异常，请重试）'
+  return `（错误码 ${error.code} ${error.status}）`
+}
 
 /**
  * 整页加载态是终态时，切段不能只换这一段的数据 —— 页头（资料）根本没到，得整页重来。
@@ -117,5 +161,6 @@ export function firstPageOf<T extends { id: string }>(
     loaded: true,
     loading: false,
     failed: false,
+    error: null,
   }
 }

@@ -144,9 +144,11 @@ describe('user 页面接线', () => {
     // 只取 `.items`（`items: mergeSegmentPage(...).items`）会丢掉 `nextCursor`：
     // `hasMore` 恒真 → 滚到底拿同一游标反复请求，去重又把条目全滤掉 → 列表静止、网络空转。
     // 删掉 `loaded: true` 则列表永远停在骨架屏。整块形状一次钉住两条写回。
+    // `error: null`（#598）同理：成功这一笔必须把上一轮的错误码一并清掉，否则列表已经拉到
+    // 了、页面上还挂着「错误码 …」—— 它还得留在这一块里，不许挪成第二次 setPage。
     const page = flatten(await source)
     expect(page).toContain(
-      '{ ...mergeSegmentPage(prev, next, cursor), loaded: true, loading: false, failed: false, }',
+      '{ ...mergeSegmentPage(prev, next, cursor), loaded: true, loading: false, failed: false, error: null, }',
     )
   })
 })

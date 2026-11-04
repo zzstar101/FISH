@@ -37,12 +37,14 @@ import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
-import type { Segment, SegmentPage } from './segment-page'
+import type { Segment, SegmentErrorInfo, SegmentPage } from './segment-page'
 import {
   emptyPage,
   firstPageOf,
   mergeSegmentPage,
   reloadRequiredOnSwitch,
+  segmentErrorInfo,
+  segmentErrorSuffix,
   segmentOfTab,
   segTitleOf,
   shouldRefetch,
@@ -182,7 +184,7 @@ export default function UserHome() {
       if (inFlight.current) return
       inFlight.current = true
       const sent = generation.current
-      setPage((prev) => ({ ...prev, loading: true, failed: false }))
+      setPage((prev) => ({ ...prev, loading: true, failed: false, error: null }))
       try {
         const next = await loadPublicUserListingsPage(userId, seg, cursor)
         // 切过段 / 重载过：这一份响应作废，一个字段都不写（连 `finally` 也不归还闩）
@@ -191,8 +193,9 @@ export default function UserHome() {
           // 段级 404（页主在这一步注销 / 该段不可见）：**只降级这一段**。
           // 不能整页退到 notFound —— 那会把 `ScrollView` 连页头那两格一起卸载，用户切一次段
           // 就丢掉整页，且 `loadState` 成了终态、补拉 effect 恒假，怎么切都出不来（#598）。
-          console.error('[miniapp] 他人主页：该段列表 404', seg)
-          setPage((prev) => ({ ...prev, loading: false, failed: true }))
+          const gone: SegmentErrorInfo = { code: 'USER_NOT_FOUND', status: 404 }
+          console.error('[miniapp] 他人主页：该段列表 404', seg, gone.code, gone.status)
+          setPage((prev) => ({ ...prev, loading: false, failed: true, error: gone }))
           return
         }
         setPage((prev) => ({
@@ -200,12 +203,15 @@ export default function UserHome() {
           loaded: true,
           loading: false,
           failed: false,
+          error: null,
         }))
       } catch (error) {
         if (sent !== generation.current) return
         // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
-        console.warn('[miniapp] 他人主页：列表加载失败', error)
-        setPage((prev) => ({ ...prev, loading: false, failed: true }))
+        // `code` / `status` 一并带上并写进页面文案：422 / 401 / 5xx 在端上必须可区分（#598）。
+        const info = segmentErrorInfo(error)
+        console.error('[miniapp] 他人主页：列表加载失败', seg, info.code, info.status, error)
+        setPage((prev) => ({ ...prev, loading: false, failed: true, error: info }))
       } finally {
         if (sent === generation.current) inFlight.current = false
       }
@@ -1092,10 +1098,12 @@ export default function UserHome() {
                 ))}
               </View>
             ) : page.failed && items.length === 0 ? (
-              /* 列表失败只降级列表：页头、顶栏都还在，所以不用整页 LoadError */
+              /* 列表失败只降级列表：页头、顶栏都还在，所以不用整页 LoadError。
+                 文案尾巴带上 `code` / `status`：422 / 401 / 5xx 在端上必须能分辨（#598），
+                 真机验收拿不到 Console 时就看这一行。 */
               <EmptyState
                 title="列表加载失败"
-                text={`${segTitle}商品没拉到，其它内容不受影响`}
+                text={`${segTitle}商品没拉到，其它内容不受影响${segmentErrorSuffix(page.error)}`}
                 icon={ICONS.boxMuted}
                 actionText="重试"
                 onAction={() => void loadSegment(null)}
