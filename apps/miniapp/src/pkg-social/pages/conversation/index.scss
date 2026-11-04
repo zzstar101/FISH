@@ -427,13 +427,14 @@
 }
 
 /* 消息列表：左右与商品摘要条同一 32px 栅格；打开即停在最新（底部）。
-   底部内衬只留 4pt：底对齐时它决定最新一条离输入栏的距离（稿子口径）。 */
+   行距 16 → 12（#596 第 5 点：气泡本身变高变方了，行距不跟着收会显得很散）。
+   底部内衬只留 3pt：底对齐时它决定最新一条离输入栏的距离（原 4pt，同步收一档）。 */
 .conv__list {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 16px;
-  padding: 24px 32px 8px;
+  gap: 12px;
+  padding: 24px 32px 6px;
 }
 
 /* 日期分隔（稿子 .daysep）：蓝底小胶囊，与系统灰胶囊区分 */
