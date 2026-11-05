@@ -107,6 +107,63 @@ describe('商品详情：卖家区一个入口，留言作者可进主页（#517
   })
 })
 
+describe('「我的」页：主页钮进自己的公开主页（#578）', () => {
+  test('头部动作区新增主页钮，点击带当前登录用户 id 进公开主页', async () => {
+    const code = await source('pages/profile/index.tsx')
+    const open = sliceFrom(code, 'const openMyProfile = () => {', 'const onLogout =')
+    expect(open).toContain('/pkg-browse/pages/user/index?id=')
+    expect(open).toContain('encodeURIComponent(uid)')
+    // 缺 id 先返回，不拼半截 url 去猜人。先断言守卫**存在**再比先后 —— 守卫被删掉时
+    // `indexOf` 给 -1，`-1 < 正数` 照样成立，只比顺序是假绿（上面 `:107` 是既有写法，
+    // 不照抄）。
+    expect(open).toContain('if (!uid) return')
+    expect(open.indexOf('if (!uid) return')).toBeLessThan(open.indexOf('Taro.navigateTo'))
+    expect(code).toContain('<View className="profile__homebtn" onClick={openMyProfile}>')
+    // 未登录不该看见：钮在 `if (anonymous)` 早返回之后，匿名分支根本走不到这里
+    expect(code.indexOf('if (anonymous)')).toBeGreaterThan(-1)
+    expect(code.indexOf('if (anonymous)')).toBeLessThan(code.indexOf('profile__homebtn'))
+  })
+
+  test('头像 / 昵称 / 右箭头仍是编辑资料（#86 B），主页钮不顶替它们', async () => {
+    const code = await source('pages/profile/index.tsx')
+    expect(code).toContain(
+      "const openEditProfile = () => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })",
+    )
+    expect(code).toContain('<View className="profile__avatar" onClick={openEditProfile}>')
+    expect(code).toContain('<Text className="profile__name" onClick={openEditProfile}>')
+  })
+})
+
+describe('他人主页页头：本人态的说明与出口（#578）', () => {
+  test('回「我的」走 switchTab（Tab 页，navigateTo 到不了）', async () => {
+    const code = await source('pkg-browse/pages/user/index.tsx')
+    const goMy = sliceFrom(code, 'const goMyProfile = () =>', 'const navReportAction')
+    expect(goMy).toContain("Taro.switchTab({ url: '/pages/profile/index' })")
+    expect(goMy).not.toContain('Taro.navigateTo')
+  })
+
+  test('提示只在 isSelf 渲染，整行可点回「我的」', async () => {
+    const code = await source('pkg-browse/pages/user/index.tsx')
+    expect(code).toContain('{isSelf ? (')
+    const note = sliceFrom(code, 'className="uhome__selfnote"', 'uhome__selfnote-exit-ic')
+    expect(note).toContain('这是你的公开主页')
+    expect(note).toContain('onClick={goMyProfile}')
+    expect(note).toContain('回我的')
+    // 反向断言：提示块必须**在** `{isSelf ? (` 这个三元里面，且三元在它之前没闭合 ——
+    // 否则他人主页（isSelf 为假）也会看到「这是你的公开主页」。
+    const selfIdx = code.indexOf('{isSelf ? (')
+    const noteIdx = code.indexOf('className="uhome__selfnote"')
+    expect(noteIdx).toBeGreaterThan(selfIdx)
+    expect(code.slice(selfIdx, noteIdx)).not.toContain(') : null}')
+  })
+
+  test('关注钮 / 举报钮的本人态判据原样不动（只加提示，不改既有语义）', async () => {
+    const code = await source('pkg-browse/pages/user/index.tsx')
+    expect(code).toContain("const canFollow = authedUser !== null && !isSelf && userId !== ''")
+    expect(code).toContain('profile && !isSelf ? (')
+  })
+})
+
 describe('我的收藏：卖家头像 → 主页，且不连带开详情（#517）', () => {
   test('适配器把 listing.seller.id 带到 sellerId；缺席留 null', async () => {
     const code = await source('pkg-browse/pages/favorites/list.ts')

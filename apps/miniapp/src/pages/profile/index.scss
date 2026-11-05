@@ -307,8 +307,11 @@
 }
 
 /* 右侧动作：编辑钮已去掉（头像昵称跟随微信，本页可编辑的只有个性签名）。
-   扫码与头像同一行对齐：高度撑满头像（120px），图标与头像同心；无边框透明钮 */
-.profile__scanbtn {
+   扫码与头像同一行对齐：高度撑满头像（120px），图标与头像同心；无边框透明钮。
+   #578 起这一排还有「主页」钮（`profile__homebtn`，进自己的公开主页）：
+   两枚几何完全一致（80×120 触摸区 + 48 图标），只差图标与语义 */
+.profile__scanbtn,
+.profile__homebtn {
   flex: 0 0 auto;
   width: 80px;
   height: 120px;
@@ -322,7 +325,8 @@
   }
 }
 
-.profile__scanbtn-ic {
+.profile__scanbtn-ic,
+.profile__homebtn-ic {
   width: 48px;
   height: 48px;
 }

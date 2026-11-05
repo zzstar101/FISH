@@ -367,6 +367,23 @@ export default function Profile() {
   /** 头像 / 昵称：进编辑资料页（#86 B） */
   const openEditProfile = () => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })
 
+  /**
+   * 「主页」钮（#578）：进**自己的公开主页**，看别人眼里的自己。
+   *
+   * 与头像 / 昵称那条「编辑资料」（#86 B）**并存、不顶替** —— 那两处仍是编辑资料，
+   * 这里只多一枚独立入口，所以放在头部右侧、与扫码钮同一行的动作区，而不是把头像 /
+   * 昵称的点击改去主页。
+   *
+   * 目标是公开页 `pkg-browse/pages/user`（`GET /users/:userId/public` 匿名可读），
+   * 页内 `isSelf` 会认出本人并补「这是你的公开主页」提示，因此后端 / 契约零改动。
+   * 未登录态不渲染这枚钮：匿名分支连整个头部都不渲染（见下方 `anonymous` 分支）。
+   */
+  const openMyProfile = () => {
+    const uid = user?.id
+    if (!uid) return
+    void Taro.navigateTo({ url: `/pkg-browse/pages/user/index?id=${encodeURIComponent(uid)}` })
+  }
+
   /** 退出登录：确认后先注销服务端会话、再清本地（顺序说明见文件头） */
   const onLogout = () => {
     if (loggingOut) return
@@ -716,6 +733,14 @@ export default function Profile() {
                 {sigText || '设置个性签名'}
               </Text>
             </View>
+          </View>
+          {/* 主页（#578）：进自己的公开主页（`pkg-browse/pages/user?id=<自己>`）。
+              与头像 / 昵称的「编辑资料」语义不重叠（那两处仍是 #86 B 的编辑入口），
+              所以这里是**并列的一枚独立按钮**；图标用 `userFg`（人形 = 个人主页），
+              刻意不用 house 字形 —— TabBar 的「首页」就是这个字形，摆在头部会被读成
+              「回首页」。 */}
+          <View className="profile__homebtn" onClick={openMyProfile}>
+            <Image className="profile__homebtn-ic" src={ICONS.userFg} mode="aspectFit" />
           </View>
           {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}
           <View
