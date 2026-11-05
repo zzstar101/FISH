@@ -124,8 +124,8 @@ export default function Profile() {
   /**
    * 切走时暂停页头动效。tab 页常驻不销毁 —— `useDidShow`/`useDidHide` 只是切显隐，
    * 页面藏起来后 `heroGlow`(opacity) 与 `heroSweep`(transform) 仍按帧推进，白占合成器。
-   * 加一个 class 让 WXSS 把 `animation-play-state` 置 paused：从当前帧冻结，
-   * 回到本页继续跑，观感与不暂停完全一致（规则见 index.scss）。
+   * 加一个 class 让 WXSS 把 `animation-play-state` 置 paused，从当前帧冻结、回来继续跑
+   * （规则见 index.scss）。真机上的停帧与衔接观感未实测，见 PR #624 的取证记录。
    */
   const [pageHidden, setPageHidden] = useState(false)
   useDidShow(() => setPageHidden(false))
