@@ -6,7 +6,8 @@ import { cn } from './lib/utils'
  * shadcn/ui Avatar（new-york-v4 官方源码）。
  *
  * 相对官方的适配：尺寸刻度改成本仓库原有的四档（sm 32 / default 40 / lg 56 / xl 64），
- * 官方是 24 / 32 / 40。emoji 头像的渲染由 `@fish/ui/user-avatar` 组合 AvatarFallback 完成。
+ * 官方是 24 / 32 / 40。兜底内容的渲染由 `@fish/ui/user-avatar` 组合 AvatarFallback 完成
+ * （#618 起兜底统一是默认头像插画，不再画昵称首字母 / emoji）。
  */
 function Avatar({
   className,

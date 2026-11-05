@@ -289,7 +289,7 @@ export default function MyList() {
    * 下拉刷新的一次性标记（原生指示器已经拉出来了，见 `usePullDownRefresh`）：
    *
    * - `keepList`：本次加载**不要**把列表换回骨架屏 —— 用户已经读过一段，换成骨架屏等于
-   *   把阅读位置弄丢（与 `pages/orders-buy` 的 `keepList` 同一取舍）；
+   *   把阅读位置弄丢（与 `pages/orders-buy` 的刷新口径同一取舍）；
    * - `stopPull`：本次加载结束后收掉原生指示器。收尾照旧放在 effect 的 `finally` 里 ——
    *   那才是「这一次请求真的结束了」（成功与失败都算）的唯一位置。
    */

@@ -1,6 +1,9 @@
 import { beforeEach, expect, mock, test } from 'bun:test'
 import type { Dispute } from '@fish/contracts/disputes/schema'
 
+// Domain APIs now invalidate display snapshots through the Taro storage boundary.
+mock.module('@tarojs/taro', () => ({ default: {} }))
+
 /**
  * 详情取数的错误分类（#497）。
  *

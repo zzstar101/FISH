@@ -1,10 +1,11 @@
 // 必须是第一条：在任何契约（zod schema）模块被求值之前关掉 zod 的 JIT，见该模块的说明
 import '@/lib/zod-jitless'
-import { useLaunch } from '@tarojs/taro'
+import { useDidHide, useLaunch } from '@tarojs/taro'
 import type { PropsWithChildren } from 'react'
 import { bootstrapAuth } from '@/features/auth/store'
 import { startRecommendationQueueAutoFlush } from '@/features/recommendation/queue'
 import { loadSubscribeConfig } from '@/features/subscribe/api'
+import { resetTabTransition } from '@/lib/tabbar-sync'
 import './app.scss'
 
 export default function App({ children }: PropsWithChildren) {
@@ -29,6 +30,8 @@ export default function App({ children }: PropsWithChildren) {
     */
     void loadSubscribeConfig()
   })
+
+  useDidHide(resetTabTransition)
 
   return children
 }

@@ -727,6 +727,8 @@ function toReplyExcerpt(item: MockMessage): string {
  * 服务端游标没有前进）页面不显示那些由总数派生的文案 —— 而不是把不完整的数据说成全部。
  */
 export type LoadedOrders = {
+  /** Raw validated display data; absent for mock/error results. */
+  snapshot?: Awaited<ReturnType<typeof fetchAllTransactions>>
   items: OrderCardView[]
   /**
    * 失败分类（#304）：非 `null` 就是「真实接口失败且**没有**回退 mock（生产口径）」，
@@ -754,6 +756,7 @@ export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
     const page = await fetchAllTransactions(role)
     return {
       items: page.items.map((dto) => toOrderCard(dto)),
+      snapshot: page,
       failureKind: null,
       truncated: page.truncated,
     }

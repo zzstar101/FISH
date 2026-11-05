@@ -76,20 +76,6 @@
   box-shadow: var(--shadow-soft);
 }
 
-/* 真实头像：铺满圆形槽位。父级已带 border + border-radius，
-   这里再收一次 50% 以免方图四角越过边框出现直角。 */
-.uhome__avatar-img {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-}
-
-.uhome__avatar-tx {
-  font-size: 62px;
-  font-weight: 600;
-  color: var(--brand-deep);
-}
-
 .uhome__pinfo {
   flex: 1;
   min-width: 0;
@@ -545,7 +531,8 @@
   white-space: nowrap;
 }
 
-/* 续页失败时这一行是**可点的重试入口**（#598 复审 M1）：同一套细线小字，只补按压反馈 */
+/* 续页失败时这一行是**可点的重试入口**（#598 复审 M1）：同一套细线小字，只补按压反馈。
+   只由宿主按 `hoverClass` 在按压期间挂上，**不许**写进 `className` —— 那会让这一行常驻 0.6。 */
 .uhome__list-end--tap {
   opacity: 0.6;
 }
@@ -693,4 +680,75 @@
   &.is-busy {
     opacity: 0.5;
   }
+}
+
+/* ---------------------------------------------------------------- 本人态提示
+   (#578)：本人访问自己的公开主页时，头像行下方一行「这是你的公开主页 + 回我的」。
+   与数据行同一套白玻璃底（`rgba(255,255,255,.72)` + 同款描边 / 圆角 / 卡片投影 /
+   背景模糊，逐条对齐 `.uhome__stats`），坐在页头渐变上不抢眼；整行就是「回我的」的
+   触摸区，高度 88px = 44pt（同一句换算见 `components/legal-doc/index.scss:286`）。
+   这里写 `height` 而非 `min-height`：同行 `.uhome__stat--link` 的 `min-height: 88px`
+   是 #581 的独占契约（`apps/miniapp/tests/user-page-tabs.test.ts:218` 断言本文件里
+   只有**一处** `min-height: 88px`）；文案单行省略号不会撑高，固定高够用。
+   只在 `isSelf` 时渲染 —— 他人主页 / 匿名访客的页头一个像素都不变。 */
+
+.uhome__selfnote {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 22px;
+  height: 88px;
+  padding: 0 28px;
+  border-radius: 36px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 2px solid rgba(255, 255, 255, 0.78);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* 按下的反馈（`hoverClass`）：与可点的数据格同一档 —— 白玻璃底压深一档 */
+.uhome__selfnote--tap {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+/* 文字块：主句 + 一行小字（两行塞进 88px 里，不折行、不省略号） */
+.uhome__selfnote-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.uhome__selfnote-title {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.uhome__selfnote-sub {
+  font-size: var(--fs-2xs);
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.uhome__selfnote-exit {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 「回我的」用品牌深色：这一行里唯一可动的动作，要看得出来可点 */
+.uhome__selfnote-exit-txt {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.uhome__selfnote-exit-ic {
+  width: 24px;
+  height: 24px;
 }

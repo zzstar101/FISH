@@ -8,6 +8,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -25,7 +26,7 @@ import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
 import { fetchAllTransactions } from '@/features/transaction/api'
 import type { TxMessageEvent } from '@/features/transaction/tx-signal'
-import { notifyTabbarRoute } from '@/lib/tabbar-sync'
+import { useTabTransition } from '@/lib/use-tab-transition'
 import type { MockNotification } from '@/mock/types'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
 import './index.scss'
@@ -262,8 +263,11 @@ export default function Chat() {
   /**
    * 会话列表加载。重试钮、进页、以及从会话页返回（`useDidShow`）都走这里。
    *
-   * 失败即清屏并进错误态（与首页 `applyLoadResult` 同一口径）：把上一批会话留在
-   * 屏幕上会让人以为「刷新过了，就这几条」。
+   * 失败即清屏并进错误态：把上一批会话留在屏幕上会让人以为「刷新过了，就这几条」。
+   * 这里与首页的取舍**不同** —— 首页会留住旧商品（`pages/home/index.tsx` 的
+   * `lastGoodRef` + `applyLoadResult` 的 `previous`，并用 toast 明说这次没刷上），
+   * 因为商品列表是「看内容」，而会话列表的每一行都带着未读数：留着旧行会给出
+   * 一个关于「有几条没读」的错误结论。
    */
   const reloadConversations = useCallback(() => {
     const epoch = ++listEpoch.current
@@ -412,7 +416,7 @@ export default function Chat() {
   const authedRef = useRef(false)
   authedRef.current = authStatus === 'authed'
   // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
-  useDidShow(notifyTabbarRoute)
+  const tabContentClass = useTabTransition()
   useDidShow(() => {
     if (skipFirstShow.current) {
       skipFirstShow.current = false
@@ -680,7 +684,7 @@ export default function Chat() {
         会话列表（1版稿 .list）。「通知」tab 不再走会话列表：原独立通知页的列表
         直接渲染在这里（页面已删）；「全部」tab 渲染真实会话行。
       */}
-      <View className="chat__list">
+      <View className={`chat__list ${tabContentClass}`}>
         {filter === 'system' ? (
           <View className="notif__list">
             {notifs.map((item) => (
@@ -739,14 +743,8 @@ export default function Chat() {
                 >
                   {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
                   <View className="chat__ava-wrap">
-                    <View className="chat__ava">
-                      {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）；空串即不渲染图 */}
-                      <Image
-                        className="chat__ava-img"
-                        src={user.avatarUrl ?? ''}
-                        mode="aspectFill"
-                      />
-                    </View>
+                    {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）：空就走统一默认头像 */}
+                    <UserAvatar className="chat__ava" src={user.avatarUrl} />
                     {unread > 0 ? (
                       // 两位数与 `99+` 要缩字号才不裁字（见 index.scss 的 .is-multi）
                       <Text className={`chat__bdg num${unread > 9 ? ' is-multi' : ''}`}>

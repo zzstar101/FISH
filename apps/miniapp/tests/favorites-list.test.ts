@@ -92,7 +92,7 @@ describe('演示数据 —— 必须与「我的」页数字栏对得上', () =>
   test('每行的色块都取到了（分类基色 / 头像块，不新增色值）', () => {
     for (const row of DEMO_FAVORITES) {
       expect(row.coverUrl.startsWith('data:image/png;base64,')).toBe(true)
-      expect(row.avatarUrl.startsWith('data:image/png;base64,')).toBe(true)
+      expect(row.avatarUrl?.startsWith('data:image/png;base64,')).toBe(true)
     }
   })
 })
@@ -215,8 +215,9 @@ describe('toFavoriteItems —— 契约行 → 本页行（#397 接真数据的�
     // #517：没有卖家就没有可跳的主页 —— 留 null，页面据此只给提示
     expect(withoutSeller?.sellerId).toBeNull()
     expect(withoutSeller?.verified).toBe(false)
-    // 头像缺席落既有占位块（`features/listing/adapt.ts` 同一取法），不是空串
-    expect(withoutSeller?.avatarUrl.startsWith('data:image/png;base64,')).toBe(true)
+    // #618：头像缺席**原样留 null**，不再塞 1×1 占位块 —— 视图层据 null 画统一默认头像
+    // （之前这里断言的是 data URI 占位块，正是「新用户没有默认头像」的成因）
+    expect(withoutSeller?.avatarUrl).toBeNull()
   })
 
   test('无图落分类基色块、分类名走两字表、真实行 demo 恒 false', () => {

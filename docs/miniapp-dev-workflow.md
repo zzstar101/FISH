@@ -51,6 +51,13 @@
    - **"演示通过 + Owner 认可" 是合并的必要前置条件**，两者缺一不可。
 3. **静态检查通过**：`bun run --filter '@fish/miniapp' typecheck` 与 `bun run lint` 无错误。
 4. 提交信息用 Conventional Commits，遵守 `CONTRIBUTING.md`。
+5. **涉及 API 契约的批次，小程序端与 API 必须是同一提交基线**（或至少同一版契约）：小程序是独立发布通道，
+   端上先发而 API 未支持时可能打成 4xx。使用 `z.strictObject` 的查询 schema 会把未知查询键拒为 422；
+   非 strict schema 也可能静默剥离未知键，不能据此认为新参数已生效。纯 UI / 文档批次不涉及契约发布顺序。
+   实测案例见 [#599](https://github.com/zzstar101/FISH/issues/599)：端上 `GET /users/:id/listings?status=SOLD`
+   先发，API 还是不含 #592 的旧构建 → 每次切段都 422，端上表现为「刷新不出来」。
+   - 演示时要确认被测环境的 API 与自己这份端上构建出自同一提交；
+   - 改契约时在同一 PR 内两侧一起改，或先合入兼容的新服务端；发布时**必须先部署 API，再发端上**。
 
 > 顺序：改代码 →（开 PR、CI 变绿）→ 微信开发者工具逐页演示 → Owner 认可 → 合并。
 > **提交与推送本身不再是演示的前置条件** —— 端上演示是**合并前**的一次门禁，不是每次 commit 的关卡，也不是"动手前先报备"。

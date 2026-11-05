@@ -5,8 +5,16 @@ import {
   isNearBottom,
   mergeViewportShrink,
   nextKeyboardInset,
+  PANEL_CONTENT_RPX,
+  PANEL_DISC_RPX,
+  PANEL_LABEL_RPX,
+  PANEL_PADDING_RPX,
+  PANEL_TILE_GAP_RPX,
   planScrollFix,
+  resolveBottomInset,
+  resolvePanelHeightPx,
   resolveSentinel,
+  shouldHandOffToKeyboard,
   stickAfterScroll,
 } from '../src/pkg-social/pages/conversation/view'
 
@@ -196,6 +204,271 @@ describe('贴底容差的记账口径（#560/#561，纯函数表驱动）', () =
     expect(mergeViewportShrink({ allowance: 8, prevViewport: 0, nextViewport: 600 })).toBe(8)
     // 量到的高度无效时同理
     expect(mergeViewportShrink({ allowance: 8, prevViewport: 600, nextViewport: 0 })).toBe(8)
+  })
+
+  test('面板开合那一次缩量不记进余量（#597：主动切换不是「内容长高」）', () => {
+    /**
+     * 面板占掉一整块底部（内容高 + 安全区）：记进余量就等于把「贴底」一次放宽到面板那么高。
+     * 翻历史的人下一次开面板时，可视高度骤降一两百 px，判定会把「他离底还很远」误读成
+     * 「贴底」→ 重锚把他从历史里拽到最新一条（#597 现象三）。
+     */
+    expect(
+      mergeViewportShrink({
+        allowance: 0,
+        prevViewport: 600,
+        nextViewport: 600 - resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 34 }),
+        panelTransition: true,
+      }),
+    ).toBe(0)
+    // 也不会把 `onLineChange` 刚记下的多行增量一起清掉之外的任何放宽带进来
+    expect(
+      mergeViewportShrink({
+        allowance: 30,
+        prevViewport: 600,
+        nextViewport: 300,
+        panelTransition: true,
+      }),
+    ).toBe(0)
+    // 面板不开合时口径不变（同一组入参不带标志，缩量照记）
+    expect(mergeViewportShrink({ allowance: 0, prevViewport: 600, nextViewport: 546 })).toBe(54)
+  })
+})
+
+describe('底部底座的高度真源（#597，纯函数表驱动）', () => {
+  /** 面板在 375 宽（designWidth 的一半）、34pt 安全区的 iPhone 上占多高：194rpx → 97px，再加 34 */
+  const panelOn375 = resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 34 })
+
+  test('键盘态取键盘高度，键盘收起就是不占', () => {
+    expect(
+      resolveBottomInset({ panelOpen: false, keyboardHeight: 280, panelHeight: panelOn375 }),
+    ).toBe(280)
+    expect(
+      resolveBottomInset({ panelOpen: false, keyboardHeight: 0, panelHeight: panelOn375 }),
+    ).toBe(0)
+    // 负值（有的机型收起时报一次）当 0，别给它一个负内边距
+    expect(resolveBottomInset({ panelOpen: false, keyboardHeight: -12, panelHeight: 0 })).toBe(0)
+  })
+
+  test('面板态取「面板自己的内容高」，与此刻的键盘高度无关', () => {
+    /**
+     * 开面板那一刻键盘正在单调收起（280 → 196 → 0）。面板高度必须**一次**到位：
+     * 跟着 `keyboardHeight` 走就会让底座连跳三档，正是 #597 现象一（整页移动 / 消息流抽搐）。
+     *
+     * 面板高度也**不再**取「上次/最高键盘高」（#597 追加任务）：三格图标撑成一把键盘高
+     * 只会在下面留一片空白。大屏外接键盘（430 那种）同样不许把面板抬起来。
+     */
+    for (const keyboardHeight of [280, 196, 0, 430]) {
+      expect(resolveBottomInset({ panelOpen: true, keyboardHeight, panelHeight: panelOn375 })).toBe(
+        panelOn375,
+      )
+    }
+  })
+
+  test('面板高度只由内容与安全区决定（rpx → px 换算 + 安全区叠加）', () => {
+    // 750 宽 = designWidth：scss 里的 1px 就是 1rpx，换算比 1
+    expect(resolvePanelHeightPx({ windowWidth: 750, safeAreaBottom: 0 })).toBe(PANEL_CONTENT_RPX)
+    // 375 宽（常见 iPhone）：194rpx → 97px
+    expect(resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 0 })).toBe(
+      Math.round(PANEL_CONTENT_RPX / 2),
+    )
+    // 414 宽（Plus / Max）：四舍五入到整数，不吐小数
+    expect(resolvePanelHeightPx({ windowWidth: 414, safeAreaBottom: 0 })).toBe(
+      Math.round((PANEL_CONTENT_RPX * 414) / 750),
+    )
+    // 安全区原样叠在内容高之上（面板自己的 padding-bottom 里也带 env，两边必须对齐）
+    expect(resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: 34 })).toBe(
+      Math.round(PANEL_CONTENT_RPX / 2) + 34,
+    )
+    // 负的安全区当 0
+    expect(resolvePanelHeightPx({ windowWidth: 375, safeAreaBottom: -10 })).toBe(
+      Math.round(PANEL_CONTENT_RPX / 2),
+    )
+    // 量不到窗口宽度（老基础库）按 375 估：不许退化成 0，也不能是整屏
+    const fallback = resolvePanelHeightPx({ windowWidth: 0, safeAreaBottom: 0 })
+    expect(fallback).toBeGreaterThan(60)
+    expect(fallback).toBeLessThan(140)
+    // 面板整体得落在「三个 104rpx 圆钮放得下、又不至于顶掉半屏消息」的量级里
+    expect(panelOn375).toBeGreaterThan(100)
+    expect(panelOn375).toBeLessThan(200)
+  })
+
+  test('面板高的四个分项与 index.scss 的真源逐项一致（改 scss 不改常量必红）', async () => {
+    /**
+     * 面板的**实际**高度由 scss 决定（内容撑开，`height: auto`），而底座让位带的高度由
+     * `view.ts` 的常量算 —— 两边必须逐项对齐，否则面板要么盖住输入行、要么在下面留一条缝。
+     * 这条用例就是那把锁：改 scss 的内边距 / 圆钮尺寸 / 间隙 / 字号而不改常量，这里必红。
+     */
+    const css = await styleSource()
+    const panel = slice(css, '.conv__panel {', '}')
+    const disc = slice(css, '.conv__ptile-disc {', '}')
+    const tile = slice(css, '.conv__ptile {', '}')
+    const label = slice(css, '.conv__ptile-label {', '}')
+    // 上下内边距各一半（scss 的 24px + 24px）
+    expect(panel).toContain(`padding: ${PANEL_PADDING_RPX / 2}px 28px`)
+    expect(disc).toContain(`width: ${PANEL_DISC_RPX}px`)
+    expect(disc).toContain(`height: ${PANEL_DISC_RPX}px`)
+    expect(tile).toContain(`gap: ${PANEL_TILE_GAP_RPX}px`)
+    expect(label).toContain('font-size: 22px')
+    /**
+     * 行盒高度必须由 scss **钉死**成 `PANEL_LABEL_RPX`。
+     *
+     * 不写 `line-height` 时它落在 `normal` 上，实际行盒取决于端上字体（iOS 苹方 / 安卓
+     * 各自一套，差两三 rpx 很常见）—— 那么 `resolvePanelHeightPx()` 算出来的就不是
+     * 「面板的真实高度」，而是按 1.36 倍字号拍的估值：让位带里那条 16px 缝隙最后剩多少
+     * 全看机型。写死之后纯函数与端上几何逐 rpx 对齐，缝隙恒为 16px。
+     */
+    expect(label).toContain(`line-height: ${PANEL_LABEL_RPX}px`)
+    // 文字那一行按 1.2~1.6 倍字号估；超出这个区间说明估算离实际太远，该改成读实测
+    expect(PANEL_LABEL_RPX).toBeGreaterThanOrEqual(22 * 1.2)
+    expect(PANEL_LABEL_RPX).toBeLessThanOrEqual(22 * 1.6)
+    // 总和必须等于四项之和（防止有人只改一项却忘了总和是派生的）
+    expect(PANEL_CONTENT_RPX).toBe(
+      PANEL_PADDING_RPX + PANEL_DISC_RPX + PANEL_TILE_GAP_RPX + PANEL_LABEL_RPX,
+    )
+    // 面板内容必须比它得到的让位带矮一截（`.conv__bar` 的 `$bar-gap-px` 那条缝）
+    expect(panelOn375 - Math.round(PANEL_CONTENT_RPX / 2)).toBe(34)
+  })
+
+  test('面板态 → 聚焦输入框 → 键盘首帧：中间不许塌成 0，交接只变一次（#597 F1）', () => {
+    /**
+     * 反方向（面板 → 键盘）的交接序列。焦点落在输入框时键盘还没起来，这一刻若就
+     * `setPanelOpen(false)`，`resolveBottomInset` 只能拿到 `keyboardHeight === 0`（开面板
+     * 走过 `collapseKeyboard()`）→ 底座直落 0、视口放大一整把键盘，下一拍平台报高度再长回来：
+     * 「输入栏先掉到屏幕底、下方空一片、再被顶上去」，正是现象一的镜像。
+     * 所以收起时刻必须推迟到键盘真落地第一帧 —— 页面就是这么接的（见下一条源码断言）。
+     *
+     * 面板不再与键盘等高（#597 追加任务），第 ③ 帧底座会**一次**从面板高换成键盘高，
+     * 差值 = 键盘高 − 面板高。这是预期行为：只变一次，且任何一档都不是 0。
+     */
+    const steps = [
+      // ① 面板展开：占住面板内容那一条
+      { label: '① 面板态', panelOpen: true, keyboardHeight: 0 },
+      // ② 聚焦当拍（键盘仍未落地）：仍然是面板态，高度不许动
+      { label: '② 聚焦当拍', panelOpen: true, keyboardHeight: 0 },
+      // ③ 键盘首帧到达：同一帧里收面板、落地键盘高度 —— 交接一次到位
+      { label: '③ 键盘首帧', panelOpen: false, keyboardHeight: 280 },
+    ]
+    const heights = steps.map((step) =>
+      resolveBottomInset({
+        panelOpen: step.panelOpen,
+        keyboardHeight: step.keyboardHeight,
+        panelHeight: panelOn375,
+      }),
+    )
+    expect(heights).toEqual([panelOn375, panelOn375, 280])
+    // 序列里任何一档都不许是 0（0 = 视口凭空放大一整把键盘，就是「当拍塌空」那一档）
+    expect(heights.every((height) => height > 0)).toBe(true)
+    // 反面：这就是「当拍关」会塌成的那一档，钉住禁令
+    expect(
+      resolveBottomInset({ panelOpen: false, keyboardHeight: 0, panelHeight: panelOn375 }),
+    ).toBe(0)
+  })
+})
+
+describe('交接判据：这一帧键盘上报算不算「新占用者到了」（#597，纯函数表驱动）', () => {
+  /**
+   * 光有「面板 → 键盘推迟到键盘帧」还不够（P1 复审阻断）：收键盘动画的每一帧高度都 `> 0`，
+   * 而点「+」当拍就走过 `collapseKeyboard()`，平台紧接着把收键盘拆成若干递减帧。判据里少了
+   * `!closing`，键盘**开着**点「+」会在第一帧（250 那类中间值）被当成「新键盘到了」，面板
+   * 约 40ms 就自己消失、底座一路连降 —— 现象一原样复发，比改前更糟。
+   *
+   * 这张表是纯函数层面的直接钉桩：喂的是 `nextKeyboardInset` 真实产出的三元组，页面里只
+   * 调用这一个判据。**回滚页面那行条件改动，本组必须变红**（`closing: true` 那几行）。
+   */
+  const cases: {
+    label: string
+    panelOpen: boolean
+    closing: boolean
+    inset: number
+    handOff: boolean
+  }[] = [
+    {
+      label: '面板态 + 键盘首帧真落地',
+      panelOpen: true,
+      closing: false,
+      inset: 280,
+      handOff: true,
+    },
+    {
+      label: '面板态 + 更矮的键盘真落地',
+      panelOpen: true,
+      closing: false,
+      inset: 196,
+      handOff: true,
+    },
+    { label: '面板态 + 还没落地', panelOpen: true, closing: false, inset: 0, handOff: false },
+    // ↓ 这一组就是 P1：键盘开着点「+」后，平台报来的收键盘动画帧 —— 一律不许交接
+    {
+      label: '面板态 + 收键盘动画首帧',
+      panelOpen: true,
+      closing: true,
+      inset: 280,
+      handOff: false,
+    },
+    {
+      label: '面板态 + 收键盘动画中间帧',
+      panelOpen: true,
+      closing: true,
+      inset: 250,
+      handOff: false,
+    },
+    { label: '面板态 + 收键盘动画尾帧', panelOpen: true, closing: true, inset: 60, handOff: false },
+    { label: '面板态 + 收干净', panelOpen: true, closing: true, inset: 0, handOff: false },
+    {
+      label: '没有面板：无所谓交不交接',
+      panelOpen: false,
+      closing: false,
+      inset: 280,
+      handOff: false,
+    },
+    { label: '没有面板 + 收键盘', panelOpen: false, closing: true, inset: 250, handOff: false },
+  ]
+
+  for (const item of cases) {
+    test(`交接判据：${item.label} → ${item.handOff}`, () => {
+      expect({
+        handOff: shouldHandOffToKeyboard({
+          panelOpen: item.panelOpen,
+          closing: item.closing,
+          inset: item.inset,
+        }),
+      }).toEqual({ handOff: item.handOff })
+    })
+  }
+
+  test('两条主路径的整条帧序列：键盘开着点「+」一次都不交接，面板态点输入框只交接一次', () => {
+    /**
+     * 路径 A：键盘开着（280）点「+」 —— 点「+」当拍 `collapseKeyboard()` 置 `closing`，平台随后
+     * 报 250 / 180 / 60 / 0。这一段是**旧占用者退场**，面板必须一路留着，底座高度恒为面板高。
+     */
+    const openingPanel = [
+      { inset: 280, closing: true },
+      { inset: 250, closing: true },
+      { inset: 180, closing: true },
+      { inset: 60, closing: true },
+      { inset: 0, closing: false },
+    ]
+    expect(
+      openingPanel.map((frame) => shouldHandOffToKeyboard({ panelOpen: true, ...frame })),
+    ).toEqual([false, false, false, false, false])
+
+    /**
+     * 路径 B：面板态点输入框 —— 直到键盘真落地那一帧才交接。按页面里的真实写法（判据成立就
+     * 立刻把 `panelOpenRef` 写成 false）逐帧模拟，交接**恰好一次**，后续帧不再重复 setState。
+     */
+    const openingKeyboard = [
+      { inset: 0, closing: false },
+      { inset: 280, closing: false },
+      { inset: 280, closing: false },
+    ]
+    let panelOpenRef = true
+    const decisions = openingKeyboard.map((frame) => {
+      const handOff = shouldHandOffToKeyboard({ panelOpen: panelOpenRef, ...frame })
+      if (handOff) panelOpenRef = false
+      return handOff
+    })
+    expect(decisions).toEqual([false, true, false])
+    expect(decisions.filter(Boolean)).toHaveLength(1)
   })
 })
 
@@ -742,8 +1015,42 @@ describe('键盘高度是单一真源（#560）', () => {
       body.indexOf('keyboardHeightRef.current = step.inset'),
     )
     expect(body).toContain('setKeyboardHeight(step.inset)')
-    // 只要真落地了就重指尾行 —— 不是「只在收到 0 时」：开键盘时视口变矮同样要重锚（探针 2）
-    expect(body).toContain('setKeyboardHeight(step.inset) keepTailAnchored()')
+    /**
+     * 只要真落地了就重指尾行 —— 不是「只在收到 0 时」：开键盘时视口变矮同样要重锚（探针 2）。
+     *
+     * 但面板展开期间必须**跳过**（#597）：那一刻底部高度由面板占（`resolveBottomInset` 不看
+     * 正在收缩的键盘），键盘往 0 收的每一档都不改变布局 —— 这几帧再翻尾行锚点，既把翻历史的
+     * 用户拽回底部，又和面板那一次几何变化叠成「连着动两次」。
+     */
+    expect(body).not.toContain('setKeyboardHeight(step.inset) keepTailAnchored()')
+    expect(body).toContain('if (!panelOpenRef.current) keepTailAnchored()')
+    /**
+     * 面板高度**不再**跟着键盘走（#597 追加任务）：三格图标按键盘高撑开会留一片空白。
+     * 键盘事件里那条「见过的最高的键盘」的记录必须整段消失 —— 留着它面板就又被抬回键盘高。
+     */
+    expect(source).not.toContain('panelHeightPxRef')
+    expect(source).not.toContain('setPanelHeightPx')
+    expect(body).not.toContain('if (step.inset > panelHeightPxRef.current) {')
+    /**
+     * **面板 → 键盘**的交接（#597 F1）：收到「键盘真落地第一帧」才收面板，不在聚焦当拍收。
+     * 当拍收的话底座从面板高直落 0（键盘高度此刻还是 0），视口先放大一整把键盘再缩回来。
+     *
+     * 判据本身在纯函数 `shouldHandOffToKeyboard` 里（P1）：页面只许**调用**它，不许自己写
+     * 条件 —— 少一条 `!step.closing` 就会让「键盘开着点『+』」的收键盘动画帧被当成新键盘到了。
+     * 上面那组表驱动直接钉住这条判据，这里钉的是「页面确实走它」。
+     */
+    expect(body).toContain('shouldHandOffToKeyboard({')
+    expect(body).toContain('panelOpen: panelOpenRef.current')
+    expect(body).toContain('closing: step.closing')
+    expect(body).toContain('inset: step.inset')
+    // 自己手写条件的老写法必须消失（回滚成它 = 丢掉 closing 判据）
+    expect(body).not.toContain('if (panelOpenRef.current && step.inset > 0) {')
+    expect(body).toContain('panelOpenRef.current = false')
+    expect(body).toContain('setPanelOpen(false)')
+    // 交接必须在「要不要重指尾行」之前：同一帧里先让位，那句判断才看得见 panelOpenRef=false
+    expect(body.indexOf('shouldHandOffToKeyboard({')).toBeLessThan(
+      body.indexOf('if (!panelOpenRef.current) keepTailAnchored()'),
+    )
     expect(source).toContain('Taro.onKeyboardHeightChange(onHeightChange)')
     expect(source).toContain('Taro.offKeyboardHeightChange(onHeightChange)')
     // 卸载时把哨兵的定时器一起收掉（R2 清理点之二）
@@ -913,8 +1220,20 @@ describe('键盘高度是单一真源（#560）', () => {
   test('用户点输入框＝明确要键盘：收尾尾巴窗口与意图闩立刻作废（B2）', async () => {
     const source = squash(await pageSource())
     const focus = slice(source, 'onFocus={() => {', 'onInput=')
-    // #541：聚焦输入框仍然收起面板
-    expect(focus).toContain('setPanelOpen(false)')
+    /**
+     * #541 的契约（聚焦输入框算点面板外部）仍然成立，但**不在这一拍收**（#597 F1）：
+     * 那一刻键盘高度还是 0，底座会直落到底、视口放大一整把键盘再被顶回来。收起推到了
+     * 键盘真落地第一帧（键盘订阅里那条 `shouldHandOffToKeyboard(...)`）。
+     *
+     * 唯一的例外是**降级路径**（P2）：基础库 < 2.7.0 没有 `onKeyboardHeightChange`，订阅直接
+     * 返回了，没有「键盘落地那一帧」可等 —— 那条路上只能在聚焦当拍收，否则 #541 彻底失效。
+     * 所以这里钉的不是「onFocus 里没有 setPanelOpen」，而是「它只出现在那个降级守卫里、且只有
+     * 一处」：既挡住退回「无条件当拍收」，也挡住删掉降级兜底。
+     */
+    expect(focus).toContain(
+      "if (typeof Taro.onKeyboardHeightChange !== 'function') { keepTailAnchored() setPanelOpen(false) }",
+    )
+    expect(focus.split('setPanelOpen(false)')).toHaveLength(2)
     // 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」会被尾巴判据吞掉，输入栏被新键盘盖住
     expect(focus).toContain('keyboardClosedAtRef.current = 0')
     expect(focus).toContain('keyboardClosingRef.current = false')
@@ -954,17 +1273,98 @@ describe('键盘高度是单一真源（#560）', () => {
     expect(body).toContain('inputFocusedRef.current = false')
   })
 
-  test('输入栏的下内边距由真源派生，收起时不内联（env 安全区照旧生效）', async () => {
+  test('底部底座的让高样式由纯函数派生，收起态交给 scss 的安全区（#577）', async () => {
     const source = squash(await pageSource())
-    // 标签跨多行、`style` 里还有比较运算符，`tag()` 切不准：切到下一个子节点为止
+    // 标签跨多行，`tag()` 切不准：切到下一个子节点为止
     const bar = slice(source, '<View className="conv__bar"', '{recording ?')
-    // 页面里写的字面量就是这个表达式（`${` 拆成两段拼，免得被当成模板串插值）
-    const derived =
-      'keyboardHeight > 0 ? { paddingBottom: `calc($' + '{keyboardHeight}px + 16rpx)` } : undefined'
-    expect(bar).toContain(derived)
-    // 键盘收起时不内联，样式里那条带 safe-area 的内边距照旧生效
-    expect(await styleSource()).toContain(
-      'padding: 16px 24px calc(16px + env(safe-area-inset-bottom))',
+    // 内联样式整段来自纯函数（两条分支、含「安全区只算一次」的口径都在 view.ts 里）：
+    // 页面里不许再自己现算条件，否则「回滚这一行」除了源码钉桩没人测得到
+    expect(bar).toContain('style={bottomReserve.bar}')
+    expect(source).toContain('<View className="conv__bottom" style={bottomReserve.bottom}>')
+    expect(source).toContain('const bottomReserve = resolveBottomReserveStyles(bottomInset)')
+    expect(source).toContain(
+      'const bottomInset = resolveBottomInset({ panelOpen, keyboardHeight, panelHeight,',
+    )
+    // 面板高度从窗口宽度 + 安全区算一次（#597 追加任务）：不再依赖「见过的最高的键盘」
+    expect(source).toContain('const panelHeight = useMemo(')
+    expect(source).toContain(
+      'resolvePanelHeightPx({ windowWidth: info.windowWidth, safeAreaBottom })',
+    )
+    // 收起态不内联任何值，安全区由底座那条 env 内边距照旧生效（#577：只算这一次）
+    const style = squash(await styleSource())
+    expect(slice(style, '.conv__bottom {', '}')).toContain(
+      'padding-bottom: env(safe-area-inset-bottom)',
+    )
+    // 输入栏自己不再算安全区：写了就是跟底座重复计数
+    expect(slice(style, '.conv__bar {', '}')).not.toContain('env(safe-area-inset-bottom)')
+  })
+
+  test('面板是底部底座里的吸底浮层，不在输入栏的文档流里（#597）', async () => {
+    const source = squash(await pageSource())
+    const style = await styleSource()
+    // 结构：面板与输入栏同一个父级（`.conv__bottom`，内联让高由 #577 的纯函数给）
+    expect(source).toContain('<View className="conv__bottom" style={bottomReserve.bottom}>')
+    /**
+     * 面板高度由**内容自己撑开**（#597 追加任务）：不能再内联「上次键盘高」，
+     * 否则三格图标下面又是一片空白（Owner 的演示截图）。
+     */
+    expect(
+      tag(source, '<View className="conv__panel"').startsWith('<View className="conv__panel">'),
+    ).toBe(true)
+    // 面板必须**在输入栏之外**：`.conv__bar` 的片段一直切到面板标签之前，中间得先出现底座的闭合
+    const barToPanel = slice(source, '<View className="conv__bar"', '<View className="conv__panel"')
+    expect(barToPanel).toContain('</View> </View>')
+    // 样式：面板绝对定位贴底、高度由内容决定；容器提供定位父级
+    const panel = style.slice(
+      style.indexOf('.conv__panel {'),
+      style.indexOf('}', style.indexOf('.conv__panel {')),
+    )
+    expect(panel).toContain('position: absolute')
+    expect(panel).toContain('bottom: 0')
+    // 高度不能写死在样式里（底座让位带的高度是运行期按窗口宽度 / 安全区算的）
+    expect(panel).not.toContain('height:')
+    expect(
+      style.slice(
+        style.indexOf('.conv__bottom {'),
+        style.indexOf('}', style.indexOf('.conv__bottom {')),
+      ),
+    ).toContain('position: relative')
+    // 流内块时代的 `margin-top` 会把面板从底边顶开，与内联高度叠加就是一条缝
+    expect(panel).not.toContain('margin-top')
+  })
+
+  test('面板落地后按「展开当拍是否贴底」再锚一次尾行（#597 追加任务）', async () => {
+    /**
+     * `togglePanel` 里那次 `keepTailAnchored()` 跑在 `setPanelOpen` **之前**，锚的是「面板还没
+     * 占位」的旧几何；面板一落地消息流又矮一截，最后一条就被输入栏截掉了。所以展开当拍记一份
+     * 贴底快照，等面板几何落地那一次量测再按它补锚一次。
+     *
+     * 记的必须是**判据**：翻历史翻到一半的人，展开面板后不许被拽回底部（#597 现象三）。
+     */
+    const source = squash(await pageSource())
+    // 快照本身要有存放处
+    expect(source).toContain('const panelOpenStickRef = useRef(false)')
+    const toggle = slice(source, 'const togglePanel = () => {', 'const dismissPanel = () => {')
+    // 只在**展开**分支里记（收起不需要：视口变高不会截断尾行）
+    expect(toggle).toContain('panelOpenStickRef.current = stickBottomRef.current')
+    expect(toggle.indexOf('panelOpenStickRef.current = stickBottomRef.current')).toBeLessThan(
+      toggle.indexOf('setPanelOpen(!panelOpen)'),
+    )
+    // 落地后取走标志：三个条件缺一不可（是面板引起的几何变化 / 面板确实开着 / 当时贴底）
+    const measure = slice(
+      source,
+      'const panelTransition = panelGeomRef.current',
+      'bottomGapAllowanceRef.current = mergeViewportShrink({',
+    )
+    expect(measure).toContain(
+      'const reopenTailAnchor = panelTransition && panelOpenRef.current && panelOpenStickRef.current',
+    )
+    expect(measure).toContain('if (reopenTailAnchor) panelOpenStickRef.current = false')
+    // 补锚必须发生在**量完几何之后**：这一帧的视口才是最终几何
+    const exec = slice(source, 'const reopenTailAnchor', '}, [keyboardHeight, panelOpen')
+    expect(exec).toContain('if (reopenTailAnchor) keepTailAnchored()')
+    expect(exec.indexOf('writeInputRowPx(inputHeight)')).toBeLessThan(
+      exec.indexOf('if (reopenTailAnchor) keepTailAnchored()'),
     )
   })
 
@@ -1010,14 +1410,15 @@ describe('键盘高度是单一真源（#560）', () => {
     /**
      * scss 侧同样钉住：`conv__rowwrap` 是「按住说话」的定位父级；`.conv__hold` 改成盖满整行
      * 的绝对定位块、**不再写死 68**（否则多行草稿切语音时手势区矮一截）；输入框的
-     * `min-height: 68px` 保留 —— 单行时输入栏高度必须还是这个自然高。
+     * `min-height` 保留 —— 单行时输入栏高度必须还是「控件高」这个数（#577 起走 token，
+     * 与三颗钮同源，见 `conversation-bottom-bar-layout.test.ts`）。
      */
     const style = squash(await styleSource())
     expect(slice(style, '.conv__rowwrap {', '}')).toContain('position: relative')
     const holdStyle = slice(style, '.conv__hold {', '&:active')
     expect(holdStyle).toContain('position: absolute')
     expect(holdStyle).not.toContain('height: 68px')
-    expect(slice(style, '.conv__input {', '}')).toContain('min-height: 68px')
+    expect(slice(style, '.conv__input {', '}')).toContain('min-height: $bar-control-px')
   })
 
   test('发送清空输入后，输入行高度真源跟着回落（否则下一轮切语音又把消息流顶矮一截）', async () => {
