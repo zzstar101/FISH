@@ -162,9 +162,10 @@ describe('他人主页接线（#581）', () => {
       body.indexOf('mergeSegmentPage(prev, next, cursor)'),
     )
     // 段级 404（读取层把 404 折成 null）**只降级这一段**：整页 notFound 会把 ScrollView
-    // 连页头两格一起卸载，切一次段就丢掉整页（#598）
+    // 连页头两格一起卸载，切一次段就丢掉整页（#598）。读取层没把码交上来，所以只写段内
+    // `failed`，不带 `error`（端上不许自造码，见「段级 404 只报中性段内失败」那条）
     expect(body).not.toContain("setLoadState('notFound')")
-    expect(slice(body, 'if (next === null) {', 'return')).toContain('failed: true, error: gone')
+    expect(slice(body, 'if (next === null) {', 'return')).toContain('failed: true, error: null')
 
     // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据
     // 之前；#598 复审 F1 起代号顺带留在 `sent` 里，供 await 之后比对（见「切段自愈」那组）
@@ -379,15 +380,18 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(body).not.toContain('console.warn(')
   })
 
-  test('段级 404 用端上自造的码，不借服务端的 USER_NOT_FOUND', async () => {
-    // `features/user/api.ts` 已把 404 折成 `null`，服务端的码到不了这一层：借服务端那个码会
-    // 把「页主注销」和「这段列表不可见」混成一句误导诊断（复审 F6）
+  test('段级 404 只报中性段内失败：不自造错误码、不摆 HTTP 状态', async () => {
+    // `features/user/api.ts` 已把 404 折成 `null`（`code` / `status` 到不了这一层）。
+    // 修复前这一支自造 `{ code: 'LISTING_NOT_FOUND', status: 404 }`，页面文案于是摆出
+    // 「错误码 LISTING_NOT_FOUND 404」—— 一个服务端从没说过的码，配一个凭空断言的 HTTP 状态。
     const body = slice(await page, 'const loadSegment = useCallback(', 'const items = page.items')
-    expect(body).toContain("code: 'LISTING_NOT_FOUND'")
-    expect(body).not.toContain("'USER_NOT_FOUND'")
-    // 只钉常量名是假绿：把这一支整个退回 `setLoadState('notFound')` 时上面两条仍会绿。
-    // 真正的验收③是「404 只降级这一段列表」，所以必须钉住它写的是段内 `failed` + 码。
-    expect(slice(body, 'if (next === null) {', 'return')).toContain('failed: true, error: gone')
+    expect(body).not.toContain('LISTING_NOT_FOUND')
+    expect(body).not.toContain('USER_NOT_FOUND')
+    // 只钉「没有自造码」还不够：把这一支整个退回 `setLoadState('notFound')` 也照样绿。
+    // 真正的验收③是「404 只降级这一段列表」，所以还要钉住它写的是段内 `failed`、不带码。
+    const branch = slice(body, 'if (next === null) {', 'return')
+    expect(branch).toContain('failed: true, error: null')
+    expect(body).not.toContain("setLoadState('notFound')")
   })
 
   test('续页失败留一个可点的出口：列表尾部换成带码的重试行（复审 M1）', async () => {
@@ -398,6 +402,16 @@ describe('切段自愈与段级失败（#598）', () => {
     expect(retry).toContain('void loadSegment(page.nextCursor)')
     expect(retry).toContain(`${'${'}segmentErrorSuffix(page.error)}`)
     expect(retry).toContain('没拉到更多')
+  })
+
+  test('续页重试行只在按压时变淡：`--tap` 只能挂 `hoverClass`，不许进 `className`', async () => {
+    // 修复前：这一行的 `className` 同时带 `uhome__list-end--tap`，而样式是
+    // `.uhome__list-end--tap { opacity: 0.6 }`（没有 `:active` 之类的前置条件）⇒ 这一行
+    // **常驻** 0.6 透明度，按压反而看不出变化。同页的 `.uhome__stat--tap` 是正确写法：
+    // 只挂 `hoverClass`，由宿主在按压期间加类。
+    const retry = slice(await page, 'page.failed && items.length > 0 ? (', "end === 'end'")
+    expect(retry).toContain('hoverClass="uhome__list-end--tap"')
+    expect(retry).not.toMatch(/className="[^"]*--tap/)
   })
 
   test('接线：段失败后滚底不再重打同一个游标', async () => {

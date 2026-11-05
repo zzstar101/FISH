@@ -37,7 +37,7 @@ import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
 import { userListEnd } from './list-end'
-import type { Segment, SegmentErrorInfo, SegmentPage } from './segment-page'
+import type { Segment, SegmentPage } from './segment-page'
 import {
   emptyPage,
   firstPageOf,
@@ -199,12 +199,12 @@ export default function UserHome() {
           // 段级 404（页主在这一步注销 / 该段不可见）：**只降级这一段**。
           // 不能整页退到 notFound —— 那会把 `ScrollView` 连页头那两格一起卸载，用户切一次段
           // 就丢掉整页，且 `loadState` 成了终态、补拉 effect 恒假，怎么切都出不来（#598）。
-          // 码是**端上自造**的（`features/user/api.ts` 已把 404 折成 `null`，服务端的码到不了
-          // 这里），不借服务端那个 `USER_NOT_FOUND` 用 —— 借了会把「页主注销」与「这段列表
-          // 不可见」混成一句误导诊断（#598 复审 F6；口径另开单）。
-          const gone: SegmentErrorInfo = { code: 'LISTING_NOT_FOUND', status: 404 }
-          console.error('[miniapp] 他人主页：该段列表 404', seg, gone.code, gone.status)
-          setPage((prev) => ({ ...prev, loading: false, failed: true, error: gone }))
+          // 码报不出来：`features/user/api.ts` 已把 404 折成 `null`，服务端的 `code` / `status`
+          // 到不了这一层。所以这里**只说一句中性的段内失败**，不替服务端编一个码（早前这一支
+          // 自造过一个「列表不存在」的码 + 404，页面于是摆出一个服务端从没说过的码、一个没有
+          // 任何一层真的读到的状态）。诊断留给 Console。
+          console.error('[miniapp] 他人主页：该段列表 404（该段不可见），按段内失败处理', seg)
+          setPage((prev) => ({ ...prev, loading: false, failed: true, error: null }))
           return
         }
         setPage((prev) => ({
@@ -1211,7 +1211,7 @@ export default function UserHome() {
                 这里就地给一行可点的重试：`nextCursor` 还在，点一下就是重打同一游标。 */}
             {page.failed && items.length > 0 ? (
               <View
-                className="uhome__list-end uhome__list-end--tap"
+                className="uhome__list-end"
                 hoverClass="uhome__list-end--tap"
                 onClick={() => void loadSegment(page.nextCursor)}
               >
