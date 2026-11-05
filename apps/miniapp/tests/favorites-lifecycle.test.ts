@@ -156,6 +156,29 @@ async function settle() {
   for (let i = 0; i < 20; i++) await Promise.resolve()
   render()
 }
+/** 页面上所有字符串（标题、正文、提示）—— 用来确认没有任何一句被画出来 */
+function pageText(): string[] {
+  return elements().flatMap((element) => {
+    const own = [element.props.text, element.props.title].filter(
+      (value): value is string => typeof value === 'string',
+    )
+    const children = element.props.children
+    if (typeof children === 'string') return [...own, children]
+    if (Array.isArray(children)) {
+      return [...own, ...children.filter((child): child is string => typeof child === 'string')]
+    }
+    return own
+  })
+}
+function hasRetry() {
+  return elements().some((element) => element.props.actionText === '重试')
+}
+function skeletonShown() {
+  return elements().some((element) => element.props.className === 'fav__skeleton')
+}
+function rowCount() {
+  return elements().filter((element) => element.props.className === 'fav__item').length
+}
 function selectAll() {
   click(byClass('fav__manage'))
   click(byClass('fav__all'))
@@ -201,31 +224,99 @@ test('hiding without unmount retires a batch and return permits a new batch', as
   expect(toasts).toEqual(['已取消 2 件收藏'])
 })
 
-test('return during detail favorite write offers visible retry and recovers after settlement', async () => {
+test('return during a detail favorite write re-reads after it settles instead of painting an error', async () => {
+  let reads = 0
+  let finish = () => {}
+  request = async (_path, options) => {
+    if (options?.method === 'DELETE') {
+      return new Promise((resolve) => {
+        finish = () => resolve({ favorited: false })
+      })
+    }
+    reads += 1
+    return response
+  }
   render()
   didShow()
   await settle()
-  expect(elements().filter((element) => element.props.className === 'fav__item')).toHaveLength(2)
+  expect(rowCount()).toBe(2)
   didHide()
-  let finish = () => {}
-  request = async (_path, options) =>
-    options?.method === 'DELETE'
-      ? new Promise((resolve) => {
-          finish = () => resolve({ favorited: false })
-        })
-      : response
   const mutation = setFavorite(required(response.items[0]).listing.id, false)
   didShow()
   await settle()
-  const retry = elements().find((element) => element.props.actionText === '重试')
-  expect(retry).toBeDefined()
+  // 读请求被本页自己的写操作挡掉：服务端并没有失败，不能画失败态 / 重试按钮
+  expect(pageText().filter((text) => text.includes('收藏正在更新'))).toEqual([])
+  expect(pageText().filter((text) => text.includes('收藏没读出来'))).toEqual([])
+  expect(hasRetry()).toBe(false)
   expect(cache.read('favorites', account)).toBeNull()
+  // 首屏不能停在骨架屏上：写落定后自己补读，补读的才是这一屏的数据
+  expect(skeletonShown()).toBe(true)
   finish()
   await mutation
-  click(required(retry), 'onAction')
   await settle()
-  expect(elements().filter((element) => element.props.className === 'fav__item')).toHaveLength(2)
-  expect(elements().some((element) => element.props.actionText === '重试')).toBe(false)
+  expect(reads).toBe(2)
+  expect(rowCount()).toBe(2)
+  expect(hasRetry()).toBe(false)
+  expect(skeletonShown()).toBe(false)
+  expect(cache.read('favorites', account)?.items).toHaveLength(2)
+})
+
+test('successive writes cannot abandon the first screen on its skeleton', async () => {
+  let reads = 0
+  request = async () => {
+    reads += 1
+    if (reads <= 2) {
+      // 每次读都撞上一次「刚结束的写操作」：这次读的结果不可信，必须补读
+      const finish = cache.startMutation(['favorites'])
+      finish()
+    }
+    return response
+  }
+  render()
+  await settle()
+  expect(reads).toBe(3)
+  expect(rowCount()).toBe(2)
+  expect(skeletonShown()).toBe(false)
+  expect(hasRetry()).toBe(false)
+  expect(cache.read('favorites', account)?.items).toHaveLength(2)
+})
+
+test('a fenced read is not re-issued once the page is left', async () => {
+  let reads = 0
+  let finishWrite = () => {}
+  request = async () => {
+    reads += 1
+    // 这一次读在飞的时候有本页写操作在跑（例如从详情页返回时刚点了收藏）
+    if (reads === 2) finishWrite = cache.startMutation(['favorites'])
+    return response
+  }
+  render()
+  await settle()
+  expect(reads).toBe(1)
+  didHide()
+  didShow()
+  await settle()
+  expect(reads).toBe(2)
+  didHide() // 又一次离开本页：这一轮读与它的补读都不再属于当前屏幕
+  finishWrite()
+  await settle()
+  expect(reads).toBe(2)
+  expect(hasRetry()).toBe(false)
+})
+
+test('a real read failure keeps the rows already on screen', async () => {
+  render()
+  await settle()
+  expect(rowCount()).toBe(2)
+  request = async () => {
+    throw new Error('request:fail')
+  }
+  didHide()
+  didShow()
+  await settle()
+  expect(rowCount()).toBe(2)
+  expect(hasRetry()).toBe(false)
+  expect(pageText().some((text) => text.includes('网络不太好，收藏没读出来'))).toBe(true)
   expect(cache.read('favorites', account)?.items).toHaveLength(2)
 })
 

@@ -228,56 +228,76 @@ export default function Favorites() {
    */
   const startLoad = useCallback(async (): Promise<FavoritesLoad | null> => {
     if (removingRef.current) return null
-    const ticket = listSnapshots.begin('favorites', userIdRef.current)
-    if (!ticket) return null
-    if (displayedRevision.current !== listSnapshots.revision('favorites')) {
-      setItems([])
-      setTotal(0)
-      hasData.current = false
-      displayedRevision.current = listSnapshots.revision('favorites')
-    }
+    /** 换账号 / 卸载 / 被后一次读取顶掉：这一轮读取连同它的补读一起作废 */
     inFlight.current?.cancel()
-    const current = cancellable(
-      () => loadFavorites(() => listSnapshots.isCurrent(ticket)),
-      () => true,
-    )
-    const canApply = () => !current.isCancelled() && listSnapshots.isCurrent(ticket)
-    if (!hasData.current) setLoading(true)
-    inFlight.current = current
-    setError(null)
-    let next: FavoritesLoad | null
-    try {
-      next = await current.promise
-    } catch (caught) {
-      // 已经被后一次读取顶掉 / 已卸载之后才失败的：那次失败不属于这一屏，不写状态
-      if (!canApply()) {
-        if (!current.isCancelled() && listSnapshots.isOwner(ticket)) {
+    /**
+     * 发一次请求并落地它的结果。
+     *
+     * 被**本页写操作**作废的读请求，其结果不可信：`listSnapshots.startMutation` 在写操作
+     * 期间挡住 `favorites` 作用域的读，写落定又作废一次（见 `@/features/favorites/api` 的
+     * 「取消收藏」与详情页的收藏开关）。但**服务端并没有失败** —— 不能把它画成
+     * 「服务端失败 / 请稍后重试」，也不能就这么丢掉让首屏一直停在骨架屏上。等那次写落定后
+     * 自己再要一次；补读又被新的写操作挡掉就继续等（订单列表 `useOrderList` 同款口径）。
+     */
+    const load = async (): Promise<FavoritesLoad | null> => {
+      const ticket = listSnapshots.begin('favorites', userIdRef.current)
+      if (!ticket) return null
+      if (displayedRevision.current !== listSnapshots.revision('favorites')) {
+        setItems([])
+        setTotal(0)
+        hasData.current = false
+        displayedRevision.current = listSnapshots.revision('favorites')
+      }
+      const current = cancellable(
+        () => loadFavorites(() => listSnapshots.isCurrent(ticket)),
+        () => true,
+      )
+      /**
+       * 这一份结果还属于当前这一屏：没被取消（换账号 / 卸载），也没被后一次读取顶掉
+       * （后一次会 `cancel()` 它并把 `inFlight` 换成自己）。换账号后迟到的补读因此不会落地。
+       */
+      const live = () => !current.isCancelled() && inFlight.current === current
+      if (!hasData.current) setLoading(true)
+      inFlight.current = current
+      setError(null)
+      let next: FavoritesLoad | null
+      try {
+        next = await current.promise
+      } catch (caught) {
+        if (!live()) return null
+        // 真失败（网络 / 服务端 / 契约解析）：照旧把失败态交给页面
+        if (listSnapshots.isCurrent(ticket)) {
           setLoading(false)
-          setError('收藏正在更新，请稍后重试')
+          setError(failureText(caught))
+          return null
         }
-        return null
+        // 被本页写操作挡掉 / 作废：结果不可信，但服务端没有失败，等写落定再读
+        if (!listSnapshots.isOwner(ticket)) return null
+        await listSnapshots.waitForWrites('favorites')
+        // 等的过程里换了账号 / 卸载 / 又有更新的读取：交给它们，别抢着落地
+        if (!live()) return null
+        return load()
       }
+      // `null` = 已被取消（换账号 / 卸载 / 被后一次读取顶掉）：整份结果丢弃，不写状态
+      if (next === null) return null
+      if (!live()) return null
+      if (!listSnapshots.isCurrent(ticket)) {
+        // 写操作在读到一半时开始（或刚结束）：这份结果可能早于那次写，不能落盘也不能上屏
+        if (!listSnapshots.isOwner(ticket)) return null
+        await listSnapshots.waitForWrites('favorites')
+        if (!live()) return null
+        return load()
+      }
+      if (next.snapshot) listSnapshots.write(ticket, next.snapshot)
+      hasData.current = true
+      setItems(next.items)
+      setTotal(next.total)
       setLoading(false)
-      setError(failureText(caught))
-      return null
+      // 列表换了一茬，旧的勾选不再对得上任何一行（刷新后还留着勾是「选了不存在的东西」）
+      setSelected([])
+      return next
     }
-    // `null` = 已被取消（换账号 / 卸载 / 被后一次读取顶掉）：整份结果丢弃，不写状态
-    if (next === null) return null
-    if (!canApply()) {
-      if (!current.isCancelled() && listSnapshots.isOwner(ticket)) {
-        setLoading(false)
-        setError('收藏正在更新，请稍后重试')
-      }
-      return null
-    }
-    if (next.snapshot) listSnapshots.write(ticket, next.snapshot)
-    hasData.current = true
-    setItems(next.items)
-    setTotal(next.total)
-    setLoading(false)
-    // 列表换了一茬，旧的勾选不再对得上任何一行（刷新后还留着勾是「选了不存在的东西」）
-    setSelected([])
-    return next
+    return load()
   }, [])
 
   useEffect(() => {
