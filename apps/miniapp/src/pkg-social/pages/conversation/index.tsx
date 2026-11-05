@@ -91,6 +91,7 @@ import {
   isLatestPageLoad,
   isLatestPresencePoll,
   isNearBottom,
+  isPanelDismissTap,
   isStaleMediaIdentity,
   isStaleMediaTask,
   keepRecalledMediaTombstones,
@@ -227,6 +228,24 @@ const KEYBOARD_SENTINEL_MS = 500
 function touchClientY(event: unknown): number {
   const touch = (event as { touches?: Array<{ clientY?: number }> } | null)?.touches?.[0]
   return typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN
+}
+
+/**
+ * 取第一个触点的 clientX/clientY（拿不到就给 NaN）。
+ *
+ * 与 `touchClientY` 分开是因为**松手**那一拍触点已经在 `changedTouches` 里、`touches` 空了：
+ * 「点消息区收面板」的判据要比较按下与松手两个坐标（见 `isPanelDismissTap`）。
+ */
+function touchPoint(event: unknown): { x: number; y: number } {
+  const payload = event as {
+    touches?: Array<{ clientX?: number; clientY?: number }>
+    changedTouches?: Array<{ clientX?: number; clientY?: number }>
+  } | null
+  const touch = payload?.touches?.[0] ?? payload?.changedTouches?.[0]
+  return {
+    x: typeof touch?.clientX === 'number' ? touch.clientX : Number.NaN,
+    y: typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN,
+  }
 }
 
 export default function Conversation() {
@@ -478,6 +497,11 @@ export default function Conversation() {
    * 展开时没贴底的人保持 `false`，落地后不会被拽回底部。
    */
   const panelOpenStickRef = useRef(false)
+  /**
+   * 手指落在消息流上的起点（#597）：面板展开时靠**松手那一拍**判断这次触摸是「点空白」
+   * 还是「拖动滚动」。按下时记、松手时取走并清空 —— 不清就会把上一次的坐标带到下一次手势。
+   */
+  const scrollTouchStartRef = useRef<{ x: number; y: number } | null>(null)
   /**
    * 意图闩的起点高度与「收尾尾巴」记录（#560 R1/R3）：`closing` 是**页面要求收起**的意图，
    * 不是从高度符号反推的 —— 安卓上切输入法 / 候选栏伸缩会让键盘「没关、只是变矮」，拿
@@ -2699,13 +2723,36 @@ export default function Conversation() {
     setPanelOpen(!panelOpen)
   }
 
-  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541/#597）—— 消息流的 `onTouchStart`、
+  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541/#597）—— 消息流的点击、
    *  页头空白、点面板里的格子。聚焦输入框也收，但要等键盘落地（交接在键盘订阅里，见那里）。
    *  不碰已输入文字、不 blur 输入框；底部底座从面板高缩回键盘高
    *  （键盘没开就是 0），位置仍交给同一个守卫决定（贴底继续贴底，翻历史原地不动）。 */
   const dismissPanel = () => {
     keepTailAnchored()
     setPanelOpen(false)
+  }
+
+  /**
+   * 消息流上的手指落下：**只记起点，不收面板**（#597）。
+   *
+   * 收起挂在触摸开始上是不行的：手指一落下就是滚动的第一帧，那一刻收面板 = 面板展开期间
+   * 根本滚不动（底座从面板高缩回 0，消息流在手指还没动起来时被撑高一条面板）。判据挪到
+   * 松手（`endScrollTouch`），按下这里只留坐标。
+   */
+  const beginScrollTouch = (event: unknown) => {
+    scrollTouchStartRef.current = touchPoint(event)
+  }
+
+  /**
+   * 消息流上松手：位移在容差内才算「点了一下空白」→ 收面板；拖动（滚动）一项都不做。
+   *
+   * 判据在 `view.ts` 的 `isPanelDismissTap()` 里（与「滚动第一帧不许收面板」一起被单测钉住）。
+   * 取走起点即清空：同一次手势只判一次，也不把陈旧坐标留给下一次。
+   */
+  const endScrollTouch = (event: unknown) => {
+    const start = scrollTouchStartRef.current
+    scrollTouchStartRef.current = null
+    if (isPanelDismissTap(start, touchPoint(event))) dismissPanel()
   }
 
   const openListing = () => {
@@ -3770,10 +3817,11 @@ export default function Conversation() {
           靠 `tick % 2` 的 0.5px 交替保证同一位置也能再下发，属性值不变则不会重新应用，
           所以它长期在场也不会盖住 `scrollIntoView` 的后续定位（两者并存的优先级只能端上验）
 
-          面板展开时由 `onTouchStart` 收起面板（#597）：改前这里被一层透明遮罩盖住，面板
+          面板展开时由消息流自己的**点击**收起（#597）：改前这里被一层透明遮罩盖住，面板
           展开期间消息流**滑不动**、长按/点图也拿不到触摸。现在遮罩没了，触摸先落到消息流
-          自己身上 —— 手指一动就收面板，这一下**不**拦着滚动（滚动仍由 ScrollView 处理），
-          手指不动只点一下就是「点空白收起」。
+          自己身上 —— 拖动照常滚动，松手时位移在容差内才算「点了一下空白」并收起面板。
+          **收起判据不能在触摸开始那一拍**：手指落下就是滚动的第一帧，那一刻收面板等于面板
+          展开期间滑不动（底座缩回 0、消息流被撑高一条面板），也是 #597 现象一的另一种形态。
           只在展开时挂：收起态传 `undefined`，回调不出现在事件表里。 */}
       <ScrollView
         className="conv__scroll"
@@ -3782,7 +3830,8 @@ export default function Conversation() {
         scrollIntoView={scrollTarget}
         scrollWithAnimation={animateScroll}
         onScroll={onScroll}
-        onTouchStart={panelOpen ? dismissPanel : undefined}
+        onTouchStart={panelOpen ? beginScrollTouch : undefined}
+        onTouchEnd={panelOpen ? endScrollTouch : undefined}
       >
         <View className="conv__list">
           {/* 更早一页：文本与媒体两条流各有游标，任一还有更早就给入口（#67 N3） */}
@@ -4062,10 +4111,12 @@ export default function Conversation() {
       </ScrollView>
 
       {/*
-        底部底座（#597）：输入栏 + 「+」面板是**同一块屏幕底部区域**的两个占用者 —— 键盘开着
-        时由输入栏的下内边距占，面板开着时由面板自己占，两者高度同为
-        `resolveBottomInset()`（面板高度 = 上次键盘高度）。等高了，切换时底座总高不变，
-        `.conv__scroll` 的高度一次都不用变，消息流既不位移也不被裁（#597 三现象的根）。
+        底部底座（#597）：输入栏 + 「+」面板是**同一块屏幕底部区域**的两个占用者 ——
+        键盘开着时由输入栏的下内边距占，面板开着时由面板自己占，高度**都由**
+        `resolveBottomInset()` 给出：键盘态 = 键盘高度，面板态 = 面板内容高（+ 安全区）。
+        面板不再与键盘等高，所以互切时底座会**一次**变高/变矮（差一个「键盘高 − 面板高」）——
+        这是 #597 追加任务的取舍（宁可让消息流一次性让位，也不留一片空面板），关键在于
+        **只变一次**且任何一档都不塌成 0。
 
         结构边界（#577 会基于本容器做输入栏的跨端高度/安全区统一）：本容器只管「贴底 +
         给面板当定位父级 + 提供粘滞层」，输入栏自己的几何（内边距、48/68px 尺寸、安全区）

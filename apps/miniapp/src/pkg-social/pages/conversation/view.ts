@@ -1287,9 +1287,10 @@ export const BOTTOM_SLACK_PX = 24
  * - `PANEL_PADDING_RPX`：`.conv__panel` 的 `padding: 24px 28px calc(24px + env(...))` 上下两段
  * - `PANEL_DISC_RPX`：`.conv__ptile-disc` 的 `width/height: 104px`
  * - `PANEL_TILE_GAP_RPX`：`.conv__ptile` 的 `gap: 12px`（圆钮与文字之间）
- * - `PANEL_LABEL_RPX`：`.conv__ptile-label` 的 `font-size: 22px` 一行文字。scss 没写
- *   `line-height`，按常见的 1.36 倍字号估成 30；误差几个 rpx 由面板上方那条 `$bar-gap-px`
- *   缝隙吸收，面板本身用 `height: auto` 撑开，绝不会因此裁掉格子。
+ * - `PANEL_LABEL_RPX`：`.conv__ptile-label` 的**行盒**高度，即 `line-height: 30px`
+ *   （字号 22px 配 1.36 倍行距）。这一条**必须由 scss 写死**：不写 `line-height` 时行盒落在
+ *   `normal` 上，实际高度取决于端上字体（iOS 苹方 / 安卓各一套），1.36 倍只是个估值 ——
+ *   那这里算出来的就不是「面板真实高度」，让位带上方那条 16px 缝隙剩多少全看机型。
  */
 export const PANEL_PADDING_RPX = 48
 export const PANEL_DISC_RPX = 104
@@ -1365,6 +1366,33 @@ export function shouldHandOffToKeyboard(input: {
   if (!panelOpen) return false
   if (closing) return false
   return inset > 0
+}
+
+/** 点击与拖动的分界（设备 px）：松手时位移超出它就算「用户在滚动」，不算点击 */
+export const PANEL_DISMISS_TAP_SLOP_PX = 8
+
+/**
+ * 一次松手算不算「点了一下消息区」（设备 px）。
+ *
+ * 面板展开时靠消息流的触摸收起它（#541/#597），但收起**不能挂在触摸开始上**：手指一落下
+ * 就是滚动的第一帧，那一刻收面板等于「面板展开期间滑不动」—— 底座从面板高缩回 0，消息流
+ * 在手指还没动起来时被撑高一条面板，正是 #597 现象二与现象一叠在一起。所以判据落在**松手**
+ * 那一拍：位移在容差内才算点击（收起），拖动就交给 ScrollView 照常滚动。
+ *
+ * 容差按单轴给：一次点击的抖动是两个方向各几 px，取两轴都不过阈值就够了，不必算欧氏距离
+ * （斜着拖 6+6 也正是「有意图的拖动」）。取不到坐标（老基础库 / 事件被吞）时一律返回 `false`
+ * —— 拿不到起点就不许收，宁可这一次点空白没反应，也不能把滚动误判成点击。
+ */
+export function isPanelDismissTap(
+  start: { x: number; y: number } | null,
+  end: { x: number; y: number } | null,
+): boolean {
+  if (!start || !end) return false
+  // NaN（取不到触点）参与比较恒为 false，这里要的是「不许据此收面板」，正好一致
+  return (
+    Math.abs(end.x - start.x) <= PANEL_DISMISS_TAP_SLOP_PX &&
+    Math.abs(end.y - start.y) <= PANEL_DISMISS_TAP_SLOP_PX
+  )
 }
 
 /**

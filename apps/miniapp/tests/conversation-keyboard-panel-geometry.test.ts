@@ -309,6 +309,15 @@ describe('底部底座的高度真源（#597，纯函数表驱动）', () => {
     expect(disc).toContain(`height: ${PANEL_DISC_RPX}px`)
     expect(tile).toContain(`gap: ${PANEL_TILE_GAP_RPX}px`)
     expect(label).toContain('font-size: 22px')
+    /**
+     * 行盒高度必须由 scss **钉死**成 `PANEL_LABEL_RPX`。
+     *
+     * 不写 `line-height` 时它落在 `normal` 上，实际行盒取决于端上字体（iOS 苹方 / 安卓
+     * 各自一套，差两三 rpx 很常见）—— 那么 `resolvePanelHeightPx()` 算出来的就不是
+     * 「面板的真实高度」，而是按 1.36 倍字号拍的估值：让位带里那条 16px 缝隙最后剩多少
+     * 全看机型。写死之后纯函数与端上几何逐 rpx 对齐，缝隙恒为 16px。
+     */
+    expect(label).toContain(`line-height: ${PANEL_LABEL_RPX}px`)
     // 文字那一行按 1.2~1.6 倍字号估；超出这个区间说明估算离实际太远，该改成读实测
     expect(PANEL_LABEL_RPX).toBeGreaterThanOrEqual(22 * 1.2)
     expect(PANEL_LABEL_RPX).toBeLessThanOrEqual(22 * 1.6)
