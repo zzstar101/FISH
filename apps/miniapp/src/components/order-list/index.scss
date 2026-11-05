@@ -356,11 +356,11 @@
 }
 
 /**
- * 卡尾动作钮。高度与左右内边距一律取 `btn-sm` 的 S 档（68rpx / 26rpx，见 DESIGN.md §3.1），
- * **不要再写一遍 `height: 68px`** —— 在 `@include` 之后重复声明与 mixin 完全相同的值，Taro 的
- * pxtransform 会漏掉一次换算，产物里会同时留下 `height:68rpx;height:68px`，
- * 后者以设备 px 生效（按钮变成 68pt 高，是设计稿的两倍）。
- * 间距按稿取 6pt（mixin 给的是 5pt，值不同，能正常换算）。
+ * 卡尾动作钮。高度与左右内边距一律取 `btn-sm` 的 S 档（`--btn-h-sm` / `--btn-px-sm`，
+ * 见 DESIGN.md §3.1），这一层只补间距。
+ * **不要在 `@include` 之后重复声明高度或内边距** —— 与 mixin 同值的裸 px 会撞上 Taro
+ * pxtransform 的换算漏判，产物里同时留下 `height:68rpx;height:68px`，后者以设备 px
+ * 生效（按钮变成 68pt 高，是设计稿的两倍）。页面上要换档就换档位令牌，不要覆盖。
  */
 .orders__btn {
   @include btn-sm;

@@ -150,14 +150,15 @@
   padding: 8px 0;
 }
 
-/* 设计稿 `.cat-chip`：浅蓝底胶囊，选中转深墨（图标用滤镜转白，与许愿页筛选一致） */
+/* 设计稿 `.cat-chip`：浅蓝底胶囊，选中转深墨（图标用滤镜转白，与许愿页筛选一致）。
+   可点选 chip → DESIGN.md §3.1 的 S 档：高 68、左右内边距 26、胶囊圆角。 */
 .wp__cat {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
   gap: 10px;
-  height: 64px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   border: 2px solid transparent;

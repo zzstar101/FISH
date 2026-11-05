@@ -560,9 +560,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
-  padding: 0 44px;
-  border-radius: 44px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   background: var(--brand-deep);
   color: var(--surface);
   font-size: var(--fs-body);

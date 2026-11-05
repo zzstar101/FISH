@@ -4,11 +4,12 @@
  * 举报用户（稿 `小程序1版举报用户.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
  * 与 `pages/report-listing` 同一套版式（ NavBar glass 吸顶 + 渐变页头 + 表单卡 +
- * 等宽胶囊 + 键值行），差异只在对象卡：用户是**圆形头像 + 昵称**，没有价格行。
+ * 按内容取宽的胶囊 + 键值行），差异只在对象卡：用户是**圆形头像 + 昵称**，没有价格行。
  * 两页 scss 刻意不共享（weapp 页面样式本就按页隔离，共用反而把两页耦死）。
  *
- * 胶囊不放图标：标签最长 7 个字（辱骂或恶意行为），图标 + 7 字会撑爆三列等宽
- * 胶囊体；纯文字 12pt 不换行刚好留出边距（Owner 2026-09-26 验收口径）。
+ * 胶囊不放图标：标签最长 7 个字（辱骂或恶意行为），图标 + 7 字会撑爆等宽列。
+ * 排版从「等宽三列」改成「按内容取宽 + 自动换行」（#630），理由同 report-listing：
+ * 等宽列装不下 §3.1 要求的 26rpx 内边距，原先靠 8rpx 贴边硬塞。
  */
 
 .rpu {
@@ -505,6 +506,10 @@
   padding: 4px 16px;
 }
 
+/* 编号 + 复制钮：`align-items: center` 让编号文字与 S 档复制钮（68）垂直居中；
+   外层 `.rpu__kv` 仍保持 baseline —— 同组的「补充说明」是多行文本，换行时标签要贴
+   首行基线，改成 center 反而会飘。于是这一行因为钮是 68 而比相邻纯文本行略高，
+   由本行的居中承担「同行其它元素也居中」，视觉上标签/编号/钮三者仍是一条中线。 */
 .rpu__kvid {
   flex: 1 1 auto;
   min-width: 0;
@@ -517,8 +522,8 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  height: 48px;
-  padding: 0 18px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);

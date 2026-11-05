@@ -1,7 +1,7 @@
 /**
  * 复用样式组合。页面与组件通过 `@use '@/styles/mixins' as *;` 引入。
  *
- * 只放「反复出现且容易写歪」的组合：卡片、胶囊、玻璃、截断。
+ * 只放「反复出现且容易写歪」的组合：卡片、按钮档位、玻璃、截断。
  * 具体尺寸一律由调用方给，避免这里长成一个万能样式表。
  */
 
@@ -11,28 +11,6 @@
   border: 2px solid var(--border);
   border-radius: $radius;
   box-shadow: var(--shadow-card);
-}
-
-/* 筛选胶囊 / 标签：默认浅玻璃白，按下态是深墨底白字 */
-@mixin chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  height: var(--btn-h-sm);
-  padding: 0 var(--btn-px-sm);
-  border-radius: var(--r-pill);
-  border: 2px solid var(--border);
-  background: rgba(255, 255, 255, 0.74);
-  color: var(--fg);
-  font-size: 26px;
-
-  &.is-on {
-    background: var(--ink);
-    border-color: var(--ink);
-    color: #fff;
-    font-weight: 500;
-  }
 }
 
 /*

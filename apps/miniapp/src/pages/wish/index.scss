@@ -264,8 +264,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 60px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--ink);
   color: #fff;

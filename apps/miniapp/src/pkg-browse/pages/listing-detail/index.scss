@@ -461,7 +461,11 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  /* 排版预算：147.5pt 的行宽要装下 头像 34 + 昵称 ~44 + 本钮 ~41 */
+  /* 排版预算（稿宽 750rpx）：行宽 = 750 − `.detail__seller-section` 左右 padding 40×2 = 670rpx。
+     固定占用 = 头像 68 + 两个 gap 20×2 = 40 + 本钮 ≈ 200（文字「进TA主页」~105 / 图标 24 /
+     gap 6 / 左右内边距 32×2 / 边框 2×2）≈ 308rpx，昵称区还能拿到 ~362rpx。
+     结论：不会溢出 —— 余宽由 `.detail__sinfo`（flex: 1 1 auto; min-width: 0）吸收，
+     昵称再长也只走到 `.detail__snick` 的 ellipsis 收口；本钮 nowrap，内容不换行。 */
   flex: 0 1 auto;
   min-width: 0;
 
@@ -515,7 +519,7 @@
   width: 0;
   min-width: 0;
   height: var(--btn-h-md);
-  padding: 0 28px;
+  padding: 0 var(--btn-px-md);
   border: 2px solid var(--border);
   border-radius: var(--r-pill);
   background: var(--bg);
@@ -655,6 +659,7 @@
 /* S 档（DESIGN.md §3.1）：行内回复行比主输入条小一档，输入框与按钮同高 */
 .detail__cmt-in--reply {
   height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   font-size: 26px;
 }
 

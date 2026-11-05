@@ -4,15 +4,17 @@
  * 举报商品（稿 `小程序1版举报商品.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
  * 结构：NavBar glass（吸顶玻璃栏，居中双色标题，本页只补内容顶部的等高让位）
- * → 渐变页头（随内容滚走）→ 举报对象卡（固定不可改）→ 原因胶囊（5 枚等宽 3+2）
+ * → 渐变页头（随内容滚走）→ 举报对象卡（固定不可改）→ 原因胶囊（内容自适应换行）
  * → 补充说明（200 字计数）→ 隐私提示 + 提交钮 → 成功态 / 只读态复用同一套键值行。
  *
  * 顶部栏吸顶由 `components/nav-bar` 的 glass 变体负责（position: fixed），本页不写
  * 任何 position: fixed / sticky；根节点刻意不写 overflow（会破坏 pageScrollTo 与
  * 下拉刷新，见 `pages/wish/index.scss` 同类说明）。
  *
- * 胶囊不放图标：标签最长 7 个字，图标 + 7 字会撑爆三列等宽（约 102pt）的胶囊体；
- * 纯文字 12pt 不换行刚好留出边距，5 枚大小完全统一（Owner 2026-09-26 验收口径）。
+ * 胶囊不放图标：标签最长 7 个字，图标 + 7 字会撑爆等宽列（约 102pt）。
+ * 排版从「等宽三列」改成「按内容取宽 + 自动换行」（#630）：等宽列只有 ~193rpx，
+ * 装不下 DESIGN.md §3.1 要求的 26rpx 左右内边距（7 字标签需要 224rpx），
+ * 原先是靠 8rpx 贴边内边距硬塞进去的 —— 那正是本次要修的「字顶框边」。
  */
 
 .rpl {
@@ -532,6 +534,10 @@
   padding: 4px 16px;
 }
 
+/* 编号 + 复制钮：`align-items: center` 让编号文字与 S 档复制钮（68）垂直居中；
+   外层 `.rpl__kv` 仍保持 baseline —— 同组的「补充说明」是多行文本，换行时标签要贴
+   首行基线，改成 center 反而会飘。于是这一行因为钮是 68 而比相邻纯文本行略高，
+   由本行的居中承担「同行其它元素也居中」，视觉上标签/编号/钮三者仍是一条中线。 */
 .rpl__kvid {
   flex: 1 1 auto;
   min-width: 0;
@@ -544,8 +550,8 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  height: 48px;
-  padding: 0 18px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);

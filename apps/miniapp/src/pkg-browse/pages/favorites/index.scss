@@ -59,8 +59,8 @@
 .fav__manage {
   display: inline-flex;
   align-items: center;
-  height: 60px;
-  padding: 0 22px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   font-size: 26px;
   font-weight: 600;
   color: var(--brand-deep);

@@ -288,8 +288,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 56px;
-  padding: 0 22px;
+  /* DESIGN.md §3.1 S 档：卡片内小按钮统一 68 / 26，胶囊圆角（原 56 / 22 不在梯上） */
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--brand-deep);
   color: var(--surface);
@@ -821,13 +822,13 @@
   color: var(--danger-ink);
 }
 
-/* 失败重试胶囊：高 24pt，与媒体的上传失败共用 */
+/* 失败重试胶囊：DESIGN.md §3.1 S 档（68 / 26），与媒体的上传失败共用 */
 .conv__retry {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 48px;
-  padding: 0 18px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--danger-weak);
   border: 2px solid var(--danger-line);
