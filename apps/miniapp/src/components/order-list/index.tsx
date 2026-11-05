@@ -387,7 +387,7 @@ export default function OrderList({
         {/*
           接口失败且没有回退 mock：这一页是「加载不出来」，不是「恰好没有订单」。
           但**已经加载好的列表不能因为一次失败就整片消失** —— 下拉刷新失败时
-          `useOrderList` 是保留 `items` 的（keepList 的用意就是别让用户丢掉阅读位置），
+          `useOrderList` 是保留 `items` 的（刷新时保留列表的用意就是别让用户丢掉阅读位置），
           所以这里只在「一条都没有」时用错误态顶替列表，否则把它放在列表上方当一条提示。
         */}
         {!loading && failed ? (

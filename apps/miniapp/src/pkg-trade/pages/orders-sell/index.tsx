@@ -48,12 +48,12 @@ export default function OrdersSell() {
       return
     }
     if (!authedRef.current) return
-    void reload({ keepList: true })
+    void reload()
   })
 
   usePullDownRefresh(() => {
-    // keepList：系统已经拉出原生指示器，不把列表换成骨架屏（否则用户丢掉阅读位置）
-    void reload({ keepList: true }).then(() => Taro.stopPullDownRefresh())
+    // 系统已经拉出原生指示器，`reload` 手里有列表时不换成骨架屏（否则用户丢掉阅读位置）
+    void reload().then(() => Taro.stopPullDownRefresh())
   })
 
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))

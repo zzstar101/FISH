@@ -3,6 +3,9 @@ import type { MessageDto } from '@fish/contracts/chat/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 
+// Domain APIs now invalidate display snapshots through the Taro storage boundary.
+mock.module('@tarojs/taro', () => ({ default: {} }))
+
 /**
  * 「立即购买」提案端点的请求构造与失败映射（对齐 PC buy-dialog 的语义）。
  *
