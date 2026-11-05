@@ -846,6 +846,41 @@ describe('useDidShow 的返回刷新接线（#608）', () => {
   })
 })
 
+/**
+ * `load()` 里消息区落态的位置（#608 审查第 3 条）。
+ *
+ * 判据本身由 `resolveMsgState` 的纯函数用例锁住，但**接线**锁不住：把这一句挪回
+ * `if (!(silent && page.failed))` 守卫里面，纯函数用例照样全绿，而「首屏在途时被刷新
+ * 判过期、随后历史半边失败」那一刻页面会永远停在「正在加载消息…」。同上一段，按仓库既有
+ * 手法读源码文本钉住接线。
+ */
+describe('load() 的消息区落态在守卫之外（#608 审查第 3 条）', () => {
+  const loadBlock = async (): Promise<string> => {
+    const code = await Bun.file(
+      new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url),
+    ).text()
+    const from = code.indexOf('const load = useCallback(')
+    expect(from, '页面里应出现 load 的定义').toBeGreaterThanOrEqual(0)
+    const to = code.indexOf('const loadEarlier = (', from)
+    expect(to, 'loadEarlier 应出现在 load 之后').toBeGreaterThan(from)
+    return code
+      .slice(from, to)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '')
+  }
+
+  test('落态走 resolveMsgState 且写在「silent 失败不覆盖消息」的守卫之外', async () => {
+    const block = await loadBlock()
+    expect(block).toContain('setMsgState((prev) => resolveMsgState(prev, page.failed, silent))')
+    // 老写法（夹在守卫里、silent 失败时状态原样不动）不能回来
+    expect(block).not.toContain("setMsgState(page.failed ? 'failed' : 'ok')")
+    // 位置：守卫体最后一句是游标，落态必须排在它之后（挪回守卫里就会排在前面）
+    expect(block.indexOf('setMsgState((prev) => resolveMsgState')).toBeGreaterThan(
+      block.indexOf('setNextCursor(page.nextCursor)'),
+    )
+  })
+})
+
 describe('DeferredReload 状态机 —— 「发送中返回」延后到发送落定再补刷新（#170 D）', () => {
   /**
    * 走一遍完整回路：发起 n 次发送、再落定 m 次（同一 epoch）。

@@ -821,6 +821,20 @@ export function mergeRefreshedMessages(
 }
 
 /**
+ * 把「更早一页」并入消息流（`loadEarlier` 的落地口径）。
+ *
+ * 抽成纯函数是为了让「同一页被取回两次会不会重复」有用例守着：分页与整页刷新**共用同一个
+ * epoch**，所以刷新在途期间翻的一页不会被判过期 —— 那一页先落地、刷新随后把 `nextCursor`
+ * 写回首屏游标，用户再翻取回的就是同一个游标，同一条消息会第二次进流。
+ * 媒体那一侧一直走 `mergeRefreshedMedia`（本来就是并集），文本这一侧此前是裸拼接。
+ */
+export function mergeEarlierMessages(previous: MessageDto[], incoming: MessageDto[]): MessageDto[] {
+  const seen = new Set(incoming.map((item) => item.id))
+  const carried = previous.filter((item) => !seen.has(item.id))
+  return sortMessages([...incoming, ...carried])
+}
+
+/**
 /**
  * 撤回不可回退：快照里「还没撤回」的那条不能把本地刚落地的撤回碑写回正文。
  *
@@ -1049,7 +1063,7 @@ export type ConvDetailStatus = Exclude<ConvState, 'loading'>
  *
  * 但也不能无条件保留：页面**还没正常显示过**（`loading` / `failed`）时必须如实落
  * 详情结果，否则会停在一个没有重试入口的态上（`loading` 分支不渲染重试钮）。
- * 真被删掉的会话，下一次用户主动进页 / 点重试（非 silent）仍会如实反映。
+ * 而「会话真的没了」这条不以「没读到」为例外 —— 见下面的 `missing` 分支（#608 审查第 1 条）。
  *
  * 抽成纯函数是因为这条判据是 #170 review 的修复点本身 —— 页面组件没有渲染测试
  * 基建，不抽出来就没有任何用例能在它被改坏时变红（`prev` 必须由调用方经
@@ -1061,8 +1075,32 @@ export function resolveConvState(
   detail: ConvDetailStatus,
   silent: boolean,
 ): ConvState {
-  if (!silent || detail === 'ok') return detail
+  /**
+   * `missing` 是**服务端权威结论**（404 `CONVERSATION_NOT_FOUND`：会话已删 / 我已不是参与者，
+   * 服务端刻意不区分），不是「没读到」，所以它照常落地 —— 否则后台刷新每确认一次删除都被
+   * 当成噪声吞掉，一条已经结束的会话能一直留在屏幕上可用（#608 审查第 1 条）。
+   *
+   * 只有 `failed`（没读到）才走下面这条「只做确认、不做降级」。
+   */
+  if (!silent || detail === 'ok' || detail === 'missing') return detail
   return prev === 'ok' ? 'ok' : detail
+}
+
+/** 消息流的页面态（`loading` 是页面自己的在途态；其余两个来自 `loadMessagePage`） */
+export type MsgState = 'loading' | 'ok' | 'failed'
+
+/**
+ * 消息区如何落态：与 `resolveConvState` 同一条「silent 失败只做确认、不做降级」，
+ * 但**不能无条件保留原值**。
+ *
+ * 页面没正常显示过（`loading` / `failed`）时如实落 `failed`：那一次的 `loading` 属于更早
+ * 那次首屏请求，而一次 silent 刷新会把 `epoch` +1 让它的响应判过期 —— 响应永远不再落地，
+ * 状态就卡在 `loading`，而 `loading` 分支（`index.tsx` 的「正在加载消息…」）**没有重试入口**，
+ * 用户只能退页重进（#608 审查第 3 条）。屏幕上已有消息（`ok`）才保留，别把整屏换成错误卡。
+ */
+export function resolveMsgState(prev: MsgState, pageFailed: boolean, silent: boolean): MsgState {
+  if (silent && pageFailed) return prev === 'ok' ? 'ok' : 'failed'
+  return pageFailed ? 'failed' : 'ok'
 }
 
 /**
