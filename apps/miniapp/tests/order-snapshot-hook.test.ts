@@ -224,6 +224,29 @@ test('first screen fenced by a local write leaves the skeleton, then loads inste
   expect(after.loading).toBe(false)
 })
 
+test('successive writes cannot abandon the first screen on its skeleton', async () => {
+  let calls = 0
+  fetchOrders = async () => {
+    calls += 1
+    if (calls <= 2) {
+      const finish = cache.startMutation(['seller'])
+      finish()
+    }
+    return {
+      items: [],
+      truncated: false,
+      failureKind: null,
+      snapshot: { items: [], truncated: false },
+    }
+  }
+  const first = render(buyer, 'seller')
+  await first.reload()
+  const settled = render(buyer, 'seller')
+  expect(calls).toBe(3)
+  expect(settled.loading).toBe(false)
+  expect(settled.failureKind).toBeNull()
+})
+
 test('account and role changes synchronously remove the previous view', () => {
   expect(render().items).toHaveLength(1)
   expect(render(buyer, 'seller').items).toEqual([])

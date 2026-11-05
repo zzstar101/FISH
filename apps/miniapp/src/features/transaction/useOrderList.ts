@@ -123,10 +123,8 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
   userIdRef.current = userId
 
   const reload = useCallback((): Promise<void> => {
-    /**
-     * 发出一次读请求并落地它的结果。被本地写操作挡掉时会再进一次（`attempt` 只在这里自增）。
-     */
-    const load = async (attempt: number): Promise<void> => {
+    /** 被本地写操作作废的读请求，等该作用域写落定后补读。 */
+    const load = async (): Promise<void> => {
       /*
        * 登录态未就绪 / 已退出：**不发请求**。`/transactions` 整条挂在 requireAuth 之下，
        * 这个时点发出去必然 401 —— 演示构建还会被那次 401 退成 mock。页面在
@@ -155,14 +153,13 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
          *
          * 但**服务端并没有失败** —— 不能塞一个 `server` 失败态（页面会显示「服务暂时不可用，
          * 请稍后重试」），也不能就这么丢掉让首屏一直停在骨架屏上。等那次写操作落定后自己再
-         * 要一次。只补一次：第二次仍被挡（同一瞬间又有人开写）就交给下一次页面重拉（下拉刷新 /
-         * 从子页面返回都会重拉），仍然不伪造任何失败。
+         * 要一次。若下一份响应又被新写操作作废，继续等待并补读，不能把首屏遗留在骨架屏。
          */
-        if (!listSnapshots.isOwner(ticket) || attempt > 0) return
+        if (!listSnapshots.isOwner(ticket)) return
         await listSnapshots.waitForWrites(role)
         // 等的过程里换了账号 / 卸载 / 又有更新的请求：交给它们，别抢着落地。
         if (requestId.current !== id) return
-        return load(attempt + 1)
+        return load()
       }
       /*
        * 失败时**不动** `items` / `truncated`：`loadOrders` 失败一律给空数组，直接写进去
@@ -179,7 +176,7 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
       setFailureKind(result.failureKind)
       setLoading(false)
     }
-    return load(0)
+    return load()
   }, [role])
 
   return { items, loading, failureKind, truncated, reload }

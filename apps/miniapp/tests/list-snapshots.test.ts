@@ -91,6 +91,21 @@ test('a read retired by a write resumes only once that write settles', async () 
   await f.cache.waitForWrites('buyer')
 })
 
+test('a settled scope resumes without waiting for unrelated writes', async () => {
+  const { cache } = fixture()
+  const finishBuyer = cache.startMutation(['buyer'])
+  const finishFavorites = cache.startMutation(['favorites'])
+  let resumed = false
+  const waiting = cache.waitForWrites('buyer').then(() => {
+    resumed = true
+  })
+  finishBuyer()
+  await Bun.sleep(0)
+  expect(resumed).toBe(true)
+  finishFavorites()
+  await waiting
+})
+
 test('TTL, schema version, malformed data, future timestamps and byte bounds fail closed', () => {
   const f = fixture()
   const ticket = required(f.cache.begin('buyer', 'alice'))

@@ -51,12 +51,13 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
   const requests = { buyer: 0, seller: 0, favorites: 0 }
   const mutations = { buyer: 0, seller: 0, favorites: 0 }
   const blocked = new Set<SnapshotScope>()
-  const idleWaiters = new Set<() => void>()
-  /** Resume waiters only once the last write on every scope has settled. */
+  const idleWaiters = new Map<SnapshotScope, Set<() => void>>()
   const notifyIdle = () => {
-    if (SCOPES.some((scope) => mutations[scope] > 0)) return
-    for (const resume of idleWaiters) resume()
-    idleWaiters.clear()
+    for (const [scope, waiters] of idleWaiters) {
+      if (mutations[scope] > 0) continue
+      idleWaiters.delete(scope)
+      for (const resume of waiters) resume()
+    }
   }
   const key = (scope: SnapshotScope) => `fish:list-snapshot:${scope}`
   const remove = (scope: SnapshotScope) => {
@@ -90,7 +91,12 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
   function waitForWrites(scope: SnapshotScope): Promise<void> {
     if (mutations[scope] === 0) return Promise.resolve()
     return new Promise((resume) => {
-      idleWaiters.add(resume)
+      let waiters = idleWaiters.get(scope)
+      if (!waiters) {
+        waiters = new Set()
+        idleWaiters.set(scope, waiters)
+      }
+      waiters.add(resume)
     })
   }
 
