@@ -1,20 +1,42 @@
 /**
- * 底栏选中态的**唯一**同步通道（Owner 2026-09-28 拍板：按页面路径显示高光，不做动画）。
- *
- * 为什么需要它：微信 custom-tab-bar 是**每个 Tab 页一个独立实例**，实例被复用显示时
- * 不会重新渲染，组件内部任何基于「挂载时算一次」的状态都会残留错位（实测：胶囊停在
- * 上一页的槽、蓝色文字对不上当前页）。
- *
- * 解法是 Taro 官方口径的 React 适配：每个 Tab 页在 `useDidShow`（onShow，此刻页面栈
- * 已就位）里广播一次，tab-bar 组件监听后按 `getCurrentPages()` 的真实 route 重新同步
- * 选中项。事件是全局广播 —— 所有实例都会收到并各自同步，**显示中的那个必然收到**，
- * 不可见实例同步成什么无所谓（它们下次显示前必有一次 onShow 广播修正）。
+ * 微信 custom-tab-bar 每页一实例：onShow 广播实际路由，选中态与显隐只认它。
+ * #612 的共享状态仅描述装饰动画，不提前改选中项，也不延迟/代理页面栈。
  */
 import Taro from '@tarojs/taro'
+import { createTabTransition, type TabTransition } from './tab-transition'
 
 export const TABBAR_ROUTE_EVENT = 'tabbar:route-changed'
+const transition = createTabTransition()
 
-/** Tab 页在 `useDidShow` 里调用；其余任何地方不要调。 */
-export const notifyTabbarRoute = (): void => {
+export function currentTabRoute(): string {
+  if (process.env.TARO_ENV === 'h5' && typeof window !== 'undefined') {
+    return window.location.hash.replace(/^#\/?/, '').split('?')[0] ?? ''
+  }
+  try {
+    const pages = Taro.getCurrentPages()
+    return pages[pages.length - 1]?.route ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** 仅由底栏点击发起；失败只撤销自己的意图，不触碰任何页面或取数状态。 */
+export function switchTabWithTransition(url: string): void {
+  const id = transition.begin(currentTabRoute(), url.replace(/^\//, ''), Date.now())
+  void Taro.switchTab({ url }).catch(() => transition.cancel(id))
+}
+
+export function readTabTransition(): TabTransition | null {
+  return transition.read(currentTabRoute(), Date.now())
+}
+
+export function resetTabTransition(): void {
+  transition.reset()
+}
+
+/** Tab 页每次 onShow 调一次；意图只消费一次，挂载晚的底栏可 read 同一快照。 */
+export function notifyTabbarRoute(): TabTransition | null {
+  const motion = transition.arrive(currentTabRoute(), Date.now())
   Taro.eventCenter.trigger(TABBAR_ROUTE_EVENT)
+  return motion
 }

@@ -9,6 +9,7 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { fetchListingDetail } from '@/features/listing/api'
@@ -304,13 +305,7 @@ export default function Watchers() {
                         })
                       }
                     >
-                      <View className="wt__av">
-                        {user.avatarUrl ? (
-                          <Image className="wt__av-img" src={user.avatarUrl} mode="aspectFill" />
-                        ) : (
-                          <Text className="wt__av-tx">{user.nickname.slice(0, 1) || '同'}</Text>
-                        )}
-                      </View>
+                      <UserAvatar className="wt__av" src={user.avatarUrl} />
                       <View className="wt__main">
                         <View className="wt__top">
                           <Text className="wt__name">{user.nickname}</Text>

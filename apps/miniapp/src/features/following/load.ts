@@ -29,9 +29,14 @@ import { followingStatsOf } from './stats'
 export type FollowingRow = {
   id: string
   nickname: string
-  /** 真实头像 URL；`null` = 没有图（退昵称首字）。 */
+  /** 真实头像 URL；`null` = 没有图（视图层画统一默认头像，#618）。 */
   avatarUrl: string | null
-  /** 演示占位色块（data URI）。真实行恒为空串（它与首字是两层，见 `demo.ts` 的说明）。 */
+  /**
+   * 演示占位色块（data URI）。真实行恒为空串。
+   *
+   * #618 起列表行头像统一由 `components/user-avatar` 渲染（有图渲真图、无图渲默认头像），
+   * 这个字段只作为演示 fixture 的数据保留，页面不再叠加渲染。
+   */
   placeholderBlock: string
   /** 已认证：行内渲染设计稿「认证」成品徽章（整图，非小图标），未认证整块不占位。 */
   verified: boolean

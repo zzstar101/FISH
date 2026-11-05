@@ -7,6 +7,7 @@ import BackTop from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import ReviewDialog from '@/components/review-dialog'
 import TopBar from '@/components/top-bar'
+import UserAvatar from '@/components/user-avatar'
 import type { FailureKind } from '@/features/load-failure'
 import type { OrderCardView } from '@/features/transaction/adapt'
 import { cancelTransaction, fetchMyTransactionReview } from '@/features/transaction/api'
@@ -441,9 +442,8 @@ export default function OrderList({
               return (
                 <View key={item.id} className="orders__card">
                   <View className="orders__top">
-                    <View className="orders__av">
-                      <Text className="orders__av-tx">{item.counterpart.nickname.slice(0, 1)}</Text>
-                    </View>
+                    {/* 交易对方的头像：有真图渲真图，缺图落统一默认头像（#618）；不再拿昵称首字顶替 */}
+                    <UserAvatar className="orders__av" src={item.counterpart.avatarUrl} />
                     <Text className="orders__oname">{item.counterpart.nickname}</Text>
                     {/* 已认证徽章（#534）：与「我的」页同一张设计稿徽章。
                         原来挂在头像右下角的小圆勾放不下这张横向徽章，改为昵称右侧内联。 */}

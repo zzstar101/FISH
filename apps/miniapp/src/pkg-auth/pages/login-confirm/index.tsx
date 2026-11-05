@@ -3,6 +3,7 @@ import Taro, { useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { confirmScanTicket } from '@/features/auth/api'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
@@ -161,14 +162,8 @@ export default function LoginConfirm() {
     return (
       <>
         <View className="lc__stage">
-          <View className="lc__avatar">
-            {/* 契约 `MeSchema.avatarUrl` 可为 null：空就画人形占位，不拿别人的头像顶上 */}
-            {user?.avatarUrl ? (
-              <Image className="lc__avatar-img" src={user.avatarUrl} mode="aspectFill" />
-            ) : (
-              <Image className="lc__avatar-ph" src={ICONS.userFg} mode="aspectFit" />
-            )}
-          </View>
+          {/* 契约 `MeSchema.avatarUrl` 可为 null：空就画统一默认头像，不拿别人的头像顶上 */}
+          <UserAvatar className="lc__avatar" src={user?.avatarUrl} />
           <Text className="lc__name">{user?.nickname ?? '—'}</Text>
           <Text className="lc__headline">确认登录此电脑端</Text>
           <Text className="lc__sub">确认后，该电脑端将以你的身份登录鱼小应。</Text>

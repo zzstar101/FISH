@@ -6,6 +6,7 @@ import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import type { ReportRecord } from '@/features/reports/demo'
@@ -226,9 +227,9 @@ export default function MyReports() {
                       <Image className="rpts__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
                     </View>
                   ) : (
-                    <View className="rpts__thumb rpts__thumb--ava">
-                      <Image className="rpts__thumb-ic" src={ICONS.userFg} mode="aspectFit" />
-                    </View>
+                    /* 举报记录里契约只带被举报对象的昵称（`ReportUserSummarySchema` 没有
+                       avatarUrl），所以头像位只能是统一默认头像（#618），不是漏传字段 */
+                    <UserAvatar className="rpts__thumb rpts__thumb--ava" />
                   )}
                   <View className="rpts__main">
                     <View className="rpts__top">

@@ -115,11 +115,7 @@ function ReplyRow({
 }) {
   return (
     <div className="flex gap-3">
-      <UserAvatar
-        avatarUrl={reply.author.avatarUrl}
-        emoji={reply.author.nickname.slice(0, 1)}
-        size="sm"
-      />
+      <UserAvatar avatarUrl={reply.author.avatarUrl} size="sm" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-medium text-xs">{reply.author.nickname}</span>
@@ -178,10 +174,7 @@ function CommentRow({
   return (
     <div className="py-5">
       <div className="flex gap-3">
-        <UserAvatar
-          avatarUrl={comment.author.avatarUrl}
-          emoji={comment.author.nickname.slice(0, 1)}
-        />
+        <UserAvatar avatarUrl={comment.author.avatarUrl} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-sm">{comment.author.nickname}</span>

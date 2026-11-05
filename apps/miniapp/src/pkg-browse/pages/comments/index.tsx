@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { usePageScroll, usePullDownRefresh, useReachBottom } from '@tarojs/taro'
+import Taro, { usePageScroll, usePullDownRefresh, useReachBottom, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -23,6 +23,7 @@ import {
   type MyCommentDeleteRef,
   ratingChipOf,
   SEGMENTS,
+  segmentOfParam,
   shortCategoryLabel,
   toMyCommentFromResponseItem,
   viewTargetOf,
@@ -92,13 +93,22 @@ export default function MyComments() {
   const [items, setItems] = useState<MyComment[]>(demo ? DEMO_MY_COMMENTS : [])
   const [loading, setLoading] = useState(!demo)
   const [error, setError] = useState<string | null>(null)
-  const [segment, setSegment] = useState<CommentSegment>('all')
+  /**
+   * 进页初始分段（#613 ⑤）：`?seg=trade` → 直接落在「交易评价」段。
+   *
+   * 会话页「前往查看评价」带这个参数跳进来 —— 用户刚在面交页写完评价，来这儿就是要看
+   * 自己给出去的那条，落到「全部」还得再切一次段。参数非 `SEGMENTS` 里的键一律回落
+   * `all`（纯函数 `segmentOfParam`，与三个 Tab 共用同一份键）。
+   */
+  const router = useRouter()
+  const initialSegment = segmentOfParam(router.params.seg)
+  const [segment, setSegment] = useState<CommentSegment>(initialSegment)
   /**
    * 当前段的 ref：`usePullDownRefresh` / 删除回调都是**注册期一次**的闭包或跨帧回调，
    * 直接读 `segment` 会拿到注册那一刻的旧值（切过段后刷新/删除就打错段）。
    * 与本页 `authedRef` 同一手法。
    */
-  const segmentRef = useRef<CommentSegment>('all')
+  const segmentRef = useRef<CommentSegment>(initialSegment)
   segmentRef.current = segment
   /**
    * 当前账号的 ref（与 `segmentRef` 同一手法）。
@@ -153,7 +163,10 @@ export default function MyComments() {
     setError(null)
     setCursor(null)
     setCounts(NO_COUNTS)
-    setSegment('all')
+    // 换账号回到「进页初始分段」，不是写死 `all`：`?seg=trade` 进来时下标亮的是交易评价段，
+    // 复位成 `all` 会让 Tab 与已加载的数据对不上（下面登录态 effect 读的是 `segmentRef`）
+    setSegment(initialSegment)
+    segmentRef.current = initialSegment
   }
 
   /**
@@ -211,7 +224,8 @@ export default function MyComments() {
   useEffect(() => {
     if (demo) return
     if (authStatus !== 'authed' || userId === null) return
-    void read('all')
+    // 首屏读**当前段**（`?seg=trade` 进来就别白读一遍「全部」）；切段由 `pickSegment` 负责
+    void read(segmentRef.current)
     void probeCounts()
     // `demo` 是构建期常量（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`），运行期不变，
     // 不进依赖数组（Biome 会提示它多余）
