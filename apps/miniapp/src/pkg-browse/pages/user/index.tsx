@@ -888,7 +888,7 @@ export default function UserHome() {
                     {/* 在线态（#359 第五点）：头像右边这一列的第二行。绿点 + 文案；
                         「多久没上线」由 `presenceView` 折算成「12 分钟前活跃」这类相对时间。
                         「现在」由组件自己订阅；拿不到在线态时它整块不渲染（不画一个假的「离线」）。 */}
-                    <PresenceBadge presence={profile?.presence} className="uhome__presence" />
+                    <PresenceBadge presence={profile.presence} className="uhome__presence" />
                   </View>
                   {/* 关注按钮（稿 `.btn-follow`）：**头像行内第三格**，昵称块右侧 ——
                       稿的 `.profile` 是 `头像 | 昵称块 | 关注钮` 三格 flex，签名不在这一行里。

@@ -1,6 +1,7 @@
 import { useDidHide, useDidShow } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import { acquirePresenceClock, presenceNow, subscribePresenceNow } from './tick'
+import type { PresenceClockHolder } from './tick'
+import { createPresenceClockHolder, presenceNow, subscribePresenceNow } from './tick'
 
 /**
  * 在线态的「现在」（#376 审查回合，P2；性能改造后拆成两个钩子）。
@@ -36,20 +37,16 @@ import { acquirePresenceClock, presenceNow, subscribePresenceNow } from './tick'
  * 重新占上时时钟先把「现在」对到真实时间（见 `./tick` 的 `acquirePresenceClock`）。
  */
 export function usePresenceClock(): void {
-  /** 当前占着的持有权；`null` 表示没占（页面隐藏或已卸载） */
-  const releaseRef = useRef<(() => void) | null>(null)
+  /**
+   * 持有权对象（自带幂等守卫，见 `./tick` 的 `createPresenceClockHolder`）。
+   * 只建一次：它只是个闭包，不参与渲染，放 ref 里免得每次渲染换身份。
+   */
+  const holderRef = useRef<PresenceClockHolder | null>(null)
+  if (holderRef.current === null) holderRef.current = createPresenceClockHolder()
+  const holder = holderRef.current
 
-  const start = useCallback(() => {
-    // 重复调用（挂载 effect 与首次 didShow 都可能在同一次进入里触发）不许叠出两份持有权
-    if (releaseRef.current !== null) return
-    releaseRef.current = acquirePresenceClock()
-  }, [])
-
-  const stop = useCallback(() => {
-    if (releaseRef.current === null) return
-    releaseRef.current()
-    releaseRef.current = null
-  }, [])
+  const start = useCallback(() => holder.start(), [holder])
+  const stop = useCallback(() => holder.stop(), [holder])
 
   /**
    * 挂载即占上：首次 `didShow` 可能早于本钩子注册（Taro 的 didShow 回调是
