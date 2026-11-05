@@ -10,6 +10,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuth } from '@/features/auth/store'
 import { fetchBlockState, setBlock } from '@/features/blocks/api'
 import {
@@ -26,8 +27,8 @@ import {
 } from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
 import { outOfMarketLabel } from '@/features/listing/status-mark'
-import { usePresenceNow } from '@/features/presence/use-presence-now'
-import { presenceView } from '@/features/presence/view'
+import { PresenceBadge } from '@/features/presence/presence-badge'
+import { usePresenceClock } from '@/features/presence/use-presence-now'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { cancellable } from '@/lib/cancellable'
@@ -375,10 +376,11 @@ export default function UserHome() {
    * 位置。不补偿就会漏掉「先在骨架屏上滚了一段、数据随后才到」这一档：那时视口坐标比
    * 内容坐标小一整个 `scrollTop`，算出的阈值偏小，标题会在昵称还看得见时就冒出来。
    *
-   * **量的节点是签名行（没有签名时退回头像行）**，与稿 `syncNav` 同一口径
-   * （`p = $('psign'); if (!p || !p.offsetHeight) p = $('profile')`）—— 稿的判据是
-   * 「身份块整行滚干净才补标题」，签名行是身份块的最后一行；量到数据行（`.uhome__stats`）
-   * 底边会让标题整整晚一行才出现。
+   * **量的节点是身份区里最低的那一行**：签名行 `#uhome-psign` / 头像行 `#uhome-profile` /
+   * 本人态提示行 `#uhome-selfnote`（#578，只在 `isSelf` 渲染），三者 rect 底边取 max。
+   * 与稿 `syncNav` 同一口径（`p = $('psign'); if (!p || !p.offsetHeight) p = $('profile')`），
+   * 只是稿里没有提示行这一档 —— 稿的判据是「身份块整行滚干净才补标题」，所以谁最低就量谁
+   * 的底边；量到数据行（`.uhome__stats`）底边会让标题整整晚一行才出现。
    *
    * 量不到（节点未上屏 / 选择器失效）时兜底 `IDENTITY_FALLBACK`：与 home 页的 `pinAt`
    * 兜底同理 —— 不给兜底会变成「标题永远不出现」，给个偏大的估计值最多让标题晚一点
@@ -397,6 +399,8 @@ export default function UserHome() {
         .boundingClientRect()
         .select('#uhome-profile')
         .boundingClientRect()
+        .select('#uhome-selfnote')
+        .boundingClientRect()
         .exec((res) => {
           /** 节点在屏且真有高度才算数（`height === 0` 说明它没渲染 / 被裁） */
           const pick = (i: number): { top: number; height: number } | undefined => {
@@ -406,10 +410,15 @@ export default function UserHome() {
               return undefined
             return { top, height }
           }
-          // 签名行缺失（无签名的用户）时退回头像行，与稿一致
-          const rect = pick(0) ?? pick(1)
-          identityBottomAt.current = rect
-            ? rect.top + scrollTopRef.current + rect.height
+          // 三个节点里取**最低**那行的底边：签名行缺失时退回头像行，但本人态多出来的
+          // 提示行（#578）比头像行还低 —— 只退到头像行会让阈值少 22（行距）+ 88（行高）
+          // = 110 设计 px，提示行还在屏上时居中标题就淡入了。他人主页没有提示行，
+          // `pick(2)` 自然是 undefined，max 退化成稿里的「签名行 ?? 头像行」。
+          const bottoms = [pick(0), pick(1), pick(2)]
+            .filter((r): r is { top: number; height: number } => r !== undefined)
+            .map((r) => r.top + r.height)
+          identityBottomAt.current = bottoms.length
+            ? Math.max(...bottoms) + scrollTopRef.current
             : IDENTITY_FALLBACK
           const nextTitled = scrollTopRef.current >= identityBottomAt.current - 6
           setTitled((prev) => (prev === nextTitled ? prev : nextTitled))
@@ -481,12 +490,12 @@ export default function UserHome() {
    * TTL 的本地过期 —— 本页进页只拉一次资料，不做过期处理的话，几分钟前拿到的
    * 「在线」会一直挂在屏幕上。`profile` 还没到时不渲染（骨架屏阶段没有在线态可说）。
    *
-   * 「现在」走 `usePresenceNow`（#376 审查回合）：本页没有任何轮询能带来重渲染，
-   * 直接用 `Date.now()` 只在资料到位那一帧求值一次，那段本地过期永远不会被触发。
-   * 该 hook 不发请求，页面被盖住时停表。
+   * 「现在」走 `usePresenceClock` + `PresenceBadge`（#376 审查回合，性能改造）：本页没有任何
+   * 轮询能带来重渲染，直接用 `Date.now()` 只在资料到位那一帧求值一次，那段本地过期永远不会
+   * 被触发。那个 30s 一跳的时钟现在只驱动徽标本身重算，页面主体（整屏列表）不跟着重渲染；
+   * 本钩子不发请求，页面被盖住时停表。
    */
-  const presenceNow = usePresenceNow()
-  const presence = profile ? presenceView(profile.presence, presenceNow) : null
+  usePresenceClock()
 
   /**
    * 当前分段的**真总数**：在售段用 `activeCount`、已售出段用 `soldCount`，都是服务端给的
@@ -793,6 +802,18 @@ export default function UserHome() {
     void Taro.navigateTo({ url: `/pkg-trade/pages/report-user/index?${query}` })
   }
 
+  /**
+   * 本人态的出口（#578）：回「我的」。
+   *
+   * `pages/profile` 是**原生 TabBar 页**，只能 `switchTab`（`navigateTo` 会失败），
+   * 写法与 `apps/miniapp/src/pkg-auth/pages/verify/index.tsx:345-348` 的「返回我的主页」同款：
+   * 失败兜底提示，不静默吞掉。
+   */
+  const goMyProfile = () =>
+    void Taro.switchTab({ url: '/pages/profile/index' }).catch(
+      () => void Taro.showToast({ title: '打开失败，请重试', icon: 'none' }),
+    )
+
   /** 顶栏举报钮（Owner 拍板：贴微信胶囊放）。仅非本人主页渲染，见 isSelf。 */
   const navReportAction =
     profile && !isSelf ? (
@@ -883,21 +904,8 @@ export default function UserHome() {
               <View className="uhome__identity" style={{ marginTop: `${identityTopGap}px` }}>
                 <View className="uhome__profile" id="uhome-profile">
                   {/* 头像：契约的 `PublicUserProfileSchema.avatarUrl` 真实存在（可空），
-                      有图就渲染真图；只有「没有图」才退昵称首字 —— 首字是缺图的降级呈现，
-                      不是这个人的身份。首字降级与 `conversation` 同款
-                      （`watchers` 的缺图降级是 `—`，不是首字，别照抄那一处）。
-                      不做占位色块：本页有首字可退，比通用色块更可辨。 */}
-                  <View className="uhome__avatar">
-                    {profile.avatarUrl ? (
-                      <Image
-                        className="uhome__avatar-img"
-                        src={profile.avatarUrl}
-                        mode="aspectFill"
-                      />
-                    ) : (
-                      <Text className="uhome__avatar-tx">{profile.nickname.slice(0, 1)}</Text>
-                    )}
-                  </View>
+                      有图就渲染真图；没有图渲统一默认头像（#618），不再拿昵称首字顶替。 */}
+                  <UserAvatar className="uhome__avatar" src={profile.avatarUrl} />
                   <View className="uhome__pinfo">
                     <View className="uhome__nameRow">
                       <Text className="uhome__pname">{profile.nickname}</Text>
@@ -911,13 +919,8 @@ export default function UserHome() {
                     </View>
                     {/* 在线态（#359 第五点）：头像右边这一列的第二行。绿点 + 文案；
                         「多久没上线」由 `presenceView` 折算成「12 分钟前活跃」这类相对时间。
-                        拿不到在线态时整块不渲染（不画一个假的「离线」）。 */}
-                    {presence ? (
-                      <View className={`uhome__presence${presence.online ? ' is-online' : ''}`}>
-                        <View className="uhome__presence-dot" />
-                        <Text className="uhome__presence-tx">{presence.text}</Text>
-                      </View>
-                    ) : null}
+                        「现在」由组件自己订阅；拿不到在线态时它整块不渲染（不画一个假的「离线」）。 */}
+                    <PresenceBadge presence={profile.presence} className="uhome__presence" />
                   </View>
                   {/* 关注按钮（稿 `.btn-follow`）：**头像行内第三格**，昵称块右侧 ——
                       稿的 `.profile` 是 `头像 | 昵称块 | 关注钮` 三格 flex，签名不在这一行里。
@@ -963,6 +966,42 @@ export default function UserHome() {
                     <View className="uhome__follow-skel" />
                   ) : null}
                 </View>
+
+                {/* 本人态提示（#578）：本人访问自己的公开主页时，页头给一句
+                    「这是你的公开主页」+ 回「我的」的出口。没有这一行，这一屏与他人主页
+                    长得一模一样 —— 关注钮 / 举报钮在本人态本来就不渲染（`canFollow` /
+                    `navReportAction` 的 `!isSelf` 判据**不动**），空出来的位置没人解释。
+                    文案口径对齐 PC 站同款本人态分支
+                    （`apps/web-pc/src/features/user-profile/user-profile-page.tsx:106-109`
+                    的「这是你的公开主页 · 去个人中心」）。
+                    两行而不是一行：右端要让出「回我的 ›」（3 字 ≈ 72rpx + 间距 + 24 图标
+                    ≈ 100rpx）与左右各 28rpx 内边距，主句落到一行只剩约 500rpx ——
+                    整句 19 字（≈437rpx）会顶满整行且没有主次；拆成主句 + 一行小字，
+                    一眼先读到结论。
+                    整行可点（88px = 44pt 触摸高度，见 scss），不做成 tiny 链接。
+                    `id` 参与滚动联动的身份区测量：无签名时它是身份区最低的一行，
+                    `measureIdentity()` 取三行底边的 max（见该函数注释）。 */}
+                {isSelf ? (
+                  <View
+                    id="uhome-selfnote"
+                    className="uhome__selfnote"
+                    hoverClass="uhome__selfnote--tap"
+                    onClick={goMyProfile}
+                  >
+                    <View className="uhome__selfnote-copy">
+                      <Text className="uhome__selfnote-title">这是你的公开主页</Text>
+                      <Text className="uhome__selfnote-sub">别人看到的就是这一页</Text>
+                    </View>
+                    <View className="uhome__selfnote-exit">
+                      <Text className="uhome__selfnote-exit-txt">回我的</Text>
+                      <Image
+                        className="uhome__selfnote-exit-ic"
+                        src={ICONS.chevronRightMuted}
+                        mode="aspectFit"
+                      />
+                    </View>
+                  </View>
+                ) : null}
 
                 {/* 个性签名（稿 `.psign`）：头像行的**下一行、独占全宽** ——
                     稿把「校区 · 加入天数」换成签名，正是为了吃到全宽（和关注钮挤同一行

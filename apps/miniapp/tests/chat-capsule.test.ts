@@ -3,6 +3,7 @@ import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import {
   capsuleFor,
+  currentTxOf,
   lastEventOfMessages,
   needsProposalScan,
   transactionsByConversation,
@@ -438,5 +439,36 @@ describe('transactionsByConversation', () => {
     })
     const map = transactionsByConversation([newer, older], [])
     expect(map.get('c-1')?.id).toBe('t-new')
+  })
+})
+
+/**
+ * 同一会话多笔历史交易的 latest-wins 判据（#613 验收口径：进度块只反映最新那笔，
+ * **不许分叉出第三套判定**）。这条判据原本在 `capsuleFor` 与 `view.ts` 的 `txBarView`
+ * 各写一份，`txStageView` 落地时又抄了第三份 —— 这里把它钉成**唯一一份**导出，
+ * 三个调用方共用，改判据只改一处。
+ */
+describe('currentTxOf —— 「取消后又被新提案盖过」的唯一一份判据', () => {
+  test('已取消的行 + 最后一条事件是提案 → 行被盖过（null），改按提案陈述', () => {
+    expect(currentTxOf(tx({ status: 'CANCELLED' }), 'tx.proposal')).toBeNull()
+  })
+
+  test('已取消的行 + 最后一条事件不是提案（拒绝 / 接受 / 空）→ 行仍然有效', () => {
+    const cancelled = tx({ status: 'CANCELLED' })
+    expect(currentTxOf(cancelled, 'tx.rejected')).toBe(cancelled)
+    expect(currentTxOf(cancelled, 'tx.accepted')).toBe(cancelled)
+    expect(currentTxOf(cancelled, null)).toBe(cancelled)
+  })
+
+  test('只有 CANCELLED 会被盖过：进行中 / 已完成的行不适用（listing 被锁，提不出新案）', () => {
+    const pending = tx({ status: 'PENDING_MEETUP' })
+    const completed = tx({ status: 'COMPLETED' })
+    expect(currentTxOf(pending, 'tx.proposal')).toBe(pending)
+    expect(currentTxOf(completed, 'tx.proposal')).toBe(completed)
+  })
+
+  test('没有交易行就是没有（提案态由调用方自己看 lastEvent.type）', () => {
+    expect(currentTxOf(null, 'tx.proposal')).toBeNull()
+    expect(currentTxOf(null, null)).toBeNull()
   })
 })

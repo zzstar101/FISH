@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingCard } from '@fish/contracts/listings/schema'
-import { toMockListing } from '@/features/listing/adapt'
+import { toMockCardSeller, toMockListing } from '@/features/listing/adapt'
 
 /**
  * `features/listing/adapt.ts` 的 `toMockListing` 投影判据。
@@ -59,5 +59,38 @@ describe('toMockListing / views', () => {
     const listing = toMockListing(card({ views: 218, wants: 34 }))
     expect(listing.views).toBe(218)
     expect(listing.wants).toBe(34)
+  })
+})
+
+/**
+ * `toMockCardSeller` 的头像判据（#618）。
+ *
+ * 契约的 `seller.avatarUrl` 可为 `null`（库里是无约束 text）。此前这里会把它换成
+ * `AVATAR_BLOCKS` 的 1×1 占位块，于是「新用户没有头像」在端上表现为一块彩色方块/空白，
+ * 而不是平台统一的默认头像。现在**原样保留 null**，由视图层 `components/user-avatar`
+ * 画默认头像 —— 这条用例在改前会失败（那时拿到的是 data URI）。
+ */
+describe('toMockCardSeller / avatarUrl', () => {
+  test('契约给 null 就保持 null，不塞占位块', () => {
+    const seller = toMockCardSeller(
+      card({
+        seller: { id: 'u-1', nickname: '阿星', avatarUrl: null, authStatus: 'VERIFIED' },
+      }),
+    )
+    expect(seller?.avatarUrl).toBeNull()
+  })
+
+  test('契约给了真头像就原样透传', () => {
+    const seller = toMockCardSeller(
+      card({
+        seller: {
+          id: 'u-1',
+          nickname: '阿星',
+          avatarUrl: 'https://cdn.example.com/a.png',
+          authStatus: 'VERIFIED',
+        },
+      }),
+    )
+    expect(seller?.avatarUrl).toBe('https://cdn.example.com/a.png')
   })
 })
