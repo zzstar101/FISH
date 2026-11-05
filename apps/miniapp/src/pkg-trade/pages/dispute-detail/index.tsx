@@ -26,6 +26,7 @@ import {
   shortDisputeId,
   TRANSACTION_STATUS_LABEL,
 } from '@/features/disputes/meta'
+import { markDisputesDirty } from '@/features/disputes/refresh'
 import { uploadDisputeAttachment } from '@/features/disputes/upload'
 import {
   attachmentActionLabel,
@@ -313,6 +314,8 @@ export default function DisputeDetailPage() {
       }
       setDetail(next)
       setStale(false)
+      // 列表上的状态已经变了：让它下次显示时无视「刚拉过」的时间闸，先重拉一次
+      markDisputesDirty()
       void Taro.showToast({ title: '已撤回争议', icon: 'none' })
     } catch (error) {
       if (!opAlive(op)) {
@@ -516,6 +519,8 @@ export default function DisputeDetailPage() {
         return { ...prev, evidence: [...prev.evidence, result.evidence] }
       })
       setSheetOpen(false)
+      // 与撤回同理：证据条数会显示在列表上，返回时必须重拉
+      markDisputesDirty()
       void Taro.showToast({
         title: result.created ? '已添加为证据' : '这条消息已经是证据',
         icon: 'none',
