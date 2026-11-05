@@ -350,7 +350,7 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 96px;
+  height: var(--btn-h-lg);
   border-radius: var(--r-pill);
   font-size: var(--fs-title);
   font-weight: 600;

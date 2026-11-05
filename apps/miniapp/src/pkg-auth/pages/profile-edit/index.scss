@@ -219,7 +219,7 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  height: 96px;
+  height: var(--btn-h-lg);
   border-radius: 999px;
   background: var(--brand-deep);
   color: #fff;

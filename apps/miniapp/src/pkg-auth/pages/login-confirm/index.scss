@@ -119,7 +119,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
+  height: var(--btn-h-lg);
   border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);

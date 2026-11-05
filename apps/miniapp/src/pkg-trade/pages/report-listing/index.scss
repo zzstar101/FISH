@@ -348,7 +348,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
+  height: var(--btn-h-lg);
   padding: 0 var(--btn-px-lg);
   border-radius: var(--r-pill);
   background: var(--grad-brand);
@@ -576,7 +576,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
+  height: var(--btn-h-lg);
   padding: 0 var(--btn-px-lg);
   border-radius: var(--r-pill);
   background: var(--grad-brand);

@@ -51,7 +51,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 44px;
+  height: var(--btn-h-label);
   padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   border: 2px solid transparent;

@@ -851,7 +851,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 80px;
+  height: var(--btn-h-md);
   padding: 0 32px;
   border-radius: var(--r-pill);
   color: var(--muted-2);

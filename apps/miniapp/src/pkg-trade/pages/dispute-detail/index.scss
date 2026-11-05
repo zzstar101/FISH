@@ -77,7 +77,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 44px;
+  height: var(--btn-h-label);
   padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   border: 2px solid transparent;
@@ -264,7 +264,7 @@
 /* ── 按钮 ── */
 .dsd__btn {
   flex: 1 1 auto;
-  min-height: 80px;
+  min-height: var(--btn-h-md);
   display: flex;
   align-items: center;
   justify-content: center;
