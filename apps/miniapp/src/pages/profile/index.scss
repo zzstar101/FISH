@@ -45,19 +45,15 @@
     linear-gradient(180deg, rgba(247, 250, 255, 0) 68%, #f7faff 100%),
     linear-gradient(180deg, #91b8ff 0%, #cfe3ff 100%);
 
-  /* 色团缓慢漂移：只动 background-position，6 组值与 6 层严格一一对应
-     （层数对不上会层错位）；幅度 1~2%，24s 往返，呼吸感 */
-  animation: heroMeshDrift 24s ease-in-out infinite alternate;
-}
-
-@keyframes heroMeshDrift {
-  from {
-    background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 0 0;
-  }
-
-  to {
-    background-position: 2% 1%, -2% 2%, 1.5% -1%, -1% 2%, 0 0, 0 0;
-  }
+  /* 这里原有一条 `heroMeshDrift`（24s 往返、动 background-position）想做「色团漂移」，
+     但它从来没动过，只留下每帧对整块六层渐变的重绘：
+     渐变没写 `background-size`，`auto` = 定位区大小，而 background-position 的百分比
+     偏移 = (定位区 − 背景图) × 百分比，两者相等 ⇒ 偏移恒为 0。
+     实测（桌面 headless Chromium，冻结在 0s / 12s 两帧逐像素比对）：本页 CSS 原样
+     0/375000 像素有差异；对照组仅多一条 `background-size: 120% 120%`，同法比对 164015
+     像素有差异（最大通道差 5/255，即设计意图里那 1~2% 的幅度）。故删除，画面零变化。
+     该比对只在桌面 Chromium 做过，未在真机微信 WebView 复核；换算规则本身与渲染引擎无关。
+     若确实要「真的漂移」，那是改视觉效果，另开一版由 Owner 看真机后再加。 */
 }
 
 /* 顶部高光呼吸：模拟屏幕反光（灵动岛那块更通透），opacity 只在 .35↔.6 间缓慢往返 */
@@ -117,6 +113,28 @@
   100% {
     transform: translateX(260%) skewX(-18deg);
   }
+}
+
+/**
+ * 页面切走后暂停页头动效。tab 页常驻不销毁（`useDidShow`/`useDidHide` 只切显隐），
+ * 切走的页面里 `heroGlow`(opacity) / `heroSweep`(transform) 仍会按帧推进，白占合成器。
+ * `animation-play-state: paused` 从当前帧冻结，回到本页继续跑。
+ * class 由页面按 `useDidHide`/`useDidShow` 切换（见 index.tsx）。
+ *
+ * **靠特异性赢，不靠源序**：`animation` 简写会把 `animation-play-state` 重置成 `running`，
+ * 但每条选择器都带两个类（外层暂停类 + `__hero-bg`），比基础规则的单个类更高，层叠里
+ * 无论写在文件哪一段都赢。桌面 Chromium 实测两种源序都读到 `paused`
+ * （`%TEMP%/perf-check/order-vs-specificity.html`）。测试锚点见
+ * `tests/profile-hero-anim-pause.test.ts`。
+ *
+ * 已验证：编译后 `dist/pages/profile/index.wxss` 保留了这条声明（WXSS 接受该属性）。
+ * 未验证：微信 WebView 里动画是否真的停帧、暂停/恢复衔接是否肉眼无感 —— 需真机
+ * （开发者工具取不到被盖住页面的节点，取证记录见 PR #624）。
+ */
+.profile--anim-paused .profile__hero-bg,
+.profile--anim-paused .profile__hero-bg::before,
+.profile--anim-paused .profile__hero-bg::after {
+  animation-play-state: paused;
 }
 
 /* 弱动效偏好：全部动画关闭，静态呈现定稿配色 */
