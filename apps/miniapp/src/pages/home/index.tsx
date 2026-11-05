@@ -27,7 +27,7 @@ import {
 import { startVisualSearch } from '@/features/visual-search/start'
 import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
-import { notifyTabbarRoute } from '@/lib/tabbar-sync'
+import { useTabTransition } from '@/lib/use-tab-transition'
 import type { ListingCategory, MockListing } from '@/mock/types'
 import { applyLoadResult, homeListState } from './list-state'
 import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
@@ -490,7 +490,7 @@ export default function Home() {
   })
 
   // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
-  useDidShow(notifyTabbarRoute)
+  const tabContentClass = useTabTransition()
   usePageScroll(({ scrollTop }) => {
     scrollTopRef.current = scrollTop
     // 分类归位动画期间吸顶判定锁定在当前值（防阈值边界抖动，见 onCategoryTap）
@@ -586,7 +586,7 @@ export default function Home() {
         </ScrollView>
       </View>
 
-      <View className="home__grid">
+      <View className={`home__grid ${tabContentClass}`}>
         {listState === 'error' ? (
           <LoadError onRetry={() => void load(category)} />
         ) : listState === 'skeleton' ? (
