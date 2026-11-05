@@ -80,6 +80,14 @@ export default function Home() {
   const [loadedFor, setLoadedFor] = useState<ListingCategory | 'ALL' | null>(null)
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态，不显示空态、更不显示演示数据 */
   const [failed, setFailed] = useState(false)
+  /**
+   * 上一次加载失败了，但屏幕上的旧列表被留住了（`applyLoadResult` 的 `previous` 生效）。
+   *
+   * 单独立一个标志，因为那时 `failed` 已经被压回 `false`（屏幕不是错误块，是旧列表）。
+   * 不留标记的话「再点一次当前分类就当重试」那条路径会变成死代码，用户只剩下拉刷新
+   * 一个入口，而且列表看起来和刷新成功没有区别 —— 一句话都没人告诉他这次没刷上。
+   */
+  const [staleAfterFailure, setStaleAfterFailure] = useState(false)
 
   /**
    * 本机「不感兴趣」名单：进页读一次，`useDidShow` 每次回到本页再读一次。
@@ -112,12 +120,15 @@ export default function Home() {
   const reqSeq = useRef(0)
 
   /**
-   * 屏幕上**当前这批数据**（以及它属于哪个分类）的镜像。
+   * 屏幕上**正在显示的那一批**（以及它属于哪个分类）的镜像。
    *
    * 存在的唯一理由：`load()` 失败时要判断「能不能不清屏」（见 `applyLoadResult` 的
    * `previous`），而 `load` 是随渲染重建的闭包，读不到最新的 `items` / `loadedFor`。
-   * 只在**一次成功加载的结转之后**更新；失败本身不更新 —— 失败保留的就是它，
-   * 这正是「留着」的语义。
+   *
+   * **它必须恒等于屏幕事实**，每次 `load` 落屏后无条件跟写。写成「只在成功时更新」会让它
+   * 退化成「历史上成功过的那一批」：按推荐成功 → 换分类失败清屏 → 再按推荐失败时，
+   * 被清掉的旧列表会被复活到屏幕上，`failed` 还被压成 `false`、错误块消失 ——
+   * 用户看到的是一次假成功。
    */
   const lastGoodRef = useRef<{
     items: MockListing[]
@@ -216,17 +227,29 @@ export default function Home() {
       failed: result.failed,
       previous: lastGoodRef.current,
     })
-    // 上下文与列表同一次渲染生效：曝光观察器建起来时就已经能拿到 requestId 与序号
-    setFeedContext({
-      requestId: result.requestId ?? null,
-      positions: result.positions ?? new Map(),
-    })
-    if (!applied.failed)
-      lastGoodRef.current = { items: applied.items, loadedFor: applied.loadedFor }
+    /*
+      失败但旧数据留住了（`held`）：屏幕上的还是上次成功那批，所以**不动**归因上下文 ——
+      那份 `requestId` / `positions` 正是这批商品的来源。清掉的话，`use-impressions` 里
+      `if (!requestId) return` 会让整屏商品在下次成功加载前一条曝光都不发（也不发
+      QUICK_SKIP、进详情没有归因）；而契约只禁「没有真实 requestId 的数据计入」，
+      没要求把已经有归因的数据弃用。旧段会被 `use-impressions` 按各自 requestId 结算，
+      去重键 `${requestId}:${listingId}` 与保留下来的数据同源，不会重复计。
+    */
+    const held = result.failed && !applied.failed
+    if (!held) {
+      // 上下文与列表同一次渲染生效：曝光观察器建起来时就已经能拿到 requestId 与序号
+      setFeedContext({
+        requestId: result.requestId ?? null,
+        positions: result.positions ?? new Map(),
+      })
+    }
+    // 恒等于屏幕事实（含「失败清屏」这一种），见 `lastGoodRef` 的注释
+    lastGoodRef.current = { items: applied.items, loadedFor: applied.loadedFor }
     setItems(applied.items)
     setFailed(applied.failed)
+    setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
-    return { failed: result.failed, held: result.failed && !applied.failed }
+    return { failed: result.failed, held }
   }
 
   useLoad(() => {
@@ -334,7 +357,7 @@ export default function Home() {
    * 切完的落点（Owner 2026-09-28 拍板，闲鱼口径）：滚到「文字导航刚好吸顶」的位置，
    * 不再回列表顶 —— 吸顶条下方正好是新一批商品的开头；页面还没滚到吸顶点时保持原位，
    * 不把用户往下拽。重复点**当前**分类不重新取数（没有新信息可拿），但也不是完全
-   * no-op：失败态下当作「重试」，成功态只做落点归位。
+   * no-op：失败态（含「失败但旧列表留住了」的兜底态）当作「重试」，成功态只做落点归位。
    *
    * 归位期间（Owner 反馈「切换 tag 不需要抖动」）把吸顶判定**锁在当前值**：滚动动画
    * 途中 `scrollTop` 会贴着阈值来回、新分类列表替换时页面高度先塌再涨，两者都会让
@@ -351,7 +374,8 @@ export default function Home() {
     if (repositions) lockNavSettle()
     else releaseNavSettle()
     if (key === category) {
-      if (failed) void load(key)
+      // 兜底态（旧列表压着一次失败）也要能重试：那时 `failed` 是 false，只判 `failed` 会漏
+      if (failed || staleAfterFailure) void load(key)
       if (repositions)
         void Taro.pageScrollTo({ scrollTop: target, duration: CATEGORY_SCROLL_DURATION })
       return

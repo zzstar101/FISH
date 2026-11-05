@@ -82,7 +82,7 @@ describe('homeListState —— 商品区渲染形态', () => {
 
 describe('一次加载的完整结转（rebase 审查 P1 的回归锁）', () => {
   /*
-   * 用户可见路径：推荐加载成功 → 断网 → 点「推荐」重试失败 → 再点「推荐」。
+   * 用户可见路径：断网进首页 → 加载失败 → 再点「推荐」重试。
    * 修复前第三步渲染「这个分类还没有闲置」（假空态）；修复后是骨架屏。
    *
    * 为什么必须是这条组合用例：`homeListState({loadedFor:null,…}) → skeleton` 单测
@@ -90,22 +90,23 @@ describe('一次加载的完整结转（rebase 审查 P1 的回归锁）', () =>
    * 接线。只有把「结转 → 渲染」按用户操作顺序串起来，修复前的实现才会在某一步
    * 给出不同答案：失败那一步的 loadedFor 会保留 'ALL' 而不是 null，最后一步
    * 因此落到空态。
+   *
+   * 用例必须显式传 `previous`：组件恒传 `lastGoodRef.current`，不传的话这条断言
+   * 描述的是组件根本走不到的形状（「成功后再失败」已经走「留住旧数据」那一支）。
+   * 首次进页时那个 ref 正是 `{ items: [], loadedFor: null }` —— 与不传等价，所以
+   * 这条用例描述的仍然是组件**真会**走到的那条路。
    */
-  test('推荐成功 → 重试失败 → 再点推荐：重试在途必须是骨架屏', () => {
-    // 1. 后端可达，进首页，「推荐」加载成功
-    let state = applyLoadResult({ requested: 'ALL', items: [1, 2, 3], failed: false })
-    expect(state.loadedFor).toBe('ALL')
-    expect(
-      homeListState({
-        loadedFor: state.loadedFor,
-        category: 'ALL',
-        failed: state.failed,
-        itemCount: state.items.length,
-      }),
-    ).toBe('list')
+  test('首次进页失败 → 再点推荐：重试在途必须是骨架屏', () => {
+    // 1. 进首页时屏幕上什么都没有（`lastGoodRef` 初值）
+    const empty = { items: [] as number[], loadedFor: null }
 
-    // 2. 停后端，点「推荐」重试 → 失败：items 清空、loadedFor 作废
-    state = applyLoadResult({ requested: 'ALL', items: [], failed: true })
+    // 2. 断网，进页那次加载失败，再点「推荐」重试 → 失败：items 清空、loadedFor 作废
+    let state = applyLoadResult({
+      requested: 'ALL',
+      items: [],
+      failed: true,
+      previous: empty,
+    })
     expect(state.items).toEqual([])
     expect(state.loadedFor).toBeNull() // 修复前：保留上一步的 'ALL'
     expect(
@@ -130,14 +131,21 @@ describe('一次加载的完整结转（rebase 审查 P1 的回归锁）', () =>
 
   test('切到新分类失败后切回已成功过的分类：重试在途同样是骨架屏', () => {
     // 「推荐」成功后切「教材书籍」失败，再点回「推荐」—— 与上一条同为 P1 形状，
-    // 区别在中间多了一次切分类，锁住 loadedFor 不被中途的成功态污染
-    let state = applyLoadResult({ requested: 'ALL', items: [1, 2], failed: false })
-    state = applyLoadResult({ requested: 'BOOKS', items: [], failed: true })
-    expect(state.loadedFor).toBeNull()
+    // 区别在中间多了一次切分类，锁住 loadedFor 不被中途的成功态污染。
+    // `previous` 取自屏幕事实（成功那一跳之后 `lastGoodRef` 就是它），BOOKS 失败时
+    // 旧数据属于别的分类 → 清屏；组件随后把 ref 也跟写成空，所以切回「推荐」时无数据可留。
+    const state = applyLoadResult({ requested: 'ALL', items: [1, 2], failed: false })
+    const books = applyLoadResult({
+      requested: 'BOOKS',
+      items: [],
+      failed: true,
+      previous: { items: state.items, loadedFor: state.loadedFor },
+    })
+    expect(books.loadedFor).toBeNull()
     // 切回「推荐」：onCategoryTap 里 setCategory('ALL') + load('ALL')，
     // 请求在途期间的渲染（failed 已清、items 空）
     expect(
-      homeListState({ loadedFor: state.loadedFor, category: 'ALL', failed: false, itemCount: 0 }),
+      homeListState({ loadedFor: books.loadedFor, category: 'ALL', failed: false, itemCount: 0 }),
     ).toBe('skeleton')
   })
 })
