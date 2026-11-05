@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isRecentlyLoaded, SHOW_RELOAD_MIN_INTERVAL_MS } from '../src/lib/show-reload'
+import { isRecentlyLoaded, SHOW_RELOAD_MIN_INTERVAL_MS } from '../src/features/disputes/refresh'
 
 /**
  * 「刚拉过吗」的判据（`useDidShow` 里那一道闸）。
