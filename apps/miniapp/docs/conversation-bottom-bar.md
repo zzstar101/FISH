@@ -84,11 +84,11 @@ q.exec((res) => {
 })
 ```
 
-再补一条：`safe-area-inset-bottom` 的实际取值（单位 px，等于 `windowHeight - safeArea.bottom`）。
+再补一条：底部安全区的设备指标推导值（单位 px，等于 `Math.max(0, screenHeight - safeArea.bottom)`，与 `safeBottomInset` 的屏幕坐标口径一致；不是 CSS 环境变量的直接读取）。
 
 ```js
 const i = wx.getWindowInfo()
-console.log('inset-bottom(css px)', i.windowHeight - i.safeArea.bottom)
+console.log('inset-bottom(device px)', Math.max(0, i.screenHeight - i.safeArea.bottom))
 ```
 
 ## 3. 记录表（待 Owner 采集）
