@@ -77,10 +77,12 @@ describe('我的关注：行映射', () => {
     })
   })
 
-  test('演示行：色块与首字两层、签名与最近活跃都在，avatarUrl 空着', () => {
+  test('演示行：头像位给空（视图层画统一默认头像，#618）、签名与最近活跃都在', () => {
     const ready = demoReady()
     for (const row of ready.rows) {
       expect(row.avatarUrl).toBeNull()
+      // 演示色块仍是 fixture 数据（`features/following/demo.ts`），但页面已不渲染它：
+      // 头像位一律走 `components/user-avatar`（真图 / 统一默认头像，#618）
       expect(row.placeholderBlock.length).toBeGreaterThan(0)
       expect(row.bio.length).toBeGreaterThan(0)
       expect(row.seenLabel.length).toBeGreaterThan(0)

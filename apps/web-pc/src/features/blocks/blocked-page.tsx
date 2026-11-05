@@ -83,12 +83,7 @@ export function BlockedRow({ item }: { item: BlockedUser }) {
   return (
     <article className="flex items-center gap-4 p-4">
       <Link params={{ userId: item.id }} to="/users/$userId">
-        <UserAvatar
-          avatarUrl={item.avatarUrl}
-          emoji={item.nickname.slice(0, 1)}
-          fallbackClassName="text-sm"
-          size="default"
-        />
+        <UserAvatar avatarUrl={item.avatarUrl} size="default" />
       </Link>
       <div className="min-w-0 flex-1">
         <Link

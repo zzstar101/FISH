@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./assets/avatar-default.png": "./src/assets/avatar-default.png",
     "./accordion": "./src/accordion.tsx",
     "./alert": "./src/alert.tsx",
     "./alert-dialog": "./src/alert-dialog.tsx",

@@ -165,35 +165,6 @@
   height: 88px;
 }
 
-.rpu__ava-ph {
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--accent-weak);
-  border: 2px solid var(--accent-mid);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--brand-deep);
-}
-
-.rpu__ava-ph-ic {
-  width: 40px;
-  height: 40px;
-}
-
-/* 占位圆与真实头像同尺寸（class 组合出两种尺寸） */
-.rpu__ava-ph.rpu__ava--obj,
-.rpu__ava.rpu__ava--obj {
-  width: 96px;
-  height: 96px;
-}
-
-.rpu__ava-ph.rpu__ava--sm,
-.rpu__ava.rpu__ava--sm {
-  width: 88px;
-  height: 88px;
-}
-
 .rpu__obj-main {
   flex: 1 1 auto;
   min-width: 0;

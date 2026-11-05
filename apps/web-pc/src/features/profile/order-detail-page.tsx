@@ -186,13 +186,7 @@ function OrderDetailContent({
           <Card className="gap-0 border border-line p-6">
             <h2 className="font-semibold text-base">{detail.role === 'buyer' ? '卖家' : '买家'}</h2>
             <div className="mt-4 flex items-center gap-3">
-              <UserAvatar
-                avatarUrl={detail.counterpart.avatarUrl}
-                className="size-12"
-                emoji={detail.counterpart.nickname.slice(0, 1)}
-                fallbackClassName="text-lg"
-                size="lg"
-              />
+              <UserAvatar avatarUrl={detail.counterpart.avatarUrl} className="size-12" size="lg" />
               <div className="min-w-0">
                 <p className="truncate font-semibold">{detail.counterpart.nickname}</p>
                 <p className="mt-1 text-ink-3 text-xs">交易对方</p>

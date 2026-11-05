@@ -68,13 +68,7 @@ export function UserProfilePage({ userId }: { userId: string }) {
     <div className="space-y-6">
       <Card className="gap-0 border border-line p-6">
         <div className="flex items-center gap-6">
-          <UserAvatar
-            avatarUrl={user.avatarUrl}
-            className="size-20"
-            emoji={user.nickname.slice(0, 1)}
-            fallbackClassName="text-2xl"
-            size="xl"
-          />
+          <UserAvatar avatarUrl={user.avatarUrl} className="size-20" size="xl" />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2.5">
               <h1 className="truncate font-semibold text-2xl">{user.nickname}</h1>

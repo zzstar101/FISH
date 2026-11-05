@@ -8,6 +8,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -742,14 +743,8 @@ export default function Chat() {
                 >
                   {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
                   <View className="chat__ava-wrap">
-                    <View className="chat__ava">
-                      {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）；空串即不渲染图 */}
-                      <Image
-                        className="chat__ava-img"
-                        src={user.avatarUrl ?? ''}
-                        mode="aspectFill"
-                      />
-                    </View>
+                    {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）：空就走统一默认头像 */}
+                    <UserAvatar className="chat__ava" src={user.avatarUrl} />
                     {unread > 0 ? (
                       // 两位数与 `99+` 要缩字号才不裁字（见 index.scss 的 .is-multi）
                       <Text className={`chat__bdg num${unread > 9 ? ' is-multi' : ''}`}>

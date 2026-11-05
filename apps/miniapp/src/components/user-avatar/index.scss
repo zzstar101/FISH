@@ -1,0 +1,17 @@
+/**
+ * 统一用户头像（#618）。容器观感（尺寸 / 圆角 / 边框 / 背景）由调用点自己的 class 决定并挂在
+ * 根节点上，这里只保证「里面那张图铺满容器」——所以刻意不写宽高，圆角一律继承容器。
+ */
+.user-av {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.user-av__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}

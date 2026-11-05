@@ -14,6 +14,7 @@ import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import { SCAN_CODE_PAGE } from '@/components/scan-tabs/tabs'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -3303,24 +3304,18 @@ export default function Conversation() {
   const dayLabel = dayLabelOf(firstCreatedAt, now)
 
   /**
-   * 30pt 圆头像：真实 avatarUrl 优先，无图回退首字（同消息列表行的降级）。
+   * 30pt 圆头像：有真实 avatarUrl 就渲真图，没有就是统一默认头像（#618，双方同一张）。
    * 头像本身是独立点击区（#517）：对方 → 他人主页，自己 → 编辑资料。
    * 消息行没有整行点击，头像与气泡是兄弟节点，所以不需要 stopPropagation。
    */
   const renderAvatar = (mine: boolean) => {
-    const url = mine ? (me?.avatarUrl ?? '') : (counterpart.avatarUrl ?? '')
-    const initial = mine ? (me?.nickname[0] ?? '我') : (counterpart.nickname[0] ?? '同')
+    const url = mine ? (me?.avatarUrl ?? null) : counterpart.avatarUrl
     return (
-      <View
-        className={`conv__ava${mine ? ' is-mine' : ''}`}
+      <UserAvatar
+        className="conv__ava"
+        src={url}
         onClick={mine ? openSelfProfile : openCounterpart}
-      >
-        {url ? (
-          <Image className="conv__ava-img" src={url} mode="aspectFill" />
-        ) : (
-          <Text className="conv__ava-tx">{initial}</Text>
-        )}
-      </View>
+      />
     )
   }
 

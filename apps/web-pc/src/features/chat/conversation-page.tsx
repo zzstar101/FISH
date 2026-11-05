@@ -806,11 +806,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
           <Card className="gap-0 border border-line p-5">
             <h2 className="font-semibold text-base">对方</h2>
             <div className="mt-4 flex items-center gap-3">
-              <UserAvatar
-                avatarUrl={item.counterpart.avatarUrl}
-                emoji={item.counterpart.nickname.slice(0, 1)}
-                size="lg"
-              />
+              <UserAvatar avatarUrl={item.counterpart.avatarUrl} size="lg" />
               <p className="truncate font-semibold">{item.counterpart.nickname}</p>
             </div>
           </Card>

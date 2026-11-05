@@ -5,6 +5,7 @@ import {
 } from '@fish/contracts/auth/scan'
 import { Button } from '@fish/ui/button'
 import { Spinner } from '@fish/ui/spinner'
+import { UserAvatar } from '@fish/ui/user-avatar'
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api-client'
@@ -312,13 +313,8 @@ export function ScanLoginPanel({
         <div>
           <p className="text-ink-3 text-sm">即将登录为</p>
           <div className="mt-2 flex items-center justify-center gap-2">
-            {state.user.avatarUrl === null ? (
-              <span className="flex size-9 items-center justify-center rounded-full bg-secondary font-semibold text-secondary-foreground">
-                {state.user.nickname.slice(0, 1)}
-              </span>
-            ) : (
-              <img alt="" className="size-9 rounded-full object-cover" src={state.user.avatarUrl} />
-            )}
+            {/* 契约 `ScanUserSchema.avatarUrl` 可为 null：空也画统一默认头像（#618） */}
+            <UserAvatar avatarUrl={state.user.avatarUrl} className="size-9" size="sm" />
             <span className="font-semibold text-lg">{state.user.nickname}</span>
           </div>
         </div>
