@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useDidShow } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BADGE } from '@/assets/badge'
 import { BRAND } from '@/assets/brand'
@@ -19,7 +19,7 @@ import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
-import { notifyTabbarRoute } from '@/lib/tabbar-sync'
+import { useTabTransition } from '@/lib/use-tab-transition'
 import { acceptsRefreshedProfile, isLatestLoad, isNotOlderThan, shouldRefreshOnShow } from './view'
 import './index.scss'
 
@@ -122,6 +122,17 @@ export default function Profile() {
    */
   const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
 
+  /**
+   * 切走时暂停页头动效。tab 页常驻不销毁 —— `useDidShow`/`useDidHide` 只是切显隐，
+   * 页面藏起来后 `heroGlow`(opacity) 与 `heroSweep`(transform) 仍按帧推进，白占合成器。
+   * 加一个 class 让 WXSS 把 `animation-play-state` 置 paused，从当前帧冻结、回来继续跑
+   * （规则见 index.scss）。真机上的停帧与衔接观感未实测，见 PR #624 的取证记录。
+   */
+  const [pageHidden, setPageHidden] = useState(false)
+  useDidShow(() => setPageHidden(false))
+  useDidHide(() => setPageHidden(true))
+  const pageClass = pageHidden ? 'profile profile--anim-paused' : 'profile'
+
   const { status: authStatus, user: authUser } = useAuth()
   /** 只有**确定**未登录才显示登录引导（`unknown` = 冷启动 `GET /me` 还没回来） */
   const anonymous = authStatus === 'anonymous'
@@ -216,7 +227,7 @@ export default function Profile() {
   authedRef.current = authStatus === 'authed'
   userIdRef.current = authUser?.id ?? null
   // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
-  useDidShow(notifyTabbarRoute)
+  const tabContentClass = useTabTransition()
   useDidShow(() => {
     const firstShow = skipFirstShowRef.current
     skipFirstShowRef.current = false
@@ -356,6 +367,23 @@ export default function Profile() {
 
   /** 头像 / 昵称：进编辑资料页（#86 B） */
   const openEditProfile = () => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })
+
+  /**
+   * 「主页」钮（#578）：进**自己的公开主页**，看别人眼里的自己。
+   *
+   * 与头像 / 昵称那条「编辑资料」（#86 B）**并存、不顶替** —— 那两处仍是编辑资料，
+   * 这里只多一枚独立入口，所以放在头部右侧、与扫码钮同一行的动作区，而不是把头像 /
+   * 昵称的点击改去主页。
+   *
+   * 目标是公开页 `pkg-browse/pages/user`（`GET /users/:userId/public` 匿名可读），
+   * 页内 `isSelf` 会认出本人并补「这是你的公开主页」提示，因此后端 / 契约零改动。
+   * 未登录态不渲染这枚钮：匿名分支连整个头部都不渲染（见下方 `anonymous` 分支）。
+   */
+  const openMyProfile = () => {
+    const uid = user?.id
+    if (!uid) return
+    void Taro.navigateTo({ url: `/pkg-browse/pages/user/index?id=${encodeURIComponent(uid)}` })
+  }
 
   /** 退出登录：确认后先注销服务端会话、再清本地（顺序说明见文件头） */
   const onLogout = () => {
@@ -560,9 +588,12 @@ export default function Profile() {
    */
   if (anonymous) {
     return (
-      <View className="profile">
+      <View className={pageClass}>
         <View className="profile__hero-bg" />
-        <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
+        <View
+          className={`profile__body ${tabContentClass}`}
+          style={{ paddingTop: `${navHeight + 8}px` }}
+        >
           <View className="profile__card profile__guest">
             <View className="profile__guest-av">
               <Image className="profile__guest-ic" src={ICONS.userFg} mode="aspectFit" />
@@ -594,9 +625,12 @@ export default function Profile() {
    */
   if (authStatus === 'unknown') {
     return (
-      <View className="profile">
+      <View className={pageClass}>
         <View className="profile__hero-bg" />
-        <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
+        <View
+          className={`profile__body ${tabContentClass}`}
+          style={{ paddingTop: `${navHeight + 8}px` }}
+        >
           <View className="profile__card profile__guest">
             <Text className="profile__guest-text">正在恢复登录状态…</Text>
           </View>
@@ -644,10 +678,13 @@ export default function Profile() {
   )
 
   return (
-    <View className="profile">
+    <View className={pageClass}>
       <View className="profile__hero-bg" />
 
-      <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
+      <View
+        className={`profile__body ${tabContentClass}`}
+        style={{ paddingTop: `${navHeight + 8}px` }}
+      >
         {/* 个人头部：头像 / 昵称 + 认证胶囊 / 签名 / 扫码（与头像同行对齐）。
             头像与昵称都是「编辑资料」入口（#86 B）：微信不开放读取头像昵称，
             只能由用户在编辑页主动选，所以这里既没有单独的「编辑」行也不显示假头像 */}
@@ -700,6 +737,14 @@ export default function Profile() {
                 {sigText || '设置个性签名'}
               </Text>
             </View>
+          </View>
+          {/* 主页（#578）：进自己的公开主页（`pkg-browse/pages/user?id=<自己>`）。
+              与头像 / 昵称的「编辑资料」语义不重叠（那两处仍是 #86 B 的编辑入口），
+              所以这里是**并列的一枚独立按钮**；图标用 `userFg`（人形 = 个人主页），
+              刻意不用 house 字形 —— TabBar 的「首页」就是这个字形，摆在头部会被读成
+              「回首页」。 */}
+          <View className="profile__homebtn" onClick={openMyProfile}>
+            <Image className="profile__homebtn-ic" src={ICONS.userFg} mode="aspectFit" />
           </View>
           {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}
           <View

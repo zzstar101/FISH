@@ -91,8 +91,8 @@
  * - 尺寸：宽 = 一槽；上下各留 4/6rpx，露出底栏自己的玻璃边，读作「栏内的一层」。
  * - 配方：低白度 22% + 内高光描边 + blur(16rpx)，纯透明、无品牌色 —— 选中语义仍由
  *   `.is-on` 的品牌色图标/文字承担，胶囊只负责「位置高光」。
- * - **无过渡**（Owner 2026-09-28 拍板「先去掉高光胶囊的动画」）：位置随页面路径
- *   瞬时落位。此前滑动动画受「每页一实例」机制约束被切页打断，三次返工后砍掉。
+ * - #612：有效点击意图在目标实例播放，最终位置仍由实际页面路径决定。
+ *   不靠离开页的 CSS transition，也不等待动画才导航；减少动态效果时直接落位。
  * - `pointer-events:none`：点击必须穿透到 tab，胶囊只是高光层。
  */
 .tabbar__capsule {
@@ -111,6 +111,23 @@
   backdrop-filter: blur(16px) saturate(160%);
   -webkit-backdrop-filter: blur(16px) saturate(160%);
   pointer-events: none;
+  animation-timing-function: cubic-bezier(0.333333, 1, 0.666667, 1);
+  animation-fill-mode: both;
+}
+
+@keyframes tab-capsule-enter {
+  from {
+    transform: translateX(var(--tab-capsule-from));
+  }
+  to {
+    transform: translateX(var(--tab-capsule-to));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabbar__capsule {
+    animation: none !important;
+  }
 }
 
 /**

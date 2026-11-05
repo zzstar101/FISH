@@ -5,6 +5,40 @@
    （与 `top-bar/index.scss` 等共享组件互相插队）。样式文件仍放在组件目录下。 */
 @use "./components/user-avatar/index";
 
+/* #612：只作用于四个 Tab 的内容区，始终可见；不移动页面壳或影响滚动几何。 */
+@keyframes tab-content-enter-a {
+  from {
+    opacity: 0.96;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tab-content-enter-b {
+  from {
+    opacity: 0.96;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.tab-content-enter-a {
+  animation: tab-content-enter-a 140ms ease-out;
+}
+
+.tab-content-enter-b {
+  animation: tab-content-enter-b 140ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-content-enter-a,
+  .tab-content-enter-b {
+    animation: none;
+  }
+}
+
 /**
  * 全局壳样式。
  * 令牌在 styles/_tokens.scss（会自动编译进 app.wxss），这里只放页面级公共壳。
