@@ -52,9 +52,9 @@
 3. **静态检查通过**：`bun run --filter '@fish/miniapp' typecheck` 与 `bun run lint` 无错误。
 4. 提交信息用 Conventional Commits，遵守 `CONTRIBUTING.md`。
 5. **小程序端与 API 必须是同一提交基线**（或至少同一版契约）：小程序是独立发布通道，端上先发、服务端后收
-   会直接打成 4xx。契约是 `strictObject`（未知查询键/字段直接 422），所以「端上多带一个参数」就能让整条链路失败。
+   会直接打成 4xx。契约是 `strictObject`（未知查询键直接 422），所以「端上多带一个参数」就能让整条链路失败。
    实测案例见 [#599](https://github.com/zzstar101/FISH/issues/599)：端上 `GET /users/:id/listings?status=SOLD`
-   先发，API 还是含 #592 之前的构建 → 每次切段都 422，端上表现为「刷新不出来」。
+   先发，API 还是不含 #592 的旧构建 → 每次切段都 422，端上表现为「刷新不出来」。
    - 演示时要确认被测环境的 API 与自己这份端上构建出自同一提交；
    - 改契约的 PR **不得**先合端上、后合/后部署服务端；同一 PR 内两侧一起改，或服务端先上。
 
