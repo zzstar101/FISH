@@ -48,8 +48,8 @@ import { requestSellEdit } from '@/features/listing/edit-target'
 // #567：买家侧底栏的已售出文案与卡片角标（#566）同一来源，页面不另写字面量
 import { buyerStatusNote } from '@/features/listing/status-mark'
 import { fetchListingMatches } from '@/features/match/api'
-import { usePresenceNow } from '@/features/presence/use-presence-now'
-import { presenceView } from '@/features/presence/view'
+import { PresenceBadge } from '@/features/presence/presence-badge'
+import { usePresenceClock } from '@/features/presence/use-presence-now'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
@@ -897,12 +897,12 @@ export default function ListingDetail() {
    * 时 `data.seller.presence` 为 null → 整块不渲染，不画一个假的「离线」。
    * 判据与文案走三处展示位共用的 `features/presence/view`。
    *
-   * 「现在」走 `usePresenceNow`（#376 审查回合）：本页只在进页拉一次详情，没有任何
-   * 轮询能带来重渲染，直接用 `Date.now()` 等于把 TTL 过期判据冻在首帧。该 hook 不发
+   * 「现在」走 `usePresenceClock` + `PresenceBadge`（#376 审查回合，性能改造）：本页只在
+   * 进页拉一次详情，没有任何轮询能带来重渲染，直接用 `Date.now()` 等于把 TTL 过期判据冻在
+   * 首帧。那个 30s 一跳的时钟现在只驱动徽标本身重算，页面主体不跟着重渲染；本钩子不发
    * 请求，页面被盖住（例如跳去看会话）时停表。
    */
-  const sellerPresenceNow = usePresenceNow()
-  const sellerPresence = data ? presenceView(data.seller.presence, sellerPresenceNow) : null
+  usePresenceClock()
 
   /**
    * 「谁在求购」（#8 的 byListing 端点）：**卖家本人视角**的匹配愿望列表。
@@ -1671,15 +1671,9 @@ export default function ListingDetail() {
                     {/* 在线态（#359 第五点）：昵称行里紧挨昵称（认证勾之后）、头像右侧的
                         同一条水平线上（与稿 `.seller .nm` 的排布一致，右侧那个独立槽位是
                         「进TA主页」）。
-                        绿点 + 文案（离线时说「多久没上线」，见 features/presence/view）。 */}
-                    {sellerPresence ? (
-                      <View
-                        className={`detail__presence${sellerPresence.online ? ' is-online' : ''}`}
-                      >
-                        <View className="detail__presence-dot" />
-                        <Text className="detail__presence-tx">{sellerPresence.text}</Text>
-                      </View>
-                    ) : null}
+                        绿点 + 文案（离线时说「多久没上线」，见 features/presence/view）；
+                        「现在」由组件自己订阅，拿不到在线态时它整块不渲染。 */}
+                    <PresenceBadge presence={data.seller.presence} className="detail__presence" />
                   </View>
                   {/*
                   卖出件数与好评率契约里没有（见 mock/types.ts 的 MockUser 注释）。
