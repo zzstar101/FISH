@@ -188,13 +188,16 @@
 }
 
 .rpu__obj-tag {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 19px;
   color: var(--muted);
   border: 2px dashed var(--line);
   border-radius: var(--r-pill);
-  padding: 6px 16px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
 /* ── 原因胶囊：不放图标（见文件头），纯文字 24px 不换行 ── */
@@ -503,7 +506,8 @@
   color: var(--brand-deep);
   background: var(--accent-weak);
   border-radius: var(--r-pill);
-  padding: 4px 16px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
 /* 编号 + 复制钮：`align-items: center` 让编号文字与 S 档复制钮（68）垂直居中；

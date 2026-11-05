@@ -109,7 +109,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 20px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   @include pressable;

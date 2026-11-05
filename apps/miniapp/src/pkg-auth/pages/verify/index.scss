@@ -555,8 +555,11 @@
 }
 
 .verify__badge-tag {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
-  padding: 8px 20px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--ok-weak);
   border: 2px solid var(--ok-line);

@@ -313,12 +313,15 @@
 }
 
 .dsd__evidence-type {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   font-size: var(--fs-2xs);
   color: var(--brand-deep);
   background: var(--accent-weak);
   border-radius: 999px;
-  padding: 2px 12px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
 .dsd__evidence-sender {
