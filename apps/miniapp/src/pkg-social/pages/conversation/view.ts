@@ -1574,6 +1574,127 @@ export const REPLY_DROPPED_TIP = '引用的消息已失效，已去掉引用'
 export const BOTTOM_SLACK_PX = 24
 
 /**
+ * 「+」面板自身内容的几何（rpx，#597 追加任务）。
+ *
+ * 面板高度**不再等于键盘高度**：三格图标的实际内容只有这么高，按「上次键盘高」撑开会把
+ * 下方一大片留成空白（Owner 在演示截图里提的「展开后下方位置太空了」）。面板高度改为
+ * 「内容自己多高就多高」，与键盘彻底解耦 —— 代价是键盘 ↔ 面板切换时底部底座会**一次**
+ * 变高/变矮（差一个「键盘高 − 面板高」）。这是有意的取舍：宁可让消息流一次性让位，
+ * 也不要留一片空面板。
+ *
+ * 四个数是 `index.scss` 的真源，改 scss 必须同步改这里（单测钉住两边一致）：
+ * - `PANEL_PADDING_RPX`：`.conv__panel` 的 `padding: 24px 28px calc(24px + env(...))` 上下两段
+ * - `PANEL_DISC_RPX`：`.conv__ptile-disc` 的 `width/height: 104px`
+ * - `PANEL_TILE_GAP_RPX`：`.conv__ptile` 的 `gap: 12px`（圆钮与文字之间）
+ * - `PANEL_LABEL_RPX`：`.conv__ptile-label` 的**行盒**高度，即 `line-height: 30px`
+ *   （字号 22px 配 1.36 倍行距）。这一条**必须由 scss 写死**：不写 `line-height` 时行盒落在
+ *   `normal` 上，实际高度取决于端上字体（iOS 苹方 / 安卓各一套），1.36 倍只是个估值 ——
+ *   那这里算出来的就不是「面板真实高度」，让位带上方那条 16px 缝隙剩多少全看机型。
+ */
+export const PANEL_PADDING_RPX = 48
+export const PANEL_DISC_RPX = 104
+export const PANEL_TILE_GAP_RPX = 12
+export const PANEL_LABEL_RPX = 30
+
+/** 「+」面板的内容高度（rpx）= 上下内边距 + 圆钮 + 间隙 + 一行文字 */
+export const PANEL_CONTENT_RPX =
+  PANEL_PADDING_RPX + PANEL_DISC_RPX + PANEL_TILE_GAP_RPX + PANEL_LABEL_RPX
+
+/**
+ * 面板该给自己留多高（设备 px，#597 追加任务）：内容高度（rpx 换算）+ 底部安全区。
+ *
+ * `designWidth = 750`，所以 scss 里的 `1px` 就是 `1rpx`，rpx → 设备 px 只差一个
+ * `windowWidth / 750`（375 宽的屏上 194rpx ≈ 97px）。
+ *
+ * 为什么把安全区加进来：`.conv__panel` 自己的 `padding-bottom` 里带
+ * `env(safe-area-inset-bottom)`，面板真的会比「纯内容」高出一条安全区。底座让给它的
+ * 高度必须把这条算进去，否则面板会盖到输入行上。
+ */
+export function resolvePanelHeightPx(input: {
+  windowWidth: number
+  safeAreaBottom: number
+}): number {
+  const { windowWidth, safeAreaBottom } = input
+  // 量不到窗口宽度时按 375 宽（750 的一半）估，别让 rpx 换算退化成 0
+  const scale = windowWidth > 0 ? windowWidth / 750 : 0.5
+  return Math.round(PANEL_CONTENT_RPX * scale) + Math.max(0, Math.round(safeAreaBottom))
+}
+
+/**
+ * 底部底座用什么高度（设备 px，#597）—— 键盘与「+」面板**互斥**，谁在场就用谁的。
+ *
+ * 面板展开时**不看** `keyboardHeight`：那一刻键盘正在收起（平台事件一路单调递减），
+ * 用它的中间值会把底部底座连着改好几次，消息流就跟着抖好几次。面板高度在渲染当拍就是
+ * 终值（`resolvePanelHeightPx` 从内容算出来，见上），所以底部高度**一次**到位、之后不再变。
+ *
+ * 收起面板时回到 `keyboardHeight`：键盘本来就没开就是 0（内联样式整段不写，
+ * `.conv__bottom` 自己的 `env(safe-area-inset-bottom)` 生效）。
+ */
+export function resolveBottomInset(input: {
+  panelOpen: boolean
+  keyboardHeight: number
+  panelHeight: number
+}): number {
+  const { panelOpen, keyboardHeight, panelHeight } = input
+  if (!panelOpen) return Math.max(0, keyboardHeight)
+  return Math.max(0, panelHeight)
+}
+
+/**
+ * 这一帧键盘上报是不是「新占用者到了」——**面板 → 键盘**的交接判据（#597）。
+ *
+ * 面板展开时点输入框，底部那块高度在换占用者：面板让位、键盘接上。但新占用者要等**真落地
+ * 那一帧**才认，否则底座会先塌空一次（`resolveBottomInset` 那一刻只能拿到还没落地的键盘高度）。
+ *
+ * 三条缺一不可：
+ * - 面板开着：没面板就没有交接；
+ * - 这一帧不是**收键盘动画**（`closing`）：动画里每帧高度都 `> 0`，可那是**旧占用者在退场**。
+ *   把它当成新键盘到了，就会出现「键盘开着点『+』，面板约 40ms 就自己消失」—— 点「+」当拍
+ *   走过 `collapseKeyboard()`，平台接着把收键盘拆成若干递减帧（#560 的既有前提）；
+ * - 高度 `> 0`：真落地了。
+ *
+ * `closing` 由 `nextKeyboardInset` 维护（意图闩 + 尾巴窗口），这里只做判据，不自己维护第二条
+ * 状态链 —— 判据必须在纯函数里，否则「回滚这一行」在源码钉桩之外没人能测出来。
+ */
+export function shouldHandOffToKeyboard(input: {
+  panelOpen: boolean
+  closing: boolean
+  inset: number
+}): boolean {
+  const { panelOpen, closing, inset } = input
+  if (!panelOpen) return false
+  if (closing) return false
+  return inset > 0
+}
+
+/** 点击与拖动的分界（设备 px）：松手时位移超出它就算「用户在滚动」，不算点击 */
+export const PANEL_DISMISS_TAP_SLOP_PX = 8
+
+/**
+ * 一次松手算不算「点了一下消息区」（设备 px）。
+ *
+ * 面板展开时靠消息流的触摸收起它（#541/#597），但收起**不能挂在触摸开始上**：手指一落下
+ * 就是滚动的第一帧，那一刻收面板等于「面板展开期间滑不动」—— 底座从面板高缩回 0，消息流
+ * 在手指还没动起来时被撑高一条面板，正是 #597 现象二与现象一叠在一起。所以判据落在**松手**
+ * 那一拍：位移在容差内才算点击（收起），拖动就交给 ScrollView 照常滚动。
+ *
+ * 容差按单轴给：一次点击的抖动是两个方向各几 px，取两轴都不过阈值就够了，不必算欧氏距离
+ * （斜着拖 6+6 也正是「有意图的拖动」）。取不到坐标（老基础库 / 事件被吞）时一律返回 `false`
+ * —— 拿不到起点就不许收，宁可这一次点空白没反应，也不能把滚动误判成点击。
+ */
+export function isPanelDismissTap(
+  start: { x: number; y: number } | null,
+  end: { x: number; y: number } | null,
+): boolean {
+  if (!start || !end) return false
+  // NaN（取不到触点）参与比较恒为 false，这里要的是「不许据此收面板」，正好一致
+  return (
+    Math.abs(end.x - start.x) <= PANEL_DISMISS_TAP_SLOP_PX &&
+    Math.abs(end.y - start.y) <= PANEL_DISMISS_TAP_SLOP_PX
+  )
+}
+
+/**
  * 消息流此刻是不是贴着底部（#561）。
  *
  * `onScroll` 的 `detail` 只有 `scrollTop` / `scrollHeight`，**不含视口高度**，所以视口要
@@ -1679,13 +1800,21 @@ export function growBottomAllowance(input: {
  * 与 `growBottomAllowance` 的累加互补 —— 量测是事后的一帧，布局没落定时可能报 0；
  * 直接覆盖会把 `onLineChange` 刚记下的增量清零，而原生那次滚动事件正好在这之后到达。
  * 首次量测（`prevViewport <= 0`）没有可比对象，算出来会是整个视口高，等于一次放到最松。
+ *
+ * **面板开合那一次不记账**（`panelTransition`，#597）：那是用户主动切换底部底座，
+ * 不是内容长高。把它记进容差等于把「贴底」判据一次性放宽到面板那么高 —— 用户明明在
+ * 翻历史，下一次开面板却被判成贴底，尾行锚点一翻就把他拽到底（#597 现象三）。
+ * 归零而不是「保持原值」：切换这一刻几何是全新的，判据应当回到最严格的那一档。
  */
 export function mergeViewportShrink(input: {
   allowance: number
   prevViewport: number
   nextViewport: number
+  /** 这次量测是不是「面板开合」引起的几何变化 */
+  panelTransition?: boolean
 }): number {
-  const { allowance, prevViewport, nextViewport } = input
+  const { allowance, prevViewport, nextViewport, panelTransition } = input
+  if (panelTransition) return 0
   if (!(prevViewport > 0) || !(nextViewport > 0)) return allowance
   const shrunkBy = prevViewport - nextViewport
   if (shrunkBy <= 0) return allowance
