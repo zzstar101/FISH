@@ -75,21 +75,30 @@ describe('parseTxEvent —— 交易 SYSTEM 事件解析', () => {
   })
 })
 
-describe('systemPillText —— 灰胶囊文案', () => {
-  test('proposal / rejected 翻成中文', () => {
-    expect(systemPillText(JSON.stringify({ type: 'tx.proposal' }))).toBe('待对方同意')
-    expect(systemPillText(JSON.stringify({ type: 'tx.rejected' }))).toBe('卖家已拒绝这次交易')
+describe('systemPillText —— 灰胶囊文案（#613：灰胶囊即阶段胶囊）', () => {
+  test('proposal 按视角出文案：买家「待对方同意」、卖家「商品被拍下，前往确认」', () => {
+    const proposal = JSON.stringify({ type: 'tx.proposal' })
+    expect(systemPillText(proposal, 'buyer')).toBe('待对方同意')
+    expect(systemPillText(proposal, 'seller')).toBe('商品被拍下，前往确认')
+  })
+
+  test('rejected 双方同一句「交易被拒绝」', () => {
+    const rejected = JSON.stringify({ type: 'tx.rejected' })
+    expect(systemPillText(rejected, 'buyer')).toBe('交易被拒绝')
+    expect(systemPillText(rejected, 'seller')).toBe('交易被拒绝')
   })
 
   test('认不出的内容按原文降级，不吞消息', () => {
-    expect(systemPillText(JSON.stringify({ type: 'tx.unknown' }))).toBe('{"type":"tx.unknown"}')
-    expect(systemPillText('买家发起了交易确认。')).toBe('买家发起了交易确认。')
+    expect(systemPillText(JSON.stringify({ type: 'tx.unknown' }), 'buyer')).toBe(
+      '{"type":"tx.unknown"}',
+    )
+    expect(systemPillText('买家发起了交易确认。', 'seller')).toBe('买家发起了交易确认。')
   })
 
-  test('tx.accepted 只留一句事实（#522：状态不再由消息快照承担）', () => {
-    expect(systemPillText(JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_1' }))).toBe(
-      '已接受交易',
-    )
+  test('tx.accepted 说这件事发生过什么，不随之后的状态改写', () => {
+    expect(
+      systemPillText(JSON.stringify({ type: 'tx.accepted', transactionId: 'txn_1' }), 'seller'),
+    ).toBe('已接受交易，待面交')
   })
 })
 

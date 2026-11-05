@@ -281,6 +281,19 @@ export const SEGMENTS: { key: CommentSegment; label: string }[] = [
   { key: 'trade', label: '交易评价' },
 ]
 
+/**
+ * 路由参数 `seg` → 进页初始分段（#613 ⑤：「前往查看评价」跳到「我的评价」时要直接落
+ * 在交易评价段，而不是让用户再点一次 Tab）。
+ *
+ * 只认 `SEGMENTS` 里的三个键，其余一律回落 `all`：参数是外部输入（分享 / 手拼 URL /
+ * 旧版本页面拼错），拿一个不存在的段去请求只会得到空列表并把 Tab 点亮成一个不存在的键。
+ */
+export function segmentOfParam(raw: string | string[] | undefined): CommentSegment {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const hit = SEGMENTS.find((item) => item.key === value)
+  return hit?.key ?? 'all'
+}
+
 /** 分段 → `/me/comments` 的 `kind` 档位。两套键只在这一处换算。 */
 export function kindOfSegment(segment: CommentSegment): MyCommentsKind {
   switch (segment) {

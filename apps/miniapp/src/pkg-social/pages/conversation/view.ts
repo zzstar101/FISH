@@ -1,6 +1,7 @@
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
+import { currentTxOf } from '@/features/chat/capsule'
 import type { AllowedImageMime } from '@/features/upload/mime'
 
 /**
@@ -64,16 +65,30 @@ export function lastTxAcceptedId(messages: readonly MessageDto[]): string | null
  * 不属于专门卡片的 SYSTEM 消息的胶囊文案。
  *
  * `tx.proposal` / `tx.rejected` / `tx.accepted` 翻成中文，其余（含普通文本系统消息）
- * 按原文。`tx.accepted` 说的是**这条消息发生过什么**（「已接受交易」），不是
- * 「这笔交易现在在哪一步」—— 后者由页头交易状态条按交易行渲染（#522 的教训：
- * 把不可变消息当实时状态，成交后就会一直停在「待面交」）。
+ * 按原文。
+ *
+ * 这三档文案就是 Owner 2026-11-04 定下的**阶段胶囊**本身的措辞（#613）：胶囊由这条消息
+ * 承载，会话区末尾那块进度块只在「没有系统消息可承载」的终态（成交 / 评价完成 / 取消）
+ * 才补一颗 —— 同一句话不在会话里说两遍。
+ *
+ * `role` **必填**、且只影响提案态：`tx.proposal` 说的是「买家拍下了」，卖家看到的应该是
+ * 「商品被拍下，前往确认」，而不是站在买家视角的「待对方同意」。必填是刻意的 ——
+ * 缺省回落到买家口径会让卖家静默看到别人的提示语，这种错没人会发现。
+ *
+ * 与 #522 的关系（Owner 定案时明确接受这一点，别按 #522 改回去）：这条胶囊说的是
+ * **这条消息发生过什么**，不是「这笔交易现在在哪一步」—— 实时状态仍由页头状态条按交易行
+ * 渲染、终态仍由会话区末尾的进度块渲染。成交之后历史里那句「已接受交易，待面交」读起来
+ * 就是一条日志（当时接受了、接着去面交），**不能**拿它当当前状态；页头若照抄这条消息，
+ * 才会重演 #522 的「成交后一直停在待面交」。
  */
-export function systemPillText(content: string): string {
+export function systemPillText(content: string, role: 'buyer' | 'seller'): string {
   const event = parseTxEvent(content)
   if (!event) return content
-  if (event.type === 'tx.proposal') return '待对方同意'
-  if (event.type === 'tx.accepted') return '已接受交易'
-  if (event.type === 'tx.rejected') return '卖家已拒绝这次交易'
+  if (event.type === 'tx.proposal') {
+    return role === 'seller' ? '商品被拍下，前往确认' : '待对方同意'
+  }
+  if (event.type === 'tx.accepted') return '已接受交易，待面交'
+  if (event.type === 'tx.rejected') return '交易被拒绝'
   return content
 }
 
@@ -132,6 +147,8 @@ export type TxBarAction =
   | { kind: 'code'; transactionId: string }
   | { kind: 'scan' }
   | { kind: 'review'; transactionId: string }
+  /** 评价已完成 → 「我的评价」页的交易评价段（#613） */
+  | { kind: 'reviews' }
   | { kind: 'retry' }
 
 export type TxBarView = {
@@ -174,20 +191,14 @@ export function txBarView(input: {
   const { role, tx, lastEvent, failed, reviewed } = input
   const proposal = lastEvent?.type === 'tx.proposal' ? lastEvent : null
   /**
-   * 取消后买家又提了新案：判据与 `features/chat/capsule.ts` 的 `proposalSupersedes` 同一份
+   * 取这一会话当前作数的那笔交易行：取消后买家又提了新案时，被提案盖过的旧行不作数
    * —— 此刻更该回答「现在等我做什么」的是提案，不是那笔已取消的行。否则顶部写着
    * 「交易已取消」，同一会话的列表胶囊却写着「待接受」，两处自相矛盾。
    *
-   * **已确认的边界（Owner 定论 2026-11-03：保留现状）**：同一会话存在过一笔 `CANCELLED`
-   * 交易行、买家再提案、卖家拒绝之后，拒绝只写一条 `tx.rejected`（不落表），于是「消息里
-   * 最后一个 `tx.*` 事件」变成 `tx.rejected` ⇒ 这里 `proposal` 为 null ⇒ 取回那笔 `CANCELLED`
-   * 行 ⇒ 顶部按终态陈述「交易已取消 · 查看」，不再退回「在售」。商品事实上仍在售，与
-   * #551 验收第 2 条「拒绝后顶部退回『在售 · 查看』」的字面只在**首次提案（无历史交易行）**
-   * 时完全一致；多笔历史交易时按终态陈述。此处行为不要「顺手修」—— 改判据要连
-   * `capsule.ts` 一起改，且需 Owner 重新拍板。例外口径已写进 PR 正文。
+   * **判据只有一份**：`features/chat/capsule.ts` 的 `currentTxOf`（列表胶囊、
+   * `txBarView`、`txStageView` 共用），多笔历史交易的边界也记在那里。
    */
-  const proposalSupersedes = tx?.status === 'CANCELLED' && proposal !== null
-  const currentTx = proposalSupersedes ? null : tx
+  const currentTx = currentTxOf(tx, lastEvent?.type)
 
   /**
    * 失败降级的第一档：终态 / 没有缓存 / 别的交易的缓存都不算数，一律「交易状态待更新」。
@@ -312,6 +323,229 @@ export function txBarView(input: {
     status: pendingStatus,
     label: role === 'seller' ? '打开交易码' : '开启扫码',
     action: role === 'seller' ? { kind: 'code', transactionId } : { kind: 'scan' },
+  }
+}
+
+/**
+ * 消息流末尾的「交易进度」块（#613）：胶囊 + 气泡。
+ *
+ * 这是 Owner 2026-11-04 定的**第二处状态位** —— #551 当时的口径是「顶部独家承载」，
+ * 现在改为**双通道**：顶部负责随时可查可操作，会话区负责把进度放进聊天流里，并且
+ * 把「确认 / 拒绝」这两颗钮再放一份到气泡里（两重保障，点哪边都生效）。
+ *
+ * 判据来源与 `txBarView` **同一份**，别分叉第三套：
+ * - 交易行（`TransactionDto`）回答「现在在哪一步」：`PENDING_MEETUP` / `COMPLETED` / `CANCELLED`；
+ * - 「取消后又被新提案盖过」由 `features/chat/capsule.ts` 的 `currentTxOf` 判定
+ *   （列表胶囊 / `txBarView` / 本函数共用同一份，不在这里再抄一遍）；
+ * - 消息流里最后一条 `tx.*` SYSTEM 事件回答「还没有交易行的提案态」（`tx.proposal`）
+ *   与「卖家拒绝了」（`tx.rejected`）——契约刻意不为终态写 SYSTEM 消息
+ *   （`packages/contracts/src/transactions/schema.ts:102-105`），所以终态的胶囊由交易行派生；
+ * - `reviewed` 是严格三态（`features/chat` 与 `txBarView` 同一口径）：`false` = 待评价、
+ *   `true` = 已评价、`null` = 没查到 —— `null` **不能**说成「没评价」。
+ *
+ * 与 `txBarView` 的差别只在**表达位置与文案**：顶部那条是「商品 + 状态词 + 一颗钮」，
+ * 这里是「一句阶段陈述（胶囊）+ 一张居中卡（气泡）」。动作语义共用 `TxBarAction`，
+ * 页面用同一套分发执行（`runTxBarAction`），不复制 `confirmProposal` / `declineProposal`。
+ */
+
+/** 气泡里的一颗按钮：文案显式给（同一动作在不同阶段叫法不同），语义复用 `TxBarAction` */
+export type TxStageAction = {
+  label: string
+  /** `primary` = 品牌蓝实心；`ghost` = 描边弱化（与顶部「拒绝」同一视觉语言） */
+  variant: 'primary' | 'ghost'
+  action: TxBarAction
+}
+
+/** 进度气泡：居中等宽卡，商品图 + 成交价 + 当前阶段动作 */
+export type TxStageBubble = {
+  /**
+   * 大标题：一句话说清「现在到哪一步 / 该我做什么」。
+   *
+   * 可空：这一档要说的东西已经由胶囊或按钮说清楚了就别再写一遍（Owner 口述的待面交档
+   * 就只有「商品图 + 价钱 + 打开交易码」，没有大标题；成交态评价未知时的「查看交易」
+   * 同理）。同一句话不在同一块里说两遍。
+   */
+  title: string | null
+  /** 商品名（标题下方一行，超长省略） */
+  listingTitle: string
+  coverUrl: string | null
+  /**
+   * 成交价（分），不是挂价：提案态取 `tx.proposal.amountCents`，成交后取交易行的
+   * `amountCents`。`null` = 提案没带金额（脏数据）——气泡照画，但不凭空造一个价格。
+   */
+  amountCents: number | null
+  /** 右侧动作区（竖排）；空数组 = 只陈述、没有可点的东西 */
+  actions: TxStageAction[]
+}
+
+export type TxStageView = {
+  /**
+   * 胶囊：贴在气泡上方的一句阶段陈述。
+   *
+   * **可空**，而且 ①②③ 三档刻意给 `null` —— 那三档的说法已经由消息流里的 SYSTEM 灰胶囊
+   * （`systemPillText`）说过了：灰胶囊就是 Owner 要的「胶囊」，这里再摆一颗就是同一句话
+   * 上下说两遍。只有**没有系统消息可承载**的成交档（交易成功 / 交易全流程完成）才由这块
+   * 补一颗；已取消档连胶囊都不出（顶部状态条独占，见下面 CANCELLED 分支）。
+   */
+  capsule: {
+    label: string
+    /**
+     * 胶囊视觉档，复用顶部状态条的四档 `TxBarTone`（不另造色值）：成交档目前唯一会出
+     * 胶囊，两档都是 `is-ok`（绿）。页面按它上类名，配色仍走 `--ok-weak` / `--ok-ink`。
+     */
+    tone: TxBarTone
+  } | null
+  /** 气泡；`null` = 这一档没有卡片可画（已取消） */
+  bubble: TxStageBubble | null
+}
+
+export function txStageView(input: {
+  /** 我在这条会话里的角色：决定提案态措辞与「打开交易码 / 扫码」的分派 */
+  role: 'buyer' | 'seller'
+  /** 商品状态：提案还在、商品却不是 ACTIVE 时这说明提案必然被拒（与 `txBarView` 同判据） */
+  listingStatus: string | undefined
+  /** 会话侧的商品摘要（气泡里的图与名） */
+  listing: { title: string; coverUrl: string | null }
+  tx: TransactionDto | null
+  /** 消息流里最后一个交易事件（提案态与提案金额只能从这里读） */
+  lastEvent: TxBarEvent | null
+  /** 我在这笔交易下有没有评价；`null` = 还没查 / 查不到 */
+  reviewed: boolean | null
+  /** 交易查询是否失败（调用方只在「有交易证据」时置真） */
+  failed: boolean
+}): TxStageView | null {
+  const { role, tx, lastEvent, listing } = input
+  /**
+   * 查询失败：**整块不出**。顶部状态条已经如实说「交易状态待更新 · 重新加载」，
+   * 这里再摆一条「交易状态待更新」就是同一句话说两遍，而且气泡里的动作也无从判断
+   * （失败时 `tx` 可能是别的交易的缓存）。历史 SYSTEM 灰胶囊不受影响 —— 它们是事实。
+   */
+  if (input.failed) return null
+
+  const proposal = lastEvent?.type === 'tx.proposal' ? lastEvent : null
+  /** 取消后买家又提了新案：判据见 `currentTxOf`（与 `txBarView` / 列表胶囊同一份，唯一一处） */
+  const currentTx = currentTxOf(tx, lastEvent?.type)
+  const goods = { listingTitle: listing.title, coverUrl: listing.coverUrl }
+
+  if (!currentTx) {
+    if (proposal) {
+      /**
+       * 商品已不是在售（被别的买家订走 / 下架）：这条提案必然 409 `LISTING_NOT_ACTIVE`，
+       * 摆一颗「确认」就是给用户一个必然失败的按钮（`txBarView` 同一档也是退回「查看」）。
+       */
+      if (input.listingStatus !== 'ACTIVE') return null
+      const amountCents = typeof proposal.amountCents === 'number' ? proposal.amountCents : null
+      if (role === 'seller') {
+        return {
+          /**
+           * 胶囊留空：这条提案自己就是一条 SYSTEM 消息，会话里已经有灰胶囊写着
+           * 「商品被拍下，前往确认」（`systemPillText` 按角色出），这块只补气泡。
+           */
+          capsule: null,
+          bubble: {
+            /**
+             * 卖家视角不能写「我已拍下」——拍下的是买家。同构只换人称（Owner 2026-11-04
+             * 口述「卖家这边是同样的信息」，主语按视角改）。
+             */
+            title: '买家已拍下，待我确认',
+            ...goods,
+            amountCents,
+            actions: [
+              { label: '确认', variant: 'primary', action: { kind: 'confirm', amountCents } },
+              { label: '拒绝', variant: 'ghost', action: { kind: 'reject' } },
+            ],
+          },
+        }
+      }
+      return {
+        capsule: null,
+        bubble: { title: '我已拍下，待卖家确认', ...goods, amountCents, actions: [] },
+      }
+    }
+    if (lastEvent?.type === 'tx.rejected') {
+      /**
+       * 拒绝不落表、商品仍在售：只陈述一句，不给任何动作（重新发起由买家决定）。
+       * 这句由那条 `tx.rejected` 的 SYSTEM 灰胶囊说（双方同一句「交易被拒绝」），
+       * 所以整块不出 —— 气泡、胶囊都没有可画的东西。
+       */
+      return null
+    }
+    return null
+  }
+
+  const transactionId = currentTx.id
+  if (currentTx.status === 'COMPLETED') {
+    /**
+     * 完成态三档（与 `txBarView` 的 `reviewed` 三态同源）：
+     * - `false` 待评价 → 气泡主钮「前往评价」，去向仍是面交页（端上唯一评价入口）；
+     * - `true` 已评价 → 主钮「前往查看评价」进「我的评价」的交易评价段，胶囊进最终档；
+     * - `null` 没查到 → **不替用户断言没评过**，主钮退回中性的「查看交易」，胶囊仍是「交易成功」。
+     */
+    if (input.reviewed === true) {
+      return {
+        capsule: { label: '交易全流程完成', tone: 'is-ok' },
+        bubble: {
+          title: '评价已完成',
+          ...goods,
+          amountCents: currentTx.amountCents,
+          actions: [{ label: '前往查看评价', variant: 'primary', action: { kind: 'reviews' } }],
+        },
+      }
+    }
+    return {
+      capsule: { label: '交易成功', tone: 'is-ok' },
+      bubble: {
+        /**
+         * `false` 待评价 → 标题就是那句行动号召；`null` 没查到评价态 → **没有标题**：
+         * 胶囊已经说了「交易成功」，再写一句「交易已完成」就是同一句话两遍。
+         */
+        title: input.reviewed === false ? '给对方评价' : null,
+        ...goods,
+        amountCents: currentTx.amountCents,
+        actions: [
+          {
+            label: input.reviewed === false ? '前往评价' : '查看交易',
+            variant: 'primary',
+            action: { kind: 'review', transactionId },
+          },
+        ],
+      },
+    }
+  }
+  if (currentTx.status === 'CANCELLED') {
+    /**
+     * 已取消：**整块不出**。顶部状态条这一档本来就写着「交易已取消」，会话流末尾再摆
+     * 一颗同字胶囊就是同一句话在同一屏说两遍；而这一档没有任何可以点的东西（交易已经
+     * 终止、商品回到在售，重新发起由买家决定），也就没有气泡可画。
+     */
+    return null
+  }
+
+  // PENDING_MEETUP：还没面交，买卖两侧同一句话、同一颗钮
+  return {
+    /** 胶囊留空：`tx.accepted` 那条 SYSTEM 灰胶囊已经在说「已接受交易，待面交」 */
+    capsule: null,
+    bubble: {
+      /**
+       * 没有大标题：这一档要说的「待面交」上一行灰胶囊已经说了，Owner 口述的待面交档
+       * 也只要求「商品图 + 价钱 + 右侧打开交易码」。顶部状态条在「我已确认、等对方确认」
+       * 时会写「待对方确认」（谁该动作），与这里的阶段陈述不是一回事，不冲突。
+       */
+      title: null,
+      ...goods,
+      amountCents: currentTx.amountCents,
+      actions: [
+        {
+          /**
+           * 文案按 Owner 口述「双方内容一样」统一写「打开交易码」；**动作**仍按角色分派
+           * ——卖家在面交页出示码（`code`），买家进扫码页（`scan`），与顶部同一套分派。
+           */
+          label: '打开交易码',
+          variant: 'primary',
+          action: role === 'seller' ? { kind: 'code', transactionId } : { kind: 'scan' },
+        },
+      ],
+    },
   }
 }
 

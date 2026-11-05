@@ -1253,3 +1253,165 @@
   font-size: 22px;
   color: var(--muted-2);
 }
+
+/**
+ * 消息流末尾的「交易进度」块（#613）：阶段胶囊 + 交易气泡。
+ *
+ * 位置在消息流末尾、贴着输入栏那一段，**居中**一块 —— 它不属于任何一方，买卖两侧
+ * 看到的是同一张卡（`.conv__list` 是 `align-items: flex-start`，所以这里要自己
+ * `align-self: stretch` 才能占满整行）。
+ *
+ * 配色口径：沿用消息 Tab 列表 `.chat__pill`（`pages/chat/index.scss:259`）的「浅底彩字」
+ * 语言，色值取 token（`--ok-weak` / `--ok-ink`）。刻意**不复用**订单页 `status-pill` 的
+ * 深底实心：那套会把「交易成功」画成一块黑标签（`features/chat/capsule.ts` 文件头记着
+ * 这条 Owner 结论）。
+ *
+ * 只有成交档（交易成功 / 交易全流程完成）会出胶囊 —— 提案 / 接受 / 拒绝三档的说法由流里
+ * 的 SYSTEM 灰胶囊承担，已取消档由顶部状态条承担；这两档的 `capsule.tone` 都是 `is-ok`，
+ * 所以这里只落一档绿色，不按 `TxBarTone` 铺四套配色（那四档只属于顶部状态条）。
+ */
+.conv__txstage {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0 6px;
+}
+
+.conv__txstage-pill {
+  max-width: 100%;
+  padding: 10px 22px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  /* 长文案（「商品被拍下，前往确认」）在窄屏上省略，不挤压气泡宽度 */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 绿 = 交易成功 / 全流程完成（`capsule.tone === 'is-ok'`，当前唯一会出胶囊的档） */
+.conv__txstage-pill.is-ok {
+  background: var(--ok-weak);
+  color: var(--ok-ink);
+}
+
+.conv__txstage-pill-tx {
+  font-size: inherit;
+}
+
+/* 气泡：居中等宽卡（不吃消息气泡的左右分侧布局） */
+.conv__txstage-card {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 26px;
+  border-radius: 32px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.conv__txstage-title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 一行三段：商品图 + 名与价 + 右侧动作区（动作区竖排，卖家的「确认 / 拒绝」就靠它） */
+.conv__txstage-item {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.conv__txstage-thumb {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+  overflow: hidden;
+  background: var(--ink-weak);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conv__txstage-img {
+  width: 100%;
+  height: 100%;
+}
+
+.conv__txstage-ph {
+  width: 48px;
+  height: 48px;
+}
+
+/* 名与价吃掉中间剩余宽度：商品名一行省略，价格不换行 */
+.conv__txstage-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conv__txstage-nm {
+  font-size: var(--fs-xs);
+  /* 用 --muted-2（#3e4b66，已定义）：`--ink-2` 在本仓**没有定义**（`styles/_token-vars.scss`
+     里只有 --ink / --ink-weak*），拿它写颜色会静默失效 */
+  color: var(--muted-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.conv__txstage-price {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--price);
+  white-space: nowrap;
+}
+
+.conv__txstage-price-n {
+  font-size: inherit;
+}
+
+/* 动作区：竖排（「确认」在上、「拒绝」在下，与 Owner 口述的排列一致） */
+.conv__txstage-acts {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.conv__txstage-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 132px;
+  height: 56px;
+  padding: 0 22px;
+  border-radius: var(--r-pill);
+  background: var(--brand-deep);
+  color: var(--surface);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 次要动作（拒绝）走描边：与顶部状态条 `.conv__pbar-act--ghost` 同一视觉语言 */
+.conv__txstage-act.is-ghost {
+  background: transparent;
+  color: var(--muted-2);
+  /* 用 inset 阴影画描边而不是 border：两颗钮高度一致，不吃盒模型差异 */
+  box-shadow: inset 0 0 0 2px rgba(23, 35, 61, 0.22);
+}
