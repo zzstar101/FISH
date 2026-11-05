@@ -106,6 +106,10 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 
 > 表里的「推荐字号」只是建议值，硬约束是规则 3 的上限；字号令牌仍以 `--fs-*` 为准，令牌阶梯的修订见 #628，本节不重复定义。
 >
+> **列向 flex 容器里的按钮不要写 `flex: 1`**：`flex: 1` 的 `flex-basis: 0` 会在主轴上盖掉 `height`，
+> 档位高度直接失效、按钮细成一条文字高（`apps/miniapp/src/pages/sell/index.scss` 的 `.sell__result .sell__btn-line`
+> 就是这个坑）。要固定档位高度写 `flex: none`，要它填满宽度写 `width: 100%`。
+
 > 档位数值表达的是**下限**：写成 `height` 还是 `min-height` 不影响档位含义，但文案可能换行的地方要用 `min-height`（配 `min-height` + 上下内边距，`height` + `white-space: nowrap` 会在两行时裁字）。同一行里的输入框与按钮必须取同一档（规则 2）。
 
 ## 4. 玻璃材质（谨慎用）
