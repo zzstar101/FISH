@@ -1,14 +1,16 @@
 /**
  * 「从我的发布进出物页」的一次性交接位。
  *
- * 为什么需要它：**出物页是 Tab 页**，而小程序禁止 `navigateTo` / `redirectTo` 到 tabBar 页，
- * `switchTab` 又不接受 query（`docs` 与实测都如此）。所以交接目标不能走 URL，只能走
- * 一次性的模块级交接：
+ * 为什么需要它：`prefill` 带的是**对象**（草稿字段），塞不进 query；编辑也沿用同一条通道，
+ * 不给「编辑」单独开 URL 参数。所以交接目标不走 URL，只走一次性的模块级交接：
  *
  * ```
- * 我的发布页：requestSellEdit(id) / requestSellPrefill(draft) → Taro.switchTab('/pages/sell/index')
+ * 我的发布页：requestSellEdit(id) / requestSellPrefill(draft) → Taro.navigateTo('/pages/sell/index')
  * 出物页：    useDidShow 里 takeSellHandoff() → 取到就进对应模式
  * ```
+ *
+ * （#629 之前出物页是 Tab 页，那句跳转还是 `switchTab` —— `switchTab` 不接受 query；
+ * 现在它是二级页，`navigateTo` 压栈进入，返回即回上一步。）
  *
  * 两种模式的区别：
  *

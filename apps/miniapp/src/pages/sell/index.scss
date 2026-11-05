@@ -18,7 +18,7 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  /* 本页不渲染底栏（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），底部只需让出安全区 */
+  /* 本页是二级页（#629：不在 tabBar.list 里），框架不渲染自定义底栏，底部只需让出安全区 */
   padding-bottom: calc(48px + env(safe-area-inset-bottom));
 }
 
@@ -664,7 +664,7 @@
 }
 
 /**
- * 本页**不渲染底栏**（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），所以候选卡
+ * 本页是二级页（#629：不在 `tabBar.list` 里），框架**不会**渲染自定义底栏，所以候选卡
  * 直接贴底、只让出安全区即可。原先写成 `calc(176px + 20px)` 是为了把卡片抬到底栏之上，
  * 那个底栏在本页已经不存在了 —— 留着会让卡片悬在屏幕下半部、下方一片空。
  */

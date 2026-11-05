@@ -1168,7 +1168,7 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
  * 「管理」ActionSheet 的迟到回调（#236 复查 P2）。
  *
  * 弹层结果是跨帧回调：A 作为卖家弹出菜单，在结果返回**之前**换号 / 卸载之后，旧结果
- * 仍会去写编辑交接、`switchTab` 或给已经清场的页面重开卖家下架卡 —— 这三步都在服务器
+ * 仍会去写编辑交接、`navigateTo` 出物页或给已经清场的页面重开卖家下架卡 —— 这三步都在服务器
  * 任何校验之前，商品归属校验拦不住。所以判据是「铸任务（owner + epoch + token）→ 回调
  * 返回后校验 → 过期整条丢弃」，锁的释放只认令牌。
  */
@@ -1331,7 +1331,8 @@ describe('详情页卖家底栏的接线（#236 复查 P2）', () => {
     const thenBlock = inner('.then((res) => {', '.catch(() => {})')(block)
     const guard = 'if (!isTaskLive(task, menuInFlightRef.current)) return'
     expectBefore(thenBlock, guard, 'requestSellEdit(id)')
-    expectBefore(thenBlock, guard, 'Taro.switchTab(')
+    // #629：出物页是二级页，跳转从 `switchTab` 换成 `navigateTo`（压栈、返回回本页）
+    expectBefore(thenBlock, guard, "navigateTo({ url: '/pages/sell/index' })")
     expectBefore(thenBlock, guard, 'setOfflineConfirmOpen(true)')
 
     const releaseBlock = inner('const release = (): void => {', 'void Taro.showActionSheet(')(block)
