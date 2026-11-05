@@ -2,7 +2,9 @@
  * 图标清单：每一行 = 一个字形 × 它在页面里真正用到的语义色。
  *
  * - 字形真源：`tools/icons/glyphs/<glyph>.svg`（24×24 网格、1.75 描边、圆头圆角、单色，
- *   画在 4–20 的内容框里；`heart-fill` 是同一轮廓的实心版，只给「已收藏」用；
+ *   画在 4–20 的内容框里；出图时 `build.ts` 的 `GLYPH_ZOOM` 会把 viewBox 收紧到这个框附近
+ *   （字形最大边占到画布 83%–93%，显示尺寸四档不变），所以真源继续按 4–20 画，
+ *   不要为了"看起来更大"把字形画出这个框；`heart-fill` 是同一轮廓的实心版，只给「已收藏」用；
  *   `tab-*`（TabBar）与 `entry-*`（「我的」交易入口格）是带填充的字形：主体带 `fill="accentColor"`
  *   的错位填充块，只在 `brand` 下显色）。
  * - 颜色只认这里的 5 个语义名，值与 `src/styles/_token-vars.scss` 的令牌一一对应；
@@ -12,6 +14,8 @@
  *
  * 新增图标：先画 svg，再在这里登记要用的 tone，跑 `bun run --filter @fish/miniapp icons`。
  * 不用的 tone 不要登记 —— `tests/lib-icons.test.ts` 会拦「导出了但没人引用」的条目。
+ * 显示尺寸只用 24/32/40/48 四档；各档适用哪种场景见 `apps/miniapp/DESIGN.md` §6
+ * 「图标显示尺寸四档的场景口径」（草案，待 Owner 拍板）。
  */
 export const TONES = {
   brand: '#4285FF', // --brand
