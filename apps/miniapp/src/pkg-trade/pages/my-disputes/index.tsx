@@ -16,6 +16,11 @@ import {
   canApplyLoadMore,
   type DisputeLoadMoreRequest,
 } from '@/features/disputes/paging'
+import {
+  clearDisputesDirty,
+  consumeDisputesDirty,
+  isRecentlyLoaded,
+} from '@/features/disputes/refresh'
 import { goBackOrHome } from '@/lib/nav-back'
 import './index.scss'
 
@@ -52,10 +57,18 @@ export default function MyDisputes() {
 
   const [prevUserId, setPrevUserId] = useState<string | null>(userId)
   const loadEpoch = useRef(0)
+  /**
+   * 最近一次**成功**加载的时刻（`0` = 还没成功过）。换账号清零 —— 上一个账号的「刚拉过」
+   * 不能替新账号挡掉第一次加载。判据见 `features/disputes/refresh`。
+   */
+  const lastLoadedAt = useRef(0)
   if (prevUserId !== userId) {
     setPrevUserId(userId)
     loadEpoch.current += 1
     loadMoreLock.current = null
+    lastLoadedAt.current = 0
+    // 上一个账号在详情页里的写操作不该让新账号多拉一次（下面这次全量读已经覆盖数据）
+    clearDisputesDirty()
     setItems([])
     setNextCursor(null)
     setFailed(false)
@@ -79,6 +92,13 @@ export default function MyDisputes() {
       }
       const result = await loadDisputePage(undefined, userId, Date.now())
       if (epoch !== loadEpoch.current) return
+      // 只有真拿到数据才算「刚拉过」：失败的那次什么都没换上来，不能替下一次返回挡请求
+      if (!result.failed) {
+        lastLoadedAt.current = Date.now()
+        // 非静默的那次是「进页全量读」，它已经覆盖了 dirty 想表达的变化：把标记丢掉，
+        // 否则它会一直挂到下一次「看一眼就返回」，把那次也拖成一次重拉
+        if (!silent) clearDisputesDirty()
+      }
       if (silent) {
         if (result.failed) {
           void Taro.showToast({ title: '刷新没成功，稍后再试', icon: 'none' })
@@ -108,6 +128,11 @@ export default function MyDisputes() {
   /**
    * 从详情页返回时补一次重拉（首次 show 跳过：那次由上面的登录态 effect 负责）。
    * 详情页里可能刚撤回过 / 刚补了材料，返回后列表不能停在旧快照。
+   *
+   * 两件事分开判（都在 `features/disputes/refresh` 里）：
+   * · 详情页里**有写操作**（撤回争议 / 加证据 / 新建争议）→ 它置了 dirty 标记，这里消费到
+   *   就立刻重拉，时间闸让位。
+   * · 只是**看一眼就回来** → 刚拉过（30 秒内）就跳过：那一次重拉几乎不可能拿到新东西。
    */
   const skipFirstShow = useRef(true)
   const authedRef = useRef(false)
@@ -118,6 +143,8 @@ export default function MyDisputes() {
       return
     }
     if (!authedRef.current) return
+    const mutated = consumeDisputesDirty()
+    if (!mutated && isRecentlyLoaded(lastLoadedAt.current, Date.now())) return
     void read(true)
   })
 
