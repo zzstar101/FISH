@@ -89,7 +89,7 @@
  * 「全部」= 会话未读数和；「通知」= 通知未读数 —— 胶囊数据一律未读口径。
  */
 .chat__tab-n {
-  @include num-badge(30px, 20px);
+  @include num-badge(30px, var(--fs-2xs));
 }
 
 /* 右：全部已读小圆钮。图标 = Owner 提供的食盒图去底两色（accent / muted），

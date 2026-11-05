@@ -217,7 +217,7 @@
 
 .detail__price-cur {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 700;
   margin-right: 2px;
 }
@@ -1137,7 +1137,7 @@
 .detail__buy-goods-title {
   display: block;
   margin-top: 10px;
-  font-size: 28px;
+  font-size: var(--fs-lead);
   font-weight: 600;
   line-height: 1.4;
   color: var(--fg);

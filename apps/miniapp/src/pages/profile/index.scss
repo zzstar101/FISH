@@ -414,7 +414,7 @@
   position: absolute;
   top: -12px;
   right: -14px;
-  @include num-badge(32px, 24px, $ring: 4px);
+  @include num-badge(32px, var(--fs-sm), $ring: 4px);
 }
 
 .profile__cell-label {
@@ -563,7 +563,7 @@
 
 .profile__guest-title {
   margin-top: 28px;
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--fg);
 }

@@ -140,8 +140,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* 与活跃信息 16px 成 2.5×（Owner 要 2~3×） */
-  font-size: 40px;
+  /* 与活跃信息 16px 成 2.5×（Owner 要 2~3×）：`--fs-h3` = 40px */
+  font-size: var(--fs-h3);
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: 0.01em;

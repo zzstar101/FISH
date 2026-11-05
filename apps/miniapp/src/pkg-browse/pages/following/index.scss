@@ -146,7 +146,7 @@
 
 /* ---------------------------------------------------------------- 统计行 */
 
-/* 稿 `.stat`：14 / 20 / 2，字号 11.5pt，互粉前一颗 3pt 圆点 */
+/* 稿 `.stat`：14 / 20 / 2，字号 `--fs-xs`（22px，稿 11pt），互粉前一颗 3pt 圆点 */
 .fw__stat {
   position: relative;
   z-index: 1;
@@ -220,7 +220,7 @@
 /* 首字：`position: relative` 抬到色块之上（同 `pages/watchers` 的首字口径） */
 .fw__av-tx {
   position: relative;
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--brand-deep);
 }
@@ -334,7 +334,7 @@
 
 /* ---------------------------------------------------------------- 隐私说明 */
 
-/* 稿 `.note`：10.5pt、居中、--muted */
+/* 稿 `.note`：`--fs-2xs`（20px，稿 10pt）、居中、--muted */
 .fw__note {
   position: relative;
   z-index: 1;
