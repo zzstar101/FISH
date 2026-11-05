@@ -446,6 +446,7 @@ mock.module('@/features/following/api', () => ({
 mock.module('@/lib/request', () => ({ isUnauthenticatedError: () => false }))
 mock.module('@/features/presence/use-presence-now', () => ({
   usePresenceNow: () => 1_700_000_000_000,
+  usePresenceClock: () => {},
 }))
 
 // 页面级组件换成标记名：断言读它们收到的 props（这是页面自己的决定），不去渲染实现。
