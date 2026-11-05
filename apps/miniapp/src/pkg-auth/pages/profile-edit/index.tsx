@@ -18,6 +18,7 @@ import { Button, Image, Input, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { applyProfile, useAuth } from '@/features/auth/store'
 import { updateProfile } from '@/features/profile/api'
@@ -247,11 +248,7 @@ export default function ProfileEdit() {
               if (url) pickAvatar(url)
             }}
           >
-            {previewSrc ? (
-              <Image className="pe__avatar-img" src={previewSrc} mode="aspectFill" />
-            ) : (
-              <Image className="pe__avatar-ph" src={ICONS.userFg} mode="aspectFit" />
-            )}
+            <UserAvatar className="pe__avatar-face" src={previewSrc} />
           </Button>
           <View className="pe__avatar-badge">
             <Image className="pe__avatar-badge-ic" src={ICONS.cameraMuted} mode="aspectFit" />

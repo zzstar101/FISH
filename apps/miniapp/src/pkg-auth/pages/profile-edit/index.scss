@@ -89,14 +89,10 @@
   }
 }
 
-.pe__avatar-img {
+/* 头像本体：铺满原生 button；裁圆由 button 自己的 overflow:hidden 兜住 */
+.pe__avatar-face {
   width: 100%;
   height: 100%;
-}
-
-.pe__avatar-ph {
-  width: 48px;
-  height: 48px;
 }
 
 /* 相机角标：压在头像右下角，提示「这里可以换头像」 */

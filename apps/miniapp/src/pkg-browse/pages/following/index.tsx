@@ -8,6 +8,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
+import UserAvatar from '@/components/user-avatar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
@@ -413,27 +414,12 @@ export default function Following() {
           <View className="fw__list">
             {ready.rows.map((row) => (
               <View key={row.id} className="fw__row">
-                <View className="fw__av" onClick={() => openPerson(row)}>
-                  {/*
-                    真实头像**独占整圆**（`fw__av-photo`），首字不叠上去 —— 把人脸压上一个
-                    字母是明确的错误（`demo.ts` 的字段说明记的就是这个坑）。只有演示占位
-                    色块（`placeholderBlock`）才与首字叠成两层；没有图时退昵称首字。
-                  */}
-                  {row.avatarUrl ? (
-                    <Image className="fw__av-photo" src={row.avatarUrl} mode="aspectFill" />
-                  ) : (
-                    <>
-                      {row.placeholderBlock ? (
-                        <Image
-                          className="fw__av-img"
-                          src={row.placeholderBlock}
-                          mode="aspectFill"
-                        />
-                      ) : null}
-                      <Text className="fw__av-tx">{row.nickname.slice(0, 1)}</Text>
-                    </>
-                  )}
-                </View>
+                {/* 头像：有图渲真图，没有图渲统一默认头像（#618）—— 首字不再顶替人脸 */}
+                <UserAvatar
+                  className="fw__av"
+                  src={row.avatarUrl}
+                  onClick={() => openPerson(row)}
+                />
 
                 <View className="fw__main">
                   <View className="fw__top">

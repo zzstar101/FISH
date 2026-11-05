@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AppVersion from '@/components/app-version'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
 import { usePhoneBind } from '@/features/auth/use-phone-bind'
@@ -202,12 +203,9 @@ export default function Settings() {
             onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })}
           >
             <View className="st__av">
-              {/* 有真头像画真图，无图（含 /me 未回来）才退首字，同「我的」页口径 */}
-              {user?.avatarUrl ? (
-                <Image className="st__av-img" src={user.avatarUrl} mode="aspectFill" />
-              ) : (
-                <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
-              )}
+              {/* 有真头像画真图，无图（含 /me 未回来）画统一默认头像，同「我的」页口径。
+                  头像本体是独立元素：`.st__av` 不裁剪，否则右下角徽章会被切掉 */}
+              <UserAvatar className="st__av-face" src={user?.avatarUrl} />
               {verified ? (
                 <Image className="st__av-bdg" src={ICONS.verifiedBrand} mode="aspectFit" />
               ) : null}

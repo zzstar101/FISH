@@ -32,8 +32,14 @@ import {
   NOTIFY_PREFS_EVENT,
   readNotifyPrefsFromStorage,
 } from '@/features/settings/unread-badge'
+import { TAB_SLOT_RPX, TAB_TRANSITION_MS } from '@/lib/tab-transition'
 import { isTabbarHiddenRoute } from '@/lib/tabbar-route'
-import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
+import {
+  currentTabRoute as currentRoute,
+  readTabTransition,
+  switchTabWithTransition,
+  TABBAR_ROUTE_EVENT,
+} from '@/lib/tabbar-sync'
 import './index.scss'
 
 type TabKey = 'home' | 'wish' | 'sell' | 'chat' | 'profile'
@@ -94,17 +100,19 @@ const TAB_ITEMS: TabItem[] = [
   },
 ]
 
-function currentRoute(): string {
-  // 预览态（h5）没有页面栈，从 hash 路由取
-  if (process.env.TARO_ENV === 'h5' && typeof window !== 'undefined') {
-    return window.location.hash.replace(/^#/, '')
-  }
-  try {
-    const pages = Taro.getCurrentPages()
-    const last = pages[pages.length - 1] as { route?: string } | undefined
-    return last?.route ?? ''
-  } catch {
-    return ''
+function capsuleMotion() {
+  const motion = readTabTransition()
+  if (!motion) return null
+  return {
+    id: motion.id,
+    style: {
+      '--tab-capsule-from': `${motion.from}rpx`,
+      '--tab-capsule-to': `${motion.to}rpx`,
+      animationName: 'tab-capsule-enter',
+      animationDuration: `${TAB_TRANSITION_MS}ms`,
+      // 新实例挂载较晚时接上同一时间线，而不是从头多播一次。
+      animationDelay: `${Math.min(0, motion.startedAt - Date.now())}ms`,
+    },
   }
 }
 
@@ -126,18 +134,10 @@ function currentTabKey(): TabKey {
  */
 
 /**
- * 选中胶囊（Owner 2026-09-28 拍板）：**不做动画、不存独立状态**，位置直接由 `active`
- * 派生（渲染时从 `TAB_ITEMS.findIndex` 求值），而 `active` 的唯一真源是「当前页面路径」
- * —— 每个 Tab 页 `useDidShow` 经 `lib/tabbar-sync` 广播，本组件同步。
- *
- * 历史教训（三次返工的根因，别再走回头路）：
- * 1. 任何「挂载时算一次」的状态都会残留 —— 实例被复用显示时不重新渲染；
- * 2. 任何「点击侧滑动 + 延迟 switchTab」的接力时序都会被切页时机打断；
- * 3. 槽位坐标必须是**显式 rpx**（`TAB_SLOT_RPX`）：750 设计稿下栏宽恒定
- *    （left/right 30rpx + border 2rpx×2 + padding 16rpx×2 → 内容区 654rpx，5 槽等分
- *    130.8rpx）。百分比/calc 的混合运算在 WXSS 运行时解析不可靠（实测偏位）。
+ * #612：最终高光位置仍从实际路由派生；共享意图只为目标实例提供短暂的起点。
+ * 不延迟 switchTab、不在点击时抢改选中态；快速打断从同一曲线的位置续接。
+ * 槽位仍用显式 rpx：内容区 654rpx / 5 = 130.8rpx，不混用百分比/calc。
  */
-const TAB_SLOT_RPX = 130.8
 
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
@@ -146,6 +146,7 @@ export default function CustomTabBar() {
    * 更新 —— 与 `active` 同一通道、同一时机（`lib/tabbar-sync`）。
    */
   const [route, setRoute] = useState<string>(() => currentRoute())
+  const [motion, setMotion] = useState(capsuleMotion)
   /** 「消息」tab 的未读徽标文案（#431 任务二：蓝点 → 红色数字胶囊）；`null` = 不显示 */
   const [badge, setBadge] = useState<string | null>(null)
   const { status: authStatus, user } = useAuth()
@@ -272,6 +273,8 @@ export default function CustomTabBar() {
     const sync = () => {
       setActive(currentTabKey())
       setRoute(currentRoute())
+      const next = capsuleMotion()
+      setMotion((previous) => (previous?.id === next?.id ? previous : next))
     }
     sync()
     Taro.eventCenter.on(TABBAR_ROUTE_EVENT, sync)
@@ -282,8 +285,8 @@ export default function CustomTabBar() {
 
   const go = (item: TabItem) => {
     if (item.key === active) return
-    // 只负责发起切换；选中态由目标页 onShow 的广播驱动（路径真源，无动画）
-    void Taro.switchTab({ url: item.path }).catch(() => undefined)
+    // 立即导航；只有实际到达的普通 Tab 会消费动效意图。
+    switchTabWithTransition(item.path)
   }
 
   // 出物页早退：写在所有 hook 之后（hook 数量不能随路由变化）。
@@ -294,13 +297,15 @@ export default function CustomTabBar() {
     <View className="tabbar">
       {/*
         选中胶囊：纯透明液体玻璃高光，位置由 `active`（当前页面路径）直接派生，
-        瞬时落位、无过渡。槽位坐标显式 rpx（`TAB_SLOT_RPX`，750 稿恒定）。
+        无有效意图时直接落位；仅装饰层按意图重播，不重建页面或列表。坐标保持显式 rpx。
         是 .tabbar 的第一个子元素 → 图标/文字（后面的兄弟）天然盖在它上面；
         `pointer-events: none` 让点击穿透到 tab。
       */}
       <View
+        key={motion?.id ?? 0}
         className="tabbar__capsule"
         style={{
+          ...motion?.style,
           transform: `translateX(${
             Math.max(
               0,

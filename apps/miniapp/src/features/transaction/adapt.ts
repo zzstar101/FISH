@@ -57,6 +57,11 @@ export type OrderCardView = {
   createdAt: string
   counterpart: {
     nickname: string
+    /**
+     * 交易对方的头像。契约 `transactionUserSchema` 就有这个字段（可空），
+     * 订单卡头像位据此渲真图，缺图才落统一默认头像（#618）。
+     */
+    avatarUrl: string | null
     /** 是否画认证勾。见文件头铁律 1：真实数据恒为 false */
     verified: boolean
   }
@@ -106,6 +111,7 @@ export function toOrderCard(dto: TransactionDto): OrderCardView {
     createdAt: dto.createdAt,
     counterpart: {
       nickname: dto.counterpart.nickname,
+      avatarUrl: dto.counterpart.avatarUrl,
       // 契约没有认证状态 —— 不显示徽章（铁律 1）
       verified: false,
     },
@@ -144,6 +150,7 @@ export function toOrderCardFromMock(
     createdAt: transaction.createdAt,
     counterpart: {
       nickname: counterpart.nickname,
+      avatarUrl: counterpart.avatarUrl,
       verified: counterpart.authStatus === 'VERIFIED',
     },
     listing: { title: listing.title, coverUrl: listing.coverUrl },

@@ -14,6 +14,7 @@ import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import { SCAN_CODE_PAGE } from '@/components/scan-tabs/tabs'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -91,6 +92,7 @@ import {
   isLatestPageLoad,
   isLatestPresencePoll,
   isNearBottom,
+  isPanelDismissTap,
   isStaleMediaIdentity,
   isStaleMediaTask,
   keepRecalledMediaTombstones,
@@ -102,7 +104,9 @@ import {
   type MediaTaskBinding,
   type MediaTaskIdentity,
   type MessageAction,
+  type MsgState,
   mediaActions,
+  mergeEarlierMessages,
   mergePushedMedia,
   mergePushedMessage,
   mergeRefreshedMedia,
@@ -125,19 +129,22 @@ import {
   resolveBottomInset,
   resolveBottomReserveStyles,
   resolveConvState,
+  resolveMsgState,
   resolvePanelHeightPx,
   resolveSentinel,
   settleSend,
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
   shouldHandOffToKeyboard,
-  shouldReloadOnShow,
+  showReloadAction,
   sortMessages,
   startMediaRetry,
   stickAfterScroll,
   systemPillText,
   type TxBarAction,
+  type TxStageAction,
   txBarView,
+  txStageView,
 } from './view'
 import VoiceRecordPanel from './voice-record-panel'
 import { applyVoiceAutoStop, applyVoiceRelease, isVoiceCancelArmed } from './voice-recording-view'
@@ -230,6 +237,24 @@ function touchClientY(event: unknown): number {
   return typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN
 }
 
+/**
+ * 取第一个触点的 clientX/clientY（拿不到就给 NaN）。
+ *
+ * 与 `touchClientY` 分开是因为**松手**那一拍触点已经在 `changedTouches` 里、`touches` 空了：
+ * 「点消息区收面板」的判据要比较按下与松手两个坐标（见 `isPanelDismissTap`）。
+ */
+function touchPoint(event: unknown): { x: number; y: number } {
+  const payload = event as {
+    touches?: Array<{ clientX?: number; clientY?: number }>
+    changedTouches?: Array<{ clientX?: number; clientY?: number }>
+  } | null
+  const touch = payload?.touches?.[0] ?? payload?.changedTouches?.[0]
+  return {
+    x: typeof touch?.clientX === 'number' ? touch.clientX : Number.NaN,
+    y: typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN,
+  }
+}
+
 export default function Conversation() {
   const authStatus = useAuthGuard()
   const { user: me } = useAuth()
@@ -242,7 +267,7 @@ export default function Conversation() {
   /** 详情状态：`missing`（真的没这条会话）与 `failed`（没读到）必须分开渲染 */
   const [convState, setConvState] = useState<'loading' | 'ok' | 'missing' | 'failed'>('loading')
   const [messages, setMessages] = useState<MessageDto[]>([])
-  const [msgState, setMsgState] = useState<'loading' | 'ok' | 'failed'>('loading')
+  const [msgState, setMsgState] = useState<MsgState>('loading')
   /**
    * 这条会话**当前**那笔交易（#522）。终态（COMPLETED / CANCELLED）按契约不产生
    * SYSTEM 消息，所以顶部那一条只能由交易域驱动；`failed` 时保留上一次的值，绝不拿
@@ -480,6 +505,11 @@ export default function Conversation() {
    */
   const panelOpenStickRef = useRef(false)
   /**
+   * 手指落在消息流上的起点（#597）：面板展开时靠**松手那一拍**判断这次触摸是「点空白」
+   * 还是「拖动滚动」。按下时记、松手时取走并清空 —— 不清就会把上一次的坐标带到下一次手势。
+   */
+  const scrollTouchStartRef = useRef<{ x: number; y: number } | null>(null)
+  /**
    * 意图闩的起点高度与「收尾尾巴」记录（#560 R1/R3）：`closing` 是**页面要求收起**的意图，
    * 不是从高度符号反推的 —— 安卓上切输入法 / 候选栏伸缩会让键盘「没关、只是变矮」，拿
    * 「变矮」当「开始收起」就会把闩误置、之后所有变高都被丢弃，内边距停在小值、更高的那把
@@ -709,17 +739,21 @@ export default function Conversation() {
    * 详情 + 首屏历史一起加载。两者共用一个代次：任何一个重试都作废在途的那一批，
    * 避免「重试后详情是新会话、消息还是上一个会话的」这种半新半旧。
    *
-   * `silent`：**后台刷新**（「发送中返回」被延后到发送落定后补的那一次）。与用户主动
-   * 进页 / 点重试不同，它发生在用户没有请求刷新的时刻，所以：
+   * `silent`：**后台刷新**（从子页返回、断线重连补刷、「发送中返回」被延后到发送落定后
+   * 补的那一次）。与用户主动进页 / 点重试不同，它发生在用户没有请求刷新的时刻，所以：
    * - 不把界面推进 `loading`（不闪骨架）；
    * - 失败时**只做确认、不做降级**：历史半边失败保留当前消息流与失败气泡，详情半边
    *   失败也不把已经 `ok` 的 `convState` 打回 `failed` —— 否则「发送失败 + 弱网下补刷新
    *   也失败」会把失败气泡和它的「重试」一起盖掉（发送失败本就要留在原地给重试）。
    *
+   * 两处例外，都不属于「没读到」：详情是 `missing`（服务端权威 404，会话真没了）时照常
+   * 降级；`msgState` 还是 `loading`（首屏响应已被本次刷新判过期）而历史半边失败时必须落
+   * `failed`。两处判据分别在 `./view` 的 `resolveConvState` / `resolveMsgState`。
+   *
    * 注意这是**一次性 best-effort**：补刷新的标记在发起前就清掉了，这一次失败不会有
-   * 自动重试，也不会再次补。silent 失败**不产生可见的错误入口**（`convState`/`msgState`
-   * 都保持原值，页面上不会有 `LoadError`）—— 重新同步只发生在下一次用户主动进页、
-   * 下一次从子页返回，或历史半边失败时消息区那个重试钮。
+   * 自动重试，也不会再次补。silent 失败除了上面那两处，**不产生新的错误入口**
+   * （`convState` / `msgState` 保持原值，页面上不会多出 `LoadError`）—— 重新同步只发生在
+   * 下一次用户主动进页、下一次从子页返回，或历史半边失败时消息区那个重试钮。
    */
   const load = useCallback(
     (options?: { silent?: boolean }) => {
@@ -800,7 +834,8 @@ export default function Conversation() {
               })
           }
           /**
-           * 后台刷新（silent）**只做确认、不做降级**（判据见 `./view` 的 `resolveConvState`）。
+           * 后台刷新（silent）对**没读到**不做降级，但服务端权威的 `missing` 照常落地
+           * （判据与理由见 `./view` 的 `resolveConvState`）。
            *
            * `prev` 走 `setState` 的函数式更新：`load` 的 `useCallback` 依赖只有
            * `[conversationId, applyTx]`（`applyTx` 自身稳定），直接读闭包里的 `convState`
@@ -821,8 +856,15 @@ export default function Conversation() {
               keepRecalledTombstones(prev, mergeRefreshedMessages(prev, page.items, baseIds)),
             )
             setNextCursor(page.nextCursor)
-            setMsgState(page.failed ? 'failed' : 'ok')
           }
+          /**
+           * 消息区的落态**在守卫之外**（#608 审查第 3 条）：守卫只挡「拿失败快照覆盖已经在
+           * 屏幕上的消息」，不挡状态推进 —— 夹在守卫里的话，`silent && page.failed` 那次
+           * 会把 `msgState` 原样留在 `loading`，而那一次的 `loading` 属于更早那次首屏请求，
+           * 它的响应刚被本次刷新的 `epoch` 判过期、永远不会再落地；`loading` 分支又没有重试
+           * 入口，页面就永远停在「正在加载消息…」。判据见 `./view` 的 `resolveMsgState`。
+           */
+          setMsgState((prev) => resolveMsgState(prev, page.failed, silent))
 
           /**
            * 媒体历史是**独立一条流**（契约 `GET /conversations/:id/media`，游标参数叫
@@ -942,20 +984,36 @@ export default function Conversation() {
     const sending =
       pendingRef.current.some((item) => item.status === 'sending') ||
       pendingMediaRef.current.some((item) => item.status === 'uploading')
-    if (
-      !shouldReloadOnShow({
-        loadedOnce: loadedOnceRef.current,
-        authed: authedRef.current,
-        hasUserId: userIdRef.current !== null,
-        sending,
-      })
-    ) {
-      // 有在途发送时记下待刷新；其余情况（首次显示 / 未登录）不需要补
-      if (sending) deferredRef.current = deferReload(deferredRef.current)
+    const action = showReloadAction({
+      loadedOnce: loadedOnceRef.current,
+      authed: authedRef.current,
+      hasUserId: userIdRef.current !== null,
+      sending,
+    })
+    if (action === 'none') return
+    if (action === 'defer') {
+      // 有在途发送时记下待刷新，等当前 epoch 的发送落定后由 `doSend` 的 finally 补
+      deferredRef.current = deferReload(deferredRef.current)
       return
     }
+    if (action !== 'refresh-silent') {
+      /**
+       * 三态穷尽：新增取值必须在这里显式接线。用 `never` 断言而不是 `else` 兜底，
+       * 是为了让漏接在**类型层**报错 —— 否则将来加一个非 silent 的取值会被静默
+       * 当成「后台刷新」执行。
+       */
+      const unhandled: never = action
+      throw new Error(`[miniapp] 未处理的返回动作：${String(unhandled)}`)
+    }
     deferredRef.current = clearDeferredReload(deferredRef.current)
-    loadRef.current()
+    /**
+     * **必须 silent**（#608）：返回本页时屏幕上已经有完整内容，走非 silent 的 `load()`
+     * 会把 `convState` / `msgState` 打回 `loading`，渲染层在 `convState !== 'ok'` 处早退，
+     * 整页被替换成「正在加载会话…」再重建 —— 闪骨架、滚动位置被拽回最新一条、输入栏与
+     * 键盘状态被重置。silent 的详情 / 交易进度 / 消息与媒体合并 / 已读上报一件不少，
+     * 失败时还不会把已经在屏幕上的内容降级成错误卡。
+     */
+    loadRef.current({ silent: true })
   })
   useDidHide(() => {
     visibleRef.current = false
@@ -1372,7 +1430,7 @@ export default function Conversation() {
             setEarlierFailed(true)
             return
           }
-          setMessages((prev) => sortMessages([...page.items, ...prev]))
+          setMessages((prev) => mergeEarlierMessages(prev, page.items))
           setNextCursor(page.nextCursor)
         }),
       )
@@ -2700,13 +2758,36 @@ export default function Conversation() {
     setPanelOpen(!panelOpen)
   }
 
-  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541/#597）—— 消息流的 `onTouchStart`、
+  /** 收面板：点「面板与输入栏」之外的任何位置都走这里（#541/#597）—— 消息流的点击、
    *  页头空白、点面板里的格子。聚焦输入框也收，但要等键盘落地（交接在键盘订阅里，见那里）。
    *  不碰已输入文字、不 blur 输入框；底部底座从面板高缩回键盘高
    *  （键盘没开就是 0），位置仍交给同一个守卫决定（贴底继续贴底，翻历史原地不动）。 */
   const dismissPanel = () => {
     keepTailAnchored()
     setPanelOpen(false)
+  }
+
+  /**
+   * 消息流上的手指落下：**只记起点，不收面板**（#597）。
+   *
+   * 收起挂在触摸开始上是不行的：手指一落下就是滚动的第一帧，那一刻收面板 = 面板展开期间
+   * 根本滚不动（底座从面板高缩回 0，消息流在手指还没动起来时被撑高一条面板）。判据挪到
+   * 松手（`endScrollTouch`），按下这里只留坐标。
+   */
+  const beginScrollTouch = (event: unknown) => {
+    scrollTouchStartRef.current = touchPoint(event)
+  }
+
+  /**
+   * 消息流上松手：位移在容差内才算「点了一下空白」→ 收面板；拖动（滚动）一项都不做。
+   *
+   * 判据在 `view.ts` 的 `isPanelDismissTap()` 里（与「滚动第一帧不许收面板」一起被单测钉住）。
+   * 取走起点即清空：同一次手势只判一次，也不把陈旧坐标留给下一次。
+   */
+  const endScrollTouch = (event: unknown) => {
+    const start = scrollTouchStartRef.current
+    scrollTouchStartRef.current = null
+    if (isPanelDismissTap(start, touchPoint(event))) dismissPanel()
   }
 
   const openListing = () => {
@@ -2740,6 +2821,17 @@ export default function Conversation() {
       return
     }
     void Taro.navigateTo({ url: meetupUrlById(transactionId) })
+  }
+
+  /**
+   * 「我的评价」（#613 ⑤）：「前往查看评价」的去向。
+   *
+   * `?seg=trade` 让评论页进页就停在「交易评价」段（缺省仍是「全部」）—— 评价写在面交页，
+   * 用户点这颗钮就是来找自己给出去的那条评价，落「全部」还得再切一次段。
+   * 用 `navigateTo`：评论页不在 TabBar 里（主包 tab 只有 5 个，见 `app.config.ts`）。
+   */
+  const openMyReviews = () => {
+    void Taro.navigateTo({ url: '/pkg-browse/pages/comments/index?seg=trade' })
   }
 
   /**
@@ -3431,24 +3523,18 @@ export default function Conversation() {
   const dayLabel = dayLabelOf(firstCreatedAt, now)
 
   /**
-   * 30pt 圆头像：真实 avatarUrl 优先，无图回退首字（同消息列表行的降级）。
+   * 30pt 圆头像：有真实 avatarUrl 就渲真图，没有就是统一默认头像（#618，双方同一张）。
    * 头像本身是独立点击区（#517）：对方 → 他人主页，自己 → 编辑资料。
    * 消息行没有整行点击，头像与气泡是兄弟节点，所以不需要 stopPropagation。
    */
   const renderAvatar = (mine: boolean) => {
-    const url = mine ? (me?.avatarUrl ?? '') : (counterpart.avatarUrl ?? '')
-    const initial = mine ? (me?.nickname[0] ?? '我') : (counterpart.nickname[0] ?? '同')
+    const url = mine ? (me?.avatarUrl ?? null) : counterpart.avatarUrl
     return (
-      <View
-        className={`conv__ava${mine ? ' is-mine' : ''}`}
+      <UserAvatar
+        className="conv__ava"
+        src={url}
         onClick={mine ? openSelfProfile : openCounterpart}
-      >
-        {url ? (
-          <Image className="conv__ava-img" src={url} mode="aspectFill" />
-        ) : (
-          <Text className="conv__ava-tx">{initial}</Text>
-        )}
-      </View>
+      />
     )
   }
 
@@ -3495,7 +3581,7 @@ export default function Conversation() {
     const goOrders = () => {
       void Taro.navigateTo({ url: ordersUrl })
     }
-    let label = systemPillText(message.content)
+    let label = systemPillText(message.content, conversation.role)
     if (historical) label = '已接受交易 · 查看本笔'
     else if (noIdHint) label = '已接受交易 · 请从「我的订单」查看'
     return (
@@ -3658,6 +3744,27 @@ export default function Conversation() {
   const secondaryTxBar = txBar.secondary ?? null
 
   /**
+   * 消息流末尾的交易进度块（#613）：胶囊 + 气泡。
+   *
+   * 判据与顶部状态条同源（`./view` 的 `txStageView` 按同一套规则判），只是表达位置不同：
+   * 顶部是「商品 + 状态词 + 一颗钮」，这里是「阶段陈述 + 居中卡 + 当前动作」。
+   *
+   * 故意**不接** `fallbackTxId`：顶部那条在「消息里有 `tx.accepted`、交易行却没取回来」时
+   * 退回「交易状态待更新 / 查看交易码」，那是给用户一条兜底入口；而这块只有在拿到交易行
+   * （或一条还没落表的提案）时才知道该画哪一档，没有交易行就整块不渲染 —— 避免画一张
+   * 猜出来的卡片。失败 / 无关 / 提案已被现实覆盖时同样返回 `null`，不重复喊话。
+   */
+  const txStage = txStageView({
+    role: conversation.role,
+    listingStatus: listing.status,
+    listing: { title: listing.title, coverUrl: listing.coverUrl },
+    tx: txFailed ? cachedTx : txLoad.tx,
+    lastEvent: lastTxEvent,
+    reviewed,
+    failed: txFailed,
+  })
+
+  /**
    * 顶部状态条动作区的分发：主钮传 `txBar.action`（默认取它），次要钮（`拒绝`）显式传入
    * 自己的动作。两颗钮都必须先 `stopPropagation` —— 外层整条是「点进商品详情」。
    */
@@ -3671,6 +3778,7 @@ export default function Conversation() {
     if (action.kind === 'reject') return declineProposal()
     if (action.kind === 'code') return openMeetup(action.transactionId)
     if (action.kind === 'review') return openMeetup(action.transactionId)
+    if (action.kind === 'reviews') return openMyReviews()
     if (action.kind === 'scan') {
       void Taro.navigateTo({ url: SCAN_CODE_PAGE })
       return
@@ -3783,10 +3891,11 @@ export default function Conversation() {
           靠 `tick % 2` 的 0.5px 交替保证同一位置也能再下发，属性值不变则不会重新应用，
           所以它长期在场也不会盖住 `scrollIntoView` 的后续定位（两者并存的优先级只能端上验）
 
-          面板展开时由 `onTouchStart` 收起面板（#597）：改前这里被一层透明遮罩盖住，面板
+          面板展开时由消息流自己的**点击**收起（#597）：改前这里被一层透明遮罩盖住，面板
           展开期间消息流**滑不动**、长按/点图也拿不到触摸。现在遮罩没了，触摸先落到消息流
-          自己身上 —— 手指一动就收面板，这一下**不**拦着滚动（滚动仍由 ScrollView 处理），
-          手指不动只点一下就是「点空白收起」。
+          自己身上 —— 拖动照常滚动，松手时位移在容差内才算「点了一下空白」并收起面板。
+          **收起判据不能在触摸开始那一拍**：手指落下就是滚动的第一帧，那一刻收面板等于面板
+          展开期间滑不动（底座缩回 0、消息流被撑高一条面板），也是 #597 现象一的另一种形态。
           只在展开时挂：收起态传 `undefined`，回调不出现在事件表里。 */}
       <ScrollView
         className="conv__scroll"
@@ -3795,7 +3904,8 @@ export default function Conversation() {
         scrollIntoView={scrollTarget}
         scrollWithAnimation={animateScroll}
         onScroll={onScroll}
-        onTouchStart={panelOpen ? dismissPanel : undefined}
+        onTouchStart={panelOpen ? beginScrollTouch : undefined}
+        onTouchEnd={panelOpen ? endScrollTouch : undefined}
       >
         <View className="conv__list">
           {/* 更早一页：文本与媒体两条流各有游标，任一还有更早就给入口（#67 N3） */}
@@ -4060,7 +4170,82 @@ export default function Conversation() {
                 )
               })}
 
-              {entries.length === 0 ? (
+              {/*
+                交易进度块（#613）：阶段胶囊 + 交易气泡，贴在消息流末尾。
+
+                它**不是消息**：不进 `entries`、不参与已读回执 / 长按菜单 / 日期分隔，
+                也不吃消息的左右分侧布局 —— 居中一块，谁看都是同一张卡。动作与顶部状态条
+                同一套分发（`runTxBarAction`），所以气泡里点「确认 / 拒绝」与顶部等效。
+
+                胶囊可空：提案 / 接受 / 拒绝三档的说法由流里那条 SYSTEM 灰胶囊承担
+                （`systemPillText` 按角色出文案），这块只在成交档（交易成功 / 交易全流程
+                完成）补胶囊 —— 同一句话不在会话里说两遍。已取消档整块不出：顶部状态条
+                已经写着「交易已取消」。
+              */}
+              {txStage ? (
+                <View className="conv__txstage">
+                  {txStage.capsule ? (
+                    <View className={`conv__txstage-pill ${txStage.capsule.tone}`}>
+                      <Text className="conv__txstage-pill-tx">{txStage.capsule.label}</Text>
+                    </View>
+                  ) : null}
+                  {txStage.bubble ? (
+                    <View className="conv__txstage-card">
+                      {txStage.bubble.title === null ? null : (
+                        <Text className="conv__txstage-title">{txStage.bubble.title}</Text>
+                      )}
+                      <View className="conv__txstage-item">
+                        <View className="conv__txstage-thumb">
+                          {txStage.bubble.coverUrl ? (
+                            <Image
+                              className="conv__txstage-img"
+                              src={txStage.bubble.coverUrl}
+                              mode="aspectFill"
+                            />
+                          ) : (
+                            <Image
+                              className="conv__txstage-ph"
+                              src={ICONS.imageMuted}
+                              mode="aspectFit"
+                            />
+                          )}
+                        </View>
+                        <View className="conv__txstage-main">
+                          <Text className="conv__txstage-nm">{txStage.bubble.listingTitle}</Text>
+                          {/* 成交价 ≠ 挂价：提案态取提案金额，成交后取交易行的 amountCents。
+                              提案没带金额（脏数据）时宁可不画价格，也不凭空造一个。 */}
+                          {txStage.bubble.amountCents === null ? null : (
+                            <Text className="conv__txstage-price num">
+                              {'¥'}
+                              <Text className="conv__txstage-price-n">
+                                {formatAmount(txStage.bubble.amountCents)}
+                              </Text>
+                            </Text>
+                          )}
+                        </View>
+                        {txStage.bubble.actions.length === 0 ? null : (
+                          <View className="conv__txstage-acts">
+                            {txStage.bubble.actions.map((item: TxStageAction) => (
+                              <View
+                                key={`${item.action.kind}-${item.label}`}
+                                className={`conv__txstage-act${item.variant === 'ghost' ? ' is-ghost' : ''}`}
+                                onClick={(event: { stopPropagation: () => void }) =>
+                                  runTxBarAction(event, item.action)
+                                }
+                              >
+                                <Text>{item.label}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {/* 有进度块时不再画「还没有消息」空态：两句话互相矛盾 */}
+              {entries.length === 0 && txStage === null ? (
                 <View className="conv__empty">
                   <Text className="conv__empty-title">还没有消息</Text>
                   <Text className="conv__empty-text">在下面打个招呼吧</Text>

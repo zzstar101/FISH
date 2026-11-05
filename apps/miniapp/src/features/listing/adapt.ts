@@ -28,7 +28,7 @@
  */
 import type { ListingCard, ListingCondition, ListingDetail } from '@fish/contracts/listings/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
-import { AVATAR_BLOCKS, LISTING_BLOCKS } from '@/mock/blocks'
+import { LISTING_BLOCKS } from '@/mock/blocks'
 import type { ImageRatio, MockListing, MockUser } from '@/mock/types'
 
 /** 没有卖家信息时的哨兵值：页面用 `sellerId !== ''` 判断该不该渲染卖家行 */
@@ -84,9 +84,9 @@ export function toMockCardSeller(card: ListingCard): MockUser | null {
   return {
     id: card.seller.id,
     nickname: card.seller.nickname,
-    // 契约的 `avatarUrl` 可为 null。缺图给一张**通用占位色块**（复用 mock 既有的
-    // `AVATAR_BLOCKS`）：占位图是「这张图没有」的呈现，不是编造这个人的身份。
-    avatarUrl: card.seller.avatarUrl ?? AVATAR_BLOCKS[0] ?? '',
+    // 契约的 `avatarUrl` 可为 null，**原样保留**：缺图由视图层 `components/user-avatar`
+    // 统一画默认头像（#618）—— 在这里塞占位色块会把「没有头像」变成一个假头像。
+    avatarUrl: card.seller.avatarUrl,
     authStatus: card.seller.authStatus,
     soldCount: null,
     goodRate: null,
@@ -179,9 +179,8 @@ export function toMockSeller(
   return {
     id: detail.seller.id,
     nickname: detail.seller.nickname,
-    // 契约的 `avatarUrl` 可为 null。缺图给一张**通用占位色块**（复用 mock 既有的
-    // `AVATAR_BLOCKS`）：占位图是「这张图没有」的呈现，不是编造这个人的身份。
-    avatarUrl: detail.seller.avatarUrl ?? AVATAR_BLOCKS[0] ?? '',
+    // 契约的 `avatarUrl` 可为 null，**原样保留**（缺图由视图层画统一默认头像，#618）。
+    avatarUrl: detail.seller.avatarUrl,
     authStatus: detail.seller.authStatus,
     soldCount,
     // 契约无这一项，且没有真实口径（无评价表）：不编百分比

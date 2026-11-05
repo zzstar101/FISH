@@ -26,6 +26,7 @@ import {
   shortDisputeId,
   TRANSACTION_STATUS_LABEL,
 } from '@/features/disputes/meta'
+import { markDisputesDirty } from '@/features/disputes/refresh'
 import { uploadDisputeAttachment } from '@/features/disputes/upload'
 import {
   attachmentActionLabel,
@@ -307,6 +308,12 @@ export default function DisputeDetailPage() {
     setWithdrawing(true)
     try {
       const next = await withdrawDispute(op.disputeId)
+      /*
+        置位必须在 `opAlive` 之前：服务端**已经写成功**了，「列表要重拉」这件事与
+        「本页是不是同一世代」无关。`read(true)` / 回前台 TTL 重读 / 409 重同步 /
+        预览附件都会推进 `loadEpoch`，走早退分支时若不置位，返回列表拿到的是旧状态。
+      */
+      markDisputesDirty()
       if (!opAlive(op)) {
         if (opSameAccount(op) && detailRef.current?.id === op.disputeId) void read(true)
         return
@@ -505,6 +512,14 @@ export default function DisputeDetailPage() {
     setAddingMessageId(messageId)
     try {
       const result = await addDisputeEvidence(op.disputeId, messageId)
+      /*
+        与撤回同理，置位在 `opAlive` 之前（服务端已经写成功，与页面世代无关）。
+        与撤回的差别：列表卡上**没有**证据条数（`features/disputes/map.ts` 的
+        `DisputeRecord` 只有状态 / 类型 / 时间 / 标题 / 对方 / 金额），所以补材料本身
+        不改列表上的任何字段 —— 这里保守地留一次重拉，是因为补材料可能带动服务端的
+        状态迁移；`created === false`（这条消息早就是证据，什么都没变）则不置位。
+      */
+      if (result.created) markDisputesDirty()
       if (!opAlive(op)) {
         if (opSameAccount(op) && detailRef.current?.id === op.disputeId) void read(true)
         return

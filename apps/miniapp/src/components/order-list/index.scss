@@ -209,7 +209,7 @@
   gap: 16px;
 }
 
-/* 头像：只放首字，**不再挂任何角标**（#534 把已认证徽章改成昵称右侧的行内成品图）——
+/* 头像：只放一张图（真头像或统一默认头像，#618），**不挂任何角标**（#534 把已认证徽章改成昵称右侧的行内成品图）——
    原来的 `position: relative` + `overflow: visible` 是给绝对定位的 CSS 手绘圆勾留的，已随
    那套样式一起删掉，避免下一个人以为头像上还挂着东西。 */
 .orders__av {
@@ -222,12 +222,6 @@
   justify-content: center;
   background: var(--grad-icon);
   border: 2px solid var(--border);
-}
-
-.orders__av-tx {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--brand-deep-2);
 }
 
 /* 已认证徽章（#534）：与「我的」页同一张设计稿「认证」3D 徽章，昵称右侧内联。

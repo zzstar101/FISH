@@ -7,6 +7,7 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
@@ -304,15 +305,10 @@ export default function ReportUser() {
     </Text>
   )
 
-  /* ── 对象头像：主页带真实头像就用，否则占位（演示记录同样占位） ── */
-  const avatarOf = (avatar: string, sizeClass: string) =>
-    avatar ? (
-      <Image className={`rpu__ava ${sizeClass}`} src={avatar} mode="aspectFill" />
-    ) : (
-      <View className={`rpu__ava-ph ${sizeClass}`}>
-        <Image className="rpu__ava-ph-ic" src={ICONS.userFg} mode="aspectFit" />
-      </View>
-    )
+  /* ── 对象头像：主页带真实头像就用，否则统一默认头像（#618，演示记录同样如此） ── */
+  const avatarOf = (avatar: string, sizeClass: string) => (
+    <UserAvatar className={`rpu__ava ${sizeClass}`} src={avatar} />
+  )
 
   /* ── 键值行：成功态「提交内容」与只读态「举报内容」共用同一套结构 ── */
   const rowsOf = (data: {

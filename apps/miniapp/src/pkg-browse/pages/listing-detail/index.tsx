@@ -33,6 +33,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import UserAvatar from '@/components/user-avatar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -48,8 +49,8 @@ import { requestSellEdit } from '@/features/listing/edit-target'
 // #567：买家侧底栏的已售出文案与卡片角标（#566）同一来源，页面不另写字面量
 import { buyerStatusNote } from '@/features/listing/status-mark'
 import { fetchListingMatches } from '@/features/match/api'
-import { usePresenceNow } from '@/features/presence/use-presence-now'
-import { presenceView } from '@/features/presence/view'
+import { PresenceBadge } from '@/features/presence/presence-badge'
+import { usePresenceClock } from '@/features/presence/use-presence-now'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
@@ -143,7 +144,6 @@ function matchBudgetText(wish: WishSummary): string {
 type CommentNode = {
   id: string
   authorName: string
-  authorInitial: string
   /**
    * 作者公开 id / 头像（#517）。
    * `null` 只出现在「没有真实数据」的两处：本地乐观占位与演示 mock 留言 —— 此时不跳主页。
@@ -174,7 +174,6 @@ function localComment(content: string): CommentNode {
     // 前缀是 `view.ts` 的判据常量：切号清场靠它认出「还没被服务端确认」的占位
     id: `${PENDING_COMMENT_PREFIX}${localSeq}`,
     authorName: '我',
-    authorInitial: '我',
     authorId: null,
     authorAvatarUrl: null,
     isSeller: false,
@@ -199,8 +198,6 @@ function dtoToNode(comment: CommentDto): CommentNode {
   return {
     id: comment.id,
     authorName: comment.author.nickname,
-    // 头像契约里可为 null；昵称首字兜底，与 mock 的 authorInitial 同语义
-    authorInitial: comment.author.nickname.trim().charAt(0) || '鱼',
     // #517：契约 `CommentAuthorSchema` 自带 id/avatarUrl，原样带到页面节点
     authorId: comment.author.id,
     authorAvatarUrl: comment.author.avatarUrl,
@@ -216,7 +213,6 @@ function mockCommentToNode(comment: MockComment): CommentNode {
   return {
     id: comment.id,
     authorName: comment.authorName,
-    authorInitial: comment.authorInitial,
     // MockComment 没有作者 id/头像（见 mock/types.ts）：不编假身份，点击时给一句提示
     authorId: null,
     authorAvatarUrl: null,
@@ -228,10 +224,9 @@ function mockCommentToNode(comment: MockComment): CommentNode {
 }
 
 /**
- * 留言头像（#517）。
- *
- * 有真实头像就显示图片；URL 失效时回退昵称首字 —— 只判 `authorAvatarUrl`
- * 是否为空不够，断网/CDN 404 时 `<Image>` 会留下一个空白圆。
+ * 留言头像（#517）：统一走 `UserAvatar` —— 有图渲真图，图挂了（断网 / CDN 404）
+ * 回落同一张默认头像，不再退昵称首字（#618：留言区与其它头像位同一个观感）。
+ * 失败重试也交给它：记住的是「哪张 URL 失败过」，作者换头像后自动重新尝试。
  */
 function CommentAvatar({
   node,
@@ -242,25 +237,12 @@ function CommentAvatar({
   reply?: boolean
   onOpen: () => void
 }) {
-  const [failed, setFailed] = useState(false)
-  // 同一 comment id 复用组件时，头像 URL 可能变（作者换头像/重试成功）；
-  // 不重置的话一次 404 会把首字回退永久锁死到组件卸载。
-  useEffect(() => {
-    if (node.authorAvatarUrl) setFailed(false)
-  }, [node.authorAvatarUrl])
   return (
-    <View className={`detail__cav${reply ? ' detail__cav--reply' : ''}`} onClick={onOpen}>
-      {node.authorAvatarUrl && !failed ? (
-        <Image
-          className="detail__cav-img"
-          src={node.authorAvatarUrl}
-          mode="aspectFill"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <Text className="detail__cav-text">{node.authorInitial}</Text>
-      )}
-    </View>
+    <UserAvatar
+      className={`detail__cav${reply ? ' detail__cav--reply' : ''}`}
+      src={node.authorAvatarUrl}
+      onClick={onOpen}
+    />
   )
 }
 
@@ -897,12 +879,12 @@ export default function ListingDetail() {
    * 时 `data.seller.presence` 为 null → 整块不渲染，不画一个假的「离线」。
    * 判据与文案走三处展示位共用的 `features/presence/view`。
    *
-   * 「现在」走 `usePresenceNow`（#376 审查回合）：本页只在进页拉一次详情，没有任何
-   * 轮询能带来重渲染，直接用 `Date.now()` 等于把 TTL 过期判据冻在首帧。该 hook 不发
+   * 「现在」走 `usePresenceClock` + `PresenceBadge`（#376 审查回合，性能改造）：本页只在
+   * 进页拉一次详情，没有任何轮询能带来重渲染，直接用 `Date.now()` 等于把 TTL 过期判据冻在
+   * 首帧。那个 30s 一跳的时钟现在只驱动徽标本身重算，页面主体不跟着重渲染；本钩子不发
    * 请求，页面被盖住（例如跳去看会话）时停表。
    */
-  const sellerPresenceNow = usePresenceNow()
-  const sellerPresence = data ? presenceView(data.seller.presence, sellerPresenceNow) : null
+  usePresenceClock()
 
   /**
    * 「谁在求购」（#8 的 byListing 端点）：**卖家本人视角**的匹配愿望列表。
@@ -1658,7 +1640,7 @@ export default function ListingDetail() {
             {/* ---------------------------------------------------- 卖家 */}
             <View className="detail__seller-section">
               <View className="detail__seller" onClick={openSellerHome}>
-                <Image className="detail__avatar" src={data.seller.avatarUrl} mode="aspectFill" />
+                <UserAvatar className="detail__avatar" src={data.seller.avatarUrl} />
                 <View className="detail__sinfo">
                   {/* 昵称行只有昵称 + 认证勾（稿子口径）：校区不在这里显示 */}
                   <View className="detail__sname">
@@ -1671,15 +1653,9 @@ export default function ListingDetail() {
                     {/* 在线态（#359 第五点）：昵称行里紧挨昵称（认证勾之后）、头像右侧的
                         同一条水平线上（与稿 `.seller .nm` 的排布一致，右侧那个独立槽位是
                         「进TA主页」）。
-                        绿点 + 文案（离线时说「多久没上线」，见 features/presence/view）。 */}
-                    {sellerPresence ? (
-                      <View
-                        className={`detail__presence${sellerPresence.online ? ' is-online' : ''}`}
-                      >
-                        <View className="detail__presence-dot" />
-                        <Text className="detail__presence-tx">{sellerPresence.text}</Text>
-                      </View>
-                    ) : null}
+                        绿点 + 文案（离线时说「多久没上线」，见 features/presence/view）；
+                        「现在」由组件自己订阅，拿不到在线态时它整块不渲染。 */}
+                    <PresenceBadge presence={data.seller.presence} className="detail__presence" />
                   </View>
                   {/*
                   卖出件数与好评率契约里没有（见 mock/types.ts 的 MockUser 注释）。

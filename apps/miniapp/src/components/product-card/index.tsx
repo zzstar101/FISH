@@ -25,6 +25,7 @@ import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useRef, useState } from 'react'
 import { BADGE } from '@/assets/badge'
+import UserAvatar from '@/components/user-avatar'
 import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { outOfMarketLabel } from '@/features/listing/status-mark'
 import { buildListingDetailUrl, type FeedAttribution } from '@/features/recommendation/attribution'
@@ -297,7 +298,7 @@ export default function ProductCard({
         */}
         {seller ? (
           <View className="pcard__seller" onClick={handleOpenSeller}>
-            <Image className="pcard__avatar" src={seller.avatarUrl} mode="aspectFill" />
+            <UserAvatar className="pcard__avatar" src={seller.avatarUrl} />
             <Text className="pcard__who">{seller.nickname}</Text>
             {/* 认证徽章（#563）：与商品详情卖家行同一张「认证」3D 徽章，不再用旧的多边形勾 */}
             {verified ? (
