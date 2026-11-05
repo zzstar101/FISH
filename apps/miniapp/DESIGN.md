@@ -123,7 +123,8 @@ src/
 **约定**
 
 - 页面级样式写在各自 `index.scss`，只允许用令牌色与 `_mixins` 里的组合。
-- 组件用目录 + `index.tsx` + `index.scss`。
+- 组件用目录 + `index.tsx` + `index.scss`。`user-avatar` 是样式接线的明确例外：样式仍在组件目录，
+  由 `app.scss` 全局 `@use` 一次，避免跨分包共享时 `mini-css-extract-plugin` 的 CSS 顺序冲突。
 - 不新增运行时依赖（出图用的 `@resvg/resvg-wasm` 只是 devDependency）；图标统一从 `@/assets/lib-icons` 的 `ICONS` 取。真源与生成器在仓库内 `tools/icons/`
 - **非图标类成品图**不走 `ICONS`：品牌图走 `@/assets/brand` 的 `BRAND.*`（`tools/brand/` 从母版生成），认证徽章走 `@/assets/badge` 的 `BADGE.*`（外供设计稿成品图，无母版、不由生成器产出）
   （`glyphs/*.svg` × `manifest.ts`，`bun run --filter @fish/miniapp icons` 重出图）；命名 = 字形 + 语义色
