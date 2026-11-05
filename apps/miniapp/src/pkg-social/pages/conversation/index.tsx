@@ -102,7 +102,9 @@ import {
   type MediaTaskBinding,
   type MediaTaskIdentity,
   type MessageAction,
+  type MsgState,
   mediaActions,
+  mergeEarlierMessages,
   mergePushedMedia,
   mergePushedMessage,
   mergeRefreshedMedia,
@@ -123,11 +125,12 @@ import {
   recallFailureText,
   resetDeferredReload,
   resolveConvState,
+  resolveMsgState,
   resolveSentinel,
   settleSend,
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
-  shouldReloadOnShow,
+  showReloadAction,
   sortMessages,
   startMediaRetry,
   stickAfterScroll,
@@ -238,7 +241,7 @@ export default function Conversation() {
   /** 详情状态：`missing`（真的没这条会话）与 `failed`（没读到）必须分开渲染 */
   const [convState, setConvState] = useState<'loading' | 'ok' | 'missing' | 'failed'>('loading')
   const [messages, setMessages] = useState<MessageDto[]>([])
-  const [msgState, setMsgState] = useState<'loading' | 'ok' | 'failed'>('loading')
+  const [msgState, setMsgState] = useState<MsgState>('loading')
   /**
    * 这条会话**当前**那笔交易（#522）。终态（COMPLETED / CANCELLED）按契约不产生
    * SYSTEM 消息，所以顶部那一条只能由交易域驱动；`failed` 时保留上一次的值，绝不拿
@@ -687,17 +690,21 @@ export default function Conversation() {
    * 详情 + 首屏历史一起加载。两者共用一个代次：任何一个重试都作废在途的那一批，
    * 避免「重试后详情是新会话、消息还是上一个会话的」这种半新半旧。
    *
-   * `silent`：**后台刷新**（「发送中返回」被延后到发送落定后补的那一次）。与用户主动
-   * 进页 / 点重试不同，它发生在用户没有请求刷新的时刻，所以：
+   * `silent`：**后台刷新**（从子页返回、断线重连补刷、「发送中返回」被延后到发送落定后
+   * 补的那一次）。与用户主动进页 / 点重试不同，它发生在用户没有请求刷新的时刻，所以：
    * - 不把界面推进 `loading`（不闪骨架）；
    * - 失败时**只做确认、不做降级**：历史半边失败保留当前消息流与失败气泡，详情半边
    *   失败也不把已经 `ok` 的 `convState` 打回 `failed` —— 否则「发送失败 + 弱网下补刷新
    *   也失败」会把失败气泡和它的「重试」一起盖掉（发送失败本就要留在原地给重试）。
    *
+   * 两处例外，都不属于「没读到」：详情是 `missing`（服务端权威 404，会话真没了）时照常
+   * 降级；`msgState` 还是 `loading`（首屏响应已被本次刷新判过期）而历史半边失败时必须落
+   * `failed`。两处判据分别在 `./view` 的 `resolveConvState` / `resolveMsgState`。
+   *
    * 注意这是**一次性 best-effort**：补刷新的标记在发起前就清掉了，这一次失败不会有
-   * 自动重试，也不会再次补。silent 失败**不产生可见的错误入口**（`convState`/`msgState`
-   * 都保持原值，页面上不会有 `LoadError`）—— 重新同步只发生在下一次用户主动进页、
-   * 下一次从子页返回，或历史半边失败时消息区那个重试钮。
+   * 自动重试，也不会再次补。silent 失败除了上面那两处，**不产生新的错误入口**
+   * （`convState` / `msgState` 保持原值，页面上不会多出 `LoadError`）—— 重新同步只发生在
+   * 下一次用户主动进页、下一次从子页返回，或历史半边失败时消息区那个重试钮。
    */
   const load = useCallback(
     (options?: { silent?: boolean }) => {
@@ -778,7 +785,8 @@ export default function Conversation() {
               })
           }
           /**
-           * 后台刷新（silent）**只做确认、不做降级**（判据见 `./view` 的 `resolveConvState`）。
+           * 后台刷新（silent）对**没读到**不做降级，但服务端权威的 `missing` 照常落地
+           * （判据与理由见 `./view` 的 `resolveConvState`）。
            *
            * `prev` 走 `setState` 的函数式更新：`load` 的 `useCallback` 依赖只有
            * `[conversationId, applyTx]`（`applyTx` 自身稳定），直接读闭包里的 `convState`
@@ -799,8 +807,15 @@ export default function Conversation() {
               keepRecalledTombstones(prev, mergeRefreshedMessages(prev, page.items, baseIds)),
             )
             setNextCursor(page.nextCursor)
-            setMsgState(page.failed ? 'failed' : 'ok')
           }
+          /**
+           * 消息区的落态**在守卫之外**（#608 审查第 3 条）：守卫只挡「拿失败快照覆盖已经在
+           * 屏幕上的消息」，不挡状态推进 —— 夹在守卫里的话，`silent && page.failed` 那次
+           * 会把 `msgState` 原样留在 `loading`，而那一次的 `loading` 属于更早那次首屏请求，
+           * 它的响应刚被本次刷新的 `epoch` 判过期、永远不会再落地；`loading` 分支又没有重试
+           * 入口，页面就永远停在「正在加载消息…」。判据见 `./view` 的 `resolveMsgState`。
+           */
+          setMsgState((prev) => resolveMsgState(prev, page.failed, silent))
 
           /**
            * 媒体历史是**独立一条流**（契约 `GET /conversations/:id/media`，游标参数叫
@@ -920,20 +935,36 @@ export default function Conversation() {
     const sending =
       pendingRef.current.some((item) => item.status === 'sending') ||
       pendingMediaRef.current.some((item) => item.status === 'uploading')
-    if (
-      !shouldReloadOnShow({
-        loadedOnce: loadedOnceRef.current,
-        authed: authedRef.current,
-        hasUserId: userIdRef.current !== null,
-        sending,
-      })
-    ) {
-      // 有在途发送时记下待刷新；其余情况（首次显示 / 未登录）不需要补
-      if (sending) deferredRef.current = deferReload(deferredRef.current)
+    const action = showReloadAction({
+      loadedOnce: loadedOnceRef.current,
+      authed: authedRef.current,
+      hasUserId: userIdRef.current !== null,
+      sending,
+    })
+    if (action === 'none') return
+    if (action === 'defer') {
+      // 有在途发送时记下待刷新，等当前 epoch 的发送落定后由 `doSend` 的 finally 补
+      deferredRef.current = deferReload(deferredRef.current)
       return
     }
+    if (action !== 'refresh-silent') {
+      /**
+       * 三态穷尽：新增取值必须在这里显式接线。用 `never` 断言而不是 `else` 兜底，
+       * 是为了让漏接在**类型层**报错 —— 否则将来加一个非 silent 的取值会被静默
+       * 当成「后台刷新」执行。
+       */
+      const unhandled: never = action
+      throw new Error(`[miniapp] 未处理的返回动作：${String(unhandled)}`)
+    }
     deferredRef.current = clearDeferredReload(deferredRef.current)
-    loadRef.current()
+    /**
+     * **必须 silent**（#608）：返回本页时屏幕上已经有完整内容，走非 silent 的 `load()`
+     * 会把 `convState` / `msgState` 打回 `loading`，渲染层在 `convState !== 'ok'` 处早退，
+     * 整页被替换成「正在加载会话…」再重建 —— 闪骨架、滚动位置被拽回最新一条、输入栏与
+     * 键盘状态被重置。silent 的详情 / 交易进度 / 消息与媒体合并 / 已读上报一件不少，
+     * 失败时还不会把已经在屏幕上的内容降级成错误卡。
+     */
+    loadRef.current({ silent: true })
   })
   useDidHide(() => {
     visibleRef.current = false
@@ -1350,7 +1381,7 @@ export default function Conversation() {
             setEarlierFailed(true)
             return
           }
-          setMessages((prev) => sortMessages([...page.items, ...prev]))
+          setMessages((prev) => mergeEarlierMessages(prev, page.items))
           setNextCursor(page.nextCursor)
         }),
       )

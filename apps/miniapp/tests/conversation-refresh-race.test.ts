@@ -1,14 +1,28 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
-import { isLatestPageLoad, mergeRefreshedMessages } from '../src/pkg-social/pages/conversation/view'
+import {
+  isLatestPageLoad,
+  mergeEarlierMessages,
+  mergeRefreshedMessages,
+  resolveConvState,
+  resolveMsgState,
+} from '../src/pkg-social/pages/conversation/view'
 
 /**
- * 会话页两处竞态的回归（#186 审查要求：修复前必须失败、修复后必须通过）。
+ * 会话页竞态的回归（#186 审查要求：修复前必须失败、修复后必须通过）。
  *
  * - P2-1：silent 后台刷新落地时无条件 `setMessages(page.items)`，把刷新期间发送
  *   成功的消息抹掉；
  * - P2-2：旧分页任务的 `.finally(() => setLoadingEarlier(false))` 无条件还锁，
  *   会把新账号在途分页的锁放掉。
+ *
+ * #608（返回本页改后台刷新）之后新增的三条，都是「silent 期间落地的判据」：
+ * - 第 1 条：silent 拉到的 `missing` 是服务端权威结论（404），不能当成「没读到」保留旧态，
+ *   否则已被删除的会话在屏幕上一直可用；
+ * - 第 3 条：首屏请求在途时再起一次 silent 刷新，首屏响应被判过期，silent 又失败 ——
+ *   消息区不能停在 `loading`（那个分支没有重试入口）；
+ * - 第 4 条：分页与 silent 刷新共用同一代次，刷新把游标重置回首屏时同一页会被再取一次，
+ *   分页的追加必须按 id 去重。
  *
  * 边界：本文件只跑判据与状态机，不跑组件接线（`load` 里怎么取 `baseIds`、
  * `loadEarlier` 是否真的调了守卫）—— 那部分按端上时序在微信开发者工具里验收。
@@ -79,6 +93,71 @@ describe('mergeRefreshedMessages —— silent 刷新不得覆盖刷新期间确
     const previous = [msg('m1', '2026-09-24T00:00:00.000Z'), msg('m2', '2026-09-24T00:01:00.000Z')]
 
     expect(ids(mergeRefreshedMessages(previous, [], baseIds))).toEqual(['m2'])
+  })
+})
+
+describe('mergeEarlierMessages —— 分页追加按 id 去重（#608 审查第 4 条）', () => {
+  test('刷新把游标重置回首屏后再翻一次同一页，不产生重复气泡', () => {
+    // loadEarlier 先落地（游标推到更早一页）→ silent 刷新随后把 nextCursor 写回首屏游标
+    // → 用户再翻，取回的正是刚落过的那一页
+    const previous = [msg('m2', '2026-09-24T00:01:00.000Z'), msg('m3', '2026-09-24T00:02:00.000Z')]
+    const incoming = [msg('m1', '2026-09-24T00:00:00.000Z'), msg('m2', '2026-09-24T00:01:00.000Z')]
+
+    expect(ids(mergeEarlierMessages(previous, incoming))).toEqual(['m1', 'm2', 'm3'])
+  })
+
+  test('全新一页照常拼在已有消息之前，并按 (createdAt, id) 定序', () => {
+    const previous = [msg('m3', '2026-09-24T00:02:00.000Z')]
+    const incoming = [msg('m1', '2026-09-24T00:00:00.000Z'), msg('m2', '2026-09-24T00:01:00.000Z')]
+
+    expect(ids(mergeEarlierMessages(previous, incoming))).toEqual(['m1', 'm2', 'm3'])
+  })
+
+  test('同一条重复出现时只留一份', () => {
+    const previous = [msg('m1', '2026-09-24T00:00:00.000Z')]
+    const incoming = [msg('m1', '2026-09-24T00:00:00.000Z')]
+
+    expect(ids(mergeEarlierMessages(previous, incoming))).toEqual(['m1'])
+  })
+})
+
+describe('resolveConvState —— silent 拉到的 missing 是权威结论（#608 审查第 1 条）', () => {
+  test('后台刷新拉到 missing 必须如实降级：会话已删不能再显示旧内容', () => {
+    expect(resolveConvState('ok', 'missing', true)).toBe('missing')
+  })
+
+  test('后台刷新拉到 failed 仍不降级（弱网补刷新失败不能盖掉屏幕上的内容）', () => {
+    expect(resolveConvState('ok', 'failed', true)).toBe('ok')
+  })
+
+  test('还没正常显示过时 silent 也如实落地（不能停在没有重试入口的态）', () => {
+    expect(resolveConvState('loading', 'failed', true)).toBe('failed')
+    expect(resolveConvState('failed', 'missing', true)).toBe('missing')
+  })
+
+  test('非 silent 一切如实落地', () => {
+    expect(resolveConvState('ok', 'missing', false)).toBe('missing')
+    expect(resolveConvState('ok', 'failed', false)).toBe('failed')
+    expect(resolveConvState('ok', 'ok', false)).toBe('ok')
+  })
+})
+
+describe('resolveMsgState —— silent 失败不得把消息区留在 loading（#608 审查第 3 条）', () => {
+  test('首屏请求在途时被 silent 刷新判过期，随后失败 → 必须落 failed 给重试', () => {
+    expect(resolveMsgState('loading', true, true)).toBe('failed')
+  })
+
+  test('屏幕上已有消息时 silent 失败保持 ok（不换成错误卡）', () => {
+    expect(resolveMsgState('ok', true, true)).toBe('ok')
+  })
+
+  test('silent 成功照常写 ok（首屏在途也一样）', () => {
+    expect(resolveMsgState('loading', false, true)).toBe('ok')
+  })
+
+  test('非 silent 一律如实落地', () => {
+    expect(resolveMsgState('ok', true, false)).toBe('failed')
+    expect(resolveMsgState('loading', false, false)).toBe('ok')
   })
 })
 
