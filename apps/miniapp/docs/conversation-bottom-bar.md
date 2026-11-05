@@ -21,7 +21,8 @@
 
 三个 token 在 `apps/miniapp/src/pkg-social/pages/conversation/index.scss` 顶部（`$bar-control-px: 68px`、
 `$bar-gap-px: 16px`、`$bar-input-max-px: 176px`）。`apps/miniapp/config/index.ts:34` 是 `designWidth: 750`，
-所以 scss 里写 `68px` **落盘就是 `68rpx`** —— 换算成设计稿 34pt、8pt、88pt。
+所以 scss 里写 `68px` **落盘就是 `68rpx`**。量测 API 返回逻辑 px，换算为 `rpx × windowWidth / 750`；
+375px 宽窗口下三项分别为 34px、8px、88px。`pixelRatio` 只用于换算物理像素，不乘入矩形读数。
 
 ### 为什么安全区只算一次
 
@@ -121,14 +122,14 @@ console.log('inset-bottom(device px)', Math.max(0, i.screenHeight - i.safeArea.b
 1. **贴底无缝**：S1/S2 下 `.conv.bottom === windowHeight`（容差 1px），且 `.conv__bottom` 的背景一直画到窗口底边
    —— 目视：底栏下沿与屏幕下沿之间**没有**一条异色缝。
 2. **四控件同高**：S1/S2/S6 下 `.conv__input.height === .conv__cbtn.height === .conv__plus.height ===
-   .conv__send.height`（容差 1px，都应为 34pt × `pixelRatio`）。
+   .conv__send.height`（容差 1px，均为 `68 × windowWidth / 750` 逻辑 px，不乘 `pixelRatio`）。
 3. **间距 16rpx**：S1 下 `.conv__bar-row.top - .conv__bar.top === 16rpx + 2rpx`（**已含** `.conv__bar` 的
    `border-top: 2px`，行盒从 border 内侧算起；按 16rpx 判会假失败）、
    `.conv__bar.bottom - .conv__bar-row.bottom === 16rpx`（rpx→px 按屏宽/750 换算；仅在 `.conv__bottom`
    无内联 padding 时成立）。
 4. **安全区只算一次**：S1 下 `.conv__bottom` 的下内边距 = `inset-bottom`（**不是** `inset-bottom + 16rpx`，
    也不是 0）；S4 下 `.conv__bar` 的下内边距 = `键盘高度 + 16rpx`，`.conv__bottom` 的下内边距 = **0**。
-5. **多行**：S3 下 `.conv__input.height <= 176px`（≈88pt×`pixelRatio`），继续输入时高度**不再增长**，文字在框内
+5. **多行**：S3 下 `.conv__input.height <= 176 × windowWidth / 750` 逻辑 px，继续输入时高度**不再增长**，文字在框内
    滚动且光标可见；同一场景 `.conv__cbtn/.conv__plus/.conv__send` 的 `.bottom` 与 `.conv__input.bottom`
    对齐（容差 1px），高度仍是 S1 的值（没被拉伸）。
 6. **键盘跟手**：S4 下 `.conv__bar.bottom` ≈ 键盘上沿（开发者工具里可用「显示键盘」模拟），
@@ -143,6 +144,6 @@ console.log('inset-bottom(device px)', Math.max(0, i.screenHeight - i.safeArea.b
   明确要求，不属于缺陷。
 - **键盘时序**仍由 #560 的单一真源（`onKeyboardHeightChange` → `nextKeyboardInset` 单调阶梯）负责，
   本次只改了「谁承担安全区/间距」，没有加第二套补偿、没有 `fixed; bottom: 0`、没有写死负偏移或延时。
-- **栈式 PR**：本改动基于 #597 的分支尖端（`656ba41b`），`gh pr` 挂在 #597 之上；#597 合入后本条
-  自动只剩 #577 的 diff。
+- **依赖关系**：本改动继承 #601（#597）的内容高面板与键盘交接语义；合并前整合当前 main，
+  不再以历史分支尖端或自动换 base 作为正确性的证据。
 - 端上三端数据**尚未采集**：代码侧已统一（单测钉住 token 与安全区归属），像素级对照待 Owner 按上表填写。
