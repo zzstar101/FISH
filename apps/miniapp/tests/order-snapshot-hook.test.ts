@@ -109,7 +109,7 @@ test('real cached rows hydrate before refresh; failure retains rows and truncati
   expect(cache.read('buyer', buyer)?.items).toEqual([])
 })
 
-test('late read after mutation cannot repaint or persist rows', async () => {
+test('late read after a mutation neither repaints nor persists its stale rows', async () => {
   const resolves: Array<(result: LoadedOrders) => void> = []
   fetchOrders = () =>
     new Promise((done) => {
@@ -125,21 +125,32 @@ test('late read after mutation cannot repaint or persist rows', async () => {
     failureKind: null,
     snapshot: { items: [dto], truncated: true },
   })
+  await Bun.sleep(0)
+  expect(render().items).toEqual([])
+  expect(render().failureKind).toBeNull()
+  expect(cache.read('buyer', buyer)).toBeNull()
+  finish()
+  await Bun.sleep(0)
+  required(resolves[2])({
+    items: [],
+    truncated: false,
+    failureKind: null,
+    snapshot: { items: [], truncated: false },
+  })
   await during
   expect(render().items).toEqual([])
-  finish()
+  expect(cache.read('buyer', buyer)?.items).toEqual([])
   required(resolves[0])({
-    items: page.items,
-    truncated: true,
+    items: [],
+    truncated: false,
     failureKind: null,
-    snapshot: { items: [dto], truncated: true },
+    snapshot: { items: [], truncated: false },
   })
   await stale
   expect(render().items).toEqual([])
-  expect(cache.read('buyer', buyer)).toBeNull()
 })
 
-test('return refresh shows loading when mutation invalidated the kept list', async () => {
+test('return refresh shows loading when a mutation invalidated the list', async () => {
   const cached = render()
   const finish = cache.startMutation(['buyer'])
   finish()
@@ -148,7 +159,7 @@ test('return refresh shows loading when mutation invalidated the kept list', asy
     new Promise((done) => {
       resolve = done
     })
-  const pending = cached.reload({ keepList: true })
+  const pending = cached.reload()
   const refreshing = render()
   expect(refreshing.items).toEqual([])
   expect(refreshing.loading).toBe(true)
@@ -162,27 +173,55 @@ test('return refresh shows loading when mutation invalidated the kept list', asy
   expect(render().loading).toBe(false)
 })
 
-test('read retired by an active mutation exposes retry and recovers after settlement', async () => {
+test('read fenced by a local write is retried once it settles, never reported as a server failure', async () => {
+  let calls = 0
+  fetchOrders = async () => {
+    calls += 1
+    return {
+      items: [],
+      truncated: false,
+      failureKind: null,
+      snapshot: { items: [], truncated: false },
+    }
+  }
   const cached = render()
   const finish = cache.startMutation(['buyer'])
-  fetchOrders = async () => ({
-    items: cached.items,
-    truncated: false,
-    failureKind: null,
-    snapshot: { items: [dto], truncated: false },
-  })
-  await cached.reload()
-  const retired = render()
-  expect(retired.items).toEqual([])
-  expect(retired.loading).toBe(false)
-  expect(retired.failureKind).not.toBeNull()
-  expect(cache.read('buyer', buyer)).toBeNull()
+  // Issued while the write is in flight: the mutation fence retires this read.
+  const pending = cached.reload()
+  expect(render().failureKind).toBeNull()
   finish()
-  await retired.reload()
+  await pending
   const recovered = render()
-  expect(recovered.items).toHaveLength(1)
+  expect(calls).toBe(2)
   expect(recovered.failureKind).toBeNull()
-  expect(cache.read('buyer', buyer)?.items).toHaveLength(1)
+  expect(recovered.loading).toBe(false)
+  expect(recovered.items).toEqual([])
+  expect(cache.read('buyer', buyer)?.items).toEqual([])
+})
+
+test('first screen fenced by a local write leaves the skeleton, then loads instead of failing', async () => {
+  let calls = 0
+  fetchOrders = async () => {
+    calls += 1
+    return {
+      items: [],
+      truncated: false,
+      failureKind: null,
+      snapshot: { items: [], truncated: false },
+    }
+  }
+  // No seller snapshot on disk: this really is a first screen, so it starts on the skeleton.
+  const first = render(buyer, 'seller')
+  expect(first.items).toEqual([])
+  expect(first.loading).toBe(true)
+  const finish = cache.startMutation(['seller'])
+  const pending = first.reload()
+  finish()
+  await pending
+  const after = render(buyer, 'seller')
+  expect(calls).toBe(2)
+  expect(after.failureKind).toBeNull()
+  expect(after.loading).toBe(false)
 })
 
 test('account and role changes synchronously remove the previous view', () => {

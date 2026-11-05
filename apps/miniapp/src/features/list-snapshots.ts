@@ -51,6 +51,13 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
   const requests = { buyer: 0, seller: 0, favorites: 0 }
   const mutations = { buyer: 0, seller: 0, favorites: 0 }
   const blocked = new Set<SnapshotScope>()
+  const idleWaiters = new Set<() => void>()
+  /** Resume waiters only once the last write on every scope has settled. */
+  const notifyIdle = () => {
+    if (SCOPES.some((scope) => mutations[scope] > 0)) return
+    for (const resume of idleWaiters) resume()
+    idleWaiters.clear()
+  }
   const key = (scope: SnapshotScope) => `fish:list-snapshot:${scope}`
   const remove = (scope: SnapshotScope) => {
     try {
@@ -73,6 +80,20 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
     ticket.revision === revisions[ticket.scope] &&
     ticket.request === requests[ticket.scope]
 
+  /**
+   * Waits until no local write is in flight; resolves immediately when there is none.
+   *
+   * A read issued while a write was running is retired by `isCurrent` — its payload is not
+   * trusted. That is not a server failure, so the caller must ask again once the write
+   * settles instead of reporting one (and instead of leaving the first screen loading).
+   */
+  function waitForWrites(scope: SnapshotScope): Promise<void> {
+    if (mutations[scope] === 0) return Promise.resolve()
+    return new Promise((resume) => {
+      idleWaiters.add(resume)
+    })
+  }
+
   function syncAccount(next: Owner['account']) {
     if (next === account) return
     const previous = account
@@ -89,6 +110,7 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
         remove(scope)
       }
     }
+    notifyIdle()
   }
 
   function read<S extends SnapshotScope>(
@@ -103,14 +125,22 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
         remove(scope)
         return null
       }
-      const record = JSON.parse(raw)
+      const parsed: unknown = JSON.parse(raw)
+      // Storage is untrusted: narrow to a record before reading any field off it.
+      if (typeof parsed !== 'object' || parsed === null) {
+        remove(scope)
+        return null
+      }
+      const record = parsed as Record<string, unknown>
+      const savedAt = record.savedAt
       if (
-        record?.version !== 1 ||
+        record.version !== 1 ||
         record.account !== userId ||
         record.scope !== scope ||
-        !Number.isFinite(record.savedAt) ||
-        now() < record.savedAt ||
-        now() - record.savedAt >= SNAPSHOT_TTL_MS
+        typeof savedAt !== 'number' ||
+        !Number.isFinite(savedAt) ||
+        now() < savedAt ||
+        now() - savedAt >= SNAPSHOT_TTL_MS
       ) {
         remove(scope)
         return null
@@ -170,6 +200,7 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
       for (const scope of scopes) mutations[scope] -= 1
       // Retire requests started during the write, including a failed/ambiguous write.
       invalidate(captured, scopes)
+      notifyIdle()
     }
   }
 
@@ -181,6 +212,7 @@ export function createListSnapshots(storage: Storage, now = Date.now) {
     owner,
     isOwner,
     isCurrent,
+    waitForWrites,
     invalidate,
     startMutation,
     revision: (scope: SnapshotScope) => `${epoch}:${revisions[scope]}`,

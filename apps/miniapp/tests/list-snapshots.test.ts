@@ -75,6 +75,22 @@ test('latest request wins; mutation, logout and A→B→A retire all old tickets
   expect(cache.isOwner(owner)).toBe(false)
 })
 
+test('a read retired by a write resumes only once that write settles', async () => {
+  const f = fixture()
+  const finish = f.cache.startMutation(['buyer'])
+  let resumed = false
+  const waiting = f.cache.waitForWrites('buyer').then(() => {
+    resumed = true
+  })
+  await Bun.sleep(0)
+  expect(resumed).toBe(false)
+  finish()
+  await waiting
+  expect(resumed).toBe(true)
+  // No write in flight: the next caller must not be delayed.
+  await f.cache.waitForWrites('buyer')
+})
+
 test('TTL, schema version, malformed data, future timestamps and byte bounds fail closed', () => {
   const f = fixture()
   const ticket = required(f.cache.begin('buyer', 'alice'))

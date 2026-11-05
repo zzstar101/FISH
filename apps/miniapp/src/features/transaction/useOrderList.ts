@@ -29,13 +29,14 @@ export type OrderListData = {
   /** 列表不完整（翻页到上限，或服务端游标没前进）—— 不能拿它的长度当总数 */
   truncated: boolean
   /**
-   * 重拉当前视角。
+   * 重拉当前视角（首次加载 / 下拉刷新 / 错误重试 / 从子页面返回都走它）。
    *
-   * `keepList` 时不亮骨架屏：下拉刷新用（系统已经拉出原生指示器，再把列表整片换成
-   * 骨架屏只会让用户丢掉阅读位置，还分不清「刷新」与「首次加载」）。
+   * 手里已经有一份可显示的列表时不亮骨架屏：下拉刷新时系统已经拉出原生指示器，再把列表
+   * 整片换成骨架屏只会让用户丢掉阅读位置、还分不清「刷新」与「首次加载」；而被本地写操作
+   * 作废过的列表（见 `displayedRevision`）本来就不该再显示，那种情况照旧亮骨架屏。
    * 返回值 resolve 时本次请求已落地（无论成功还是失败），调用方据此收掉原生指示器。
    */
-  reload: (options?: { keepList?: boolean }) => Promise<void>
+  reload: () => Promise<void>
 }
 
 /**
@@ -121,16 +122,19 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
   const userIdRef = useRef(userId)
   userIdRef.current = userId
 
-  const reload = useCallback(
-    (_options?: { keepList?: boolean }): Promise<void> => {
+  const reload = useCallback((): Promise<void> => {
+    /**
+     * 发出一次读请求并落地它的结果。被本地写操作挡掉时会再进一次（`attempt` 只在这里自增）。
+     */
+    const load = async (attempt: number): Promise<void> => {
       /*
        * 登录态未就绪 / 已退出：**不发请求**。`/transactions` 整条挂在 requireAuth 之下，
        * 这个时点发出去必然 401 —— 演示构建还会被那次 401 退成 mock。页面在
        * `authed` 之后由登录态 effect 补一次，请求不会丢。
        */
-      if (userIdRef.current === null) return Promise.resolve()
+      if (userIdRef.current === null) return
       const ticket = listSnapshots.begin(role, userIdRef.current)
-      if (!ticket) return Promise.resolve()
+      if (!ticket) return
       if (displayedRevision.current !== listSnapshots.revision(role)) {
         // A known local mutation must not reappear when returning from a child page.
         setItems([])
@@ -140,36 +144,43 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
       }
       const id = requestId.current + 1
       requestId.current = id
-      // keepList cannot keep rows that a mutation has already invalidated.
+      // 手里没有可显示的列表才亮骨架屏：刷新时换掉列表等于让用户丢掉阅读位置。
       if (!hasData.current) setLoading(true)
-      return loadOrders(role).then((result) => {
-        if (requestId.current !== id) return
-        if (!listSnapshots.isCurrent(ticket)) {
-          if (listSnapshots.isOwner(ticket)) {
-            setLoading(false)
-            // The read was fenced by a mutation, not an authoritative empty result.
-            setFailureKind('server')
-          }
-          return
-        }
+      const result = await loadOrders(role)
+      if (requestId.current !== id) return
+      if (!listSnapshots.isCurrent(ticket)) {
         /*
-         * 失败时**不动** `items` / `truncated`：`loadOrders` 失败一律给空数组，直接写进去
-         * 就等于「把用户已经读到的订单清空」—— 下拉刷新失败时尤其糟（阅读位置白丢）。
-         * 保留上一次成功的结果、只把错误态交给渲染层（`components/order-list` 会把
-         * `LoadError` 追加在列表下面；一条都没有时才用它顶替列表），比清空诚实也更可用。
+         * 这份结果被**本地写操作**作废了（`listSnapshots.startMutation` 在写操作期间挡掉
+         * 读请求，写落定又作废一次）：发出时写操作在飞，payload 可能是写之前的状态，不可信。
+         *
+         * 但**服务端并没有失败** —— 不能塞一个 `server` 失败态（页面会显示「服务暂时不可用，
+         * 请稍后重试」），也不能就这么丢掉让首屏一直停在骨架屏上。等那次写操作落定后自己再
+         * 要一次。只补一次：第二次仍被挡（同一瞬间又有人开写）就交给下一次页面重拉（下拉刷新 /
+         * 从子页面返回都会重拉），仍然不伪造任何失败。
          */
-        if (result.failureKind === null) {
-          if (result.snapshot) listSnapshots.write(ticket, result.snapshot)
-          hasData.current = true
-          setItems(result.items)
-          setTruncated(result.truncated)
-        }
-        setFailureKind(result.failureKind)
-        setLoading(false)
-      })
-    },
-    [role],
-  )
+        if (!listSnapshots.isOwner(ticket) || attempt > 0) return
+        await listSnapshots.waitForWrites(role)
+        // 等的过程里换了账号 / 卸载 / 又有更新的请求：交给它们，别抢着落地。
+        if (requestId.current !== id) return
+        return load(attempt + 1)
+      }
+      /*
+       * 失败时**不动** `items` / `truncated`：`loadOrders` 失败一律给空数组，直接写进去
+       * 就等于「把用户已经读到的订单清空」—— 下拉刷新失败时尤其糟（阅读位置白丢）。
+       * 保留上一次成功的结果、只把错误态交给渲染层（`components/order-list` 会把
+       * `LoadError` 追加在列表下面；一条都没有时才用它顶替列表），比清空诚实也更可用。
+       */
+      if (result.failureKind === null) {
+        if (result.snapshot) listSnapshots.write(ticket, result.snapshot)
+        hasData.current = true
+        setItems(result.items)
+        setTruncated(result.truncated)
+      }
+      setFailureKind(result.failureKind)
+      setLoading(false)
+    }
+    return load(0)
+  }, [role])
 
   return { items, loading, failureKind, truncated, reload }
 }
