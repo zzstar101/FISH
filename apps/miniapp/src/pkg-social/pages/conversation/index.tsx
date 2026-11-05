@@ -3959,7 +3959,7 @@ export default function Conversation() {
               {txStage ? (
                 <View className="conv__txstage">
                   {txStage.capsule ? (
-                    <View className="conv__txstage-pill">
+                    <View className={`conv__txstage-pill ${txStage.capsule.tone}`}>
                       <Text className="conv__txstage-pill-tx">{txStage.capsule.label}</Text>
                     </View>
                   ) : null}

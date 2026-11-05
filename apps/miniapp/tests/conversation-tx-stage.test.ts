@@ -157,7 +157,7 @@ describe('txStageView —— ③ 已接受、待面交', () => {
 describe('txStageView —— ④ 交易成功：评价三态（与顶部状态条同口径）', () => {
   test('还没评价：胶囊「交易成功」，气泡「给对方评价 → 前往评价」进面交页', () => {
     const view = txStageView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: false }))
-    expect(view?.capsule).toEqual({ label: '交易成功' })
+    expect(view?.capsule).toEqual({ label: '交易成功', tone: 'is-ok' })
     expect(view?.bubble).toMatchObject({ title: '给对方评价' })
     expect(view?.bubble?.actions).toEqual([
       {
@@ -170,7 +170,7 @@ describe('txStageView —— ④ 交易成功：评价三态（与顶部状态�
 
   test('已经评过：胶囊升到终态「交易全流程完成」，气泡「前往查看评价」进我的评价', () => {
     const view = txStageView(input({ tx: tx({ status: 'COMPLETED' }), reviewed: true }))
-    expect(view?.capsule).toEqual({ label: '交易全流程完成' })
+    expect(view?.capsule).toEqual({ label: '交易全流程完成', tone: 'is-ok' })
     expect(view?.bubble).toMatchObject({ title: '评价已完成' })
     expect(view?.bubble?.actions).toEqual([
       { label: '前往查看评价', variant: 'primary', action: { kind: 'reviews' } },

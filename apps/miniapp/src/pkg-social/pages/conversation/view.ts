@@ -1,6 +1,7 @@
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
+import { currentTxOf } from '@/features/chat/capsule'
 import type { AllowedImageMime } from '@/features/upload/mime'
 
 /**
@@ -190,20 +191,14 @@ export function txBarView(input: {
   const { role, tx, lastEvent, failed, reviewed } = input
   const proposal = lastEvent?.type === 'tx.proposal' ? lastEvent : null
   /**
-   * 取消后买家又提了新案：判据与 `features/chat/capsule.ts` 的 `proposalSupersedes` 同一份
+   * 取这一会话当前作数的那笔交易行：取消后买家又提了新案时，被提案盖过的旧行不作数
    * —— 此刻更该回答「现在等我做什么」的是提案，不是那笔已取消的行。否则顶部写着
    * 「交易已取消」，同一会话的列表胶囊却写着「待接受」，两处自相矛盾。
    *
-   * **已确认的边界（Owner 定论 2026-11-03：保留现状）**：同一会话存在过一笔 `CANCELLED`
-   * 交易行、买家再提案、卖家拒绝之后，拒绝只写一条 `tx.rejected`（不落表），于是「消息里
-   * 最后一个 `tx.*` 事件」变成 `tx.rejected` ⇒ 这里 `proposal` 为 null ⇒ 取回那笔 `CANCELLED`
-   * 行 ⇒ 顶部按终态陈述「交易已取消 · 查看」，不再退回「在售」。商品事实上仍在售，与
-   * #551 验收第 2 条「拒绝后顶部退回『在售 · 查看』」的字面只在**首次提案（无历史交易行）**
-   * 时完全一致；多笔历史交易时按终态陈述。此处行为不要「顺手修」—— 改判据要连
-   * `capsule.ts` 一起改，且需 Owner 重新拍板。例外口径已写进 PR 正文。
+   * **判据只有一份**：`features/chat/capsule.ts` 的 `currentTxOf`（列表胶囊、
+   * `txBarView`、`txStageView` 共用），多笔历史交易的边界也记在那里。
    */
-  const proposalSupersedes = tx?.status === 'CANCELLED' && proposal !== null
-  const currentTx = proposalSupersedes ? null : tx
+  const currentTx = currentTxOf(tx, lastEvent?.type)
 
   /**
    * 失败降级的第一档：终态 / 没有缓存 / 别的交易的缓存都不算数，一律「交易状态待更新」。
@@ -340,6 +335,8 @@ export function txBarView(input: {
  *
  * 判据来源与 `txBarView` **同一份**，别分叉第三套：
  * - 交易行（`TransactionDto`）回答「现在在哪一步」：`PENDING_MEETUP` / `COMPLETED` / `CANCELLED`；
+ * - 「取消后又被新提案盖过」由 `features/chat/capsule.ts` 的 `currentTxOf` 判定
+ *   （列表胶囊 / `txBarView` / 本函数共用同一份，不在这里再抄一遍）；
  * - 消息流里最后一条 `tx.*` SYSTEM 事件回答「还没有交易行的提案态」（`tx.proposal`）
  *   与「卖家拒绝了」（`tx.rejected`）——契约刻意不为终态写 SYSTEM 消息
  *   （`packages/contracts/src/transactions/schema.ts:102-105`），所以终态的胶囊由交易行派生；
@@ -390,7 +387,14 @@ export type TxStageView = {
    * 上下说两遍。只有**没有系统消息可承载**的成交档（交易成功 / 交易全流程完成）才由这块
    * 补一颗；已取消档连胶囊都不出（顶部状态条独占，见下面 CANCELLED 分支）。
    */
-  capsule: { label: string } | null
+  capsule: {
+    label: string
+    /**
+     * 胶囊视觉档，复用顶部状态条的四档 `TxBarTone`（不另造色值）：成交档目前唯一会出
+     * 胶囊，两档都是 `is-ok`（绿）。页面按它上类名，配色仍走 `--ok-weak` / `--ok-ink`。
+     */
+    tone: TxBarTone
+  } | null
   /** 气泡；`null` = 这一档没有卡片可画（已取消） */
   bubble: TxStageBubble | null
 }
@@ -419,9 +423,8 @@ export function txStageView(input: {
   if (input.failed) return null
 
   const proposal = lastEvent?.type === 'tx.proposal' ? lastEvent : null
-  /** 取消后买家又提了新案：判据与 `txBarView` / `capsule.ts` 的 `proposalSupersedes` 同一份 */
-  const proposalSupersedes = tx?.status === 'CANCELLED' && proposal !== null
-  const currentTx = proposalSupersedes ? null : tx
+  /** 取消后买家又提了新案：判据见 `currentTxOf`（与 `txBarView` / 列表胶囊同一份，唯一一处） */
+  const currentTx = currentTxOf(tx, lastEvent?.type)
   const goods = { listingTitle: listing.title, coverUrl: listing.coverUrl }
 
   if (!currentTx) {
@@ -480,7 +483,7 @@ export function txStageView(input: {
      */
     if (input.reviewed === true) {
       return {
-        capsule: { label: '交易全流程完成' },
+        capsule: { label: '交易全流程完成', tone: 'is-ok' },
         bubble: {
           title: '评价已完成',
           ...goods,
@@ -490,7 +493,7 @@ export function txStageView(input: {
       }
     }
     return {
-      capsule: { label: '交易成功' },
+      capsule: { label: '交易成功', tone: 'is-ok' },
       bubble: {
         /**
          * `false` 待评价 → 标题就是那句行动号召；`null` 没查到评价态 → **没有标题**：

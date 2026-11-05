@@ -1154,8 +1154,8 @@
  * 这条 Owner 结论）。
  *
  * 只有成交档（交易成功 / 交易全流程完成）会出胶囊 —— 提案 / 接受 / 拒绝三档的说法由流里
- * 的 SYSTEM 灰胶囊承担，已取消档由顶部状态条承担，所以这里只需要一档绿色，不按
- * `TxBarTone` 铺四套配色（那四档只属于顶部状态条）。
+ * 的 SYSTEM 灰胶囊承担，已取消档由顶部状态条承担；这两档的 `capsule.tone` 都是 `is-ok`，
+ * 所以这里只落一档绿色，不按 `TxBarTone` 铺四套配色（那四档只属于顶部状态条）。
  */
 .conv__txstage {
   align-self: stretch;
@@ -1178,8 +1178,10 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
 
-  /* 绿 = 交易成功 / 全流程完成（唯一会出胶囊的一档） */
+/* 绿 = 交易成功 / 全流程完成（`capsule.tone === 'is-ok'`，当前唯一会出胶囊的档） */
+.conv__txstage-pill.is-ok {
   background: var(--ok-weak);
   color: var(--ok-ink);
 }
