@@ -76,11 +76,15 @@
   height: 24px;
 }
 
-/* 深色「搜索」按钮：高度收进 64px 的胶囊内 */
+/*
+ * 深色「搜索」按钮：内嵌在 `.search__field`（64px 胶囊）里，按 DESIGN.md §3.1
+ * 的「胶囊内嵌例外」取「容器高 − 8」= 56px，不取四档里的任何一档 —— 容器 64px
+ * 等于微信原生胶囊高，不能为了按钮升档把它顶高。
+ */
 .search__submit {
   flex: 0 0 auto;
-  height: 52px;
-  padding: 0 22px;
+  height: 56px;
+  padding: 0 24px;
   display: flex;
   align-items: center;
   border-radius: var(--r-pill);
@@ -193,8 +197,8 @@
   align-items: center;
   flex: 0 0 auto;
   min-width: 0;
-  height: 68px;
-  padding: 0 28px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
@@ -293,8 +297,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 68px;
-  padding: 0 30px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);

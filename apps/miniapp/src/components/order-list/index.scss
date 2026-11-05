@@ -356,10 +356,10 @@
 }
 
 /**
- * 卡尾动作钮。高度直接用 `btn-sm` 给的 72rpx（= 设计稿 36pt），**不要再写一遍
- * `height: 72px`** —— 在 `@include` 之后重复声明与 mixin 完全相同的值，Taro 的
- * pxtransform 会漏掉一次换算，产物里会同时留下 `height:72rpx;height:72px`，
- * 后者以设备 px 生效（按钮变成 72pt 高，是设计稿的两倍）。
+ * 卡尾动作钮。高度与左右内边距一律取 `btn-sm` 的 S 档（68rpx / 26rpx，见 DESIGN.md §3.1），
+ * **不要再写一遍 `height: 68px`** —— 在 `@include` 之后重复声明与 mixin 完全相同的值，Taro 的
+ * pxtransform 会漏掉一次换算，产物里会同时留下 `height:68rpx;height:68px`，
+ * 后者以设备 px 生效（按钮变成 68pt 高，是设计稿的两倍）。
  * 间距按稿取 6pt（mixin 给的是 5pt，值不同，能正常换算）。
  */
 .orders__btn {
@@ -452,10 +452,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
-  padding: 0 60px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   margin-top: 44px;
-  border-radius: 48px;
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-title);

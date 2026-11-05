@@ -125,8 +125,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 76px;
-  padding: 0 44px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--fg);
@@ -332,9 +332,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
+  height: var(--btn-h-lg);
   margin-top: 28px;
-  border-radius: 44px;
+  border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
   color: var(--fg);

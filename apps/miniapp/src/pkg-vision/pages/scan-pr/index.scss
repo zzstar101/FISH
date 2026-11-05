@@ -131,8 +131,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 76px;
-  padding: 0 44px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--fg);
@@ -284,8 +284,8 @@
   align-items: center;
   justify-content: center;
   gap: 16px;
-  height: 96px;
-  border-radius: 48px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--fg);
   font-size: var(--fs-title);

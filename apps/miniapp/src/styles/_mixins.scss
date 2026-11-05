@@ -19,8 +19,8 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  height: 68px;
-  padding: 0 30px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: rgba(255, 255, 255, 0.74);
@@ -67,33 +67,41 @@
   }
 }
 
-/* 品牌渐变主按钮 */
-@mixin btn-brand {
+/*
+ * 按钮规格阶梯（DESIGN.md §3.1）：高度与左右内边距只取 --btn-h-* / --btn-px-* 四档，
+ * 圆角一律胶囊（--r-pill）。页面里不要再写裸高度；特殊排版（flex: 1、图标、状态色）
+ * 也要从档位取值。
+ */
+@mixin btn-layout($h: var(--btn-h-lg), $px: var(--btn-px-lg)) {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 14px;
-  min-height: 96px;
-  border-radius: 28px;
+  min-height: $h;
+  padding: 0 $px;
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* L 档主按钮：品牌渐变（整行 CTA、弹层主钮、底部操作栏） */
+@mixin btn-brand {
+  @include btn-layout(var(--btn-h-lg), var(--btn-px-lg));
   background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-title);
-  font-weight: 600;
   box-shadow: var(--shadow-btn);
 }
 
-/* 描边次按钮 */
+/* L 档次按钮：白底描边 */
 @mixin btn-ghost {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  min-height: 96px;
-  border-radius: 28px;
+  @include btn-layout(var(--btn-h-lg), var(--btn-px-lg));
   border: 2px solid var(--border);
   background: var(--surface);
   color: var(--fg);
   font-size: var(--fs-title);
+  font-weight: 400;
 }
 
 /* 玻璃层：必须自带不透明兜底底，Android 不支持 backdrop-filter 时不至于透明穿帮 */
@@ -281,8 +289,8 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  height: 44px;
-  padding: 0 18px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   font-size: var(--fs-2xs);
   font-weight: 600;
@@ -311,8 +319,8 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 72px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: $bg;
   color: $fg;

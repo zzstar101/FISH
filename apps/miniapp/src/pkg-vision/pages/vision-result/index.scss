@@ -355,8 +355,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 64px;
-  padding: 0 28px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
@@ -498,8 +498,8 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 96px;
-  border-radius: 48px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
   font-size: var(--fs-title);
@@ -517,8 +517,8 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 92px;
-  border-radius: 46px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
   color: var(--fg);

@@ -256,8 +256,8 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  height: 44px;
-  padding: 0 18px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: var(--fs-2xs);

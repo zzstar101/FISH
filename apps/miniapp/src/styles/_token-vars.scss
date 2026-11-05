@@ -184,6 +184,20 @@
   /* 底部弹层向上投影（B4 退出确认 / C4 下架确认 / D1 润色候选卡 / D2 面板） */
   --shadow-sheet: 0 -16px 48px -20px rgba(23, 35, 61, 0.28);
 
+  /* ---- 按钮规格阶梯（DESIGN.md §3.1）：高度与左右内边距只取这四档 ----
+     L 96 整行主/次按钮、弹层双钮、底部操作栏
+     M 80 区块内主行动、输入条内按钮（与输入盒同高）
+     S 68 卡片内小按钮、次级文字按钮、可点选 chip / tab
+     label 44 纯状态标签、不可点 tag（左右内边距下限 20） */
+  --btn-h-lg: 96px;
+  --btn-h-md: 80px;
+  --btn-h-sm: 68px;
+  --btn-h-label: 44px;
+  --btn-px-lg: 40px;
+  --btn-px-md: 32px;
+  --btn-px-sm: 26px;
+  --btn-px-label: 20px;
+
   /* ---- 圆角 ---- */
   --r-pill: 999px;
   --r-sm: 16px;

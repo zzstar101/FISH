@@ -256,7 +256,7 @@
 .wp__cancel {
   flex: 0 0 auto;
   width: 184px;
-  height: 88px;
+  height: var(--btn-h-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -274,7 +274,7 @@
 /* 「发布愿望」：设计稿 `.btn.primary`（深墨底 + 白字） */
 .wp__submit {
   flex: 1 1 auto;
-  height: 88px;
+  height: var(--btn-h-lg);
   display: flex;
   align-items: center;
   justify-content: center;

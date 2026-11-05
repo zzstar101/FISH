@@ -1230,8 +1230,10 @@ $bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后�
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* 高度跟随 #605 的输入栏控件高（`$bar-control-px` = 68 = S 档 `--btn-h-sm`），
+     保证与输入框、语音、加号三颗钮严格同高；左右内边距取 S 档令牌。 */
   height: $bar-control-px;
-  padding: 0 30px;
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--brand-deep);
 

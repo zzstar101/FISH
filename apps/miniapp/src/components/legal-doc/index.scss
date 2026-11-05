@@ -680,7 +680,7 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 92px;
+  height: var(--btn-h-lg);
   border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
@@ -703,7 +703,7 @@
   align-items: center;
   justify-content: center;
   margin-top: 16px;
-  height: 76px;
+  height: var(--btn-h-md);
   border-radius: var(--r-pill);
   font-size: var(--fs-sm);
   font-weight: 600;

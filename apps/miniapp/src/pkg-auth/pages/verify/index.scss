@@ -125,7 +125,7 @@
   display: inline-flex;
   align-items: center;
   height: 44px;
-  padding: 0 18px;
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--warn-weak);
   border: 2px solid var(--warn-line);
@@ -238,7 +238,7 @@
   width: 100%;
   height: 96px;
   margin-top: 40px;
-  border-radius: 48px;
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-title);

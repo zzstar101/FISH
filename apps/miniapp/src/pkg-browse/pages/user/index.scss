@@ -168,8 +168,8 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 64px; /* 稿 32pt ×2 */
-  padding: 0 28px;
+  height: var(--btn-h-md); /* M 档（DESIGN.md §3.1） */
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   white-space: nowrap;
   border: 2px solid transparent;
@@ -182,13 +182,13 @@
 
 /*
  * 关注钮占位（#188）：与 `.uhome__follow` 同高同圆角，宽度对齐**最宽态**「已关注 + check」
- * —— padding 28×2 + icon 32 + gap 10 + 3 字 ×26 + border 2×2 = 180px。窄了会让昵称区
+ * —— padding 32×2 + icon 32 + gap 10 + 3 字 ×26 + border 2×2 = 188px。窄了会让昵称区
  * 在状态到位时抖一下（`.uhome__nameRow` 是 nowrap，宽度变化直接改省略号位置）。
  */
 .uhome__follow-skel {
   flex: 0 0 auto;
-  width: 180px;
-  height: 64px;
+  width: 188px;
+  height: var(--btn-h-md);
   border-radius: var(--r-pill);
   background: var(--accent-faint);
 }
@@ -410,8 +410,8 @@
   top: 16px;
   display: inline-flex;
   align-items: center;
-  height: 40px;
-  padding: 0 16px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   font-size: 20px;
   font-weight: 600;
