@@ -145,12 +145,13 @@ src/
 **怎么数的**（基线 `origin/main = 7cfa1d4f`，与守门测试同一扫描口径）：
 
 1. **点位**：`apps/miniapp/src/**/*.tsx` 里 `<Image>` 的 `src` 取自图标表的两类都算 ——
-   字面量 `src={ICONS.x}`（**177 处**），加上守门测试 `INDIRECT_ICON_IMAGES` 登记的 8 类间接点
+   字面量 `src={ICONS.x}`（**175 处**），加上守门测试 `INDIRECT_ICON_IMAGES` 登记的 8 类间接点
    （`custom-tab-bar/index.tsx` 的 `tabbar__img` / `tabbar__plus`、`components/empty-state/index.tsx`
    的 `empty__icon-img`、`pkg-social/pages/conversation/index.tsx` 的 `conv__ptile-ic`、
    `pkg-auth/pages/settings/index.tsx` 的 `st__ric-ic`、`pages/chat/index.tsx` 的 `notif__ic-img`、
    `pages/profile/index.tsx` 的 `profile__row-ic` / `profile__cell-ic`）和
-   `ICONS[...]` / `HOME_CATEGORY_ICONS[...]` 变量取值点 —— 合计 **193 处**。
+   `ICONS[...]` / `HOME_CATEGORY_ICONS[...]` 变量取值点（10 处）—— 合计 **193 处**。
+   `src` 为三元表达式、一图多键的 7 处不计入这组统计。
 2. **档位**：取该 `<Image>` **自身** className 在 scss 里的 `width`（px 即 rpx）；一个
    `<Image>` 只计一次，不按出现次数或渲染次数累加。尺寸写在 inline style 里的点（自绘导航
    2 处）单列，不进分布，也不进跨档统计。
