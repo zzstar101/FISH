@@ -80,6 +80,14 @@ export default function Home() {
   const [loadedFor, setLoadedFor] = useState<ListingCategory | 'ALL' | null>(null)
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态，不显示空态、更不显示演示数据 */
   const [failed, setFailed] = useState(false)
+  /**
+   * 上一次加载失败了，但屏幕上的旧列表被留住了（`applyLoadResult` 的 `previous` 生效）。
+   *
+   * 单独立一个标志，因为那时 `failed` 已经被压回 `false`（屏幕不是错误块，是旧列表）。
+   * 不留标记的话「再点一次当前分类就当重试」那条路径会变成死代码，用户只剩下拉刷新
+   * 一个入口，而且列表看起来和刷新成功没有区别 —— 一句话都没人告诉他这次没刷上。
+   */
+  const [staleAfterFailure, setStaleAfterFailure] = useState(false)
 
   /**
    * 本机「不感兴趣」名单：进页读一次，`useDidShow` 每次回到本页再读一次。
@@ -110,6 +118,22 @@ export default function Home() {
    * 而选中态在教材书籍上。
    */
   const reqSeq = useRef(0)
+
+  /**
+   * 屏幕上**正在显示的那一批**（以及它属于哪个分类）的镜像。
+   *
+   * 存在的唯一理由：`load()` 失败时要判断「能不能不清屏」（见 `applyLoadResult` 的
+   * `previous`），而 `load` 是随渲染重建的闭包，读不到最新的 `items` / `loadedFor`。
+   *
+   * **它必须恒等于屏幕事实**，每次 `load` 落屏后无条件跟写。写成「只在成功时更新」会让它
+   * 退化成「历史上成功过的那一批」：按推荐成功 → 换分类失败清屏 → 再按推荐失败时，
+   * 被清掉的旧列表会被复活到屏幕上，`failed` 还被压成 `false`、错误块消失 ——
+   * 用户看到的是一次假成功。
+   */
+  const lastGoodRef = useRef<{
+    items: MockListing[]
+    loadedFor: ListingCategory | 'ALL' | null
+  }>({ items: [], loadedFor: null })
 
   /**
    * 埋点上下文：本次推荐请求的 `requestId` 与「公开 id → 全局 position」。
@@ -159,7 +183,16 @@ export default function Home() {
     setHiddenIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
   }
 
-  const load = async (next: ListingCategory | 'ALL') => {
+  /**
+   * 拉一次列表并结转到屏幕上。
+   *
+   * 返回值给「用户主动点的那一次」（下拉刷新）用：`failed` = 这次真的失败了，
+   * `held` = 失败但屏幕上的旧数据留住了（见 `applyLoadResult` 的 `previous`）。
+   * 静默重试（进页 / 切分类）不读返回值 —— 它们失败时用户看得见的反馈是错误块或旧列表本身。
+   */
+  const load = async (
+    next: ListingCategory | 'ALL',
+  ): Promise<{ failed: boolean; held: boolean }> => {
     const seq = reqSeq.current + 1
     reqSeq.current = seq
     // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
@@ -170,7 +203,7 @@ export default function Home() {
     const result =
       next === 'ALL' ? await loadHomeFeed('ALL') : await loadCategoryListings(next, '综合')
     // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
-    if (seq !== reqSeq.current) return
+    if (seq !== reqSeq.current) return { failed: false, held: false }
     /*
       本地隐藏名单在这里过滤（R1 没有服务端隐藏接口，见 `recommendation/hidden`）。
       过滤发生在**取数之后、上屏之前**：`positions` 仍按服务端那份 feed 的原始下标算，
@@ -180,23 +213,43 @@ export default function Home() {
     const visible = result.items.filter((item) => !hidden.has(item.id))
     /*
       三件套一次结转（纯函数，`./list-state.ts`）。`loadedFor` 的口径：
-      成功 → 置为 `next`；**失败 → 作废为 `null`**（失败时 `items` 已被清成空数组，
-      屏幕上没有属于任何分类的有效数据）。若失败时保留旧值，当失败的目标分类恰是
-      上次成功过的那个时（失败后点「重试」、下拉刷新失败后重试、失败后切回该分类），
-      `loadedFor === category` 成立，请求在途期间 `failed` 已清、`items` 仍为空 →
-      渲染空态「这个分类还没有闲置」，把「没读到」说成「这个分类没货」。作废后
-      `loadedFor !== category` 全程成立，重试期间由骨架屏接管；空态只在**真的成功
-      拿到空列表**时出现。判定逻辑与用例见 `./list-state.ts`。
+      成功 → 置为 `next`；失败 → 看屏幕上有没有**同一分类**的旧数据：
+        · 有 → 留着（`previous`），`loadedFor` 保持 `next`、`failed` 压成 false →
+          列表原地不动，重试在途也不会闪骨架屏；
+        · 没有 → 作废为 `null` + `failed: true` → 错误块。
+      后者的理由不变：失败时 `items` 已清空，屏幕上没有属于任何分类的有效数据；若保留旧值，
+      失败后重试期间 `loadedFor === category` 成立而 `items` 为空 → 渲染「这个分类还没有
+      闲置」，把「没读到」说成「这个分类没货」。判定逻辑与用例见 `./list-state.ts`。
     */
-    const applied = applyLoadResult({ requested: next, items: visible, failed: result.failed })
-    // 上下文与列表同一次渲染生效：曝光观察器建起来时就已经能拿到 requestId 与序号
-    setFeedContext({
-      requestId: result.requestId ?? null,
-      positions: result.positions ?? new Map(),
+    const applied = applyLoadResult({
+      requested: next,
+      items: visible,
+      failed: result.failed,
+      previous: lastGoodRef.current,
     })
+    /*
+      失败但旧数据留住了（`held`）：屏幕上的还是上次成功那批，所以**不动**归因上下文 ——
+      那份 `requestId` / `positions` 正是这批商品的来源。清掉的话，`use-impressions` 里
+      `if (!requestId) return` 会让整屏商品在下次成功加载前一条曝光都不发（也不发
+      QUICK_SKIP、进详情没有归因）；而契约只禁「没有真实 requestId 的数据计入」，
+      没要求把已经有归因的数据弃用。旧段会被 `use-impressions` 按各自 requestId 结算，
+      去重键 `${requestId}:${listingId}` 与保留下来的数据同源，不会重复计。
+    */
+    const held = result.failed && !applied.failed
+    if (!held) {
+      // 上下文与列表同一次渲染生效：曝光观察器建起来时就已经能拿到 requestId 与序号
+      setFeedContext({
+        requestId: result.requestId ?? null,
+        positions: result.positions ?? new Map(),
+      })
+    }
+    // 恒等于屏幕事实（含「失败清屏」这一种），见 `lastGoodRef` 的注释
+    lastGoodRef.current = { items: applied.items, loadedFor: applied.loadedFor }
     setItems(applied.items)
     setFailed(applied.failed)
+    setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
+    return { failed: result.failed, held }
   }
 
   useLoad(() => {
@@ -225,7 +278,15 @@ export default function Home() {
   // 下拉刷新重拉**当前分类**：在「教材书籍」里下拉刷新却跳回「推荐」，
   // 等于把用户刚选好的分类弄丢了。
   usePullDownRefresh(() => {
-    void load(category).then(() => Taro.stopPullDownRefresh())
+    void load(category).then((outcome) => {
+      Taro.stopPullDownRefresh()
+      /*
+        失败但旧数据留住了（`held`）：列表不动，用户看不出「这次刷了个寂寞」——
+        必须给一句话，否则下拉刷新看起来像没反应。没有旧数据可留时不弹：
+        那时屏幕上已经是带重试按钮的错误块，再叠一个 toast 是重复告知。
+      */
+      if (outcome.held) Taro.showToast({ title: '刷新失败，请稍后再试', icon: 'none' })
+    })
   })
 
   const [left, right] = useMemo(() => splitColumns(items), [items])
@@ -296,7 +357,7 @@ export default function Home() {
    * 切完的落点（Owner 2026-09-28 拍板，闲鱼口径）：滚到「文字导航刚好吸顶」的位置，
    * 不再回列表顶 —— 吸顶条下方正好是新一批商品的开头；页面还没滚到吸顶点时保持原位，
    * 不把用户往下拽。重复点**当前**分类不重新取数（没有新信息可拿），但也不是完全
-   * no-op：失败态下当作「重试」，成功态只做落点归位。
+   * no-op：失败态（含「失败但旧列表留住了」的兜底态）当作「重试」，成功态只做落点归位。
    *
    * 归位期间（Owner 反馈「切换 tag 不需要抖动」）把吸顶判定**锁在当前值**：滚动动画
    * 途中 `scrollTop` 会贴着阈值来回、新分类列表替换时页面高度先塌再涨，两者都会让
@@ -313,7 +374,8 @@ export default function Home() {
     if (repositions) lockNavSettle()
     else releaseNavSettle()
     if (key === category) {
-      if (failed) void load(key)
+      // 兜底态（旧列表压着一次失败）也要能重试：那时 `failed` 是 false，只判 `failed` 会漏
+      if (failed || staleAfterFailure) void load(key)
       if (repositions)
         void Taro.pageScrollTo({ scrollTop: target, duration: CATEGORY_SCROLL_DURATION })
       return

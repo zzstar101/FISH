@@ -262,8 +262,11 @@ export default function Chat() {
   /**
    * 会话列表加载。重试钮、进页、以及从会话页返回（`useDidShow`）都走这里。
    *
-   * 失败即清屏并进错误态（与首页 `applyLoadResult` 同一口径）：把上一批会话留在
-   * 屏幕上会让人以为「刷新过了，就这几条」。
+   * 失败即清屏并进错误态：把上一批会话留在屏幕上会让人以为「刷新过了，就这几条」。
+   * 这里与首页的取舍**不同** —— 首页会留住旧商品（`pages/home/index.tsx` 的
+   * `lastGoodRef` + `applyLoadResult` 的 `previous`，并用 toast 明说这次没刷上），
+   * 因为商品列表是「看内容」，而会话列表的每一行都带着未读数：留着旧行会给出
+   * 一个关于「有几条没读」的错误结论。
    */
   const reloadConversations = useCallback(() => {
     const epoch = ++listEpoch.current
