@@ -7,6 +7,7 @@ import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import TopBar from '@/components/top-bar'
+import UserAvatar from '@/components/user-avatar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
@@ -667,7 +668,7 @@ export default function Favorites() {
                           act(item, openSeller)
                         }}
                       >
-                        <Image className="fav__av" src={item.avatarUrl} mode="aspectFill" />
+                        <UserAvatar className="fav__av" src={item.avatarUrl} />
                         <Text className="fav__nm">{item.seller}</Text>
                         {item.verified ? (
                           <Image className="fav__tick" src={BADGE.verified} mode="aspectFit" />

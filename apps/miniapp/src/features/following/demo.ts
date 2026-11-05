@@ -22,9 +22,9 @@ export type FollowingPerson = {
    * 演示用的**占位色块**（data URI），不是真头像。
    *
    * 刻意不叫 `avatarUrl`：契约的真实头像字段（`PublicUserProfileSchema.avatarUrl`）
-   * 到位后要**新加一个字段**，而不是复用这个 —— 因为两者的渲染规则不同：
-   * 占位色块要垫在首字下面（稿的「色圈 + 首字」是两层），真头像要独占，
-   * 首字不能再压上去。字段名分开，接端点的人就必须显式决定这件事。
+   * 到位后要**新加一个字段**，而不是复用这个 —— 两者的渲染规则不同（真头像独占整圆）。
+   * #618 起缺图不再画首字 / 色块：视图层 `components/user-avatar` 画统一默认头像，
+   * 这个字段只作为演示 fixture 的数据保留，页面不再渲染它。
    */
   placeholderBlock: string
   /** 已认证：行内渲染设计稿「认证」成品徽章（整图，非小图标），未认证整块不占位 */
@@ -37,7 +37,12 @@ export type FollowingPerson = {
   mutual: boolean
 }
 
-/** 头像色块：越界时给空串（页面按「没有图」走首字兜底），不编一个颜色 */
+/**
+ * 头像色块：越界时给空串，不编一个颜色。
+ *
+ * #618 起页面不再渲染它（头像位统一由 `components/user-avatar` 画真图 / 默认头像），
+ * 这里只维持演示 fixture 的数据形状。
+ */
 function block(index: number): string {
   return AVATAR_BLOCKS[index] ?? ''
 }

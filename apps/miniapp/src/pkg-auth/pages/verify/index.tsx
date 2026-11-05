@@ -6,6 +6,7 @@ import { BADGE } from '@/assets/badge'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { applyVerification, useAuth } from '@/features/auth/store'
 import { requestSubscribe } from '@/features/subscribe/request'
@@ -368,13 +369,7 @@ export default function Verify() {
             <Text className="verify__card-sub">个人页 / 卖家页 · 同一徽章</Text>
 
             <View className="verify__badgerow">
-              <View className="verify__av">
-                {user?.avatarUrl ? (
-                  <Image className="verify__av-img" src={user.avatarUrl} mode="aspectFill" />
-                ) : (
-                  <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
-                )}
-              </View>
+              <UserAvatar className="verify__av" src={user?.avatarUrl} />
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
                   <Text className="verify__name">{nickname}</Text>
@@ -387,13 +382,7 @@ export default function Verify() {
             </View>
 
             <View className="verify__badgerow">
-              <View className="verify__av">
-                {user?.avatarUrl ? (
-                  <Image className="verify__av-img" src={user.avatarUrl} mode="aspectFill" />
-                ) : (
-                  <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
-                )}
-              </View>
+              <UserAvatar className="verify__av" src={user?.avatarUrl} />
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
                   <Text className="verify__name">{nickname}</Text>

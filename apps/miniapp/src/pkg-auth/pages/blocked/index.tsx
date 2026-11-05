@@ -16,7 +16,7 @@
  * - 换账号清场：本页实例会压在页面栈里跨登录态存活，账号一变**渲染期**清成未加载 +
  *   作废在飞回包（`accountSeq`，与 `pages/following` 同一手法）。
  */
-import { Image, Text, View } from '@tarojs/components'
+import { Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
@@ -24,6 +24,7 @@ import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { fetchMyBlocks, setBlock } from '@/features/blocks/api'
@@ -290,13 +291,7 @@ export default function BlockedPage() {
           <View className="blk__list">
             {ready.rows.map((row) => (
               <View key={row.id} className="blk__row">
-                <View className="blk__av">
-                  {row.avatarUrl ? (
-                    <Image className="blk__av-photo" src={row.avatarUrl} mode="aspectFill" />
-                  ) : (
-                    <Text className="blk__av-tx">{row.nickname.slice(0, 1)}</Text>
-                  )}
-                </View>
+                <UserAvatar className="blk__av" src={row.avatarUrl} />
                 <View className="blk__main">
                   <Text className="blk__name">{row.nickname}</Text>
                   <Text className="blk__time num">

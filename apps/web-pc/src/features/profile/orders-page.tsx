@@ -179,13 +179,7 @@ function OrderCard({ order }: { order: TransactionDto }) {
             <h2 className="line-clamp-2 font-semibold leading-6">{order.listing.title}</h2>
             <p className="mt-2 font-bold text-xl text-danger">{formatPrice(order.amountCents)}</p>
             <div className="mt-3 flex items-center gap-2">
-              <UserAvatar
-                avatarUrl={order.counterpart.avatarUrl}
-                className="size-7"
-                emoji={order.counterpart.nickname.slice(0, 1)}
-                fallbackClassName="text-xs"
-                size="sm"
-              />
+              <UserAvatar avatarUrl={order.counterpart.avatarUrl} className="size-7" size="sm" />
               <span className="truncate text-ink-3 text-xs">
                 {order.role === 'buyer' ? '卖家' : '买家'}：{order.counterpart.nickname}
               </span>

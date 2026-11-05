@@ -123,7 +123,13 @@ describe('#170 D 判据层：迟到 / 跨账号的响应不得落地', () => {
 describe('#170 D 接线层：useDidShow 静默重拉', () => {
   test('页面注册了 useDidShow，且从 @tarojs/taro 引入', async () => {
     const code = await source()
-    expect(code).toContain("import Taro, { useDidShow } from '@tarojs/taro'")
+    /*
+      不钉死花括号里的**完整**具名列表：页面后来又加了一个 hook（切走时暂停 hero 动效要用
+      `useDidHide`），写死 `{ useDidShow }` 会把「多引入一个 hook」当成回归报红。
+      这条用例要钉的是「useDidShow 确实从 @tarojs/taro 具名引入」，不是那份列表的字面形状。
+    */
+    const named = code.match(/import Taro, \{([^}]*)\} from '@tarojs\/taro'/)
+    expect(named?.[1]).toContain('useDidShow')
     expect(code).toContain('useDidShow(() => {')
   })
 

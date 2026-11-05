@@ -25,7 +25,7 @@ export const DEMO_AUTH_ENABLED = __DEMO_AUTH__ === true
 /**
  * 形状照 `MeSchema`（`packages/contracts/src/auth/user.ts`）：
  * `id` 是规范的 usr_ 公开 ID（页面可能拿它当 key 或做契约解析），
- * `authStatus` 取真实值域里的值，`avatarUrl` 给 null 让页面走首字母兜底。
+ * `authStatus` 取真实值域里的值，`avatarUrl` 给 null 让头像位落统一默认头像（#618）。
  */
 export const DEMO_USER: Me = {
   id: 'usr_01jc000000e008000000001qg0',

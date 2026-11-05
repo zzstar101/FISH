@@ -106,44 +106,66 @@
   pointer-events: none;
 }
 
+/*
+ * 昵称在上、活跃信息在下（#596 第 2 点）。
+ *
+ * 只改列方向就够：DOM 里昵称 `<Text>` 本来就排在 presence 之前（`index.tsx:3564-3575`），
+ * `flex-direction: column` 直接把它俩叠成两行，**不需要动 tsx 结构**。
+ *
+ * 关键在高度预算：`.conv__title` 的盒高就是 `contentHeight`（胶囊那一段，实测 40~48
+ * 设备 px，见 `lib/nav-metrics.ts:110` 的 `gap × 2 + capsuleHeight`）。两行若按默认行高
+ * 1.4 排是 ~42px，会撑破这个盒子、垂直居中整体偏移 —— 所以行高收到 1.2、行间隙 2px，
+ * 两行合计 ~36px，稳稳落在盒内。
+ */
 .conv__title-in {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 2px;
   min-width: 0;
+  max-width: 100%;
+  line-height: 1.2;
 }
 
 .conv__title-nm {
   /* 父级 `.conv__title` 是盖在返回钮上的纯定位层（pointer-events: none），
      昵称要接 #517 的主页点击，必须在这里单独恢复事件。 */
   pointer-events: auto;
-  flex: 0 1 auto;
+  /* 列方向下 flex 的伸展轴变成纵向：原来的 `flex: 0 1 auto` 会让昵称在纵向空间不足时
+     被**压扁**（配合下面的 `overflow: hidden` 就是裁掉字头字尾）。横向省略改由
+     `max-width: 100%` 承担，`nowrap` + ellipsis 照旧生效。 */
+  flex: 0 0 auto;
+  max-width: 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 34px;
+  /* 与活跃信息 16px 成 2.5×（Owner 要 2~3×） */
+  font-size: 40px;
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: 0.01em;
 }
 
 /*
- * 在线态（#359 第五点）：顶部栏用户名隔壁，一行「绿点 + 文案」。
+ * 在线态（#359 第五点）：顶栏**第二行**、昵称正下方（#596 第 2 点），「绿点 + 文案」。
  *
- * `flex: 0 0 auto` + 昵称自己的 ellipsis：长昵称先省略，在线态永远留在标题行内
+ * `flex: 0 0 auto` + 昵称自己的 ellipsis：长昵称先省略，在线态永远留在标题块内
  * （`.conv__title-in` 的 `maxWidth` 是胶囊避让宽度，超出会被裁）。
- * 绿点用系统成功色 `--ok`，离线压成中性灰；字号比昵称小一档（24px）。
+ * 绿点用系统成功色 `--ok`，离线压成中性灰；字号按 Owner 的 2.5× 口径落到 16px
+ * （原 24px，昵称同时从 34px 提到 40px），绿点同比缩到 8px。
  */
 .conv__presence {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  max-width: 100%;
 }
 
 .conv__presence-dot {
-  width: 12px;
-  height: 12px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--muted);
 }
@@ -153,8 +175,9 @@
 }
 
 .conv__presence-tx {
-  font-size: 24px;
+  font-size: 16px;
   font-weight: 400;
+  line-height: 1.2;
   color: var(--muted);
 }
 
@@ -407,13 +430,17 @@
 }
 
 /* 消息列表：左右与商品摘要条同一 32px 栅格；打开即停在最新（底部）。
-   底部内衬只留 4pt：底对齐时它决定最新一条离输入栏的距离（稿子口径）。 */
+   行距 16 → 12（#596 第 5 点：气泡本身变高变方了，行距不跟着收会显得很散）。
+   底部内衬只留 3pt：底对齐时它决定最新一条离输入栏的距离（原 4pt，同步收一档）。 */
 .conv__list {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 16px;
-  padding: 24px 32px 8px;
+  gap: 12px;
+  /* 左右回到 32（= 屏宽 750rpx 下 16pt）：与上方商品摘要条 `.conv__pbar` 的
+     `margin: 20px 32px 0` 同一栅格（#596 演示反馈：两边宽距要跟其它布局的外边距对齐）。
+     头像再往外挑 16px（见 `.conv__ava` 的负外边距），所以头像贴边仍是 16px = 8pt。 */
+  padding: 24px 32px 6px;
 }
 
 /* 日期分隔（稿子 .daysep）：蓝底小胶囊，与系统灰胶囊区分 */
@@ -499,10 +526,16 @@
   flex-direction: row-reverse;
 }
 
+/* 头像：60 → 76px（#596 第 1 点，Owner 要求明显放大）。
+   ⚠️ 76 这个数**同时**写在下面 `.conv__col` 的 `calc(100% - 76px)` 里，
+   两处必须一起改，只改一处会让长消息溢出到对侧。
+   负外边距：气泡列按 32px 栅格，头像单独往外挑 16px 贴着屏边（Owner 要求头像更靠边缘），
+   所以头像实际离屏幕 32 - 16 = 16px = 8pt。 */
 .conv__ava {
-  width: 60px;
-  height: 60px;
+  width: 76px;
+  height: 76px;
   flex: 0 0 auto;
+  margin-left: -16px;
   border-radius: 50%;
   overflow: hidden;
   display: flex;
@@ -512,36 +545,24 @@
   border: 2px solid var(--border);
 }
 
-.conv__ava.is-mine {
-  background: var(--accent-faint);
-}
-
-.conv__ava-img {
-  width: 100%;
-  height: 100%;
-}
-
-.conv__ava-tx {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--brand-deep-2);
-}
-
-.conv__ava.is-mine .conv__ava-tx {
-  color: var(--muted-2);
-}
-
 .conv__col {
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-  /* 让出头像 + 间距，气泡列不吃满整行 */
+  /* 让出头像（76）：`.conv__row` 的 gap 16 由 `100%` 之外的负外边距抵掉 ——
+     头像往外挑 16px 后整行可用宽是 `100% + 16px`，减去头像 76 就是 `100% - 76px`。 */
   max-width: calc(100% - 76px);
 }
 
 .conv__row.is-mine .conv__col {
   align-items: flex-end;
+}
+
+/* 我的行是 row-reverse（头像在右），往外挑要改成右边 */
+.conv__row.is-mine .conv__ava {
+  margin-left: 0;
+  margin-right: -16px;
 }
 
 /* 文本气泡：上限 200pt、圆角 12pt 均匀（带头像后不再要小尾巴角） */
@@ -554,8 +575,22 @@
 }
 
 .conv__bubble.is-mine {
-  background: var(--grad-brand);
-  border-color: transparent;
+  /* 参考稿混色 + 白字（#596 第 3 点，Owner 参考稿的定稿形态）：
+     ①基类那条 `border: 2px solid` 原先是「透明描边占位」，已去掉（盒高 −4px；
+       本页几何全部运行时实测，贴底与尾行锚点不受影响）；
+     ②底色 = `--bubble-mine`（#779fe5）**单一平色**，取自 Owner 头像图主蓝：Chain 是「参考图标注值
+       #2aa8f5/#36c0ff（不是采样值）→ 采样三色 #18c9fa/#1acaf9/#19cbf9 混成 #19caf9 →
+       Owner『再调一下，偏荧光一点』→ 抽红得 #00d8ff → Owner『深一点点』→ 同色相压 9% 得 #00cbef →
+       Owner『改蓝一点』→ 同亮度偏蓝（hue 189°→194.5°）得 #00bcf8 →
+       Owner『换成图片中的主蓝』→ 头像图背景主蓝 hue 218.2°、饱和 68% 得 #779fe5」。
+       **不是渐变** —— Owner 先后否掉了渐变（「渐变色太怪了」），这里不要再出现
+       `linear-gradient`，也别用 `--grad-brand`。
+     ③前景色是**纯白**（`#fff`）：白字压 #779fe5 = **2.67:1**（沿革 #19caf9 1.93 / #00d8ff 1.71 /
+       #00cbef 1.95 / #00bcf8 2.20，饱和降下来底色更柔和、字反而最清楚），仍连非文本 3:1 都不到。
+       这是 Owner 指定观感优先的取舍：
+       按 Owner 指定还原参考稿；白字不达 AA，**若要可读性必须压深底色，不要改回深字** */
+  background: var(--bubble-mine);
+  border: none;
 }
 
 .conv__bubble-tx {
@@ -565,19 +600,31 @@
   word-break: break-all;
 }
 
+/* 我方气泡正文：白字（参考稿）。实测 2.67:1，不达 AA —— Owner 指定，别再翻回深字。
+   历史：#396fd4/#19d2ff/#8dbfff/#19a7ff/#36c0ff 五档纯色都是深字方案，自参考稿版起翻白。 */
 .conv__bubble.is-mine .conv__bubble-tx {
   color: #fff;
 }
 
-/* 发送失败的文本：虚线红描边 + 灰字（稿子 .bubble.is-failed） */
+/* 发送失败的文本：虚线红描边 + 灰字（稿子 .bubble.is-failed）
+   宽度要显式写回：`.conv__bubble.is-mine` 现在是 `border: none`（宽度 0），
+   只补 style/color 的话自己发失败的那条会连虚线框一起消失（改动前靠基类的 2px 撑着）。 */
 .conv__bubble.is-failed {
   background: var(--ice);
+  border-width: 2px;
   border-style: dashed;
   border-color: var(--danger-line);
 }
 
 .conv__bubble.is-failed .conv__bubble-tx {
   color: var(--muted-2);
+}
+
+/* 顺序兜底（PR #602 复审）：`.is-mine` 的 `border: none` 与 `.is-failed` 的 `border-width: 2px`
+   权重相同 (0,2,0)，虚线框在不在只取决于两条规则的先后。这里用 (0,3,0) 把它钉住 ——
+   以后谁挪动上面两条的位置，自己发失败的那条也不会丢掉虚线框。 */
+.conv__bubble.is-mine.is-failed {
+  border-width: 2px;
 }
 
 .conv__time {
@@ -592,19 +639,35 @@
  * 本节只有三块：气泡内摘引、输入栏上方的引用栏、撤回碑。
  */
 
-/* 气泡内的摘引（稿子 .quote）：左侧竖线 + 单行截断的摘引文案，点它定位原消息 */
+/* 气泡内的摘引（#596 第 4 点）：**双重气泡** —— 外层是消息气泡，这一块是内层
+   「浅一档的圆角方块」，小块下方才是回复正文。
+   旧的「左侧 5px 竖线 + 无底色」形态已废弃：竖线在深色气泡上几乎看不见，
+   双层底色才能把「被引用的那句话」和正文分开。
+   浅色宿主（他人气泡 / 失败态）复用既有令牌 `--accent-mid`（#c6dcff）：压白气泡
+   1.39:1、压失败态 `--ice` 1.28:1，肉眼分得出层次；原先的 `--accent-weak`
+   (#eff5ff) 压白气泡只有 1.10:1，等于裸文字 + padding（PR #602 审查 B）。
+   DOM 结构本来就是这个顺序（气泡 > 摘引块 > 正文，`index.tsx:3886-3896`），
+   所以这里只加底色/圆角/内边距，**不需要改 tsx**。 */
 .conv__quote {
   display: flex;
   align-items: center;
   min-height: 40px;
-  padding: 4px 0 4px 16px;
+  padding: 10px 16px;
   margin-bottom: 10px;
-  border-left: 5px solid var(--accent-mid);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
+  background: var(--accent-mid);
 
-  /* 我方气泡是渐变底，竖线与文字都要换成白色系才看得清 */
+  /* 我方气泡是平色 #779fe5，内层块用**半透明白叠加**（`--quote-bg-mine` =
+     `rgba(255,255,255,.32)`，荧光档起提到 .32，理由见 token 文件），不用深色块 ——
+     参考稿就是这样提亮一档。叠在 #779fe5 上合成 **#a3beed**，块内白字因此只有 **1.88:1** ——
+     与本气泡白字同一取舍，**低于 AA 但按 Owner 参考稿保留**，别再为此改深色。
+     分层：块 vs 气泡 **1.42:1**（.22=1.27、.28=1.35、.32=1.42、.36=1.48；底色越柔和，
+     同比例越分得开），另靠下面那条 **1px `rgba(255,255,255,.35)` 内描边**（压气泡 1.46:1）
+     补边界。仍然用 `inset` 而不是 `border`：`inset` 不参与布局，块高/行高/滚动锚点都不受影响
+     （本页几何全是运行时实测）。 */
   &.is-mine {
-    border-left-color: rgba(255, 255, 255, 0.72);
+    background: var(--quote-bg-mine);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
   }
 }
 
@@ -616,21 +679,63 @@
   color: var(--muted-2);
   @include ellipsis;
 
+  /* 我方内层块是白色叠加（合成 #a3beed），文字跟正文一样是白字：1.88:1，
+     按参考稿保留（不达 AA）。深字在这个底色上清楚得多（`--fg` 8.29:1），
+     但会破坏「整块白字」的参考稿观感 —— 不要再改回去。 */
   .conv__quote.is-mine & {
-    color: rgba(255, 255, 255, 0.86);
+    color: #fff;
   }
 }
 
 /*
- * 媒体气泡上方的引用条在气泡**外面**，底下是页面 --bg，不是我方气泡的渐变底。
- * 复用 `.is-mine` 的白字会变成近白底上的白字（对比度约 1.1:1），发送方看不见。
+ * 失败态反色（PR #602 审查 A）：失败气泡的底色是浅灰 `--ice`（不是 `--bubble-mine`），
+ * 而待发条目**恒**渲染 `.conv__quote.is-mine`（`index.tsx:3685-3691`）。
+ * 所以失败态一律把内层块拉回浅蓝 `--accent-mid`，与「他人发的失败条目」同形态 ——
+ * 不让它跟着 `.is-mine` 变成白色叠加块：那会在浅灰气泡里出现一块「亮一档的灰白」，
+ * 同一个人同一屏出现两种引用块形态。可辨性/可读性都够：块压 `--ice` 1.28:1
+ * （宿主是纯色浅灰、块是饱和浅蓝，肉眼分得出），块内 `--muted-2` 压 `--accent-mid` 6.28:1
+ * （修这个 bug 之前是白字压派生浅底，只有 1.x:1）。
+ * 文字那条写成四层类名 (0,4,0)，稳定压过 `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，
+ * 不靠源序 —— on-mine 那条现在是**白字**，压不住就会在浅蓝块上变白字（1.4:1），这条必须留着。
+ * `box-shadow` 也在这里清掉：那条 1px 白色内描边是给渐变气泡上的半透明白块补边界的，
+ * 浅蓝块压浅灰气泡 1.28:1 已经有边界，不需要。
  */
-.conv__quote--floating {
-  border-left-color: var(--accent-mid);
+.conv__bubble.is-failed .conv__quote {
+  background: var(--accent-mid);
+  box-shadow: none;
+}
 
-  .conv__quote-tx {
-    color: var(--muted-2);
-  }
+.conv__bubble.is-failed .conv__quote .conv__quote-tx {
+  color: var(--muted-2);
+}
+
+/*
+ * 媒体消息的摘引在气泡**外面**（`index.tsx:2628` 的 `renderMediaQuote`），
+ * 底下是列表本身的 `--bg`（`index.scss:18-24` 的 `.conv__list`，不是 `--grad-page`：那条渐变在
+ * 页头，列表这里是纯色）—— 所以无论有没有 `.is-mine`
+ * 都必须走「蓝块 + 深字」，否则就是白字压浅底（约 1.1:1，发送方看不见）。
+ * 宿主本身就是浅蓝渐变，只靠底色分不出来（`--accent-mid` 压页头只有 1.15:1），
+ * 所以这里再加一条 `--line` 描边（压页头 1.44:1、压最浅处 #f7faff 1.67:1）。
+ * 文字：`.conv__quote-tx` 基类本来就是 `--muted-2`（深字），而 `.conv__quote.is-mine` 会把它
+ * 翻成**白字** —— 白字压浅蓝 `--accent-mid` 只有 1.4:1，所以末尾那条 `.is-mine` 反色是**必须**的，
+ * 不是给将来的兜底（`renderMediaQuote` 目前恒不产出 is-mine 类，但形态一旦用上就是错的）。
+ * 写成四个类名 (0,4,0)，稳定高过 `.conv__quote.is-mine .conv__quote-tx` (0,3,0)，不靠源序。
+ *
+ * 底色那条也一样要**自己抬高权重**（PR #602 复审）：`.conv__quote.is-mine { background:
+ * var(--quote-bg-mine) }` 是 (0,2,0)，与 `.conv__quote--floating.is-mine` 同权重 ——
+ * 只靠源序赢。这里两个选择器都带上一层 `.conv__quote`，变成 (0,2,0) / (0,3,0)，
+ * 浮动摘引的蓝底不再依赖书写顺序。`box-shadow: none` 清掉 `.is-mine` 那条 1px 白色内描边
+ * （那是给渐变气泡上的半透明白块补边界的，浮动态已经有 `--line` 描边）。
+ */
+.conv__quote.conv__quote--floating,
+.conv__quote.conv__quote--floating.is-mine {
+  background: var(--accent-mid);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+
+.conv__quote.conv__quote--floating.is-mine .conv__quote-tx {
+  color: var(--muted-2);
 }
 
 /* 撤回碑（稿子 .recalled）：灰底小胶囊，体积与 SYSTEM 胶囊一致但不占整行 */
@@ -844,7 +949,9 @@
   align-items: center;
   justify-content: center;
 
-  /* 我方：白底 + 品牌色三角（气泡本身是渐变底，实心圆钮会糊在一起） */
+  /* 我方：白色实心钮 + 蓝三角（跟随参考稿的「白字/白件」族）。白钮压 #779fe5 = 2.67:1，
+     低于非文本 3:1 线 —— 与本气泡白字同一取舍，按 Owner 参考稿保留。
+     三角用 `--bubble-mine`（#779fe5）压白钮 2.67:1，是同一套关系。 */
   &.is-mine {
     background: var(--surface);
   }
@@ -860,8 +967,9 @@
   margin-left: 5px;
 }
 
+/* 我方钮是白底，三角翻成气泡蓝（基类三角是 `--surface` 白，压在白色圆钮上会看不见） */
 .conv__play.is-mine .conv__play-glyph {
-  border-left-color: var(--brand-deep);
+  border-left-color: var(--bubble-mine);
 }
 
 /* 暂停态：两根竖条。用 border-left/right 画，避免再引一份图标 */
@@ -878,9 +986,9 @@
 }
 
 .conv__play.is-pause.is-mine .conv__play-glyph {
-  border-left-color: var(--brand-deep);
-  border-right-color: var(--brand-deep);
-  background: var(--brand-deep);
+  border-left-color: var(--bubble-mine);
+  border-right-color: var(--bubble-mine);
+  background: var(--bubble-mine);
 }
 
 .conv__wave {
@@ -895,9 +1003,11 @@
   border-radius: 4px;
   background: var(--accent-mid);
 
-  /* 我方：白 66% 的竖条 */
+  /* 我方：白 75%（跟随参考稿白件族）。非文本图形压 #779fe5 = 2.14:1 —— 低于 3:1 线，
+     与本气泡白字同一取舍，按 Owner 参考稿保留。要和已播的实心白（下一条）拉开一档，
+     所以未播不写满 100%。 */
   &.is-mine {
-    background: rgba(255, 255, 255, 0.66);
+    background: rgba(255, 255, 255, 0.75);
   }
 
   /* 已播部分高亮 */
@@ -905,8 +1015,9 @@
     background: var(--brand-deep);
   }
 
+  /* 我方已播：实心白，与未播的 75%（2.14:1）一档拉开（实心白 = 2.67:1） */
   &.is-mine.is-on {
-    background: var(--surface);
+    background: #fff;
   }
 }
 
@@ -915,6 +1026,8 @@
   font-size: var(--fs-xs);
   color: var(--muted-2);
 
+  /* 我方：白 86%（参考稿的次要信息档）。实测压 #779fe5 = **2.37:1** —— 低于 AA 4.5，
+     与本气泡正文（2.67）同一取舍，按 Owner 参考稿保留。 */
   &.is-mine {
     color: rgba(255, 255, 255, 0.86);
   }

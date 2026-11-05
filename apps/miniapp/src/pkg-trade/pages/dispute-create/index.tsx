@@ -17,6 +17,7 @@ import {
   disputeFailureText,
   TRANSACTION_STATUS_LABEL,
 } from '@/features/disputes/meta'
+import { markDisputesDirty } from '@/features/disputes/refresh'
 import { disputeNotFoundCopy, disputeWindowClosed } from '@/features/disputes/view'
 import { fetchTransaction } from '@/features/transaction/api'
 import { formatYuan } from '@/lib/money'
@@ -125,6 +126,12 @@ export default function DisputeCreatePage() {
         if (!result.created) {
           void Taro.showToast({ title: '你已发起过这条争议', icon: 'none' })
         }
+        /*
+          新建的这条争议要立刻出现在列表里。列表页可能还在栈上（订单卡 → 我的争议 →
+          详情 → 重新发起是全程 navigateTo 的），返回时它命中的是「30 秒内刚拉过」
+          那道闸，不置位就要下拉刷新才看得见 —— 这正是「我刚改的被藏掉」。
+        */
+        if (result.created) markDisputesDirty()
         void Taro.redirectTo({
           url: `/pkg-trade/pages/dispute-detail/index?id=${encodeURIComponent(result.dispute.id)}`,
         })

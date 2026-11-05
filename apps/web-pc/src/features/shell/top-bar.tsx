@@ -114,12 +114,7 @@ export function TopBar() {
             </Link>
           )}
           <Link aria-label="我的" className="ml-1" to="/profile">
-            <UserAvatar
-              avatarUrl={me?.avatarUrl ?? null}
-              emoji={me?.nickname.slice(0, 1) ?? '鱼'}
-              fallbackClassName="text-sm"
-              size="default"
-            />
+            <UserAvatar avatarUrl={me?.avatarUrl ?? null} size="default" />
           </Link>
         </div>
       </div>
