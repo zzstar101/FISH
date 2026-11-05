@@ -466,8 +466,10 @@ describe('整页终态也留得住页头两格（#598 验收②）', () => {
     // 复审 F8：`load()` 无参会被 `?tab=` 拽回初值，用户已经切到的段就丢了
     expect(err).toContain('void load(seg)')
     expect(err).not.toContain('void load()')
-    // 复审 F7：整页路径上也得有可读的失败说明，不能只剩一个标题
-    expect(err).toContain('text="网络异常，请重试"')
+    // 复审 F7：整页路径上也得有可读的失败说明，不能只剩一个标题。
+    // #607 起那句说明不再是写死的「网络异常，请重试」，而是按 `ApiError` 的码算出来的
+    // （见 `tests/user-home-failure.test.ts`）——这里只钉「它还在，且真的接进了 LoadError」。
+    expect(err).toContain('text={homeFailureText(homeError)}')
     // 复审 F10：`ScrollView` 自本单起常驻，`scrollTop` 会留着而顶栏两态已复位 ——
     // 不归位就是「导航条透明、居中标题不出现」直到用户再滚一次
     expect(err).toContain('backToTop()')
