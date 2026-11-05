@@ -197,6 +197,9 @@
   --btn-px-md: 32px;
   --btn-px-sm: 26px;
   --btn-px-label: 20px;
+  /* 搜索胶囊内嵌按钮：容器 64（微信原生胶囊高）− 8，只用于这一处 */
+  --btn-h-cap: 56px;
+  --btn-px-cap: 24px;
 
   /* ---- 圆角 ---- */
   --r-pill: 999px;

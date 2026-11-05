@@ -324,7 +324,7 @@
   display: flex;
   align-items: center;
   height: 44px;
-  padding: 0 18px;
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   color: var(--cond-fg);

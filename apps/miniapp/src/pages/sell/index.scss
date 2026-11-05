@@ -304,8 +304,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 60px;
-  padding: 0 22px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);
@@ -852,7 +852,7 @@
   align-items: center;
   justify-content: center;
   height: var(--btn-h-md);
-  padding: 0 32px;
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   color: var(--muted-2);
   font-size: 26px;

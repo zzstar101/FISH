@@ -500,8 +500,8 @@
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  height: 104px;
-  padding: 0 42px 0 36px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);

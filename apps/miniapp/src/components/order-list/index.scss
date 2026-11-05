@@ -368,7 +368,6 @@
 }
 
 .orders__btn--ghost {
-  padding: 0 8px;
   gap: 10px;
   background: transparent;
   color: var(--muted-2);
@@ -583,7 +582,6 @@
 
 /* 取消交易：次级危险位（描边 + 深红字），不抢「打开二维码」的主位 */
 .orders__btn--danger {
-  padding: 0 8px;
   border: 2px solid var(--danger-line);
   color: var(--danger-ink);
 

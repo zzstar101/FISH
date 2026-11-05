@@ -697,9 +697,9 @@
   align-items: center;
   gap: 16px;
   margin-top: 22px;
-  height: 88px;
-  padding: 0 28px;
-  border-radius: 36px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   background: rgba(255, 255, 255, 0.72);
   border: 2px solid rgba(255, 255, 255, 0.78);
   box-shadow: var(--shadow-card);

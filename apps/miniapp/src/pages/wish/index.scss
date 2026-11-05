@@ -309,8 +309,8 @@
   align-items: center;
   flex: 0 0 auto;
   gap: 12px;
-  height: 62px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);

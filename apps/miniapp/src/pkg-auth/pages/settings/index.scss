@@ -168,11 +168,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 56px;
+  height: var(--btn-h-sm);
   margin: 0;
-  padding: 0 24px;
+  padding: 0 var(--btn-px-sm);
   border: none;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--accent-weak);
   color: var(--accent);
   font-size: var(--fs-sm);

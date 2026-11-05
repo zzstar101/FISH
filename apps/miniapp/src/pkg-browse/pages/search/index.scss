@@ -83,8 +83,8 @@
  */
 .search__submit {
   flex: 0 0 auto;
-  height: 56px;
-  padding: 0 24px;
+  height: var(--btn-h-cap);
+  padding: 0 var(--btn-px-cap);
   display: flex;
   align-items: center;
   border-radius: var(--r-pill);
