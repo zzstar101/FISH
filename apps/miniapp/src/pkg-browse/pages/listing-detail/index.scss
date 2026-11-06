@@ -830,7 +830,9 @@
   align-items: center;
   gap: 20px;
   padding: 20px 24px;
-  border-radius: 48px;
+  /* 浮条本身也走全圆角（DESIGN §3：胶囊/按钮/标签 = 999）：
+     里面是正圆收藏钮 + 两枚胶囊 CTA，外框留 48px 反而不协调 */
+  border-radius: var(--r-pill);
   background: rgba(255, 255, 255, 0.84);
   border: 2px solid rgba(255, 255, 255, 0.62);
   backdrop-filter: blur(48px) saturate(180%);
