@@ -55,9 +55,10 @@ import heartMuted from '@/assets/lib-icons/heart-muted@3x.png'
 import heartWhite from '@/assets/lib-icons/heart-white@3x.png'
 import homeMuted from '@/assets/lib-icons/home-muted@3x.png'
 import imageMuted from '@/assets/lib-icons/image-muted@3x.png'
+import imageWhite from '@/assets/lib-icons/image-white@3x.png'
 import infoFg from '@/assets/lib-icons/info-fg@3x.png'
 import infoMuted from '@/assets/lib-icons/info-muted@3x.png'
-import keyFg from '@/assets/lib-icons/key-fg@3x.png'
+import keyWhite from '@/assets/lib-icons/key-white@3x.png'
 import keyboardFg from '@/assets/lib-icons/keyboard-fg@3x.png'
 import lockFg from '@/assets/lib-icons/lock-fg@3x.png'
 import mailFg from '@/assets/lib-icons/mail-fg@3x.png'
@@ -134,7 +135,7 @@ export const ICONS = {
   userAddBrand,
   lockFg,
   mailFg,
-  keyFg,
+  keyWhite,
   shieldBrand,
   shieldMuted,
   shieldFg,
@@ -143,6 +144,7 @@ export const ICONS = {
   bellFg,
   cameraMuted,
   imageMuted,
+  imageWhite,
   tagMuted,
   starBrand,
   heartMuted,

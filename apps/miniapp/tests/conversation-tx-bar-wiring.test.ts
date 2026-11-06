@@ -230,7 +230,7 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expect(bar).toContain("action.kind === 'review'")
     expect(bar).toContain('openMeetup(action.transactionId)')
     expect(bar).toContain("action.kind === 'scan'")
-    expect(bar).toContain('SCAN_CODE_PAGE')
+    expect(bar).toContain("scanPageUrl('scan')")
     expect(bar).toContain("action.kind === 'retry'")
     expect(bar).toContain('retryTx()')
     // 卖家提案态的「拒绝」也走同一个分发入口（次要钮显式传动作进来）

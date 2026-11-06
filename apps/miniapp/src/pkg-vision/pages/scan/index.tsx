@@ -1,105 +1,90 @@
-import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
-import { Camera, Text, View } from '@tarojs/components'
-import Taro, { useDidShow } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import { Camera, Image, Text, View } from '@tarojs/components'
+import Taro, { useDidShow, useRouter } from '@tarojs/taro'
+import { useMemo, useRef, useState } from 'react'
+import { ICONS } from '@/assets/lib-icons'
 import ScanTabs from '@/components/scan-tabs'
-import { SCAN_CODE_PAGE } from '@/components/scan-tabs/tabs'
+import { parseScanEntry, type ScanTabKey } from '@/components/scan-tabs/tabs'
+import type { PickedPhoto } from '@/features/upload/api'
+import { pickPhotoOfSource, readFileSize } from '@/features/upload/api'
+import { isChooseMediaCancel } from '@/features/upload/choose-error'
+import { visualSearchErrorMessage } from '@/features/visual-search/api'
+import { stashVisualShot } from '@/features/visual-search/handoff'
+import { submitVisualQuery } from '@/features/visual-search/start'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
+import { type ScanFailure, scanOutcome } from './outcome'
+import { decodeCanvasSize, decodeQrPixels } from './qr-decode'
 import './index.scss'
 
 /**
- * 扫一扫（通用二维码）—— Owner 2026-09-26 定版的「扫码家族」成员之一。
- *
- * 扫码家族按三段切换钮分工：**扫一扫（本页）负责非交易类二维码**，
- * 交易码（`pages/scan-pr`）负责面交核销，识图（商品识图搜索）后续另做。
- * 取景 UI、相机权限处理与 `pages/scan-pr` 同一套：页面内原生 `<Camera mode="scanCode">`
- * 打底、四块遮罩留出取景方框、顶部漂浮返回钮。
- *
- * 本页与交易码页的**结果分派**不同（#197 的登录码消费暂不在此页）：
+ * 扫码页（#583）：**一个页面**、底部两段 tab「扫一扫 / 拍图搜」页内切换。
  *
  * ```text
- * Camera onScanCode
- *   → parseMeetupQrPayload(rawValue) 非 null → 是交易码 → 提示去「交易码」页扫
- *   → 其它内容 → 本页暂时没有任何打开方式 → 「暂不支持」面板
+ * ?tab=scan（缺省）  <Camera mode="scanCode">  对准交易码自动识别 / 相册里选一张交易码截图
+ *                    → scanOutcome(rawValue)：只认鱼小应的交易码 → 面交页核销
+ * ?tab=photo         <Camera mode="normal">    快门 / 相册 / 聊天记录 → 整图上传 → 识图结果页
  * ```
  *
- * 电脑端扫码登录（#197）的小程序码由微信扫码**直接拉起确认页**（scene 进页面参数），
- * 不经过本页中转；等 #197 的登录码契约冻结后，若需要在本页内识别再接分派，
- * 不提前假定其 payload 形状。
+ * 切 tab 换 Camera 的 key 整体重挂：`mode` 在同一个相机实例上切换不保证生效。
  *
- * **实现约定**
- * - `onScanCode` 对准期间连续触发：结果只切换到结果面板（`mode !== 'viewfinder'`
- *   即拦住后续触发），本页没有下游 navigateTo，不需要交易码页的 processing 锁。
- * - 「重新对准」回到取景后，同一枚码会再次触发分派并再次落面板 —— 与交易码页
- *   「重新扫」的语义一致，不算重试风暴。
- * - 相机权限被拒 / 其余相机错误都**不再弹阻断弹窗**（Owner 2026-09-29：弹窗老是挡住操作）——
- *   取景层就地换成一句说明 + 一个「去设置」，底部三段切换钮照常可用。
+ * **实现约定（沿用 #114 / #536）**
+ * - `onScanCode` 对准期间会**连续触发**：`processingRef` 做本地锁，发起导航 / 弹失败面板即上锁，
+ *   页面重新显示或「重新扫」时解锁。导航失败同样解锁，但把这枚码记入 5s 冷却
+ *   （否则「失败 → 解锁 → 再扫同一枚」形成重试风暴）。
+ * - `cameraEpoch` 作 key：页面 hide→show（下游页 / 相册 / 设置页回来）与 `onStop` 都换号重挂，
+ *   规避部分 iOS 机型回前台后预览黑屏 / 冻结。
+ * - 相机不可用（权限被拒 / 无相机 / 被占用）**不弹阻断弹窗**：取景层换成纯黑 + 居中说明 +
+ *   「去设置」，底部 tab 与相册等入口照常可用。拒绝的判据优先取 `getSetting` 的确定性结果，
+ *   `onError` 只做兜底。
+ * - 「输入 6 位交易码」只在**从面交页进来**时出现（入口带 `from=meetup`，见 `scanPageUrl`）：
+ *   6 位码只能在具体订单的面交页输入（那里才知道 transactionId），点它直接返回那页。
  */
 
-/**
- * 结果反馈的原因条目与面板文案（渲染结构对齐 `pages/scan-pr` 的结果面板）。
- *
- * 原「硬件（设备没有可用摄像头）」一条随「无相机弹窗下线」一起删掉了（Owner 2026-09-29）：
- * 相机不可用现在只在取景层就地说明，不再走结果面板。
- */
-const REASONS = [
-  {
-    key: 'is-txn',
-    pipe: '交易码',
-    pipeCls: 'is-warn',
-    title: '这是鱼小应的交易码',
-    desc: '面交核销要在「交易码」页完成，到那边扫同一个码即可。',
-    action: 'code',
-    actionLabel: '去交易码',
+/** 「扫码没成功」面板的两种原因（Owner 拍板：只留这两条） */
+const FAILURES: Record<ScanFailure, { title: string; desc: string }> = {
+  invalid: {
+    title: '这不是鱼小应的交易码',
+    desc: '扫到的是其他二维码。请扫对方「交易码」页面上的那个。',
   },
-  {
-    key: 'unsupported',
-    pipe: '暂未支持',
-    pipeCls: 'is-mute',
-    title: '没有对应的打开方式',
-    desc: '后续开放更多能力后，这里可以直接打开它。',
-    action: 'retry',
-    actionLabel: '重新对准',
+  'no-qr': {
+    title: '图里没找到二维码',
+    desc: '换一张清晰、完整包含交易码的截图再试。',
   },
-] as const
-
-/** 面板标题按原因区分：两条都是「扫到了但打不开」，不是扫码失败。 */
-const SHEET_COPY: Record<ReasonKey, { title: string; sub: string }> = {
-  'is-txn': { title: '扫到了交易码', sub: '换到「交易码」页就能继续' },
-  unsupported: { title: '这个码暂不支持打开', sub: '识别成功了，但这里还没有对应的打开方式' },
 }
-
-type Mode = 'viewfinder' | 'errors'
-
-type ReasonKey = (typeof REASONS)[number]['key']
-
-type ReasonAction = (typeof REASONS)[number]['action']
 
 /** onScanCode 事件 detail（weapp 的识别结果在 result 字段） */
 type ScanCodeDetail = { result?: string }
 
-/** 扫码结果的分派（纯逻辑，交易码形状 gate 复用 contracts 的唯一出口）。
- * 相机对识别不出的画面不触发 onScanCode，本页没有「解析失败」分支；
- * 空结果由 handleScanCode 的入口守卫拦下。 */
-function classifyScan(rawValue: string): ReasonKey {
-  // 解析兜底同 scan-pr（#536）：解析异常按「不支持的码」处理，不得打断扫码回调。
-  try {
-    return parseMeetupQrPayload(rawValue) !== null ? 'is-txn' : 'unsupported'
-  } catch {
-    return 'unsupported'
-  }
-}
+/** 导航失败 / 判无效后，同一枚二维码的自动重试冷却时间 */
+const SCAN_RETRY_COOLDOWN_MS = 5000
 
-export default function ScanQr() {
-  const [mode, setMode] = useState<Mode>('viewfinder')
-  /** 相机是否挂载：卸载 → 重挂是让报过错相机重启的唯一手段 */
+export default function Scan() {
+  const router = useRouter<Record<string, string | undefined>>()
+  /** 进页参数：初始 tab 与「是否从面交页进来」。进页时定下，之后不变 */
+  const entry = useMemo(
+    () => parseScanEntry({ tab: router.params.tab, from: router.params.from }),
+    [router.params],
+  )
+
+  const [tab, setTab] = useState<ScanTabKey>(entry.tab)
+  /** 相机是否可用（不可用时只出说明，不阻断操作） */
   const [cameraOn, setCameraOn] = useState(true)
-  /** 相机实例序号：作为 key，换号即整体重挂（报错恢复 / 回前台防预览冻结） */
+  /** 相机实例序号：与 tab 一起作 key，换号即整体重挂 */
   const [cameraEpoch, setCameraEpoch] = useState(0)
-  /** 「扫码没成功」面板当前展示的原因（进入面板时一定带一个） */
-  const [failureKey, setFailureKey] = useState<ReasonKey>('unsupported')
+  /** 「扫码没成功」面板当前的原因；`null` = 取景态 */
+  const [failure, setFailure] = useState<ScanFailure | null>(null)
+  /** 相册识码 / 拍图上传在途：底部按钮防连点（原生面板是模态的，后续腿不是） */
+  const [busy, setBusy] = useState(false)
 
-  // 返回钮与标题的垂直位置跟微信原生胶囊对齐（设备 px，内联下发，不参与 rpx 缩放）
+  /** 防重复消费锁：onScanCode 从发起导航 / 弹面板到解锁期间为 true */
+  const processingRef = useRef(false)
+  /** 在途的同步判据（`busy` 是状态，同一帧连点读不到新值） */
+  const busyRef = useRef(false)
+  /** 上一次没走通的二维码：冷却期内同一枚码不自动重试 */
+  const failedScanRef = useRef<{ value: string; at: number } | null>(null)
+  /** 首次 didShow 不重挂相机（刚挂上） */
+  const shownRef = useRef(false)
+
+  // 返回钮的垂直位置跟微信原生胶囊对齐（设备 px，内联下发，不参与 rpx 缩放）
   const nav = useMemo(() => readNavMetrics(), [])
   const backGeo = backButtonGeometry(nav.capsuleHeight)
 
@@ -111,8 +96,9 @@ export default function ScanQr() {
 
   /**
    * 复核相机权限（页面显示 / 从设置页回来时走）。
+   *
    * `getSetting` 只返回**已请求过**的权限：`false` = 明确拒绝 → 取景层出说明（**不弹窗**）；
-   * `true` 或未出现 = 已授权 / 从未询问 → 挂相机。
+   * `true` 或未出现 = 已授权 / 从未询问 → 挂相机（从未询问时微信自己拉授权弹窗）。
    */
   const syncCameraState = () => {
     void Taro.getSetting()
@@ -126,169 +112,302 @@ export default function ScanQr() {
   }
 
   useDidShow(() => {
+    // 页面重新显示 = 上一次扫码消费已结束：解锁；换 key 重挂相机（防预览冻结）；
+    // 同时复核权限（设置页可能已改动）。失败面板开着时锁照样由面板守卫挡住扫码。
+    processingRef.current = false
+    if (shownRef.current) setCameraEpoch((n) => n + 1)
+    shownRef.current = true
     syncCameraState()
   })
 
-  /**
-   * 相机层错误：**不再弹阻断弹窗**（Owner 2026-09-29）—— 权限被拒与硬件失败都只把取景层
-   * 换成一句说明（`cameraOn=false`），底部三段切换钮照常可用。
-   */
-  const handleCameraError = () => {
-    setCameraOn(false)
-  }
-
-  /** 扫码结果入口：分派只落结果面板，不在本页做任何下游导航。 */
-  const handleScanCode = (event: { detail?: ScanCodeDetail }) => {
-    if (mode !== 'viewfinder' || !event.detail?.result) return
-    setFailureKey(classifyScan(event.detail.result))
-    setMode('errors')
-  }
-
-  /** 从设置页回来：授权了就重挂相机；仍未授权就继续留在「相机不可用」的就地说明上。 */
   const openSetting = () => {
     void Taro.openSetting({})
       .then((res) => {
-        if (res.authSetting['scope.camera']) {
-          setCameraOn(true)
-          setCameraEpoch((n) => n + 1)
-        }
+        if (res.authSetting['scope.camera']) setCameraOn(true)
+        // 仍未授权：停在说明，等下次进设置
       })
       .catch(() => undefined)
   }
 
-  /** 关掉结果面板回取景态（面板底部「关闭」钮 / 点击面板上方相机区域）。 */
-  const closePanel = () => {
-    setCameraOn(true)
-    setMode('viewfinder')
+  const switchTab = (next: ScanTabKey) => {
+    if (busyRef.current) return
+    processingRef.current = false
+    setFailure(null)
+    setTab(next)
   }
 
-  const handleReasonAction = (action: ReasonAction) => {
-    if (action === 'code') {
-      void Taro.redirectTo({ url: SCAN_CODE_PAGE }).catch(() => {
-        void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
-      })
+  /* ------------------------------------------------------------ 扫一扫 */
+
+  /**
+   * 扫码结果分派（相机识码与相册识码同一个出口）：交易码 → 面交页；其余 → 失败面板。
+   * `rawValue === null` 只来自相册（图里没解出二维码）。
+   */
+  const dispatchScan = (rawValue: string | null) => {
+    const outcome = scanOutcome(rawValue)
+    processingRef.current = true
+    if (outcome.kind === 'failure') {
+      if (rawValue !== null) failedScanRef.current = { value: rawValue, at: Date.now() }
+      setFailure(outcome.reason)
       return
     }
-    closePanel()
+    void Taro.navigateTo({ url: outcome.url }).catch(() => {
+      // 导航失败（如页面栈满）：解锁留在取景态，同一枚码冷却期内不自动重试
+      processingRef.current = false
+      if (rawValue !== null) failedScanRef.current = { value: rawValue, at: Date.now() }
+      void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
+    })
   }
 
+  const handleScanCode = (event: { detail?: ScanCodeDetail }) => {
+    const rawValue = event.detail?.result ?? ''
+    if (processingRef.current || busyRef.current || failure !== null || !rawValue) return
+    const failed = failedScanRef.current
+    if (failed && failed.value === rawValue && Date.now() - failed.at < SCAN_RETRY_COOLDOWN_MS) {
+      return
+    }
+    dispatchScan(rawValue)
+  }
+
+  /** 相册识码：选一张图 → 端上解码（离屏 Canvas + jsQR）→ 同一个分派。 */
+  const scanAlbum = async () => {
+    if (busyRef.current || failure !== null) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      let path: string | undefined
+      try {
+        const res = await Taro.chooseMedia({
+          count: 1,
+          mediaType: ['image'],
+          sourceType: ['album'],
+          sizeType: ['compressed'],
+        })
+        path = res.tempFiles[0]?.tempFilePath
+      } catch (error) {
+        // 只吞「用户取消」；权限被拒 / 平台失败给一句提示
+        if (!isChooseMediaCancel(error)) {
+          void Taro.showToast({ title: '无法选择图片，请检查相册权限后重试', icon: 'none' })
+        }
+        return
+      }
+      if (path === undefined) return
+      // 读图 / 画布任何一步失败都当「没解出来」：对用户而言就是这张图里找不到码
+      const rawValue = await readQrFromImage(path).catch(() => null)
+      dispatchScan(rawValue)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  /** 「输入 6 位交易码」：只在从面交页进来时出现，直接返回那页输入。 */
+  const goManualInput = () => {
+    void Taro.navigateBack()
+  }
+
+  /** 面板「重新扫」/ 点面板外：回取景，解锁 */
+  const dismissFailure = () => {
+    processingRef.current = false
+    setFailure(null)
+  }
+
+  /* ------------------------------------------------------------ 拍图搜 */
+
+  const shoot = async () => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      let path: string
+      try {
+        path = await new Promise<string>((resolve, reject) => {
+          Taro.createCameraContext().takePhoto({
+            // normal：整图直接上传，查询图有 5MB 上限，high 档在部分机型上会超
+            quality: 'normal',
+            success: (res) => resolve(res.tempImagePath),
+            fail: (res) => reject(new Error(res.errMsg)),
+          })
+        })
+      } catch {
+        void Taro.showToast({ title: '拍摄失败，请重试', icon: 'none' })
+        return
+      }
+      // 拍照原图交给结果页当背景（必须在跳转之前 stash，见 `features/visual-search/handoff`）
+      stashVisualShot({ path })
+      // 字节数由文件系统读（`takePhoto` 不给 size）；上传前服务端还会按真实字节复核
+      const photo: PickedPhoto = { path, mime: 'image/jpeg', sizeBytes: readFileSize(path) }
+      await submitVisualQuery(photo)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  /** 从相册 / 聊天记录取图：取到的就是成品图，直接整图上传。 */
+  const pickFrom = async (source: 'album' | 'chat') => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      const { photos, rejected } = await pickPhotoOfSource(source)
+      const photo = photos[0]
+      if (photo === undefined) {
+        if (rejected !== null) void Taro.showToast({ title: rejected, icon: 'none' })
+        return
+      }
+      await submitVisualQuery(photo)
+    } catch (error) {
+      void Taro.showToast({ title: visualSearchErrorMessage(error), icon: 'none' })
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  /* ------------------------------------------------------------ 渲染 */
+
+  const noCamText =
+    tab === 'scan'
+      ? '可以去「设置」允许使用相机，或从相册选一张交易码截图'
+      : '可以去「设置」允许使用相机，或改用相册、聊天记录'
+
   return (
-    <View className="scanqr">
-      {/* ------- 取景底：原生相机（取景态）/ 无相机占位 ------- */}
-      <View className="scanqr__view">
-        {cameraOn ? (
-          <Camera
-            key={cameraEpoch}
-            className="scanqr__camera"
-            mode="scanCode"
-            devicePosition="back"
-            flash="off"
-            resolution="high"
-            onScanCode={handleScanCode}
-            onError={handleCameraError}
-            onStop={() => {
-              // 非正常终止（如退后台）：换 key 重挂，回前台后由微信重新初始化
-              setCameraEpoch((n) => n + 1)
-            }}
-          />
-        ) : (
-          <Text className="scanqr__view-label num">CAMERA PREVIEW PLACEHOLDER</Text>
-        )}
-      </View>
-
-      {/* 遮罩四块：相机不可用时照常保留（不再整屏压暗 + 弹窗） */}
-      <View className="scanqr__mask scanqr__mask--t" />
-      <View className="scanqr__mask scanqr__mask--b" />
-      <View className="scanqr__mask scanqr__mask--l" />
-      <View className="scanqr__mask scanqr__mask--r" />
-
-      {/* 取景框：恒可见 */}
-      <View className={`scanqr__window${mode === 'viewfinder' ? '' : ' is-dim'}`}>
-        {mode === 'viewfinder' ? <View className="scanqr__scanline" /> : null}
-        <View className="scanqr__cnr scanqr__cnr--tl" />
-        <View className="scanqr__cnr scanqr__cnr--tr" />
-        <View className="scanqr__cnr scanqr__cnr--bl" />
-        <View className="scanqr__cnr scanqr__cnr--br" />
-      </View>
-
-      {/*
-        相机不可用：**不弹阻断弹窗**（Owner 2026-09-29）—— 就地说明 + 「去设置」，
-        底部三段切换钮照常可用，用户随时能切到「识图」或「交易码」。
-      */}
-      {cameraOn ? null : (
-        <View className="scanqr__noCam">
-          <Text className="scanqr__noCam-title">相机不可用</Text>
-          <Text className="scanqr__noCam-text">可以去「设置」允许使用相机，或切到其他入口</Text>
-          <View className="scanqr__noCam-btn" onClick={openSetting}>
+    <View className="scanpage">
+      {/* ---------------- 全屏相机 / 相机不可用（纯黑 + 居中说明） ---------------- */}
+      {cameraOn ? (
+        <Camera
+          key={`${tab}-${cameraEpoch}`}
+          className="scanpage__camera"
+          mode={tab === 'scan' ? 'scanCode' : 'normal'}
+          devicePosition="back"
+          flash="off"
+          onScanCode={tab === 'scan' ? handleScanCode : undefined}
+          onError={() => setCameraOn(false)}
+          onStop={() => {
+            // 非正常终止（如退后台）：换 key 重挂，回前台后由微信重新初始化
+            setCameraEpoch((n) => n + 1)
+          }}
+        />
+      ) : (
+        <View className="scanpage__noCam">
+          <Text className="scanpage__noCam-title">相机不可用</Text>
+          <Text className="scanpage__noCam-text">{noCamText}</Text>
+          <View className="scanpage__noCam-btn" onClick={openSetting}>
             <Text>去设置</Text>
           </View>
         </View>
       )}
 
-      {/* ------- 顶部：返回 + 标题（垂直对齐右侧微信原生胶囊的中线） ------- */}
+      {/* ---------------- 顶部：只有返回钮（垂直对齐右侧微信原生胶囊的中线） ---------------- */}
       <View
-        className="scanqr__back"
+        className="scanpage__back"
         style={{
           top: `${nav.statusBarHeight + nav.contentHeight / 2}px`,
           ...backGeo.btnStyle,
         }}
         onClick={goBack}
       >
-        <View className="scanqr__back-chevron" style={backGeo.chevronStyle} />
+        <View className="scanpage__back-chevron" style={backGeo.chevronStyle} />
       </View>
-      <Text
-        className="scanqr__topbar-title"
-        style={{ top: `${nav.statusBarHeight + nav.contentHeight / 2}px` }}
-      >
-        扫一扫
-      </Text>
 
-      {/* ---------------- 提示文案（仅默认取景态） ---------------- */}
-      {mode === 'viewfinder' ? (
-        <View className="scanqr__hint">
-          <Text className="scanqr__hint-title">对准要打开的二维码</Text>
-          <Text className="scanqr__hint-text">非交易类二维码 · 对准后自动识别</Text>
-        </View>
+      {/* ---------------- 底部自下而上：tab 行 → 操作行 → 一行提示 ---------------- */}
+      {cameraOn ? (
+        <Text className="scanpage__hint">
+          {tab === 'scan' ? '对准对方的交易码，自动识别' : '对准想搜的商品，按下快门'}
+        </Text>
       ) : null}
 
-      {/* ---------------- 底部：扫码家族切换钮（仅取景态） ---------------- */}
-      {mode === 'viewfinder' ? <ScanTabs active="scan" /> : null}
-
-      {/* ---- 「扫码没成功」结果反馈（只显示当前原因；可关闭，不挡演示） ---- */}
-      {mode === 'errors' ? (
-        <>
-          {/* 面板之上的透明点击层：点面板以外任意位置直接回取景 */}
-          <View className="scanqr__sheet-dismiss" onClick={closePanel} />
-          <View className="scanqr__sheet scanqr__sheet--list">
-            <View className="scanqr__grab" />
-            <Text className="scanqr__sheet-title scanqr__sheet-title--left">
-              {SHEET_COPY[failureKey].title}
-            </Text>
-            <Text className="scanqr__sheet-sub scanqr__sheet-sub--left">
-              {SHEET_COPY[failureKey].sub}
-            </Text>
-
-            <View className="scanqr__reasons">
-              {REASONS.filter((item) => item.key === failureKey).map((item) => (
-                <View key={item.key} className="scanqr__frow">
-                  <Text className={`scanqr__pipe ${item.pipeCls}`}>{item.pipe}</Text>
-                  <View className="scanqr__fmain">
-                    <Text className="scanqr__ft">{item.title}</Text>
-                    <Text className="scanqr__fd">{item.desc}</Text>
-                  </View>
-                  <View className="scanqr__fact" onClick={() => handleReasonAction(item.action)}>
-                    <Text>{item.actionLabel}</Text>
-                  </View>
-                </View>
-              ))}
+      {tab === 'scan' ? (
+        <View className="scanpage__actions">
+          <View
+            className={`scanpage__act${busy ? ' is-busy' : ''}`}
+            onClick={() => void scanAlbum()}
+          >
+            <Image className="scanpage__act-ic" src={ICONS.imageWhite} mode="aspectFit" />
+            <Text className="scanpage__act-label">相册</Text>
+          </View>
+          <View className="scanpage__act-slot" />
+          {entry.fromMeetup ? (
+            <View className="scanpage__act" onClick={goManualInput}>
+              <Image className="scanpage__act-ic" src={ICONS.keyWhite} mode="aspectFit" />
+              <Text className="scanpage__act-label">输入 6 位码</Text>
             </View>
+          ) : (
+            <View className="scanpage__act-slot" />
+          )}
+        </View>
+      ) : (
+        <View className="scanpage__actions">
+          <View
+            className={`scanpage__act${busy ? ' is-busy' : ''}`}
+            onClick={() => void pickFrom('album')}
+          >
+            <Image className="scanpage__act-ic" src={ICONS.imageWhite} mode="aspectFit" />
+            <Text className="scanpage__act-label">相册</Text>
+          </View>
+          <View
+            className={`scanpage__shutter${busy || !cameraOn ? ' is-busy' : ''}`}
+            onClick={() => {
+              if (cameraOn) void shoot()
+            }}
+          >
+            <View className="scanpage__shutter-core" />
+          </View>
+          <View
+            className={`scanpage__act${busy ? ' is-busy' : ''}`}
+            onClick={() => void pickFrom('chat')}
+          >
+            <Image className="scanpage__act-ic" src={ICONS.chatWhite} mode="aspectFit" />
+            <Text className="scanpage__act-label">聊天记录</Text>
+          </View>
+        </View>
+      )}
 
-            <View className="scanqr__btn-close" onClick={closePanel}>
-              <Text>关闭</Text>
+      <ScanTabs active={tab} onChange={switchTab} />
+
+      {/* ---------------- 「扫码没成功」白色底部面板：点面板外或「重新扫」回取景 ---------------- */}
+      {failure !== null ? (
+        <>
+          <View className="scanpage__sheet-dismiss" onClick={dismissFailure} />
+          <View className="scanpage__sheet">
+            <View className="scanpage__grab" />
+            <Text className="scanpage__sheet-title">{FAILURES[failure].title}</Text>
+            <Text className="scanpage__sheet-sub">{FAILURES[failure].desc}</Text>
+            <View className="scanpage__sheet-btn" onClick={dismissFailure}>
+              <Text>重新扫</Text>
             </View>
           </View>
         </>
       ) : null}
     </View>
   )
+}
+
+/**
+ * 离屏 2D Canvas 的最小形状。`Taro.OffscreenCanvas.getContext` 的返回类型是空接口
+ * `RenderingContext`（Taro 类型只声明了 WebGL 用法），这里只声明用到的两个方法。
+ */
+type OffscreenContext2D = {
+  drawImage: (image: Taro.Image, dx: number, dy: number, dw: number, dh: number) => void
+  getImageData: (sx: number, sy: number, sw: number, sh: number) => Taro.ImageData
+}
+
+/**
+ * 读一张本地图里的二维码：`getImageInfo` 拿原尺寸 → 长边收到 `MAX_DECODE_SIDE` →
+ * 离屏 Canvas（基础库 2.16.1+）画上去取像素 → jsQR。没解出来返回 `null`。
+ */
+async function readQrFromImage(path: string): Promise<string | null> {
+  const info = await Taro.getImageInfo({ src: path })
+  const size = decodeCanvasSize({ width: info.width, height: info.height })
+  const canvas = Taro.createOffscreenCanvas({ type: '2d', width: size.width, height: size.height })
+  const ctx = canvas.getContext('2d') as OffscreenContext2D
+  const image = canvas.createImage()
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve()
+    image.onerror = () => reject(new Error('图片读取失败'))
+    image.src = path
+  })
+  ctx.drawImage(image, 0, 0, size.width, size.height)
+  const pixels = ctx.getImageData(0, 0, size.width, size.height)
+  return decodeQrPixels(pixels.data, pixels.width, pixels.height)
 }

@@ -56,19 +56,6 @@
   color: var(--on-dark-track);
 }
 
-/**
- * 这次取框的那一块：框内保持原亮度、框外整体压暗（`box-shadow` 的 9999px 扩散就是遮罩，
- * 与识图入口页取框态同一手法）。参考图②的「整张照片 + 框住主体」。
- */
-.vres__frame {
-  position: absolute;
-  z-index: 1;
-  box-sizing: border-box;
-  border: 4px solid var(--surface);
-  border-radius: 12px;
-  box-shadow: 0 0 0 9999px rgba(23, 35, 61, 0.42);
-}
-
 /* ------------------------------------------------------------ 顶部漂浮层 */
 
 .vres__back {
