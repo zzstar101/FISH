@@ -161,7 +161,6 @@
 
 /* 可点的排序开关（1版稿 .sort）：倒序 ⇄ 正序，箭头跟着翻转 */
 .orders__sort {
-  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -169,14 +168,12 @@
   color: var(--muted-2);
 
   /* 视觉上只是一行小字（约 29rpx 高，远低于触控底线），但整块是要点的：
-     用伪元素把**热区**撑到 88rpx（44pt）见方，视觉位置与标题行的 baseline 都不动
-     （直接给本元素加 min-height / padding 会把 `align-items: baseline` 的标题行顶歪） */
-  &::after {
-    content: "";
-    position: absolute;
-    inset: -30px -16px;
-    border-radius: var(--r-pill);
-  }
+     本元素撑到 88rpx（44pt）见方，上下用等量负 margin 抵掉，标题行的
+     `align-items: baseline` 与行高都不变 —— 只长热区，不长排版。
+     （本文件有一条守卫禁止任何伪元素，见 verified-badge-consistency.test.ts，
+     所以热区只能靠元素自身撑高，不能用伪元素外扩） */
+  min-height: 88px;
+  margin: -30px 0;
 }
 
 /* 排序箭头：1版稿的 ic-chev 是 14pt 框、描边约 1pt，所以框按 12px（6pt）+ 2px 描边取 */
