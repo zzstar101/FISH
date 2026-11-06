@@ -54,7 +54,8 @@ mock.module('@/features/visual-search/api', () => ({
     error instanceof Error ? `文案：${error.message}` : '识图失败，请稍后重试',
 }))
 
-const { startVisualSearch } = await import('@/features/visual-search/start')
+const { startVisualSearch, submitVisualQuery } = await import('@/features/visual-search/start')
+const { readVisualShot, stashVisualShot } = await import('@/features/visual-search/handoff')
 
 const PHOTO = { path: '/tmp/q.png', mime: 'image/png', sizeBytes: 4 }
 
@@ -126,5 +127,19 @@ describe('startVisualSearch 的失败语义', () => {
     const outcome = await startVisualSearch()
     expect(outcome).toBe('failed')
     expect(calls).toContain('toast:页面打开失败，请重试')
+  })
+})
+
+describe('submitVisualQuery 的原图交接', () => {
+  test('上一张照片的残留不会被改绑到新的查询图上：结果页背景是这一张', async () => {
+    // 拍 A 后没走到结果页（上传失败 / 返回）就留下了一份 stash；再从相册选 B 上传
+    stashVisualShot({ path: '/tmp/a.jpg' })
+    const outcome = await submitVisualQuery({
+      path: '/tmp/b.jpg',
+      mime: 'image/jpeg',
+      sizeBytes: 4,
+    })
+    expect(outcome).toBe('navigated')
+    expect(readVisualShot('visual-search/abc/def.png')?.path).toBe('/tmp/b.jpg')
   })
 })

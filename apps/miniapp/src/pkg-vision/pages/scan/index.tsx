@@ -8,7 +8,6 @@ import type { PickedPhoto } from '@/features/upload/api'
 import { pickPhotoOfSource, readFileSize } from '@/features/upload/api'
 import { isChooseMediaCancel } from '@/features/upload/choose-error'
 import { visualSearchErrorMessage } from '@/features/visual-search/api'
-import { stashVisualShot } from '@/features/visual-search/handoff'
 import { submitVisualQuery } from '@/features/visual-search/start'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { type ScanFailure, scanOutcome } from './outcome'
@@ -134,6 +133,9 @@ export default function Scan() {
     processingRef.current = false
     setFailure(null)
     setTab(next)
+    // 相机错误可能只出在某一种 mode：换 tab 时重新试一次，真没权限由 getSetting / onError 再收回
+    setCameraOn(true)
+    syncCameraState()
   }
 
   /* ------------------------------------------------------------ 扫一扫 */
@@ -192,7 +194,10 @@ export default function Scan() {
       }
       if (path === undefined) return
       // 读图 / 画布任何一步失败都当「没解出来」：对用户而言就是这张图里找不到码
-      const rawValue = await readQrFromImage(path).catch(() => null)
+      const rawValue = await readQrFromImage(path).catch((error: unknown) => {
+        console.warn('[miniapp] 相册识码读图失败', error)
+        return null
+      })
       dispatchScan(rawValue)
     } finally {
       busyRef.current = false
@@ -232,8 +237,6 @@ export default function Scan() {
         void Taro.showToast({ title: '拍摄失败，请重试', icon: 'none' })
         return
       }
-      // 拍照原图交给结果页当背景（必须在跳转之前 stash，见 `features/visual-search/handoff`）
-      stashVisualShot({ path })
       // 字节数由文件系统读（`takePhoto` 不给 size）；上传前服务端还会按真实字节复核
       const photo: PickedPhoto = { path, mime: 'image/jpeg', sizeBytes: readFileSize(path) }
       await submitVisualQuery(photo)
@@ -279,6 +282,7 @@ export default function Scan() {
           key={`${tab}-${cameraEpoch}`}
           className="scanpage__camera"
           mode={tab === 'scan' ? 'scanCode' : 'normal'}
+          resolution="high"
           devicePosition="back"
           flash="off"
           onScanCode={tab === 'scan' ? handleScanCode : undefined}

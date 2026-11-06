@@ -16,7 +16,7 @@ import Taro from '@tarojs/taro'
 import type { PickedPhoto } from '@/features/upload/api'
 import { pickPhotoFromSource } from '@/features/upload/api'
 import { uploadVisualQueryImage, visualSearchErrorMessage } from './api'
-import { bindVisualShot } from './handoff'
+import { bindVisualShot, stashVisualShot } from './handoff'
 import { visionResultPageUrl } from './link'
 
 /** 一次识图发起的结局：调用方据此决定要不要复位「在途」状态。 */
@@ -62,8 +62,10 @@ export async function submitVisualQuery(
     void Taro.hideLoading()
     loading = false
 
-    // 「这是哪一次搜索」只有上传成功才知道：把入口页暂存的原图/取框绑定到这个键上，
-    // 结果页据此取回自己的背景图（见 `./handoff`）
+    // 「这是哪一次搜索」只有上传成功才知道：把**这一张**图绑定到这个键上，结果页据此取回
+    // 自己的背景图（见 `./handoff`）。在这里 stash 而不是让入口各自 stash：否则没 stash 的
+    // 来源（相册 / 聊天记录 / 换图）会把上一张照片的残留改绑到新键上，背景就成了别的图（#583 审查）
+    stashVisualShot({ path: photo.path })
     bindVisualShot(objectKey)
     options.onUploaded?.(objectKey)
 
