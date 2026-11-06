@@ -161,11 +161,22 @@
 
 /* 可点的排序开关（1版稿 .sort）：倒序 ⇄ 正序，箭头跟着翻转 */
 .orders__sort {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: var(--fs-2xs);
   color: var(--muted-2);
+
+  /* 视觉上只是一行小字（约 29rpx 高，远低于触控底线），但整块是要点的：
+     用伪元素把**热区**撑到 88rpx（44pt）见方，视觉位置与标题行的 baseline 都不动
+     （直接给本元素加 min-height / padding 会把 `align-items: baseline` 的标题行顶歪） */
+  &::after {
+    content: "";
+    position: absolute;
+    inset: -30px -16px;
+    border-radius: var(--r-pill);
+  }
 }
 
 /* 排序箭头：1版稿的 ic-chev 是 14pt 框、描边约 1pt，所以框按 12px（6pt）+ 2px 描边取 */
