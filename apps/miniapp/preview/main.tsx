@@ -92,9 +92,15 @@ function PageMount({ path, params }: { path: string; params: Record<string, stri
         alive = false
       }
     }
-    void loader().then((mod) => {
-      if (alive) setComponent(() => mod.default)
-    })
+    void loader()
+      .then((mod) => {
+        if (alive) setComponent(() => mod.default)
+      })
+      .catch((err) => {
+        // 别静默吞掉：页面模块求值失败时（典型是模块顶层读了预览桩没有的全局量），
+        // 界面上只会停在「加载中…」，控制台必须留下线索。
+        console.error(`[preview] 页面模块加载失败: ${path}`, err)
+      })
     return () => {
       alive = false
     }

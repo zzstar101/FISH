@@ -87,17 +87,8 @@ if (!result.success) {
 }
 
 /**
- * 与 Taro 的 postcss-pxtransform 保持一致：`Npx` → `Nrpx`。
- * 预览运行时再把 `Nrpx` 按帧宽换算成 CSS 像素（750rpx = 390px）。
- * 少了这一步，设计尺寸会被当成 CSS 像素直接放大一倍以上。
- */
-function pxToRpx(css) {
-  return css.replace(/(-?[\d.]+)px\b/g, '$1rpx')
-}
-
-/**
  * Bun.build 会自己把收集到的 CSS 写进 outdir（即使我们再手动写一次，也会被它覆盖），
- * 所以构建产物先落到临时目录，再在这里做 px→rpx 与 `page` 选择器改写后搬到 dist。
+ * 所以构建产物先落到临时目录，再在这里做 `page` 选择器改写后搬到 dist。
  */
 const cssText = (
   await Promise.all(result.outputs.filter((f) => f.path.endsWith('.css')).map((f) => f.text()))
@@ -115,8 +106,10 @@ for (const file of result.outputs) {
 writeFileSync(join(OUT, 'preview.css'), cssText.replace(/(-?[\d.]+)rpx/g, '$1px'))
 console.log(' - preview.css', `${Math.round(cssText.length / 1024)}KB`)
 
-/* 令牌 + 全局壳：注入到 <style id="app-css">，避免与组件 CSS 顺序错乱 */
-const rewrite = (css) => pxToRpx(css).replace(/^page\s*\{/m, ':root, .page-frame {')
+/* 令牌 + 全局壳：注入到 <style id="app-css">，避免与组件 CSS 顺序错乱
+   ⚠️ 不能走 `pxToRpx`：令牌里的长度本来就是 CSS 像素（`--r-pill: 999px`、`--fs-title: 30px`），
+   转成 rpx 后浏览器不认识，等于把全站的圆角与字号作废（预览里按钮变直角、字号退回 16px）。 */
+const rewrite = (css) => css.replace(/^page\s*\{/m, ':root, .page-frame {')
 for (const [name, file] of [['main.css', join(ROOT, 'src', 'app.scss')]]) {
   const compiled = sass.compile(file, {
     loadPaths: [join(ROOT, 'src')],

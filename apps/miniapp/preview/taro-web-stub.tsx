@@ -255,6 +255,15 @@ export const Camera = (props: BaseProps) => {
   return createElement('div', { className, 'data-camera': '', style: normalizeStyle(style) })
 }
 
+/**
+ * Canvas：预览里没有小程序画布，渲染一个同尺寸的空容器占位
+ * （取景页的坐标框是 DOM 叠加的，画布自身不画东西，评审不受影响）。
+ */
+export const Canvas = (props: BaseProps) => {
+  const { className, style } = props
+  return createElement('div', { className, 'data-canvas': '', style: normalizeStyle(style) })
+}
+
 /* --------------------------------------------------------------- Taro API */
 
 type Router = { path: string; params: Record<string, string> }
@@ -306,6 +315,10 @@ export function useRouter(): Router {
 
 const noop = () => undefined
 
+/** 事件总线：`custom-tab-bar` 与 `lib/tabbar-sync.ts` 用的就是它，
+ *  缺了 `eventCenter` 那个 effect 一挂载就抛 TypeError（整页空白）。 */
+const events = new Map<string, Set<() => void>>()
+
 const Taro = {
   navigateTo: ({ url }: { url: string }) => {
     navigate(url, 'push')
@@ -332,6 +345,29 @@ const Taro = {
     return Promise.resolve()
   },
   hideToast: noop,
+  /* 页面实例：预览没有「页面对象」，曝光观察器（use-impressions）拿到 undefined 会
+     继续走 createIntersectionObserver → wx → null 的降级链，视觉评审不需要它。 */
+  getCurrentInstance: () => ({ page: undefined, router: undefined, app: undefined }),
+  eventCenter: {
+    on: (name: string, fn: () => void) => {
+      const set = events.get(name) ?? new Set<() => void>()
+      set.add(fn)
+      events.set(name, set)
+    },
+    off: (name: string, fn: () => void) => {
+      events.get(name)?.delete(fn)
+    },
+    once: (name: string, fn: () => void) => {
+      const wrap = () => {
+        Taro.eventCenter.off(name, wrap)
+        fn()
+      }
+      Taro.eventCenter.on(name, wrap)
+    },
+    trigger: (name: string) => {
+      for (const fn of [...(events.get(name) ?? [])]) fn()
+    },
+  },
   stopPullDownRefresh: noop,
   /**
    * 页面滚动到指定位置。`scrollTop` 是**逻辑 px**（不参与 rpx 缩放），原样交给滚动容器。
@@ -463,6 +499,16 @@ export function useDidShow(callback: () => void) {
 export function usePullDownRefresh(callback: () => void) {
   const ref = useRef(callback)
   ref.current = callback
+}
+
+/* 触底加载：预览是固定高度的长文档，没有「触底」事件可发，留桩即可
+   （页面只在用户滚到底时才会用到它，不影响首屏评审）。 */
+export function useReachBottom(callback: () => void) {
+  void callback
+}
+
+export function useLaunch(callback: () => void) {
+  useLoad(callback)
 }
 
 export function useDidHide(callback: () => void) {
