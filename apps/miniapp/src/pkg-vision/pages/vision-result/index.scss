@@ -40,6 +40,19 @@
   display: block;
 }
 
+/**
+ * 主体框（#584）：白色细描边 + 外圈投影，任何底色上都看得出；只是标注，不拦触摸。
+ * 位置与尺寸由 `view.ts` 的 `subjectFrameRect` 按 aspectFill 算好行内下发（设备 px）。
+ */
+.vres__subject {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid var(--surface);
+  border-radius: 16px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 12px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+}
+
 /** 两条路都拿不到图时的占位：深色底 + 一句说明（不画裂图） */
 .vres__photo-ph {
   width: 100%;

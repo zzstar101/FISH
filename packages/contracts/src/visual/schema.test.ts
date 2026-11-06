@@ -133,6 +133,7 @@ describe('VisualSearchResponseSchema', () => {
     const response: Record<string, unknown> = {
       queryId: '44444444-4444-4444-8444-444444444444',
       interpretation: null,
+      subjectBox: null,
       strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
       embeddingModel: 'stub-visual-deterministic-v1',
       items: [resultItem],
@@ -150,10 +151,35 @@ describe('VisualSearchResponseSchema', () => {
       VisualSearchResponseSchema.safeParse({
         queryId: '44444444-4444-4444-8444-444444444444',
         interpretation: null,
+        subjectBox: null,
         strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
         embeddingModel: 'stub-visual-deterministic-v1',
         items: [listingCard],
         stats: emptyStats,
+      }).success,
+    ).toBe(false)
+  })
+
+  test('主体框（#584）：字段必填可为 null，坐标是 0–1 的比例', () => {
+    const response = {
+      queryId: '44444444-4444-4444-8444-444444444444',
+      interpretation: null,
+      subjectBox: { x: 0.25, y: 0.1, width: 0.5, height: 0.8 },
+      strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
+      embeddingModel: 'stub-visual-deterministic-v1',
+      items: [resultItem],
+      stats: emptyStats,
+    }
+    expect(VisualSearchResponseSchema.safeParse(response).success).toBe(true)
+
+    const { subjectBox, ...withoutBox } = response
+    expect(subjectBox.width).toBe(0.5)
+    expect(VisualSearchResponseSchema.safeParse(withoutBox).success).toBe(false)
+    // 像素坐标（> 1）不是这个契约的形状。
+    expect(
+      VisualSearchResponseSchema.safeParse({
+        ...response,
+        subjectBox: { x: 250, y: 100, width: 500, height: 800 },
       }).success,
     ).toBe(false)
   })

@@ -32,6 +32,7 @@ const uploadResponse: VisualQueryUploadResponse = {
 const searchResponse: VisualSearchResponse = {
   queryId: '44444444-4444-4444-8444-444444444444',
   interpretation: null,
+  subjectBox: null,
   strategyVersion: 'visual-search-v1',
   embeddingModel: 'stub-visual-embedding',
   items: [],
