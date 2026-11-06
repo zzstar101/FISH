@@ -121,6 +121,9 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 - 玻璃层必须**同时**给一个不透明兜底背景（如 `rgba(255,255,255,.72)`），
   不要在玻璃上直接压正文小字。
 - 只用于：底部悬浮 TabBar、吸顶筛选条、悬浮主按钮、底部操作栏。
+- 两套配方，别混用：
+  - `@include glass` —— 常规玻璃（`--glass-bg` 72% 白、`blur(30px) saturate(180%)`、`--shadow-float`）。
+  - `@include glass-bar` —— **底部浮条**（TabBar 与页面底部操作栏共用）：56% 白、`blur(30px) saturate(190%)`、带一圈 `inset` 内高光。同屏两条浮条必须是同一种「冰蓝」，所以两处都走这一个 mixin。
 
 ## 5. 字体
 

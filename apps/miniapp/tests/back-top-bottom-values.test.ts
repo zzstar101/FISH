@@ -109,6 +109,31 @@ async function pxOrToken(body: string, prop: string): Promise<number> {
 }
 
 /**
+ * 把 `@include <name>;`（无参形式）就地展开成 `_mixins.scss` 里的声明体。
+ *
+ * #630 起底部浮条材质（TabBar 与页面底部操作栏共用同一套配方）抽成了
+ * `@include glass-bar`，`.tabbar` 块里因此不再有 `border: 2px …` 这类声明；
+ * 不展开的话栏高算术会少算两圈描边，顶边算少、回顶钮看着没事实际已经压上去了。
+ */
+async function expandMixins(style: string): Promise<string> {
+  const mixins = await Bun.file(new URL('../src/styles/_mixins.scss', import.meta.url)).text()
+  return style.replace(/@include\s+([\w-]+)\s*;/g, (whole, name: string) => {
+    const head = new RegExp(`@mixin ${name}\\s*\\{`).exec(mixins)
+    if (!head) return whole
+    const open = mixins.indexOf('{', head.index)
+    let depth = 0
+    for (let i = open; i < mixins.length; i += 1) {
+      if (mixins[i] === '{') depth += 1
+      else if (mixins[i] === '}') {
+        depth -= 1
+        if (depth === 0) return mixins.slice(open + 1, i)
+      }
+    }
+    return whole
+  })
+}
+
+/**
  * 悬浮底栏的几何（从 `custom-tab-bar/index.scss` 真读）。
  *
  * 高度取**最高那一列**：栏体是 `display:flex; align-items:center`，5 个子项各是一个
@@ -124,7 +149,8 @@ async function pxOrToken(body: string, prop: string): Promise<number> {
  * （`app.scss`），`.tabbar` 是挂在 `<page>` 之外的组件。
  */
 async function tabBarGeometry(): Promise<{ bottom: number; height: number }> {
-  const style = await Bun.file(new URL('../src/custom-tab-bar/index.scss', import.meta.url)).text()
+  const raw = await Bun.file(new URL('../src/custom-tab-bar/index.scss', import.meta.url)).text()
+  const style = await expandMixins(raw)
   const bar = ruleBody(style, '.tabbar')
   const tab = ruleBody(style, '.tabbar__tab')
   const label = ruleBody(style, '.tabbar__label')
