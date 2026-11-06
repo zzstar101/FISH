@@ -206,7 +206,7 @@ export const VisualSearchResponseSchema = z.strictObject({
   interpretation: VisualInterpretationSchema.nullable(),
   /**
    * 本次检索实际用的主体框（#584）。`null` = 没检测到可用主体，本次按**整图**检索，客户端不画框。
-   * 非 `null` 时图片向量来自框内区域。
+   * 非 `null` 时图片向量来自这个框（服务端再略外扩一圈）裁出的区域。
    */
   subjectBox: VisualSubjectBoxSchema.nullable(),
   strategyVersion: z.string().min(1),

@@ -75,7 +75,10 @@ function isManifest(value: unknown): value is Manifest {
         typeof item === 'object' &&
         item !== null &&
         typeof (item as Record<string, unknown>).file === 'string' &&
-        Array.isArray((item as Record<string, unknown>).relevant),
+        Array.isArray((item as Record<string, unknown>).relevant) &&
+        ((item as Record<string, unknown>).relevant as unknown[]).every(
+          (id) => typeof id === 'string',
+        ),
     )
   )
 }

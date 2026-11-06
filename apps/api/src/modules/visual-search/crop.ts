@@ -1,3 +1,4 @@
+// PNG 的 IDAT 是带 zlib 头的流；`Bun.deflateSync` 产出的是裸 DEFLATE，不能直接用，所以走 node:zlib。
 import { deflateSync, inflateSync } from 'node:zlib'
 import type { VisualImageMime } from '@fish/contracts/visual/provider'
 import {
@@ -126,7 +127,10 @@ export async function cropSubject(
 /** 一张查询图分析完之后：解析结论、实际采用的主体框，以及该拿去向量化的那张图。 */
 export type AnalyzedQueryImage = {
   interpretation: VisualInterpretation | null
-  /** 只在**真的按它裁了**时非 `null`：客户端画出来的框必须就是被搜的那块。 */
+  /**
+   * 只在**真的按它裁了**时非 `null`：没裁成就不能让客户端画框。
+   * 返回的是模型给的原框；实际向量化的区域是它外扩 `VISUAL_SUBJECT_PADDING` 之后的那块。
+   */
   subjectBox: VisualSubjectBox | null
   /** 有主体时是主体裁剪的 JPEG，否则就是原图（字节与 MIME 原样）。 */
   image: Uint8Array

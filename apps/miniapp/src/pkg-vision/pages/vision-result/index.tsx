@@ -154,8 +154,15 @@ export default function VisionResult() {
     const info = Taro.getWindowInfo()
     return info.windowHeight + (info.statusBarHeight ?? 0)
   }, [])
-  /** 背景图容器（`.vres__stage` 铺满整屏）的宽，设备 px */
-  const viewWidth = useMemo(() => Taro.getWindowInfo().windowWidth, [])
+  /**
+   * 背景图容器 `.vres__stage` 的尺寸（设备 px）：它铺满 `.vres`（`100vw × 100vh`），
+   * 小程序里 `100vh` 就是 `windowHeight`（全局 `navigationStyle: 'custom'`，窗口已含状态栏）。
+   * 主体框按 `aspectFill` 映射必须用**这块容器的真实尺寸**，不能借用上面面板的 `viewHeight`。
+   */
+  const stageSize = useMemo(() => {
+    const info = Taro.getWindowInfo()
+    return { width: info.windowWidth, height: info.windowHeight }
+  }, [])
 
   /** 面板当前高度（设备 px）与「拖动中」标记；拖动期间 `dragging` 为真（此时不加 CSS 过渡） */
   const [height, setHeight] = useState(() => sheetHeight('open', viewHeight))
@@ -389,11 +396,8 @@ export default function VisionResult() {
   const open = sheetHeight('open', viewHeight)
 
   const frame = useMemo(
-    () =>
-      subjectBox && photoSize
-        ? subjectFrameRect(subjectBox, photoSize, { width: viewWidth, height: viewHeight })
-        : null,
-    [subjectBox, photoSize, viewWidth, viewHeight],
+    () => (subjectBox && photoSize ? subjectFrameRect(subjectBox, photoSize, stageSize) : null),
+    [subjectBox, photoSize, stageSize],
   )
   /** Taro 把 `detail.width/height` 声明成 `number | string`（单位串）；按数值读，读不出就当未知 */
   const onPhotoLoad = (event: { detail: { width: number | string; height: number | string } }) => {
