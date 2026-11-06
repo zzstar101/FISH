@@ -298,7 +298,10 @@
 }
 
 .fw__more-btn {
-  padding: 12px 32px;
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-faint);
   font-size: var(--fs-xs);

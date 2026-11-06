@@ -188,10 +188,11 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   font-size: 20px;
   font-weight: 600;
-  padding: 6px 18px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 2px solid;
   line-height: 1.2;
 
