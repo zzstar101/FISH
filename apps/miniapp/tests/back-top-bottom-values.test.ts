@@ -86,6 +86,29 @@ function px(body: string, prop: string): number {
 }
 
 /**
+ * 读 `_token-vars.scss` 里一个按钮档位令牌的 px 值。
+ *
+ * #630 起按钮高度/内边距走 `--btn-h-*` / `--btn-px-*` 令牌，`.ml__fab` 的高度不再是
+ * 裸 `104px` 而是 `var(--btn-h-lg)`。这里按同一份令牌文件解析，几何断言才不会和
+ * 「阶梯改了一档」脱节。
+ */
+async function tokenPx(name: string): Promise<number> {
+  const vars = await Bun.file(new URL('../src/styles/_token-vars.scss', import.meta.url)).text()
+  const matched = new RegExp(`--${name}:\\s*([\\d.]+)px`).exec(vars)
+  expect(matched, `_token-vars.scss 里没有 --${name}`).not.toBeNull()
+  return Number(matched?.[1])
+}
+
+/** 取属性值：裸 `Npx` 直接返回，`var(--btn-*)` 解析令牌，缺失即失败 */
+async function pxOrToken(body: string, prop: string): Promise<number> {
+  const direct = pxOrNull(body, prop)
+  if (direct !== null) return direct
+  const matched = new RegExp(`(?:^|[;{\\s])${prop}:\\s*var\\(--([\\w-]+)\\)`).exec(body)
+  expect(matched, `缺少 ${prop}: <数值>px 或 var(--档位令牌)`).not.toBeNull()
+  return await tokenPx(matched?.[1] as string)
+}
+
+/**
  * 悬浮底栏的几何（从 `custom-tab-bar/index.scss` 真读）。
  *
  * 高度取**最高那一列**：栏体是 `display:flex; align-items:center`，5 个子项各是一个
@@ -167,7 +190,8 @@ describe('回顶钮 bottom：mylist 按本页 FAB 定位', () => {
     ).text()
     const fab = ruleBody(style, '.ml__fab')
     // 稿 `.totop` 的缝是 `var(--fab-b) + var(--fab-h) + 20px`，按本仓「pt × 2」= 40px
-    const expected = px(fab, 'bottom') + px(fab, 'height') + 40
+    // fab 高走 `--btn-h-lg` 令牌（#630 四档阶梯的 L 档），从令牌文件解析
+    const expected = px(fab, 'bottom') + (await pxOrToken(fab, 'height')) + 40
     expect(await backTopBottom('pkg-browse/pages/mylist/index.tsx')).toBe(expected)
     // 底栏顶边（154）与本页无关：套过去会把按钮压到发布钮上
     const bar = await tabBarGeometry()
@@ -182,7 +206,8 @@ describe('回顶钮 bottom 文档口径', () => {
     ).text()
     // 不写明的话，下一个人又会像 #319 第一版那样去「统一」它们
     expect(source).toContain("'170rpx'")
-    expect(source).toContain("'188rpx'")
+    // FAB 高度按 #630 的四档阶梯取 L 档 96（原 104 不在梯上）→ 44 + 96 + 40 = 180
+    expect(source).toContain("'180rpx'")
     expect(source).toContain('mylist')
   })
 
