@@ -54,6 +54,7 @@
   z-index: 2;
   flex: 0 0 auto;
   padding-bottom: 24px;
+  /* 去渐变（2026-11-06 Owner 指定）：会话页与会话列表页的浅蓝页头保留（首页同样保留），其余页头去掉底色。 */
   background: var(--grad-page);
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
@@ -291,7 +292,7 @@
   height: 56px;
   padding: 0 22px;
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -944,7 +945,7 @@
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: var(--brand-deep);
+  background: var(--brand);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -977,18 +978,21 @@
   width: 16px;
   height: 18px;
   border: 0;
+  /* 两根竖条都画成图标墨色，中间那条缝留给圆钮自己的底色（`background` 只负责这道缝）：
+     竖条若跟着圆钮一起变成主色，最后一根就整条消失在圆钮上。 */
   border-left: 5px solid var(--surface);
-  border-right: 5px solid var(--brand-deep);
+  border-right: 5px solid var(--surface);
   border-top: 0;
   border-bottom: 0;
-  background: var(--brand-deep);
+  background: var(--brand);
   margin-left: 0;
 }
 
+/* 我方钮是白底：竖条翻成气泡蓝，缝留给白钮 */
 .conv__play.is-pause.is-mine .conv__play-glyph {
   border-left-color: var(--bubble-mine);
   border-right-color: var(--bubble-mine);
-  background: var(--bubble-mine);
+  background: var(--surface);
 }
 
 .conv__wave {
@@ -1012,7 +1016,7 @@
 
   /* 已播部分高亮 */
   &.is-on {
-    background: var(--brand-deep);
+    background: var(--brand);
   }
 
   /* 我方已播：实心白，与未播的 75%（2.14:1）一档拉开（实心白 = 2.67:1） */
@@ -1233,7 +1237,7 @@ $bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后�
   height: $bar-control-px;
   padding: 0 30px;
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
 
   /* 未输入（禁用）态：淡底灰字（稿子 .send.is-off） */
   &.is-off {
@@ -1467,7 +1471,7 @@ $bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后�
   height: 56px;
   padding: 0 22px;
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-xs);
   font-weight: 600;

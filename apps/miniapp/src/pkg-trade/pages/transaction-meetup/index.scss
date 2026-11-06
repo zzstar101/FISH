@@ -858,7 +858,7 @@
   justify-content: center;
   height: 72px;
   border-radius: 36px;
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -1035,7 +1035,7 @@
 }
 
 .meetup__btn--pri {
-  background: var(--brand-deep);
+  background: var(--brand);
   color: #fff;
   box-shadow: var(--shadow-btn);
 

@@ -1219,7 +1219,7 @@ export default function MyList() {
       </View>
 
       <View className="ml__fab" onClick={goPublish}>
-        <Image className="ml__fab-ic" src={ICONS.plusBrand} mode="aspectFit" />
+        <Image className="ml__fab-ic" src={ICONS.plusWhite} mode="aspectFit" />
         <Text>发布</Text>
       </View>
 

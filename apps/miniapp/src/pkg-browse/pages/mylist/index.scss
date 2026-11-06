@@ -466,7 +466,7 @@
   /* 上架：低风险正向动作，用实底主色 */
   &--primary {
     border: 2px solid transparent;
-    background: var(--brand-deep);
+    background: var(--brand);
     color: var(--surface);
   }
 }
@@ -566,7 +566,7 @@
   height: 88px;
   padding: 0 44px;
   border-radius: 44px;
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-body);
   font-weight: 600;

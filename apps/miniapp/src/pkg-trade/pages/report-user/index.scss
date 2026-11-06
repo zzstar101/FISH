@@ -50,11 +50,11 @@
 
 /* ── 渐变页头（随内容滚走，玻璃栏不动） ── */
 .rpu__head {
-  background: var(--grad-page);
+  background: transparent;
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
   padding: 32px 40px 40px;
-  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+  /* 背板底色去掉后这圈空投影只剩盒边，一并去掉 */
 }
 
 .rpu__kicker {
