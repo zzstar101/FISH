@@ -131,8 +131,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 76px;
-  padding: 0 44px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--fg);
@@ -284,8 +284,8 @@
   align-items: center;
   justify-content: center;
   gap: 16px;
-  height: 96px;
-  border-radius: 48px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--fg);
   font-size: var(--fs-title);
@@ -507,13 +507,15 @@
   color: var(--muted-2);
 }
 
+/* 行内动作钮：DESIGN.md §3.1 S 档（68 / 26，原 72 / 26 不在梯上）。
+   `.scan__frow` 是 `align-items: flex-start`，钮矮 4px 不影响左侧状态签与中间文案的顶对齐。 */
 .scan__fact {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 72px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   border: 2px solid var(--line);
   color: var(--brand-deep);

@@ -188,10 +188,11 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   font-size: 20px;
   font-weight: 600;
-  padding: 6px 18px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   border: 2px solid;
   line-height: 1.2;
 
@@ -230,13 +231,16 @@
 }
 
 .rpts__reason {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   font-size: var(--fs-2xs);
   font-weight: 600;
   color: var(--brand-deep);
   background: var(--accent-weak);
   border-radius: 999px;
-  padding: 4px 16px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
 .rpts__desc {

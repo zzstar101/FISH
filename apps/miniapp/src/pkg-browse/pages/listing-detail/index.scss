@@ -324,7 +324,7 @@
   display: flex;
   align-items: center;
   height: 44px;
-  padding: 0 18px;
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   color: var(--cond-fg);
@@ -444,11 +444,11 @@
   text-overflow: ellipsis;
 }
 
-/* 稿子 `.seller .go`：min-height 72rpx、padding 0 24rpx、字号 25rpx，右侧带 24rpx 箭头 */
+/* 稿子 `.seller .go`：字号 25rpx、右侧带 24rpx 箭头；框体归 DESIGN.md §3.1 的 M 档 */
 .detail__go {
   margin-left: auto;
-  min-height: 72px;
-  padding: 0 24px;
+  min-height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
@@ -461,7 +461,11 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  /* 排版预算：147.5pt 的行宽要装下 头像 34 + 昵称 ~44 + 本钮 ~41 */
+  /* 排版预算（稿宽 750rpx）：行宽 = 750 − `.detail__seller-section` 左右 padding 40×2 = 670rpx。
+     固定占用 = 头像 68 + 两个 gap 20×2 = 40 + 本钮 ≈ 200（文字「进TA主页」~105 / 图标 24 /
+     gap 6 / 左右内边距 32×2 / 边框 2×2）≈ 308rpx，昵称区还能拿到 ~362rpx。
+     结论：不会溢出 —— 余宽由 `.detail__sinfo`（flex: 1 1 auto; min-width: 0）吸收，
+     昵称再长也只走到 `.detail__snick` 的 ellipsis 收口；本钮 nowrap，内容不换行。 */
   flex: 0 1 auto;
   min-width: 0;
 
@@ -514,8 +518,8 @@
      否则占位符会把胶囊撑爆、整行换行（与 search 页同一处坑） */
   width: 0;
   min-width: 0;
-  height: 76px;
-  padding: 0 28px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border: 2px solid var(--border);
   border-radius: var(--r-pill);
   background: var(--bg);
@@ -529,8 +533,8 @@
 
 .detail__cmt-send {
   flex: 0 0 auto;
-  height: 76px;
-  padding: 0 32px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: #fff;
@@ -603,8 +607,8 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  height: 36px;
-  padding: 0 12px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--tag-cyan-bg);
   border: 2px solid rgba(25, 230, 255, 0.46);
@@ -652,14 +656,16 @@
   margin-top: 18px;
 }
 
+/* S 档（DESIGN.md §3.1）：行内回复行比主输入条小一档，输入框与按钮同高 */
 .detail__cmt-in--reply {
-  height: 68px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   font-size: 26px;
 }
 
 .detail__cmt-send--reply {
-  height: 68px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   font-size: 26px;
 }
 
@@ -824,19 +830,18 @@
   align-items: center;
   gap: 20px;
   padding: 20px 24px;
-  border-radius: 48px;
-  background: rgba(255, 255, 255, 0.84);
-  border: 2px solid rgba(255, 255, 255, 0.62);
-  backdrop-filter: blur(48px) saturate(180%);
-  -webkit-backdrop-filter: blur(48px) saturate(180%);
-  box-shadow: 0 32px 68px -32px rgba(23, 35, 61, 0.5), 0 4px 16px -6px rgba(23, 35, 61, 0.14);
+  /* 材质与底部 TabBar 同源（`@include glass-bar`）：同屏两条浮条必须是同一种「冰蓝」；
+     圆角也一并由 mixin 给 999 —— 里面是正圆收藏钮 + 两枚胶囊 CTA，外框留 48 会不协调 */
+  @include glass-bar;
 }
 
 .detail__fav {
   width: 96px;
   height: 96px;
   flex: 0 0 auto;
-  border-radius: 28px;
+  /* 方形图标钮：与 `.backtop` / `.search__vision` / `.conv__replybar-cancel` 同口径取正圆。
+     原 `28px` 既不是胶囊也不是 50%，是 DESIGN §3 圆角表外的孤例 */
+  border-radius: 50%;
   border: 2px solid var(--border);
   background: var(--surface);
   display: flex;
@@ -863,9 +868,9 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  min-height: 96px;
-  padding: 0 36px;
-  border-radius: 28px;
+  min-height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   font-size: var(--fs-title);
   font-weight: 600;
   white-space: nowrap;
@@ -952,6 +957,7 @@
    弱化成 muted 小字（低频治理动作），点击整行有热区；margin-left:auto 吃掉
    标签行剩余宽度，标签多到换行时它独占一行仍贴右。 */
 .detail__tag-report {
+  position: relative;
   margin-left: auto;
   display: flex;
   align-items: center;
@@ -959,6 +965,14 @@
   padding: 0 12px;
   font-size: var(--fs-xs);
   color: var(--muted);
+
+  /* 视觉上只有 44rpx 高的一行小字，但它是可点的：按 DESIGN §3.1 规则 5「无边框触控区」
+     用伪元素把热区补到 88×88rpx（44pt），文字位置与标签行排版都不动 */
+  &::after {
+    content: "";
+    position: absolute;
+    inset: -22px -12px;
+  }
 
   &:active {
     color: var(--fg);
@@ -1056,8 +1070,8 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  height: 92px;
-  border-radius: 46px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   font-size: 29px;
   font-weight: 600;
 }
