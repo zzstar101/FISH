@@ -57,7 +57,8 @@ async function slice(from: string, to: string): Promise<string> {
 
 describe('小程序运行时：不许用 browser-only 的 window', () => {
   test('页面源码里没有 window（原生小程序没有这个全局）', async () => {
-    expect(code(await homeSource())).not.toContain('window')
+    // 检查全局标识符，不误伤 Taro.getWindowInfo().windowHeight 这样的原生窗口属性。
+    expect(code(await homeSource())).not.toMatch(/\bwindow\b/)
   })
 
   test('解锁定时器走全局 setTimeout，且句柄存进 ref（可取消）', async () => {

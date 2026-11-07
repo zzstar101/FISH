@@ -28,6 +28,7 @@ import {
 } from '@/features/recommendation/use-impressions'
 import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { onSessionChanged } from '@/lib/session'
 import { useTabTransition } from '@/lib/use-tab-transition'
 import type { ListingCategory, MockListing } from '@/mock/types'
 import { applyLoadResult, homeListState } from './list-state'
@@ -89,6 +90,10 @@ export default function Home() {
    * 一个入口，而且列表看起来和刷新成功没有区别 —— 一句话都没人告诉他这次没刷上。
    */
   const [staleAfterFailure, setStaleAfterFailure] = useState(false)
+  // 身份清空期间只保留滚动所需的几何高度，不保留旧商品；不能用骨架卡数量猜像素高度。
+  const [identityScrollHeight, setIdentityScrollHeight] = useState<number | null>(null)
+  // 身份变化可能发生在别的页面上；首页几何只取首页自己显示时记录的窗口高度。
+  const homeViewportHeightRef = useRef(0)
 
   /**
    * 本机「不感兴趣」名单：进页读一次，`useDidShow` 每次回到本页再读一次。
@@ -257,6 +262,15 @@ export default function Home() {
     // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
     if (seq !== reqSeq.current) return { failed: false, held: false }
     /*
+      身份那道闸（#652）：这次请求是**上一个身份**发出去的（`viewerAtRequest` 记的就是它），
+      而落地时本地已经是另一个人了 —— 这份数据一个字节都不许上屏，也不许落快照。
+
+      正常路径上它已经被上一条挡住：身份一变，`onSessionChanged` 的订阅会立刻 `load()` 一次、
+      把 `reqSeq` 推上去，旧响应回来时序号必然过期。但 `reqSeq` 是「又发了一次请求」的意思，
+      不是「换了个人」的意思 —— 这条按身份本身判，不依赖重建有没有跑起来。
+    */
+    if (viewerAtRequest !== homeFeedCache.viewer()) return { failed: false, held: false }
+    /*
       本地隐藏名单在这里过滤（R1 没有服务端隐藏接口，见 `recommendation/hidden`）。
       过滤发生在**取数之后、上屏之前**：`positions` 仍按服务端那份 feed 的原始下标算，
       重新编号会让后续曝光与详情归因整体错位。
@@ -301,6 +315,8 @@ export default function Home() {
     setFailed(applied.failed)
     setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
+    // 与新列表同次落地释放高度；新列表确实更短时允许自然夹到新的末尾。
+    setIdentityScrollHeight(null)
     /*
       这一屏是快照顶上的，而这次请求又失败了：列表被 `held` 留住了，页面**不出现**错误块，
       屏幕上就再没有任何「这是半小时前的货」的信号（下拉刷新那条 toast 只有在用户主动刷新时
@@ -321,12 +337,83 @@ export default function Home() {
     return { failed: result.failed, held }
   }
 
+  /**
+   * `category` 的镜像：会话清理的回调是**常驻闭包**（订阅只注册一次，见下面的 `useLoad`），
+   * 读不到之后重渲染出来的 `category`。不镜像的话，用户切到「教材书籍」再退出登录，
+   * 重拉的还是「推荐」。
+   */
+  const categoryRef = useRef<ListingCategory | 'ALL'>(category)
+  categoryRef.current = category
+
+  /**
+   * 身份变了：退出登录、登录、匿名→已登录、A→B 换号，以及会话被后端撤销的 401。屏幕上这一屏
+   * 商品属于**上一个**身份，必须整体作废重拉（#650 两个退出方向、#652 补齐登录方向）。
+   *
+   * 为什么只有订阅能治：身份变化是个**事件** —— 不切分类、不发请求，`useDidShow` 也不会
+   * 因为它多跑一次，页面自己察觉不到。用户退出登录后回到首页，看到的还是上一个账号的推荐流
+   * （含他那份「不感兴趣」过滤结果），点进详情才发现自己已经未登录；换号后看到的则是上一个人的
+   * 商品，点进去按新身份报错，像「点了没反应」。
+   *
+   * 清四样，缺一样都会把旧身份的东西留在屏幕上、归因里或埋点里：
+   * - `items` + `lastGoodRef`：后者不清的话，重拉失败时 `applyLoadResult` 会把上一个身份的
+   *   商品当成「同一分类的旧数据」留住（`previous` 命中），既串号又谎报成功；
+   * - `loadedFor` 归零：新一批还没到，`loadedFor === category` 一旦成立，空数组就渲染成
+   *   「这个分类还没有闲置」（判定顺序见 `./list-state.ts`）；
+   * - `feedContext`：`requestId` / `positions` 属于上一个身份那次推荐请求，留着就会拿旧
+   *   requestId 给新数据记曝光；
+   * - 在途的可见段（`impressions`）：**丢弃，不结算**。结算会把上一个身份看到的停留补发成
+   *   IMPRESSION / QUICK_SKIP，而服务端按**投递那一刻**的身份校验归属（`recommendation/service.ts`
+   *   的 `ownsRequest()` 对不上就判 `identity_mismatch` 拒收）—— 补发不会记账，但会白跑一趟请求
+   *   并把拒收计数冲高，正是 `recommendation/queue` 在身份变化时清队列要避免的事。
+   *
+   * 重拉的是**当前分类**而不是 `load('ALL')`：分类选中态不是身份数据，不该被一次退出登录
+   * 重置；何况重拉 `ALL` 会把 `loadedFor` 记成 `ALL`、`category` 还停在别的档上，两者对不上
+   * → `homeListState` 恒给骨架屏，重拉成功也还是骨架屏。
+   *
+   * 在途的旧身份请求由 `load()` 里两道闸拦住：重建必然推一次 `reqSeq`（旧响应序号过期），
+   * 外加身份指纹那道（发出时的 `viewerAtRequest` 与落地时不同就丢弃，见 `load()` 里的注释）。
+   * 本机「不感兴趣」名单（`hiddenIds`）不动：那是本机口径，不跟着账号走。
+   *
+   * 重拉不会打转：Feed 与分类列表都**匿名可用**（`apps/api/src/modules/recommendation/router.ts`
+   * 不挂 `requireAuth`），退出后的这次请求照常 200，不会再靠 401 清一次会话来触发下一轮。
+   */
+  const resetForIdentityChange = () => {
+    setIdentityScrollHeight((previous) =>
+      Math.max(previous ?? 0, scrollTopRef.current + homeViewportHeightRef.current),
+    )
+    impressions.discardAll()
+    lastGoodRef.current = { items: [], loadedFor: null }
+    setFeedContext({ requestId: null, positions: new Map() })
+    setItems([])
+    setLoadedFor(null)
+    void load(categoryRef.current)
+  }
+
+  /** `resetForIdentityChange` 的镜像：订阅只注册一次，回调必须调到**最新**那份闭包 */
+  const resetRef = useRef(resetForIdentityChange)
+  resetRef.current = resetForIdentityChange
+
+  /** 会话清理订阅的退订函数：页面卸载时摘掉，别让迟到的清理去写已销毁的页面（见下面 `useUnload`） */
+  const unsubscribeSessionRef = useRef<(() => void) | null>(null)
+
   useLoad(() => {
+    /*
+      订阅挂在 `useLoad` 而不是 `useDidShow`：身份可能在**本页不可见**时变化（在设置页点
+      「退出登录」、再登录成另一个账号），那时首页还在页面栈里；挂到 `useDidShow` 上要等
+      用户切回来才补，这中间它照样挂着上一个身份的商品。
+
+      订阅的是「会话变了」（`onSessionChanged`）而不是登录态快照：快照在改昵称、换头像
+      这些同一个人身上的更新里也会变（`features/auth/store` 的 `applyProfile`），订阅它
+      会让首页被无谓地打回骨架屏重拉一次。会话变了 = 本地是谁变了，退出 / 401 / 登录 /
+      换号四个方向都在这一条通道上，不会漏也不会重复重置（#652）。
+    */
+    unsubscribeSessionRef.current = onSessionChanged(() => resetRef.current())
     // `load()` 会先把 `next` 的快照上屏（#631），网络回来再原地替换；没有快照就是骨架屏
     void load('ALL')
   })
 
   useDidShow(() => {
+    homeViewportHeightRef.current = Taro.getWindowInfo().windowHeight
     // 回到这个页面时补一次冲刷：队列里攒着的事件不该等到下一个 15s 定时器（见 `recommendation/queue`）
     void flushRecommendationQueue()
     /*
@@ -539,6 +626,20 @@ export default function Home() {
   // 卸载清掉未释放的锁定时器：迟到的回调不该写回已销毁的页面（也不该再 setState）
   useUnload(clearNavSettle)
 
+  /*
+    会话清理订阅也要在卸载时摘掉（见 `resetForIdentityChange`）：页面已经销毁还留在监听表里，
+    下次退出登录时它会对着已卸载的页面 `setState`。
+
+    单独起一条 `useUnload` 而不是并进上面那条：`useUnload(clearNavSettle)` 是既有行为，
+    「卸载路径只清账、不 setState」也有测试盯着（`tests/home-sticky-nav-wiring.test.ts`）。
+    同一页面注册多条生命周期回调是 Taro 支持的（`mergePageInstance` 把回调串成数组），
+    本页 `useTabTransition` 内部就已经有一条。
+  */
+  useUnload(() => {
+    unsubscribeSessionRef.current?.()
+    unsubscribeSessionRef.current = null
+  })
+
   useReady(() => {
     Taro.createSelectorQuery()
       .select('.home__cats-wrap')
@@ -576,7 +677,10 @@ export default function Home() {
   }
 
   return (
-    <View className="home">
+    <View
+      className="home"
+      style={identityScrollHeight === null ? undefined : { minHeight: `${identityScrollHeight}px` }}
+    >
       <View className="home__hero-bg" />
 
       {/*
