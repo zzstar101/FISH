@@ -19,6 +19,7 @@ import {
   type VisualInterpretation,
   type VisualSearchSort,
   type VisualSearchStats,
+  type VisualSubjectBox,
 } from '@fish/contracts/visual/schema'
 import { categoryLabel } from '@/lib/listing-labels'
 import { formatAmount } from '@/lib/money'
@@ -183,4 +184,38 @@ export function soldAvgText(stats: VisualSearchStats): string | null {
   if (stats.soldSampleCount < VISUAL_SOLD_AVG_MIN_SAMPLES) return null
   if (stats.soldAvgPriceCents === null) return null
   return `¥${formatAmount(stats.soldAvgPriceCents)} · ${stats.soldSampleCount} 件`
+}
+
+export type Size = { width: number; height: number }
+
+/** 主体框在屏幕上的位置（设备 px，相对于铺满屏的背景图容器）。 */
+export type FrameRect = { left: number; top: number; width: number; height: number }
+
+/**
+ * 主体框（#584，契约里是相对摆正后查询图的 0–1 比例）→ 背景图上的屏幕矩形。
+ *
+ * 背景图是 `mode="aspectFill"`：等比放大到**盖满**容器、居中、多出的部分裁掉。所以先按
+ * `max(容器宽 / 图宽, 容器高 / 图高)` 放大，再减去居中偏移；落在容器外的那截夹掉（被裁掉的
+ * 部分画不出来）。夹完不剩面积、或尺寸未知（图还没加载完）时返回 `null` —— 不画框。
+ */
+export function subjectFrameRect(
+  box: VisualSubjectBox,
+  image: Size,
+  container: Size,
+): FrameRect | null {
+  if (image.width <= 0 || image.height <= 0 || container.width <= 0 || container.height <= 0) {
+    return null
+  }
+  const scale = Math.max(container.width / image.width, container.height / image.height)
+  const shownWidth = image.width * scale
+  const shownHeight = image.height * scale
+  const offsetX = (container.width - shownWidth) / 2
+  const offsetY = (container.height - shownHeight) / 2
+
+  const left = Math.max(0, offsetX + box.x * shownWidth)
+  const top = Math.max(0, offsetY + box.y * shownHeight)
+  const right = Math.min(container.width, offsetX + (box.x + box.width) * shownWidth)
+  const bottom = Math.min(container.height, offsetY + (box.y + box.height) * shownHeight)
+  if (right <= left || bottom <= top) return null
+  return { left, top, width: right - left, height: bottom - top }
 }

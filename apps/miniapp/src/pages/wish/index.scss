@@ -201,7 +201,7 @@
   display: block;
   height: 100%;
   border-radius: var(--r-pill);
-  background: linear-gradient(90deg, var(--brand), var(--electric));
+  background: var(--brand);
 }
 
 /* 展开 / 收起：通栏一行，顶部一条极淡分割线 */

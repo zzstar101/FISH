@@ -16,6 +16,8 @@
 
 .home__hero-bg {
   @include page-hero(504px, 64px);
+  /* 去渐变（2026-11-06 Owner 指定）：首页这块浅蓝页头保留。`page-hero` 已改成透明背板，这里单独补回底色。 */
+  background: var(--grad-page);
 }
 
 /*
@@ -200,7 +202,7 @@
   left: 0;
   right: 0;
   z-index: 30;
-  background: rgba(238, 246, 255, 0.82);
+  background: rgba(238, 244, 255, 0.82);
   backdrop-filter: blur(36px) saturate(180%);
   -webkit-backdrop-filter: blur(36px) saturate(180%);
   border-bottom: 2px solid var(--accent-faint);

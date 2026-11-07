@@ -135,6 +135,23 @@ export const VisualInterpretationSchema = z.strictObject({
 export type VisualInterpretation = z.infer<typeof VisualInterpretationSchema>
 
 /**
+ * 查询图的主体框（#584）：服务端按它裁出主体再向量化，客户端在原图上把它画出来。
+ *
+ * 坐标是**比例**（0–1），相对于**按 EXIF 方向摆正之后**的查询图：客户端显示的就是摆正后的图，
+ * 用比例而不是像素，客户端不必知道服务端内部把图缩到了多大。
+ */
+const unit = z.number().min(0).max(1)
+
+export const VisualSubjectBoxSchema = z.strictObject({
+  x: unit,
+  y: unit,
+  width: unit,
+  height: unit,
+})
+
+export type VisualSubjectBox = z.infer<typeof VisualSubjectBoxSchema>
+
+/**
  * 结果项（#324 M6）：卡片 + 收藏数。
  *
  * **`favoriteCount` 是收藏数，不是「想要数」**（2026-10-04 澄清）：它由 `favorites` 表批量
@@ -187,6 +204,15 @@ export type VisualSearchStats = z.infer<typeof VisualSearchStatsSchema>
 export const VisualSearchResponseSchema = z.strictObject({
   queryId: z.uuid(),
   interpretation: VisualInterpretationSchema.nullable(),
+  /**
+   * 本次检索实际用的主体框（#584）。`null` = 没检测到可用主体，本次按**整图**检索，客户端不画框。
+   * 非 `null` 时图片向量来自这个框（服务端再略外扩一圈）裁出的区域。
+   *
+   * **`.optional()` 是分批发布的兼容口（#638）**：键缺失 = 对端不认识主体框，一律按整图处理、不画框，
+   * 与 `null` 同义。两种缺失来源：旧服务端根本不产出这个键；新服务端只对声明了
+   * `subject-box` 能力的客户端（`VISUAL_SEARCH_CAPABILITIES_HEADER`）才带上它。
+   */
+  subjectBox: VisualSubjectBoxSchema.nullable().optional(),
   strategyVersion: z.string().min(1),
   embeddingModel: z.string().min(1),
   items: z.array(VisualSearchResultItemSchema),
@@ -195,6 +221,32 @@ export const VisualSearchResponseSchema = z.strictObject({
 })
 
 export type VisualSearchResponse = z.infer<typeof VisualSearchResponseSchema>
+
+/**
+ * 主体框出现之前（#584 之前）**已发布小程序**校验响应用的形状：`strictObject` 且没有 `subjectBox`，
+ * 多一个键就整体校验失败（识图直接报错）。新服务端对没声明 `subject-box` 能力的客户端必须回这个形状。
+ */
+export const VisualSearchLegacyResponseSchema = VisualSearchResponseSchema.omit({
+  subjectBox: true,
+})
+
+/**
+ * 识图能力协商（#638，分批发布）。
+ *
+ * 客户端用**请求头**声明自己认识哪些响应扩展，而不是请求体字段：已发布服务端的
+ * `VisualSearchRequestSchema` 是 `strictObject`，body 多一个键会让新客户端打旧服务端直接 422；
+ * 头则会被旧服务端忽略。缺省 = 老客户端 = 只回 `VisualSearchLegacyResponseSchema` 形状。
+ * 值是逗号分隔的能力标识，目前只有 `subject-box`。
+ */
+export const VISUAL_SEARCH_CAPABILITIES_HEADER = 'x-visual-search-capabilities'
+
+export const VISUAL_SEARCH_CAPABILITY_SUBJECT_BOX = 'subject-box'
+
+/** 请求头声明里是否有 `subject-box`（按逗号切开后整词匹配，`subject-box-v2` 不算）。 */
+export function acceptsVisualSubjectBox(header: string | null | undefined): boolean {
+  if (!header) return false
+  return header.split(',').some((token) => token.trim() === VISUAL_SEARCH_CAPABILITY_SUBJECT_BOX)
+}
 
 /** 对象键里的一级主体：登录用户用 userId，匿名用会话标识（都由服务端派生）。 */
 const SUBJECT_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
