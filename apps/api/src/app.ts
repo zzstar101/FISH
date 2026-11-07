@@ -103,7 +103,11 @@ import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
 import { checkRecommendationEmbeddingModel } from './modules/recommendation/embedding-check'
 import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
-import { createTokenBucketLimiter, isIpRateLimitSubject } from './modules/recommendation/rate-limit'
+import {
+  assertTokenBucketSpec,
+  createTokenBucketLimiter,
+  isIpRateLimitSubject,
+} from './modules/recommendation/rate-limit'
 import { createRecommendationRecall } from './modules/recommendation/recall/service'
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
@@ -433,8 +437,8 @@ export function createApp(
   // 传**读取函数**给 admin，见 `admin/module.ts` 的注释。
   const recommendationProcessMetrics = createRecommendationProcessMetrics()
   // 限流阈值（#323 R6）：默认值来自契约，env 只做覆盖（未配置 = null ⇒ 用默认值）。
-  // 两份桶分开建（埋点更严、Feed 更宽），桶表上限共用一份：它防的是"内存被主体数撑爆"，
-  // 与"每个主体多少额度"无关。
+  // 两份桶分开建（埋点 120/2、Feed 身份桶 60/1；匿名 Feed 的 IP 桶另有一档 300/20），
+  // 桶表上限共用一份：它防的是"内存被主体数撑爆"，与"每个主体多少额度"无关。
   const rateLimitEnv = loadRecommendationRateLimitEnv()
   // 匿名 Feed 的 IP 桶（#643）：NAT 出口下整栋楼共享同一个 `ip:` 主体，与单个会话同规格
   // 会让正常用户互相挤兑，所以单独一档更宽的规格（契约里有定量依据）。
@@ -443,6 +447,9 @@ export function createApp(
     refillPerSecond:
       rateLimitEnv.feedIpRefillPerSecond ?? RECOMMENDATION_FEED_IP_RATE_LIMIT.refillPerSecond,
   }
+  // IP 桶是懒建的（首个 `ip:` 主体才建），不在这里当场校验的话，一个 `2.5` 的容量配置会让
+  // 进程正常启动、然后每个可归因 IP 的匿名 Feed 请求都 500。启动期校验，配错就起不来。
+  assertTokenBucketSpec(feedIpTier)
   const recommendationRateLimit = {
     events: createTokenBucketLimiter({
       capacity: rateLimitEnv.eventCapacity ?? RECOMMENDATION_EVENT_RATE_LIMIT.capacity,

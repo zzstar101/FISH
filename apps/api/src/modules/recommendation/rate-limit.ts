@@ -13,7 +13,7 @@
  * 但两条桶**不必同一规格**（#643）：校园网/宿舍是 NAT 出口，整栋楼共用一个 `ip:` 主体，
  * 按会话的规格（60/1·s⁻¹）限 IP 等于把整栋楼的匿名用户挤进 1 次/秒。所以 `createTokenBucketLimiter`
  * 支持按主体选规格（`tierFor`）：Feed 的 `ip:` 桶用契约的 `RECOMMENDATION_FEED_IP_RATE_LIMIT`，
- * `session:` / `user:` 仍用 `RECOMMENDATION_FEED_RATE_LIMIT`。两个桶仍然同时生效、原子扣减，
+ * `session:` / `user:` / `ip:unattributed` 仍用 `RECOMMENDATION_FEED_RATE_LIMIT`。两个桶仍然同时生效、原子扣减，
  * 只是"整栋楼共享的那份额度"被放宽到 NAT 的真实量级。
  *
  * **IP 只作为进程内 Map 的键存在**：不落库、不进日志、不进响应（R1 的"不落 IP"承诺不变）。
@@ -112,7 +112,7 @@ export function createTokenBucketLimiter(options: {
   const clock = options.clock ?? ((): number => Date.now())
   const defaultSpec: TokenBucketSpec = { capacity, refillPerSecond }
 
-  assertSpec(defaultSpec)
+  assertTokenBucketSpec(defaultSpec)
   if (!Number.isInteger(maxSubjects) || maxSubjects < 1) {
     throw new Error('令牌桶主体上限必须是正整数')
   }
@@ -125,7 +125,7 @@ export function createTokenBucketLimiter(options: {
     let bucket: Bucket
     if (existing === undefined) {
       const spec = options.tierFor?.(subject) ?? defaultSpec
-      assertSpec(spec)
+      assertTokenBucketSpec(spec)
       bucket = { tokens: spec.capacity, updatedAt: now, spec }
     } else {
       const elapsedMs = Math.max(0, now - existing.updatedAt)
@@ -190,7 +190,7 @@ export function createTokenBucketLimiter(options: {
 }
 
 /** 构造期/首次建桶时校验规格：非法配置要当场炸，不能带病运行。 */
-function assertSpec(spec: TokenBucketSpec): void {
+export function assertTokenBucketSpec(spec: TokenBucketSpec): void {
   if (!Number.isInteger(spec.capacity) || spec.capacity < 1) {
     throw new Error('令牌桶容量必须是正整数')
   }
@@ -205,7 +205,7 @@ function assertSpec(spec: TokenBucketSpec): void {
  * - 登录：`user:<userId>` 一条。**不再叠 IP**——登录身份不可自述伪造，叠上去只会让
  *   "同一 NAT 出口下的多个正常用户"互相抢额度；
  * - 匿名：`session:<会话>`（每个不同的会话一条）+ `ip:<可信出口 IP>`；IP 无法归因时用共享
- *   `unattributed` 桶（fail-closed）。会话统一转小写，避免同一个 UUID 的大小写两种写法各占一个桶。
+ *   `ip:unattributed` 桶（fail-closed）。会话统一转小写，避免同一个 UUID 的大小写两种写法各占一个桶。
  *
  * `anonymousSessionIds` 是数组：Feed 的会话来自请求头（最多一条），埋点的会话来自事件体
  * （一次批量可能跨会话，离线补发时会带多个）。
@@ -229,6 +229,8 @@ export function rateLimitSubjects(input: {
       subjects.add(`session:${sessionId.toLowerCase()}`)
     }
   }
-  subjects.add(`ip:${normalizeIp(input.clientIp) ?? RECOMMENDATION_UNATTRIBUTED_SUBJECT}`)
+  subjects.add(
+    `${RECOMMENDATION_IP_SUBJECT_PREFIX}${normalizeIp(input.clientIp) ?? RECOMMENDATION_UNATTRIBUTED_SUBJECT}`,
+  )
   return [...subjects]
 }

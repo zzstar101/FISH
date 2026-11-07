@@ -269,8 +269,12 @@ describe('按主体分档的令牌桶（#643 匿名 Feed 的 NAT 场景）', () 
       expect(limiter.take(subject)).toEqual({ allowed: true })
       expect(limiter.take(subject)).toEqual({ allowed: false, retryAfterSeconds: 1 })
     }
-    // 同进程里的可归因 IP 主体仍是 IP 档：1 个令牌之后要等 0.05s（向上取整 1s）。
-    expect(limiter.take(NAT_IP)).toEqual({ allowed: true })
+    // 同进程里的可归因 IP 主体仍是 IP 档：默认档容量只有 1，这里连取 300 次都通过，
+    // 第 301 次才拒绝 —— 证明 tierFor 真的返回了 300 的 IP_SPEC，而不是回落到默认档。
+    for (let i = 0; i < IP_SPEC.capacity; i += 1) {
+      expect(limiter.take(NAT_IP)).toEqual({ allowed: true })
+    }
+    expect(limiter.take(NAT_IP)).toEqual({ allowed: false, retryAfterSeconds: 1 })
   })
 
   test('isIpRateLimitSubject 只认可归因的 ip: 主体', () => {

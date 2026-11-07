@@ -2175,4 +2175,40 @@ describe('recommendation 限流与进程内计数 (#323 R6 PR-2)', () => {
       }
     }
   })
+
+  test('IP 档容量配成小数时启动即失败，而不是首个匿名请求 500（#643 审查）', () => {
+    const saved = process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY
+    process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY = '2.5'
+    try {
+      expect(() =>
+        createApp(
+          { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+        ),
+      ).toThrow('令牌桶容量必须是正整数')
+    } finally {
+      if (saved === undefined) delete process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY
+      else process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY = saved
+    }
+  })
+
+  test('IP 档不配置时用契约默认 300（61 个不同会话仍全部 200；旧 60 会挡下第 61 个）', async () => {
+    const natApp = createApp(
+      { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { peerIp: () => '203.0.113.10', trustedProxyIp: null },
+    )
+    for (let i = 0; i < 61; i += 1) {
+      const response = await natApp.request('/recommendations/feed?limit=1', {
+        headers: { 'x-anonymous-session-id': crypto.randomUUID() },
+      })
+      expect(response.status).toBe(200)
+    }
+  })
 })
