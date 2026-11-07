@@ -59,7 +59,7 @@ describe('#650/#652 身份变了之后首页重建：源码层接线', () => {
   test('清列表前保留当前滚动所需的页面高度，当前请求落地后释放', async () => {
     const body = await resetBody()
     expect(body).toContain('scrollTopRef.current + homeViewportHeightRef.current')
-    // 退出发生在使用原生导航栏的 profile 页；不能用那一页较矮的 windowHeight 撑首页。
+    // 身份回调可能发生在别的页面上；不能在这里重新读取当前页几何来撑首页。
     expect(body).not.toContain('Taro.getWindowInfo()')
     const shown = slice(code(await homeSource()), 'useDidShow(() => {', '\n  })')
     expect(shown).toContain('homeViewportHeightRef.current = Taro.getWindowInfo().windowHeight')

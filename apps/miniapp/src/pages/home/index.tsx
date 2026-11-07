@@ -92,7 +92,7 @@ export default function Home() {
   const [staleAfterFailure, setStaleAfterFailure] = useState(false)
   // 身份清空期间只保留滚动所需的几何高度，不保留旧商品；不能用骨架卡数量猜像素高度。
   const [identityScrollHeight, setIdentityScrollHeight] = useState<number | null>(null)
-  // 只在首页显示时记录：profile 的原生导航栏会让其 windowHeight 比自定义导航的首页更矮。
+  // 身份变化可能发生在别的页面上；首页几何只取首页自己显示时记录的窗口高度。
   const homeViewportHeightRef = useRef(0)
 
   /**
