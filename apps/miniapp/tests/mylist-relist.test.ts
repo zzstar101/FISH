@@ -40,7 +40,8 @@ describe('mylist 「再次上架 / 重新上架」链的接线', () => {
     const guard = relist.indexOf('if (epoch !== loadEpoch.current) return')
     expect(guard).toBeGreaterThan(awaitAt)
     expect(guard).toBeLessThan(relist.indexOf('requestSellPrefill('))
-    expect(guard).toBeLessThan(relist.indexOf('switchTab'))
+    // 代次守卫必须在**压栈打开出物页之前**（#629 起是 `navigateTo`）
+    expect(guard).toBeLessThan(relist.indexOf('navigateTo'))
   })
 
   test('预填的字段来自详情响应，不来自列表卡', async () => {

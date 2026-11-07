@@ -158,8 +158,8 @@ import './index.scss'
  * - **「同意」以服务端结论为准**：商品置 `RESERVED` 是接受那一步的服务端行为，本地不假改；
  *   契约冻结的重试口径说 409 `LISTING_NOT_ACTIVE` 表示「商品已不是 ACTIVE」（并发买家赢了，
  *   或上一次其实已经成功），所以 409 一律**重拉列表**而不是直译成「同意失败」。
- * - **编辑入口**：出物是 Tab 页，不能带 query 跳转 —— 走 `features/listing/edit-target.ts`
- *   的一次性交接 + `switchTab`。
+ * - **编辑入口**：交接走 `features/listing/edit-target.ts` 的一次性模块级变量，
+ *   再用 `navigateTo` 把出物页压到本页之上（#629 之后出物页是二级页，返回即回本页）。
  * - **下拉刷新用微信原生**（`index.config.ts` + `usePullDownRefresh`，先例 `pages/orders-buy`）：
  *   稿里那套 pointer 事件的假 refresher 是小程序外的演示外壳，不实现。
  *
@@ -600,7 +600,9 @@ export default function MyList() {
   }
 
   /**
-   * 编辑：把 id 交给出物页并切到那个 Tab —— Tab 页不能带 query（见 `edit-target` 说明）。
+   * 编辑：把 id 交给出物页并压栈进去（交接走模块级变量，见 `edit-target` 说明）。
+   *
+   * #629 之后出物页是**二级页**：`navigateTo` 压栈，出物页的返回钮 / 左滑回本页。
    *
    * **只给「在售」/「已下架」/「不过审」三段用**（调用处就是那个渲染条件）：
    * 「待确认」按稿 ⑥ 不给编辑入口（等卖家点头前先别改，那一段的说明由卡片上的
@@ -614,7 +616,7 @@ export default function MyList() {
    */
   const edit = (row: Row) => {
     requestSellEdit(row.listing.id)
-    void Taro.switchTab({ url: '/pages/sell/index' })
+    void Taro.navigateTo({ url: '/pages/sell/index' })
   }
 
   /**
@@ -637,7 +639,7 @@ export default function MyList() {
    * **这一次请求也按代次收口**（与商品列表 / 待确认索引同一把尺子，见 `loadEpoch`）：
    * 交接是模块级变量、不带账号标记，出物页的渲染期清场救不了它 —— `useDidShow` 在清场
    * 之后才 `takeSellHandoff()`。所以详情在飞期间换了号，A 的文案就不能再灌进 B 的表单，
-   * 连 `switchTab` 也一并省掉（那时候用户已经不在等这一下了）。
+   * 连 `navigateTo` 也一并省掉（那时候用户已经不在等这一下了）。
    */
   const relist = (row: Row) => {
     if (relistBusy) return
@@ -661,7 +663,7 @@ export default function MyList() {
           negotiable: detail.negotiable,
           free: detail.free,
         })
-        void Taro.switchTab({ url: '/pages/sell/index' })
+        void Taro.navigateTo({ url: '/pages/sell/index' })
       } catch (error) {
         toast(errorText(error, '打开失败，请重试'))
       } finally {
@@ -847,7 +849,7 @@ export default function MyList() {
   }
 
   const goPublish = () => {
-    void Taro.switchTab({ url: '/pages/sell/index' })
+    void Taro.navigateTo({ url: '/pages/sell/index' })
   }
 
   /**
