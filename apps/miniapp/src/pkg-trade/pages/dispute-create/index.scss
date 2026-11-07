@@ -256,12 +256,8 @@
 .dsc__submit {
   @include btn-brand;
 
-  display: flex;
-  align-items: center;
-  justify-content: center;
   margin-top: 8px;
   font-size: var(--fs-body);
-  font-weight: 600;
   color: var(--surface);
   @include pressable;
 
