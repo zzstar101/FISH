@@ -583,8 +583,8 @@ export default function Verify() {
                   />
                 </View>
 
-                {/* 错误行占固定高度（`.verify__errslot` 的 min-height）：出错只填内容，
-                这一块的版式高度不变，下面的重发行与主 CTA 不会跟着上下跳 */}
+                {/* 错误行紧随 6 格下方，按内容自然撑高（Owner 2026-11-07 拍板：不留常驻空白槽）。
+                单行错误约 67px、长文案会换行 —— 固定槽对两行错误本来就兜不住，索性把空白还回去 */}
                 <View className="verify__errslot">
                   {codeError ? (
                     <View className="verify__err">
