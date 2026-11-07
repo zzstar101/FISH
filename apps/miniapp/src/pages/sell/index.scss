@@ -18,7 +18,7 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  /* 本页不渲染底栏（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），底部只需让出安全区 */
+  /* 本页是二级页（#629：不在 tabBar.list 里），框架不渲染自定义底栏，底部只需让出安全区 */
   padding-bottom: calc(48px + env(safe-area-inset-bottom));
 }
 
@@ -304,8 +304,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 60px;
-  padding: 0 22px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);
@@ -412,8 +412,8 @@
 }
 
 .sell__chip {
-  height: 68px;
-  padding: 0 30px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   display: flex;
   align-items: center;
   border-radius: var(--r-pill);
@@ -637,8 +637,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
-  border-radius: 48px;
+  /* border-box：结果卡里这枚钮宽度由内容决定（#632 起是 `width: auto`），保留 border-box 让
+     内边距算在内容宽里，按钮间距不随内边距翻倍 */
+  box-sizing: border-box;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
   color: var(--fg);
@@ -664,7 +668,7 @@
 }
 
 /**
- * 本页**不渲染底栏**（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），所以候选卡
+ * 本页是二级页（#629：不在 `tabBar.list` 里），框架**不会**渲染自定义底栏，所以候选卡
  * 直接贴底、只让出安全区即可。原先写成 `calc(176px + 20px)` 是为了把卡片抬到底栏之上，
  * 那个底栏在本页已经不存在了 —— 留着会让卡片悬在屏幕下半部、下方一片空。
  */
@@ -848,9 +852,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 80px;
-  padding: 0 32px;
-  border-radius: 40px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
+  border-radius: var(--r-pill);
   color: var(--muted-2);
   font-size: 26px;
   font-weight: 600;
@@ -864,9 +868,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
-  padding: 0 44px;
-  border-radius: 44px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-body);
@@ -879,9 +883,20 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 22px;
-  margin-top: 48px;
-  padding: 48px 32px;
+  gap: 18px;
+  /*
+   * #632：结果卡原来撑满整页，宽窗口下更没有上限。
+   * 宽度收到 600rpx 并居中；`600px` 会被 pxtransform 编译成 `600rpx`（= 窗口宽的 80%），
+   * 在 PC 微信 / iPad 上仍然随窗口放大，所以再补一条大写 `600PX` —— 大写单位逃过
+   * pxtransform，落到 wxss 就是物理 600px，宽窗口到此为止。
+   * `box-sizing: border-box` 让这 600 是含内边距的实宽（本仓没有全局 border-box）。
+   */
+  width: 600px;
+  /* biome-ignore format: 大写 PX 必须原样保留（Biome 的格式化会把它改回小写 px，等于取消上限） */
+  max-width: 600PX;
+  box-sizing: border-box;
+  margin: 32px auto 0;
+  padding: 32px 28px;
   background: var(--surface);
   border: 2px solid var(--border);
   border-radius: var(--r-card);
@@ -890,8 +905,8 @@
 }
 
 .sell__result-badge {
-  width: 112px;
-  height: 112px;
+  width: 96px;
+  height: 96px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -900,8 +915,8 @@
 }
 
 .sell__result-ic {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
 }
 
 .sell__result-title {
@@ -916,9 +931,38 @@
   color: var(--muted-2);
 }
 
-.sell__result .sell__submit,
-.sell__result .sell__btn-line {
+/*
+ * #632：主钮仍占满卡宽，保住主次层级；次钮退到内容宽 —— 父级已是 `align-items: center`，
+ * 不再要 `width: 100%` 那种双 CTA 顶满整行的观感。
+ */
+.sell__result .sell__submit {
   width: 100%;
+  /*
+   * #632 宽窗口兜底：卡宽在 W>750px 被 `600PX` 钉死在 600 物理 px，而卡内字号/内边距仍是
+   * rpx（随窗口等比放大，属 #628 的地盘），于是窄卡 + 大字号会在 W≈1100px 以上把主钮文案
+   * 顶出卡片。基类 `.sell__submit` 带 `white-space: nowrap`，文案不缩也不换行；这里允许换行，
+   * 越界的部分改为撑高按钮，不再画出卡片之外。手机宽度不受影响（390pt 下可用 239 > 文案 140）。
+   */
+  white-space: normal;
+}
+
+/*
+ * 结果卡是**列向** flex：`.sell__btn-line` 自带的 `flex: 1` 会让 flex-basis 变成 0，
+ * 主轴上直接盖掉它的 `height: var(--btn-h-lg)`，于是这枚次钮只剩一行文字高 —— 正是
+ * 「同一张卡里主钮很高、次钮细成一条」的成因。结果卡里要的是固定档位高度，故取消伸缩。
+ */
+.sell__result .sell__btn-line {
+  flex: none;
+  width: auto;
+  /*
+   * #632 宽窗口兜底（与主钮同理，但方向是纵向）：卡宽被 `600PX` 钉死后，这枚次钮的 `width: auto`
+   * 是 shrink-to-fit —— 窗口宽到 ≈1140px 起可用宽小于文案最大宽，9 字那枚开始折成 2 行
+   * （此时仍在 96rpx 下限内，高度不变），≈1670px 起折成 3 行才超出下限。基类是固定 `height`，
+   * 折行后文字会越过胶囊下沿。这里把「固定高」换成「至少这么高」（同一个 `--btn-h-lg` 档位，
+   * 不新增规格），折行时按钮自己长高；手机端高度与改前完全一致。
+   */
+  height: auto;
+  min-height: var(--btn-h-lg);
 }
 
 /* ---- 提交中遮罩：飞行途中禁止交互（避免「所见」与「已提交」不一致） ---- */

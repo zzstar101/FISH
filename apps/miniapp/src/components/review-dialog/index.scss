@@ -61,8 +61,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 76px;
-  border-radius: 20px;
+  height: var(--btn-h-sm);
+  border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
   font-size: var(--fs-sm);
@@ -207,8 +207,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 92px;
-  border-radius: 46px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   font-size: 29px;
   font-weight: 600;
 }

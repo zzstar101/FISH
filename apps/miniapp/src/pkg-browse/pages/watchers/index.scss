@@ -237,9 +237,9 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 60px;
-  padding: 0 24px;
-  border-radius: 30px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  border-radius: var(--r-pill);
   background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-xs);
@@ -333,7 +333,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 88px;
+  min-height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   border-radius: var(--r-pill);
   background: var(--brand);
   color: var(--surface);
@@ -378,8 +379,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 88px;
-  padding: 0 32px;
+  min-height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   margin-top: 20px;
   border-radius: var(--r-pill);
   background: var(--brand);

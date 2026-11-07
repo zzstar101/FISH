@@ -219,8 +219,8 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  height: 96px;
-  border-radius: 999px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--brand);
   color: #fff;
   font-size: 32px;

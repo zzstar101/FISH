@@ -4,11 +4,12 @@
  * 举报用户（稿 `小程序1版举报用户.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
  * 与 `pages/report-listing` 同一套版式（ NavBar glass 吸顶 + 渐变页头 + 表单卡 +
- * 等宽胶囊 + 键值行），差异只在对象卡：用户是**圆形头像 + 昵称**，没有价格行。
+ * 按内容取宽的胶囊 + 键值行），差异只在对象卡：用户是**圆形头像 + 昵称**，没有价格行。
  * 两页 scss 刻意不共享（weapp 页面样式本就按页隔离，共用反而把两页耦死）。
  *
- * 胶囊不放图标：标签最长 7 个字（辱骂或恶意行为），图标 + 7 字会撑爆三列等宽
- * 胶囊体；纯文字 12pt 不换行刚好留出边距（Owner 2026-09-26 验收口径）。
+ * 胶囊不放图标：标签最长 7 个字（辱骂或恶意行为），图标 + 7 字会撑爆等宽列。
+ * 排版从「等宽三列」改成「按内容取宽 + 自动换行」（#630），理由同 report-listing：
+ * 等宽列装不下 §3.1 要求的 26rpx 内边距，原先靠 8rpx 贴边硬塞。
  */
 
 .rpu {
@@ -187,36 +188,48 @@
 }
 
 .rpu__obj-tag {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 19px;
   color: var(--muted);
   border: 2px dashed var(--line);
-  border-radius: 999px;
-  padding: 6px 16px;
+  border-radius: var(--r-pill);
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
-/* ── 原因胶囊：5 枚等宽（3+2），不放图标（见文件头），纯文字 24px 不换行 ── */
+/* ── 原因胶囊：不放图标（见文件头），纯文字 24px 不换行 ── */
+/*
+ * 类型胶囊：内容自适应 + 自动换行（DESIGN.md §3.1 S 档，左右内边距 26）。
+ * 原来是 `repeat(3, 1fr)` 等宽三列：卡片内宽 610rpx → 单列只有 ~193rpx，
+ * 而 7 字标签（"描述与实物不符"之类）24px 不换行 + 26 的内边距要 224rpx，
+ * 三列合计 704rpx 会顶出卡片（#630 修的正是字贴框边 / 溢出）。
+ * 改成 flex 换行后每枚按内容取宽，一行两枚。
+ */
 .rpu__pills {
   margin-top: 24px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 16px;
 }
 
 .rpu__pill {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  height: 72px;
-  border-radius: 999px;
+  height: var(--btn-h-sm);
+  border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
   font-size: 24px;
   font-weight: 600;
   color: var(--muted-2);
   white-space: nowrap;
-  padding: 0 8px;
+  padding: 0 var(--btn-px-sm);
   transition: background 0.16s, border-color 0.16s, color 0.16s;
 
   &:active {
@@ -310,8 +323,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
-  border-radius: 999px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
   font-size: var(--fs-title);
@@ -491,10 +505,15 @@
   font-weight: 600;
   color: var(--brand-deep);
   background: var(--accent-weak);
-  border-radius: 999px;
-  padding: 4px 16px;
+  border-radius: var(--r-pill);
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
+/* 编号 + 复制钮：`align-items: center` 让编号文字与 S 档复制钮（68）垂直居中；
+   外层 `.rpu__kv` 仍保持 baseline —— 同组的「补充说明」是多行文本，换行时标签要贴
+   首行基线，改成 center 反而会飘。于是这一行因为钮是 68 而比相邻纯文本行略高，
+   由本行的居中承担「同行其它元素也居中」，视觉上标签/编号/钮三者仍是一条中线。 */
 .rpu__kvid {
   flex: 1 1 auto;
   min-width: 0;
@@ -507,9 +526,9 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  height: 48px;
-  padding: 0 18px;
-  border-radius: 999px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  border-radius: var(--r-pill);
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);
   color: var(--brand-deep);
@@ -533,8 +552,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
-  border-radius: 999px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
   font-size: var(--fs-title);
@@ -550,8 +570,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 84px;
-  border-radius: 999px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
   color: var(--fg);

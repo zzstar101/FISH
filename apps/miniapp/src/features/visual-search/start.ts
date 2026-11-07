@@ -1,7 +1,7 @@
 /**
- * 「上传查询图 → 跳识图结果页」这一段。三个入口共用：
- * 识图入口页（`pages/scan-vision`，自己开相机拍照并裁好）、搜索页顶栏的识图按钮、
- * 结果页的「换图」。抽出来的理由与 `features/upload/api.ts` 同源 —— 这条链有几个必须
+ * 「上传查询图 → 跳识图结果页」这一段。两个入口共用：
+ * 扫码页的「拍图搜」tab（`pkg-vision/pages/scan`，自己开相机拍照 / 直点相册与聊天记录，整图上传）
+ * 与结果页的「换图」。抽出来的理由与 `features/upload/api.ts` 同源 —— 这条链有几个必须
  * 一致的细节，抄第二份迟早漂移：
  *
  * 1. `showLoading` / `hideLoading` 与 `showToast` 共用同一层浮层，**必须先收 loading 再提示**
@@ -16,7 +16,7 @@ import Taro from '@tarojs/taro'
 import type { PickedPhoto } from '@/features/upload/api'
 import { pickPhotoFromSource } from '@/features/upload/api'
 import { uploadVisualQueryImage, visualSearchErrorMessage } from './api'
-import { bindVisualShot } from './handoff'
+import { bindVisualShot, stashVisualShot } from './handoff'
 import { visionResultPageUrl } from './link'
 
 /** 一次识图发起的结局：调用方据此决定要不要复位「在途」状态。 */
@@ -47,7 +47,7 @@ export type SubmitVisualQueryOptions = {
 /**
  * 上传一张**已经拿到的**图，然后跳结果页。
  *
- * 识图入口页的相机快门与两个原生来源都走它：取图方式各不相同（相机拍 + 裁剪 / 相册 /
+ * 识图入口页的相机快门与两个原生来源都走它：取图方式各不相同（相机拍 / 相册 /
  * 聊天记录），但「上传 → 跳结果页」这一段必须只有一份实现。
  */
 export async function submitVisualQuery(
@@ -62,8 +62,10 @@ export async function submitVisualQuery(
     void Taro.hideLoading()
     loading = false
 
-    // 「这是哪一次搜索」只有上传成功才知道：把入口页暂存的原图/取框绑定到这个键上，
-    // 结果页据此取回自己的背景图（见 `./handoff`）
+    // 「这是哪一次搜索」只有上传成功才知道：把**这一张**图绑定到这个键上，结果页据此取回
+    // 自己的背景图（见 `./handoff`）。在这里 stash 而不是让入口各自 stash：否则没 stash 的
+    // 来源（相册 / 聊天记录 / 换图）会把上一张照片的残留改绑到新键上，背景就成了别的图（#583 审查）
+    stashVisualShot({ path: photo.path })
     bindVisualShot(objectKey)
     options.onUploaded?.(objectKey)
 
@@ -101,7 +103,7 @@ export type StartVisualSearchOptions = SubmitVisualQueryOptions & {
 /**
  * 取图（弹来源）→ 上传 → 跳结果页。
  *
- * 搜索页的识图按钮与结果页的「换图」用它 —— 这两处没有相机，只能弹来源（相册 / 聊天记录）。
+ * 结果页的「换图」用它 —— 那里没有相机，只能弹来源（相册 / 聊天记录）。
  * 识图入口页不走它（它自己开相机 + 两个直点按钮）。
  *
  * **取消是「什么都没发生」**：取图在用户选完之前不作废调用方的在途任务（见 `onPicked`），

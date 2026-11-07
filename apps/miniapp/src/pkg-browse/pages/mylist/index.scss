@@ -224,8 +224,8 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  height: 40px;
-  padding: 0 16px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   font-size: 20px;
   font-weight: 600;
@@ -434,13 +434,10 @@
   }
 }
 
-/* 动作钮：32pt 高、胶囊形（稿 `.act`）。`btn-sm` 给字号与按下反馈，
-   高度与左右内边距按稿覆盖（64px / 28px，与 mixin 的 72px / 26px 不同值，
-   不是「重复声明同一个值」的漏换算情形）。 */
+/* 动作钮：胶囊形（稿 `.act`）。高度与左右内边距一律取 `btn-sm` 的 S 档
+   （68rpx / 26rpx，见 DESIGN.md §3.1），页面里不再覆盖。 */
 .ml__act {
   @include btn-sm;
-  height: 64px;
-  padding: 0 28px;
 
   /**
    * 三按钮的「待确认」：查看会话靠左，拒绝 / 同意靠右（稿 `.act-first{margin-right:auto}`）。
@@ -503,8 +500,8 @@
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  height: 104px;
-  padding: 0 42px 0 36px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
@@ -563,9 +560,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
-  padding: 0 44px;
-  border-radius: 44px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-body);
@@ -779,8 +776,8 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  height: 92px;
-  border-radius: 46px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   font-size: 29px;
   font-weight: 600;
 }

@@ -235,8 +235,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 72px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--brand);
   color: #fff;
@@ -305,10 +305,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
-  padding: 0 48px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   margin-top: 32px;
-  border-radius: 44px;
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: #fff;
   font-size: 29px;

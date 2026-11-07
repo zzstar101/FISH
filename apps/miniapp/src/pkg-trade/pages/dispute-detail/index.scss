@@ -77,8 +77,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 44px;
-  padding: 0 16px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   border: 2px solid transparent;
   font-size: var(--fs-xs);
@@ -264,11 +264,12 @@
 /* ── 按钮 ── */
 .dsd__btn {
   flex: 1 1 auto;
-  min-height: 80px;
+  min-height: var(--btn-h-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 24px;
+  padding: 0 var(--btn-px-md);
+  border-radius: var(--r-pill);
   font-size: var(--fs-sm);
   font-weight: 600;
   @include pressable;
@@ -312,12 +313,15 @@
 }
 
 .dsd__evidence-type {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   font-size: var(--fs-2xs);
   color: var(--brand-deep);
   background: var(--accent-weak);
   border-radius: 999px;
-  padding: 2px 12px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
 .dsd__evidence-sender {

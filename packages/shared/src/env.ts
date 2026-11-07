@@ -457,7 +457,8 @@ export function loadRecommendationEmbeddingModel(
 /**
  * 埋点 / Feed 限流阈值的**可选覆盖**（#323 R6）。
  *
- * 默认值不在这里：它属于契约（`RECOMMENDATION_EVENT_RATE_LIMIT` / `RECOMMENDATION_FEED_RATE_LIMIT`，
+ * 默认值不在这里：它属于契约（`RECOMMENDATION_EVENT_RATE_LIMIT` / `RECOMMENDATION_FEED_RATE_LIMIT` /
+ * `RECOMMENDATION_FEED_IP_RATE_LIMIT`，
  * `packages/contracts/src/recommendation/observability.ts`），因为 worker、CLI 与文档都要读同一份数字。
  * 而 `packages/shared` **不能** import `@fish/contracts`（方向是 shared ← contracts，反过来成环），
  * 所以这里只回答"有没有覆盖值"：未配置 → `null`，由 API 侧 `?? 默认值` 合并。
@@ -470,6 +471,9 @@ export type RecommendationRateLimitEnv = {
   eventRefillPerSecond: number | null
   feedCapacity: number | null
   feedRefillPerSecond: number | null
+  /** 匿名 Feed 的出口 IP 桶（#643）；与身份桶不同档，单独覆盖。 */
+  feedIpCapacity: number | null
+  feedIpRefillPerSecond: number | null
 }
 
 function readPositiveNumber(
@@ -498,6 +502,11 @@ export function loadRecommendationRateLimitEnv(
     feedRefillPerSecond: readPositiveNumber(
       source,
       'RECOMMENDATION_FEED_RATE_LIMIT_REFILL_PER_SECOND',
+    ),
+    feedIpCapacity: readPositiveNumber(source, 'RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY'),
+    feedIpRefillPerSecond: readPositiveNumber(
+      source,
+      'RECOMMENDATION_FEED_IP_RATE_LIMIT_REFILL_PER_SECOND',
     ),
   }
 }
