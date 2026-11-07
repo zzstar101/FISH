@@ -185,6 +185,38 @@ export default function Home() {
   }
 
   /**
+   * 把 `scope` 的本地快照先上屏（#631）。
+   *
+   * 由 `load()` 在**发请求之前**调用，所以进页和切分类两条路径都吃得到：写侧按分类落盘
+   * （`homeFeedCache.write`），这里读的必须是同一个 scope，否则会拿「推荐」的货去顶别的
+   * 分类。没有可用快照就什么都不动，页面照旧走骨架屏 → 列表/错误态。
+   *
+   * 三件必须一起做的账：
+   *
+   * 1. **归因上下文置空**：快照没有 `requestId` / `positions`。`use-impressions` 里
+   *    `if (!requestId) return` 因此不会给这些卡发 IMPRESSION / QUICK_SKIP，进详情也没
+   *    归因 —— 它们本来就不是这次推荐会话的结果，契约不许把没有真实 requestId 的数据
+   *    算进曝光。
+   * 2. **`lastGoodRef` 跟写**：快照就是此时的屏幕事实。网络失败时 `applyLoadResult` 拿
+   *    它当 `previous`，列表原地留住（#626 的口径：同一分类的旧数据可留）。
+   * 3. **`failed` / `staleAfterFailure` 归零**：这一瞬还没有失败可言。
+   */
+  const paintSnapshot = (scope: ListingCategory | 'ALL'): void => {
+    const snapshot = homeFeedCache.read(scope)
+    if (!snapshot) return
+    // 本机隐藏名单优先：快照里可能还留着在别的页面被「不感兴趣」的卡片
+    const hidden = new Set(readHiddenListingIds())
+    const visible = snapshot.items.filter((item) => !hidden.has(item.id))
+    if (visible.length === 0) return
+    lastGoodRef.current = { items: visible, loadedFor: scope }
+    setItems(visible)
+    setLoadedFor(scope)
+    setFailed(false)
+    setStaleAfterFailure(false)
+    setFeedContext({ requestId: null, positions: new Map() })
+  }
+
+  /**
    * 拉一次列表并结转到屏幕上。
    *
    * 返回值给「用户主动点的那一次」（下拉刷新）用：`failed` = 这次真的失败了，
@@ -204,6 +236,12 @@ export default function Home() {
     // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
     // 不摘的话切分类时会先闪一下「加载失败」再变骨架屏。
     setFailed(false)
+    /*
+      发请求之前先把 `next` 自己的快照上屏（#631）：冷启动省掉一整屏骨架，切分类也立刻见货。
+      判据用 `lastGoodRef`（屏幕事实）而不是 `loadedFor` state —— `paintSnapshot` 里的
+      `setLoadedFor` 在同一次渲染内还不生效，读 state 会把同一份快照重复画一遍。
+    */
+    if (lastGoodRef.current.loadedFor !== next) paintSnapshot(next)
     // 「真实接口优先、只有演示构建才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
     const result =
@@ -263,43 +301,8 @@ export default function Home() {
     return { failed: result.failed, held }
   }
 
-  /**
-   * 进页先上屏上一次成功的快照（#631）。
-   *
-   * 三件必须一起做的账：
-   *
-   * 1. **归因上下文置空**：快照没有 `requestId` / `positions`。`use-impressions` 里
-   *    `if (!requestId) return` 因此不会给这些卡发 IMPRESSION / QUICK_SKIP，进详情也没
-   *    归因 —— 它们本来就不是这次推荐会话的结果，契约不许把没有真实 requestId 的数据
-   *    算进曝光。
-   * 2. **`lastGoodRef` 跟写**：快照就是此时的屏幕事实。网络失败时 `applyLoadResult` 拿
-   *    它当 `previous`，列表原地留住（#626 的口径：同一分类的旧数据可留）。
-   * 3. **`failed` / `staleAfterFailure` 归零**：进页这一瞬还没有失败可言。
-   *
-   * 读的是 `category`（进页时初值恒为「推荐」`ALL`），跟 `load()` 落盘用的那个 scope
-   * 一致 —— 快照按分类存，读的也必须是同一个分类，否则会拿「推荐」的货去顶别的分类。
-   *
-   * 返回是否真画上了。没有快照时返回 `false`，页面照旧走骨架屏 → 列表/错误态。
-   */
-  const paintEntrySnapshot = (): boolean => {
-    const snapshot = homeFeedCache.read(category)
-    if (!snapshot) return false
-    // 本机隐藏名单优先：快照里可能还留着在别的页面被「不感兴趣」的卡片
-    const hidden = new Set(readHiddenListingIds())
-    const visible = snapshot.items.filter((item) => !hidden.has(item.id))
-    if (visible.length === 0) return false
-    lastGoodRef.current = { items: visible, loadedFor: category }
-    setItems(visible)
-    setLoadedFor(category)
-    setFailed(false)
-    setStaleAfterFailure(false)
-    setFeedContext({ requestId: null, positions: new Map() })
-    return true
-  }
-
   useLoad(() => {
-    // 有快照先上屏（省掉一整屏骨架），网络回来由 `load()` 原地替换；没有就照旧
-    paintEntrySnapshot()
+    // `load()` 会先把 `next` 的快照上屏（#631），网络回来再原地替换；没有快照就是骨架屏
     void load('ALL')
   })
 
