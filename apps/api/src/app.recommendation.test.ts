@@ -2131,4 +2131,91 @@ describe('recommendation 限流与进程内计数 (#323 R6 PR-2)', () => {
       }
     }
   })
+
+  /**
+   * #643：匿名 Feed 的出口 IP 桶必须是**独立一档**、且真的被装进 app。
+   * 这里把 IP 档压到容量 2（会话档保持默认 60），用同一个 `peerIp` 模拟校园 NAT：
+   * 前两个请求来自两个不同会话都能过，第三个**换一个全新会话**仍 429 ——
+   * 说明挡住它的是 IP 桶而不是会话桶，NAT 下多会话共享配额的行为由此被钉住。
+   */
+  test('匿名 Feed 的出口 IP 桶独立成档（#643）：同 IP 的第三个会话被 IP 桶挡下', async () => {
+    const savedEnv = new Map<string, string | undefined>()
+    const overrides: Record<string, string> = {
+      RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY: '2',
+      RECOMMENDATION_FEED_IP_RATE_LIMIT_REFILL_PER_SECOND: '0.001',
+    }
+    for (const name of Object.keys(overrides)) savedEnv.set(name, process.env[name])
+    for (const [name, value] of Object.entries(overrides)) process.env[name] = value
+
+    try {
+      const natApp = createApp(
+        { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { peerIp: () => '203.0.113.9', trustedProxyIp: null },
+      )
+      const feed = (sessionId: string) =>
+        natApp.request('/recommendations/feed?limit=1', {
+          headers: { 'x-anonymous-session-id': sessionId },
+        })
+
+      expect((await feed(crypto.randomUUID())).status).toBe(200)
+      expect((await feed(crypto.randomUUID())).status).toBe(200)
+      const limited = await feed(crypto.randomUUID())
+      expect(limited.status).toBe(429)
+      expect(await limited.json()).toMatchObject({
+        error: { code: RECOMMENDATION_RATE_LIMITED },
+      })
+    } finally {
+      for (const [name, value] of savedEnv) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  })
+
+  test('IP 档容量配成小数时启动即失败，而不是首个匿名请求 500（#643 审查）', () => {
+    const saved = process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY
+    process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY = '2.5'
+    try {
+      expect(() =>
+        createApp(
+          { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+        ),
+      ).toThrow('令牌桶容量必须是正整数')
+    } finally {
+      if (saved === undefined) delete process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY
+      else process.env.RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY = saved
+    }
+  })
+
+  // 此用例验证容量而非吞吐性能；给真实 DB 往返留出预算，避免超时清库与在途请求竞争。
+  test('IP 档不配置时用契约默认 300（61 个不同会话仍全部 200；旧 60 会挡下第 61 个）', async () => {
+    // 固定令牌桶时钟：61 次真实 DB 请求期间不能靠补令牌掩盖旧容量 60 的回归。
+    const clock = spyOn(Date, 'now').mockReturnValue(Date.now())
+    try {
+      const natApp = createApp(
+        { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { peerIp: () => '203.0.113.10', trustedProxyIp: null },
+      )
+      for (let i = 0; i < 61; i += 1) {
+        const response = await natApp.request('/recommendations/feed?limit=1', {
+          headers: { 'x-anonymous-session-id': crypto.randomUUID() },
+        })
+        expect(response.status).toBe(200)
+      }
+    } finally {
+      clock.mockRestore()
+    }
+  }, 30_000)
 })
