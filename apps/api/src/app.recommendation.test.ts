@@ -2195,20 +2195,27 @@ describe('recommendation 限流与进程内计数 (#323 R6 PR-2)', () => {
     }
   })
 
+  // 此用例验证容量而非吞吐性能；给真实 DB 往返留出预算，避免超时清库与在途请求竞争。
   test('IP 档不配置时用契约默认 300（61 个不同会话仍全部 200；旧 60 会挡下第 61 个）', async () => {
-    const natApp = createApp(
-      { ...loadServerEnv(), DATABASE_URL: scratchUrl },
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      { peerIp: () => '203.0.113.10', trustedProxyIp: null },
-    )
-    for (let i = 0; i < 61; i += 1) {
-      const response = await natApp.request('/recommendations/feed?limit=1', {
-        headers: { 'x-anonymous-session-id': crypto.randomUUID() },
-      })
-      expect(response.status).toBe(200)
+    // 固定令牌桶时钟：61 次真实 DB 请求期间不能靠补令牌掩盖旧容量 60 的回归。
+    const clock = spyOn(Date, 'now').mockReturnValue(Date.now())
+    try {
+      const natApp = createApp(
+        { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { peerIp: () => '203.0.113.10', trustedProxyIp: null },
+      )
+      for (let i = 0; i < 61; i += 1) {
+        const response = await natApp.request('/recommendations/feed?limit=1', {
+          headers: { 'x-anonymous-session-id': crypto.randomUUID() },
+        })
+        expect(response.status).toBe(200)
+      }
+    } finally {
+      clock.mockRestore()
     }
-  })
+  }, 30_000)
 })

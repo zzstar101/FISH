@@ -118,7 +118,8 @@ async function addEvent(input: {
     // 曝光类事件有「必须带归因」的库级 CHECK，构造一行合法的最小归因。
     requestId: eventType === 'IMPRESSION' ? newId() : null,
     position: eventType === 'IMPRESSION' ? 0 : null,
-    occurredAt: input.occurredAt ?? new Date(),
+    // 窗口使用数据库 now()：默认夹具也取同一时钟，避免宿主机快几毫秒就变成未来事件。
+    occurredAt: input.occurredAt ?? sql`now()`,
   })
 }
 
