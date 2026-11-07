@@ -482,7 +482,7 @@
   box-sizing: border-box;
 
   &.is-on {
-    background: var(--brand-deep);
+    background: var(--brand);
     border-color: var(--brand-deep);
 
     .sell__sw-knob {
@@ -781,7 +781,7 @@
   height: 36px;
   padding: 0 12px;
   border-radius: 10px;
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: 20px;
   font-weight: 600;
@@ -843,7 +843,7 @@
   /* 当前条拉长成小胶囊，一眼看出在第几条 */
   &.is-on {
     width: 32px;
-    background: var(--brand-deep);
+    background: var(--brand);
   }
 }
 
@@ -870,7 +870,7 @@
   height: var(--btn-h-lg);
   padding: 0 var(--btn-px-lg);
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-body);
   font-weight: 600;
@@ -891,6 +891,7 @@
    * `box-sizing: border-box` 让这 600 是含内边距的实宽（本仓没有全局 border-box）。
    */
   width: 600px;
+  /* biome-ignore format: 大写 PX 必须原样保留（Biome 的格式化会把它改回小写 px，等于取消上限） */
   max-width: 600PX;
   box-sizing: border-box;
   margin: 32px auto 0;
