@@ -24,7 +24,7 @@ const BROKEN_JSON = '{ "broken": '
 /**
  * 仓库真实 `biome.json` 的 `files.includes`。`scripts/lint.ts` 把「这个文件适不适用」交给
  * biome 判断，所以这串排除一旦命中**已跟踪**文件，该文件就被静默跳过 —— 用例直接读真配置，
- * 保证以后往这里加排除也会被测试拦住。
+ * 防止 copy 2.ts、.robobun/local.ts、project.private.config.json 这三类命名排除回流。
  */
 const REPO_INCLUDES: string[] = (() => {
   const parsed = JSON.parse(readFileSync(join(import.meta.dir, '..', 'biome.json'), 'utf-8')) as {
@@ -251,6 +251,28 @@ describe('runLint', () => {
 
     expect(result.output).toContain('bad.ts')
     expect(result.exitCode).not.toBe(0)
+  })
+
+  test('format 不碰本地 robobun 产物，但强制跟踪后 lint 仍检查', () => {
+    const config = JSON.stringify({
+      vcs: { enabled: true, clientKind: 'git', useIgnoreFile: true },
+      files: { includes: REPO_INCLUDES },
+    })
+    const cwd = makeRepo(
+      { '.gitignore': readFileSync(join(import.meta.dir, '..', '.gitignore'), 'utf-8') },
+      config,
+    )
+    write(cwd, { '.robobun/evidence/bad.json': BROKEN_JSON })
+    const result = Bun.spawnSync(
+      [join(import.meta.dir, '..', 'node_modules', '.bin', 'biome'), 'format', '--write', '.'],
+      { cwd, stdout: 'pipe', stderr: 'pipe' },
+    )
+    expect(result.exitCode).toBe(0)
+    expect(readFileSync(join(cwd, '.robobun/evidence/bad.json'), 'utf-8')).toBe(BROKEN_JSON)
+    git(cwd, ['add', '-f', '.robobun/evidence/bad.json'])
+    const lint = runLint({ cwd })
+    expect(lint.output).toContain('.robobun/evidence/bad.json')
+    expect(lint.exitCode).not.toBe(0)
   })
 
   test('同名垃圾未跟踪时不影响，git add 之后立刻纳入', () => {

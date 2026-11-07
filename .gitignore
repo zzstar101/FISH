@@ -17,6 +17,7 @@ apps/api/src/modules/auth/.test-outbox-*/
 
 # 本机 agent 工具的本地目录（不属于仓库内容）
 .workbuddy/
+.robobun/
 .zcodeignore
 # 本机 agent 会话产物：/decompress 展开的 epic JSON、grill 评审会话目录、审查草稿笔记
 # （`git add -A` 会顺手带进仓库，故与 `.workbuddy/` 同组忽略）
