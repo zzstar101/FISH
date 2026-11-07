@@ -7,11 +7,13 @@ import {
   VISUAL_SOLD_AVG_MIN_SAMPLES,
   type VisualInterpretation,
   type VisualSearchErrorCode,
+  type VisualSubjectBox,
   visualQueryImageKey,
 } from '@fish/contracts/visual/schema'
 import { VISUAL_EMBEDDING_DIMENSIONS } from '@fish/db/schema/visual-embeddings'
 import type { InsertVisualQueryImageInput } from '@fish/db/visual-query-store'
 import type { ListingCardSource } from '../listings/card'
+import { encodePng } from './crop'
 import { VISUAL_RECALL_LIMIT, VISUAL_RESULT_LIMIT } from './ranking'
 import {
   createVisualSearchService,
@@ -132,6 +134,8 @@ type HarnessState = {
   embedImage: () => Promise<number[]>
   embedText: (text: string) => Promise<number[]>
   interpretation: VisualInterpretation | null
+  /** 假解析器给出的主体框（#584）。 */
+  subjectBox: VisualSubjectBox | null
   /** `soldPriceStats` 的假返回值；`calls.soldStatsCategories` 记录它是否真的被问到。 */
   soldStats: VisualSoldPriceStats
 }
@@ -145,7 +149,11 @@ type Harness = {
     marked: string[]
     recalls: Array<{ vector: number[]; limit: number; excludeSellerId?: string | null }>
     parsed: number
+    /** 每次解析收到的图（#584：应是工作图而不是原图）。 */
+    parsedImages: Array<{ image: Uint8Array; mime: string }>
     embeddedImages: number
+    /** 每次图片向量化收到的图（#584：有框时应是主体裁剪）。 */
+    embeddedImageInputs: Array<{ image: Uint8Array; mime: string }>
     embeddedTexts: string[]
     soldStatsCategories: string[]
     /** 每次 `soldPriceStats` 收到的 `excludeSellerId`：证明服务端真的按请求者排除本人成交商品。 */
@@ -165,6 +173,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
     embedImage: async () => vectorOf(1),
     embedText: async () => textVector(),
     interpretation: null,
+    subjectBox: null,
     soldStats: { soldAvgPriceCents: null, soldSampleCount: 0 },
     ...overrides,
   }
@@ -175,7 +184,9 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
     marked: [],
     recalls: [],
     parsed: 0,
+    parsedImages: [],
     embeddedImages: 0,
+    embeddedImageInputs: [],
     embeddedTexts: [],
     soldStatsCategories: [],
     soldStatsExcludeSellerIds: [],
@@ -196,8 +207,9 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
   const provider: VisualEmbeddingProvider = {
     model: MODEL,
     dimensions: VISUAL_EMBEDDING_DIMENSIONS,
-    async embedImage() {
+    async embedImage(image, mime) {
       calls.embeddedImages += 1
+      calls.embeddedImageInputs.push({ image, mime })
       return state.embedImage()
     },
     async embedText(text) {
@@ -265,9 +277,11 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
     storage,
     provider,
     parser: {
-      async parse() {
+      enabled: true,
+      async parse(image, mime) {
         calls.parsed += 1
-        return state.interpretation
+        calls.parsedImages.push({ image, mime })
+        return { interpretation: state.interpretation, subjectBox: state.subjectBox }
       },
     },
     rateLimiter: {
@@ -600,6 +614,79 @@ describe('search 的召回与合并', () => {
       sameCategory.title,
       otherCategory.title,
     ])
+  })
+})
+
+/** 真能解码的 200×100 RGB PNG：左半红、右半蓝（`SMALL_PNG` 只有文件头，解不出像素）。 */
+function realPng(): Uint8Array {
+  const width = 200
+  const height = 100
+  const pixels = new Uint8Array(width * height * 3)
+  for (let index = 0; index < width * height; index += 1) {
+    const isRight = index % width >= width / 2
+    pixels.set(isRight ? [0, 0, 255] : [255, 0, 0], index * 3)
+  }
+  return encodePng({ width, height, channels: 3, pixels })
+}
+
+describe('search 的主体框（#584）', () => {
+  test('有框：解析看的是摆正缩小后的 JPEG 工作图，向量化的是外扩后的主体裁剪，响应带回同一个框', async () => {
+    const image = realPng()
+    const box = { x: 0.5, y: 0, width: 0.5, height: 1 }
+    const { service, calls } = createHarness({
+      bytes: image,
+      statSize: image.length,
+      subjectBox: box,
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.subjectBox).toEqual(box)
+    const parsedInput = first(calls.parsedImages)
+    expect(parsedInput.mime).toBe('image/jpeg')
+    expect((await new Bun.Image(parsedInput.image).metadata()).format).toBe('jpeg')
+
+    const embedded = first(calls.embeddedImageInputs)
+    expect(embedded.mime).toBe('image/jpeg')
+    // 框的左边 0.5 再外扩框宽的 8%（0.04）⇒ 从第 92 列裁到右边界：108×100。
+    const meta = await new Bun.Image(embedded.image).metadata()
+    expect({ width: meta.width, height: meta.height }).toEqual({ width: 108, height: 100 })
+  })
+
+  test('没有框：整图向量化（原图字节与 MIME），响应的框为 null', async () => {
+    const image = realPng()
+    const { service, calls } = createHarness({ bytes: image, statSize: image.length })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.subjectBox).toBeNull()
+    expect(first(calls.embeddedImageInputs)).toEqual({ image, mime: 'image/png' })
+  })
+
+  test('框小到不值得裁：退回整图，且不把这个框回给客户端（画出来的框必须就是被搜的那块）', async () => {
+    const image = realPng()
+    const { service, calls } = createHarness({
+      bytes: image,
+      statSize: image.length,
+      subjectBox: { x: 0.1, y: 0.1, width: 0.05, height: 0.05 },
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.subjectBox).toBeNull()
+    expect(first(calls.embeddedImageInputs)).toEqual({ image, mime: 'image/png' })
+  })
+
+  test('工作图解不出来：原图交给解析，即使给了框也不裁、不回框', async () => {
+    const { service, calls } = createHarness({
+      subjectBox: { x: 0, y: 0, width: 1, height: 1 },
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.subjectBox).toBeNull()
+    expect(first(calls.parsedImages)).toEqual({ image: SMALL_PNG, mime: 'image/png' })
+    expect(first(calls.embeddedImageInputs)).toEqual({ image: SMALL_PNG, mime: 'image/png' })
   })
 })
 

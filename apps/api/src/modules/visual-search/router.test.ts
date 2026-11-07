@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import {
   MAX_VISUAL_QUERY_IMAGE_BYTES,
+  VISUAL_SEARCH_CAPABILITIES_HEADER,
   type VisualQueryUploadResponse,
   VisualQueryUploadResponseSchema,
+  VisualSearchLegacyResponseSchema,
   type VisualSearchResponse,
   VisualSearchResponseSchema,
 } from '@fish/contracts/visual/schema'
@@ -32,6 +34,7 @@ const uploadResponse: VisualQueryUploadResponse = {
 const searchResponse: VisualSearchResponse = {
   queryId: '44444444-4444-4444-8444-444444444444',
   interpretation: null,
+  subjectBox: null,
   strategyVersion: 'visual-search-v1',
   embeddingModel: 'stub-visual-embedding',
   items: [],
@@ -159,6 +162,44 @@ describe('POST /visual-search', () => {
 
     expect(res.status).toBe(200)
     expect(VisualSearchResponseSchema.safeParse(await res.json()).success).toBe(true)
+  })
+
+  describe('主体框的能力协商（#638 分批发布）', () => {
+    const box = { x: 0.25, y: 0.1, width: 0.5, height: 0.8 }
+    const withBox = fakeService({ search: async () => ({ ...searchResponse, subjectBox: box }) })
+
+    test('旧客户端（没声明能力）：响应里没有 subjectBox 键，且通过旧的 strict 响应 schema', async () => {
+      const app = buildApp({ service: withBox })
+      const res = await app.request('/visual-search', json(validSearchBody))
+
+      expect(res.status).toBe(200)
+      const body: unknown = await res.json()
+      expect(VisualSearchLegacyResponseSchema.safeParse(body).success).toBe(true)
+      expect(body).not.toHaveProperty('subjectBox')
+    })
+
+    test('新客户端（声明 subject-box）：照常拿到框；没检测到时是 null', async () => {
+      const headers = { [VISUAL_SEARCH_CAPABILITIES_HEADER]: 'subject-box' }
+      const hit = await buildApp({ service: withBox }).request(
+        '/visual-search',
+        json(validSearchBody, headers),
+      )
+      expect(((await hit.json()) as VisualSearchResponse).subjectBox).toEqual(box)
+
+      const miss = await buildApp().request('/visual-search', json(validSearchBody, headers))
+      expect(((await miss.json()) as VisualSearchResponse).subjectBox).toBeNull()
+    })
+
+    test('能力头不影响请求体校验：旧请求体照样是 { objectKey }', async () => {
+      const res = await buildApp().request(
+        '/visual-search',
+        json(
+          { ...validSearchBody, extra: true },
+          { [VISUAL_SEARCH_CAPABILITIES_HEADER]: 'subject-box' },
+        ),
+      )
+      expect(res.status).toBe(422)
+    })
   })
 
   test('sort 缺省可解析（老客户端只发 objectKey），且不凭空造出一个 sort', async () => {
