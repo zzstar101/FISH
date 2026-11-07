@@ -115,7 +115,7 @@ export async function pickPhotos(limit: number): Promise<PickResult> {
 /**
  * 按来源取一张图（**不弹来源弹窗**）：相册走 `chooseMedia`、聊天记录走 `chooseMessageFile`。
  *
- * 识图入口页把这两个来源做成两个直点的按钮（相机由页面自己开，见 `pages/scan-vision`），
+ * 识图入口页把这两个来源做成两个直点的按钮（相机由页面自己开，见 `pkg-vision/pages/scan`），
  * 所以取图腿按来源单独暴露；`pickPhotoFromSource` 只是「弹一次两项弹窗再调它」的包装。
  *
  * **取消**返回空结果、不报错：取消是正常路径。权限被拒与平台失败抛出可展示的错误，
@@ -154,7 +154,7 @@ export async function pickPhotoOfSource(source: PhotoSource): Promise<PickResult
 
 /**
  * 单张取图：先弹**来源弹窗**（从相册选择 / 从聊天会话选择），再调对应的微信原生取图 API。
- * 搜索页的识图按钮与结果页的「换图」用它 —— 这两处没有相机，取图只可能来自这两个来源。
+ * 结果页的「换图」用它 —— 那里没有相机，取图只可能来自这两个来源。
  *
  * **拍摄不在这里**（Owner 2026-09-29）：识图入口页自己开着相机、自己出快门，
  * 原生面板里再放一个「拍摄」就是同一个能力两条路。

@@ -76,12 +76,7 @@ export default defineAppConfig({
     },
     {
       root: 'pkg-vision',
-      pages: [
-        'pages/vision-result/index',
-        'pages/scan-vision/index',
-        'pages/scan-pr/index',
-        'pages/scan/index',
-      ],
+      pages: ['pages/vision-result/index', 'pages/scan/index'],
     },
   ],
   window: {

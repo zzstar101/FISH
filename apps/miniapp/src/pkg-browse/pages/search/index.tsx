@@ -6,6 +6,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import TopBar from '@/components/top-bar'
 import { loadSearch } from '@/features/fetchers'
 import { findListingByNumber } from '@/features/listing/api'
@@ -16,7 +17,6 @@ import {
   isSearchTaskCurrent,
 } from '@/features/listing/search-task'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
-import { startVisualSearch } from '@/features/visual-search/start'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
 import {
@@ -226,22 +226,18 @@ export default function Search() {
   }
 
   /**
-   * 识图（#324）：拍 / 选一张图 → 上传查询图 → 跳识图结果页。
+   * 识图（#324 / #583）：进扫码页的「拍图搜」tab（拍 / 选图 → 整图上传 → 识图结果页都在那页）。
    *
-   * 与识图入口页（`pages/scan-vision`）共用同一条链，见 `features/visual-search/start.ts`。
-   * 本页**不动**自己的关键词状态：识图是另一条检索路径，结果渲染在独立的结果页
-   * （`pages/vision-result`），不是本页的结果列表 —— 混进本页会让「已提交的关键词」
-   * 与「这一批图搜出来的结果」对不上。
-   *
-   * 作废在途的文本搜索挂在 `onPicked`（取图成功、即将上传那一刻）：提前作废的话，
-   * 用户点开弹窗又取消就会白丢一次本来能成的搜索，而 `run()` 的迟到守卫会跳过
-   * `setLoading(false)` —— 本页在 `loading` 期间不渲染任何占位，结果是一片空白。
+   * 本页**不动**自己的关键词状态与在途搜索：识图是另一条检索路径，结果渲染在独立的结果页
+   * （`pages/vision-result`），用户从扫码页返回时本页的搜索照常可用。
    */
   const visionSearch = async () => {
     if (visionBusy) return
     setVisionBusy(true)
     try {
-      await startVisualSearch({ onPicked: () => invalidateSearchTasks(taskLog) })
+      await Taro.navigateTo({ url: scanPageUrl('photo') })
+    } catch {
+      void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
     } finally {
       setVisionBusy(false)
     }
@@ -306,8 +302,7 @@ export default function Search() {
             {/*
               识图按钮：与首页搜索框左侧那枚相机图标同一个能力（#324），这里补在输入框右端 ——
               搜索页是「已经在搜索里」的场景，用户在这里更可能想换一种输入方式（拍/选图）。
-              点它走与识图入口页同一条链（来源弹窗 → 上传 → 结果页），见
-              `features/visual-search/start.ts`。上传在途时按钮压暗防连点。
+              点它进扫码页的「拍图搜」tab（#583）。跳转在途时按钮压暗防连点。
             */}
             <View
               className={`search__vision${visionBusy ? ' is-busy' : ''}`}
