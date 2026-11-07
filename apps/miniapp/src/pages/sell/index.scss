@@ -637,7 +637,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  /* border-box：`.sell__result` 里这一钮是 width:100%，content-box 下左右内边距会把框撑出卡片 */
+  /* border-box：结果卡里这枚钮宽度由内容决定（#632 起是 `width: auto`），保留 border-box 让
+     内边距算在内容宽里，按钮间距不随内边距翻倍 */
   box-sizing: border-box;
   height: var(--btn-h-lg);
   padding: 0 var(--btn-px-lg);
@@ -936,6 +937,13 @@
  */
 .sell__result .sell__submit {
   width: 100%;
+  /*
+   * #632 宽窗口兜底：卡宽在 W>750px 被 `600PX` 钉死在 600 物理 px，而卡内字号/内边距仍是
+   * rpx（随窗口等比放大，属 #628 的地盘），于是窄卡 + 大字号会在 W≈1100px 以上把主钮文案
+   * 顶出卡片。基类 `.sell__submit` 带 `white-space: nowrap`，文案不缩也不换行；这里允许换行，
+   * 越界的部分改为撑高按钮，不再画出卡片之外。手机宽度不受影响（390pt 下可用 239 > 文案 140）。
+   */
+  white-space: normal;
 }
 
 /*
