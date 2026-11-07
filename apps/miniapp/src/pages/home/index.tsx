@@ -92,6 +92,8 @@ export default function Home() {
   const [staleAfterFailure, setStaleAfterFailure] = useState(false)
   // 身份清空期间只保留滚动所需的几何高度，不保留旧商品；不能用骨架卡数量猜像素高度。
   const [identityScrollHeight, setIdentityScrollHeight] = useState<number | null>(null)
+  // 只在首页显示时记录：profile 的原生导航栏会让其 windowHeight 比自定义导航的首页更矮。
+  const homeViewportHeightRef = useRef(0)
 
   /**
    * 本机「不感兴趣」名单：进页读一次，`useDidShow` 每次回到本页再读一次。
@@ -377,7 +379,7 @@ export default function Home() {
    */
   const resetForIdentityChange = () => {
     setIdentityScrollHeight((previous) =>
-      Math.max(previous ?? 0, scrollTopRef.current + Taro.getWindowInfo().windowHeight),
+      Math.max(previous ?? 0, scrollTopRef.current + homeViewportHeightRef.current),
     )
     impressions.discardAll()
     lastGoodRef.current = { items: [], loadedFor: null }
@@ -411,6 +413,7 @@ export default function Home() {
   })
 
   useDidShow(() => {
+    homeViewportHeightRef.current = Taro.getWindowInfo().windowHeight
     // 回到这个页面时补一次冲刷：队列里攒着的事件不该等到下一个 15s 定时器（见 `recommendation/queue`）
     void flushRecommendationQueue()
     /*
