@@ -29,7 +29,9 @@ async function ruleBody(selector: string): Promise<string> {
   expect(start, `index.scss 里找不到 ${selector} 规则`).toBeGreaterThanOrEqual(0)
   const end = source.indexOf('\n}', start)
   expect(end, `${selector} 规则没有闭合`).toBeGreaterThan(start)
-  return source.slice(start, end)
+  // 先剥注释再解析：这些规则的注释里就写着 `white-space: nowrap` / `600rpx` 这类字样，
+  // 不剥的话「声明被删、注释还在」会让断言假绿。
+  return source.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '')
 }
 
 function declaration(body: string, property: string): string | undefined {
@@ -62,5 +64,15 @@ describe('出物结果卡宽窗口上限（#632）', () => {
       declaration(body, 'white-space'),
       '主钮需要 white-space: normal 兜住宽窗口下的文案溢出',
     ).toBe('normal')
+  })
+
+  test('次钮高度是下限而非固定值，折行时自己长高', async () => {
+    const body = await ruleBody('.sell__result .sell__btn-line')
+    // 基类 `.sell__btn-line` 是固定 height，卡内折行时文字会越过胶囊下沿
+    expect(declaration(body, 'height'), '次钮需要 height: auto').toBe('auto')
+    expect(
+      declaration(body, 'min-height'),
+      '次钮需要 min-height: var(--btn-h-lg) 保住档位高度',
+    ).toBe('var(--btn-h-lg)')
   })
 })
