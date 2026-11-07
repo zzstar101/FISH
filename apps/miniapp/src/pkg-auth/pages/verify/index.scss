@@ -433,7 +433,12 @@
 /* 「改邮箱」入口：点击行为与原来的「修改」一致（回到 email 阶段、清掉倒计时与码错） */
 .verify__edit {
   flex: 0 0 auto;
-  padding: 8px 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--accent-mid);
