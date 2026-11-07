@@ -124,14 +124,16 @@
   text-overflow: ellipsis;
 }
 
-/* 页头冰蓝背景：顶部渐变，底部圆角 */
+/* 页头冰蓝背景：底部圆角（2026-11-06 去渐变后背板默认透明，需要的页面自己补底色） */
 @mixin page-hero($height: 504px, $radius: 64px) {
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
   height: $height;
-  background: var(--grad-page);
+  /* 去渐变：背板底色去掉。这块原本靠渐变「渐隐到页底 #f7faff」才让 64px 圆角下缘隐形，
+     令牌压平后会成一条硬边蓝带（许愿页实测），故直接透明——尺寸占位与圆角留着，不影响布局。 */
+  background: transparent;
   border-radius: 0 0 $radius $radius;
   pointer-events: none;
 }
@@ -291,7 +293,7 @@
   white-space: nowrap;
 
   &.is-pending {
-    background: var(--brand-deep);
+    background: var(--brand);
     color: #fff;
   }
 
