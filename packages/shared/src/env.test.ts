@@ -6,6 +6,7 @@ import {
   loadEmbeddingEnv,
   loadMailTransportEnv,
   loadRecommendationEmbeddingModel,
+  loadRecommendationRateLimitEnv,
   loadServerEnv,
   loadSubscribeMessageTemplatesEnv,
   loadWechatEnv,
@@ -509,5 +510,38 @@ describe('loadSubscribeMessageTemplatesEnv（#462）', () => {
       // 非法值本身不进错误信息（与其它加载器同一口径）
       expect(message).not.toContain(bad.trim())
     }
+  })
+})
+
+describe('loadRecommendationRateLimitEnv（#643 IP 档覆盖）', () => {
+  test('未配置时全部为 null，由 API 侧回退契约默认值', () => {
+    expect(loadRecommendationRateLimitEnv({})).toEqual({
+      eventCapacity: null,
+      eventRefillPerSecond: null,
+      feedCapacity: null,
+      feedRefillPerSecond: null,
+      feedIpCapacity: null,
+      feedIpRefillPerSecond: null,
+    })
+  })
+
+  test('IP 档的容量与补充速率都从环境变量读取（覆盖契约默认 300 / 20）', () => {
+    expect(
+      loadRecommendationRateLimitEnv({
+        RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY: '2',
+        RECOMMENDATION_FEED_IP_RATE_LIMIT_REFILL_PER_SECOND: '0.001',
+      }),
+    ).toMatchObject({ feedIpCapacity: 2, feedIpRefillPerSecond: 0.001 })
+  })
+
+  test('非法值直接抛，错误只报变量名、不回显值', () => {
+    let message = ''
+    try {
+      loadRecommendationRateLimitEnv({ RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY: '0' })
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toContain('RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY')
+    expect(message).not.toContain('0')
   })
 })
