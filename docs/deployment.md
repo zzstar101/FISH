@@ -1017,79 +1017,12 @@ sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校�
 
 ### 备份（必须做，且要演练恢复）
 
-口令与 `mc` 的 alias 不写在脚本里，单独放 `/etc/fish/backup.env`（`chown root:root`、
-`chmod 600`）：
+生产备份已迁移到独立的运维仓库 `fish-ops`，**不要再使用本节旧的 cron + mc 方案**：MinIO 已停用，`mc` 对 COS 的 S3 兼容接口会报签名错误。
 
-```bash
-# /etc/fish/backup.env
-DB_PASSWORD=<数据库口令>
-# mc 不认识 §3 里 export 的那个 MC_HOST_local（那只存在于你当时的交互 shell 里），
-# cron 环境是干净的： 不给它 alias，整段脚本会因为 set -eu 直接中止，
-# 对象与配置备份会**静默缺失**。所以这里必须再声明一次。
-MC_HOST_local=http://fish-app:<应用账号口令>@127.0.0.1:9000
-```
-
-```bash
-#!/bin/sh
-# /etc/cron.daily/fish-backup
-# shebang 必须在**第一行**；必须 chmod +x（cron.daily 只执行可执行文件，
-# 权限不对就是“安静地不备份”）。
-set -eu
-. /etc/fish/backup.env
-
-STAMP=$(date +%F)
-TMP=$(mktemp -d /var/backups/fish/.tmp-XXXXXX)
-trap 'rm -rf "$TMP"' EXIT
-
-# 数据库：先写临时文件再原子改名——否则失败时会留下一个看起来正常、实际上是截断的备份
-PGPASSWORD="$DB_PASSWORD" pg_dump -h 127.0.0.1 -U fish -Fc fish > "$TMP/db-$STAMP.dump"
-mv "$TMP/db-$STAMP.dump" /var/backups/fish/db-$STAMP.dump
-
-# 对象存储：**不要 tar 运行中的数据目录**（MinIO 的 xl.meta 与数据文件在并发 PUT/DELETE 下
-# 不是一致性快照）；用 mc mirror。
-# ⚠️ 镜像到同一块盘**不构成容灾**：那块盘坏了两份一起没。目标应是挂载的第二块盘，
-#    或远端 alias（如 `mybackup:fish`）。
-mc mirror --overwrite --remove local/fish "${MINIO_BACKUP_TARGET:?请在 backup.env 里指定非本机盘的目标}"
-
-# 配置与变量：systemd 单元、MinIO 策略、证书存储都要进，否则换机器恢复时要重新推导，
-# 重新签发证书还可能撞上 CA 的速率限制。证书目录不存在时会报警告（--ignore-failed-read）
-tar czf "$TMP/config-$STAMP.tar.gz" --ignore-failed-read \
-  /srv/fish/.env /etc/fish/api-mail.env /etc/fish/backup.env /etc/default/minio /etc/minio-app-policy.json \
-  /etc/caddy/Caddyfile /var/lib/caddy/.local/share/caddy \
-  /etc/systemd/system/fish-api.service /etc/systemd/system/fish-worker.service \
-  /etc/systemd/system/minio.service
-mv "$TMP/config-$STAMP.tar.gz" /var/backups/fish/config-$STAMP.tar.gz
-
-# 只清过期的**文件**，不要误删 minio/ 镜像目录（-maxdepth 1）
-find /var/backups/fish -maxdepth 1 -type f -mtime +14 -delete
-```
-
-```bash
-sudo chmod 600 /etc/fish/backup.env
-sudo chown root:root /etc/cron.daily/fish-backup && sudo chmod +x /etc/cron.daily/fish-backup
-# 上线后手跑一次，确认三个产物都在（dump / config 包 / 对象镜像目录）
-sudo /etc/cron.daily/fish-backup && ls -la /var/backups/fish
-```
-
-恢复演练（**在另一台机器上做**，别在生产直接试；dump 文件与镜像目录要先拷过去）。
-演练机是干净的，所以下面几样都要现场重建：
-
-```bash
-# 1) 角色：dump 里对象的属主是 fish，演结机没这个角色就恢复不了
-sudo -u postgres psql -c "CREATE ROLE fish LOGIN PASSWORD '<同一口令>';"
-# 2) 建库：fish 角色默认 NOCREATEDB，建库必须用超级用户
-sudo -u postgres createdb -O fish fish_restore
-# 3) 恢复数据
-PGPASSWORD=<口令> pg_restore -h 127.0.0.1 -U fish -d fish_restore db-<日期>.dump
-
-# 4) 对象：alias 与目标桶都要现建（mc mirror 不会凭空造出桶）
-mc alias set local http://127.0.0.1:9000 <ak> <sk>
-mc mb --ignore-existing local/fish-restore
-mc mirror --overwrite /var/backups/fish/minio/fish local/fish-restore
-```
-
-演练至少要确认三件事：`pg_restore` 能跑完（不是只看到文件存在）、回灌后能匿名 GET 到对象（200）、
-以及 `config-*.tar.gz` 里的 `.env` 与证书目录确实在。
+- 方案、密钥、对象布局与操作手册：`fish-ops/docs/backup.md`
+- 备份脚本与 systemd 单元：`fish-ops/backup/`
+- 关键设计：每日 03:30 用 `pg_dump -Fc` 走本地 socket，age 客户端加密后由 coscli 上传 COS；保留 7 天日备 + 4 周周备，桶生命周期负责过期删除；脚本只写 node_exporter textfile 指标，失败经 Alertmanager → feishu-relay 告警。
+- 验收：连续 7 天成功、完成一次恢复演练（五张核心表行数一致、RTO ≤ 2 小时）、失败告警送达飞书群。
 
 ### 日志与健康
 
