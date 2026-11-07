@@ -277,6 +277,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
     storage,
     provider,
     parser: {
+      enabled: true,
       async parse(image, mime) {
         calls.parsed += 1
         calls.parsedImages.push({ image, mime })
