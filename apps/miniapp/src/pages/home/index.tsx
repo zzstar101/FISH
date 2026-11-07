@@ -17,6 +17,7 @@ import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
 import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
+import { homeFeedCache } from '@/features/home/feed-cache'
 import type { FeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { flushRecommendationQueue } from '@/features/recommendation/queue'
@@ -195,6 +196,11 @@ export default function Home() {
   ): Promise<{ failed: boolean; held: boolean }> => {
     const seq = reqSeq.current + 1
     reqSeq.current = seq
+    /*
+      身份指纹在**请求发出时**就捕获（#631）：快照要按身份隔离，而账号可能在这条请求
+      在途时被切走。写入时 `write` 会拿它跟当前身份比对，对不上就一个字都不落盘。
+    */
+    const viewerAtRequest = homeFeedCache.viewer()
     // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
     // 不摘的话切分类时会先闪一下「加载失败」再变骨架屏。
     setFailed(false)
@@ -249,10 +255,51 @@ export default function Home() {
     setFailed(applied.failed)
     setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
+    /*
+      只给**这次真的拿到结果**的那一次落盘：`held`（失败但旧数据留住了）落的是上一次的
+      数据，重写一遍没有意义，还会把 `savedAt` 刷新成「刚刚」，让一份旧列表看起来更新。
+    */
+    if (!result.failed) homeFeedCache.write(next, applied.items, viewerAtRequest)
     return { failed: result.failed, held }
   }
 
+  /**
+   * 进页先上屏上一次成功的快照（#631）。
+   *
+   * 三件必须一起做的账：
+   *
+   * 1. **归因上下文置空**：快照没有 `requestId` / `positions`。`use-impressions` 里
+   *    `if (!requestId) return` 因此不会给这些卡发 IMPRESSION / QUICK_SKIP，进详情也没
+   *    归因 —— 它们本来就不是这次推荐会话的结果，契约不许把没有真实 requestId 的数据
+   *    算进曝光。
+   * 2. **`lastGoodRef` 跟写**：快照就是此时的屏幕事实。网络失败时 `applyLoadResult` 拿
+   *    它当 `previous`，列表原地留住（#626 的口径：同一分类的旧数据可留）。
+   * 3. **`failed` / `staleAfterFailure` 归零**：进页这一瞬还没有失败可言。
+   *
+   * 读的是 `category`（进页时初值恒为「推荐」`ALL`），跟 `load()` 落盘用的那个 scope
+   * 一致 —— 快照按分类存，读的也必须是同一个分类，否则会拿「推荐」的货去顶别的分类。
+   *
+   * 返回是否真画上了。没有快照时返回 `false`，页面照旧走骨架屏 → 列表/错误态。
+   */
+  const paintEntrySnapshot = (): boolean => {
+    const snapshot = homeFeedCache.read(category)
+    if (!snapshot) return false
+    // 本机隐藏名单优先：快照里可能还留着在别的页面被「不感兴趣」的卡片
+    const hidden = new Set(readHiddenListingIds())
+    const visible = snapshot.items.filter((item) => !hidden.has(item.id))
+    if (visible.length === 0) return false
+    lastGoodRef.current = { items: visible, loadedFor: category }
+    setItems(visible)
+    setLoadedFor(category)
+    setFailed(false)
+    setStaleAfterFailure(false)
+    setFeedContext({ requestId: null, positions: new Map() })
+    return true
+  }
+
   useLoad(() => {
+    // 有快照先上屏（省掉一整屏骨架），网络回来由 `load()` 原地替换；没有就照旧
+    paintEntrySnapshot()
     void load('ALL')
   })
 
