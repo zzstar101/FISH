@@ -2131,4 +2131,48 @@ describe('recommendation 限流与进程内计数 (#323 R6 PR-2)', () => {
       }
     }
   })
+
+  /**
+   * #643：匿名 Feed 的出口 IP 桶必须是**独立一档**、且真的被装进 app。
+   * 这里把 IP 档压到容量 2（会话档保持默认 60），用同一个 `peerIp` 模拟校园 NAT：
+   * 前两个请求来自两个不同会话都能过，第三个**换一个全新会话**仍 429 ——
+   * 说明挡住它的是 IP 桶而不是会话桶，NAT 下多会话共享配额的行为由此被钉住。
+   */
+  test('匿名 Feed 的出口 IP 桶独立成档（#643）：同 IP 的第三个会话被 IP 桶挡下', async () => {
+    const savedEnv = new Map<string, string | undefined>()
+    const overrides: Record<string, string> = {
+      RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY: '2',
+      RECOMMENDATION_FEED_IP_RATE_LIMIT_REFILL_PER_SECOND: '0.001',
+    }
+    for (const name of Object.keys(overrides)) savedEnv.set(name, process.env[name])
+    for (const [name, value] of Object.entries(overrides)) process.env[name] = value
+
+    try {
+      const natApp = createApp(
+        { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { peerIp: () => '203.0.113.9', trustedProxyIp: null },
+      )
+      const feed = (sessionId: string) =>
+        natApp.request('/recommendations/feed?limit=1', {
+          headers: { 'x-anonymous-session-id': sessionId },
+        })
+
+      expect((await feed(crypto.randomUUID())).status).toBe(200)
+      expect((await feed(crypto.randomUUID())).status).toBe(200)
+      const limited = await feed(crypto.randomUUID())
+      expect(limited.status).toBe(429)
+      expect(await limited.json()).toMatchObject({
+        error: { code: RECOMMENDATION_RATE_LIMITED },
+      })
+    } finally {
+      for (const [name, value] of savedEnv) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  })
 })

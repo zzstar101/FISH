@@ -2,6 +2,7 @@ import { BLOCK_ROUTES } from '@fish/contracts/blocks/routes'
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import {
   RECOMMENDATION_EVENT_RATE_LIMIT,
+  RECOMMENDATION_FEED_IP_RATE_LIMIT,
   RECOMMENDATION_FEED_RATE_LIMIT,
   RECOMMENDATION_RATE_LIMIT_MAX_SUBJECTS,
 } from '@fish/contracts/recommendation/observability'
@@ -102,7 +103,7 @@ import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
 import { checkRecommendationEmbeddingModel } from './modules/recommendation/embedding-check'
 import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
-import { createTokenBucketLimiter } from './modules/recommendation/rate-limit'
+import { createTokenBucketLimiter, isIpRateLimitSubject } from './modules/recommendation/rate-limit'
 import { createRecommendationRecall } from './modules/recommendation/recall/service'
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
@@ -435,6 +436,13 @@ export function createApp(
   // 两份桶分开建（埋点更严、Feed 更宽），桶表上限共用一份：它防的是"内存被主体数撑爆"，
   // 与"每个主体多少额度"无关。
   const rateLimitEnv = loadRecommendationRateLimitEnv()
+  // 匿名 Feed 的 IP 桶（#643）：NAT 出口下整栋楼共享同一个 `ip:` 主体，与单个会话同规格
+  // 会让正常用户互相挤兑，所以单独一档更宽的规格（契约里有定量依据）。
+  const feedIpTier = {
+    capacity: rateLimitEnv.feedIpCapacity ?? RECOMMENDATION_FEED_IP_RATE_LIMIT.capacity,
+    refillPerSecond:
+      rateLimitEnv.feedIpRefillPerSecond ?? RECOMMENDATION_FEED_IP_RATE_LIMIT.refillPerSecond,
+  }
   const recommendationRateLimit = {
     events: createTokenBucketLimiter({
       capacity: rateLimitEnv.eventCapacity ?? RECOMMENDATION_EVENT_RATE_LIMIT.capacity,
@@ -447,6 +455,8 @@ export function createApp(
       refillPerSecond:
         rateLimitEnv.feedRefillPerSecond ?? RECOMMENDATION_FEED_RATE_LIMIT.refillPerSecond,
       maxSubjects: RECOMMENDATION_RATE_LIMIT_MAX_SUBJECTS,
+      // 只有**可归因的** `ip:` 主体用宽松档；`session:` / `user:` / `ip:unattributed` 走默认档。
+      tierFor: (subject) => (isIpRateLimitSubject(subject) ? feedIpTier : null),
     }),
   }
   const recommendationService = createRecommendationService({

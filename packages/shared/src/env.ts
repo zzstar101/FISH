@@ -470,6 +470,9 @@ export type RecommendationRateLimitEnv = {
   eventRefillPerSecond: number | null
   feedCapacity: number | null
   feedRefillPerSecond: number | null
+  /** 匿名 Feed 的出口 IP 桶（#643）；与身份桶不同档，单独覆盖。 */
+  feedIpCapacity: number | null
+  feedIpRefillPerSecond: number | null
 }
 
 function readPositiveNumber(
@@ -498,6 +501,11 @@ export function loadRecommendationRateLimitEnv(
     feedRefillPerSecond: readPositiveNumber(
       source,
       'RECOMMENDATION_FEED_RATE_LIMIT_REFILL_PER_SECOND',
+    ),
+    feedIpCapacity: readPositiveNumber(source, 'RECOMMENDATION_FEED_IP_RATE_LIMIT_CAPACITY'),
+    feedIpRefillPerSecond: readPositiveNumber(
+      source,
+      'RECOMMENDATION_FEED_IP_RATE_LIMIT_REFILL_PER_SECOND',
     ),
   }
 }

@@ -51,13 +51,34 @@ export const RECOMMENDATION_CLEANUP_INTERVAL_MS = 3_600_000
 export const RECOMMENDATION_EVENT_RATE_LIMIT = { capacity: 120, refillPerSecond: 2 } as const
 
 /**
- * Feed（`GET /recommendations/feed`）的限流：容量 60 / 1 令牌每秒。
+ * Feed（`GET /recommendations/feed`）的**身份桶**限流：容量 60 / 1 令牌每秒。
+ *
+ * 身份 = 登录用户的 `user:<id>` 或匿名会话的 `session:<id>`：一个会话/用户一份。
+ * 它回答的是"单个客户端别刷"——脚本换一个会话 UUID 就能拿到新桶，所以匿名请求还要
+ * 同时过下面的 IP 桶（#643）。
  *
  * 为什么 Feed 也要限：`requestId` 是写归因事件的前提，不限 Feed 等于给脚本一条"免费取号"通道——
- * 它不必写事件就能拿到成千上万个 requestId，再用它们污染归因表。这一档比埋点宽（1·s⁻¹ vs 2·s⁻¹），
- * 因为 Feed 是重查询（多路召回 + 排序），但它本身也不该被脚本以每秒几十次的速度打。
+ * 它不必写事件就能拿到成千上万个 requestId，再用它们污染归因表。这一档比埋点更紧
+ * （容量 60 vs 120、补充 1·s⁻¹ vs 2·s⁻¹），因为 Feed 是重查询（多路召回 + 排序），
+ * 但它本身也不该被脚本以每秒几十次的速度打。
  */
 export const RECOMMENDATION_FEED_RATE_LIMIT = { capacity: 60, refillPerSecond: 1 } as const
+
+/**
+ * Feed（`GET /recommendations/feed`）的**出口 IP 桶**限流：容量 300 / 20 令牌每秒（#643）。
+ *
+ * 为什么匿名 Feed 的 IP 桶必须比会话桶宽两个数量级：校园网/宿舍普遍是 NAT 出口，整栋楼共用
+ * 一个公网 IP。IP 桶按 60/1·s⁻¹ 限，等于让整栋楼的未登录用户共享 1 次/秒——正常刷新首页被
+ * 当成脚本刷量（#643 的 95% 429）。这里按真实需求定量：一栋楼 200 人、平均 10 秒刷一次
+ * = 20 rps，所以稳态 20·s⁻¹；300 的容量覆盖整栋楼同时冷启的首屏突发。
+ *
+ * 职责差异：**会话桶管"单个会话别刷"，IP 桶管"换会话也别无限刷"**。两个桶同时生效、原子扣减，
+ * 任一不过就 429。脚本换会话仍拿不到 20·s⁻¹ 以上的持续额度；正常 NAT 用户不再互相挤兑。
+ *
+ * `unattributed`（IP 不可归因的共享兜底桶）**不走这一档**，继续用 `RECOMMENDATION_FEED_RATE_LIMIT`：
+ * 出现它说明 `resolveClientIp` 装配有问题，该 fail-closed 而不是放宽。
+ */
+export const RECOMMENDATION_FEED_IP_RATE_LIMIT = { capacity: 300, refillPerSecond: 20 } as const
 
 /**
  * 进程内令牌桶的桶数上限（超过就按 LRU 淘汰最久未用的主体）。

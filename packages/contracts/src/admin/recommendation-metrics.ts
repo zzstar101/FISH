@@ -200,7 +200,8 @@ export const RecommendationGuardrailsSchema = z.object({
    *
    * 包含两类：**埋点写入**（`POST /recommendations/events`）与 **Feed 读取**
    * （`GET /recommendations/feed`）——两者各有独立令牌桶（埋点更严、Feed 更宽，见
-   * `RECOMMENDATION_EVENT_RATE_LIMIT` / `RECOMMENDATION_FEED_RATE_LIMIT`），任一被拒都记一次。
+   * `RECOMMENDATION_EVENT_RATE_LIMIT` / `RECOMMENDATION_FEED_RATE_LIMIT`；匿名 Feed 的
+   * 出口 IP 桶另有一档更宽的 `RECOMMENDATION_FEED_IP_RATE_LIMIT`），任一被拒都记一次。
    * 想只看埋点的话，把 `eventWriteFailureRate` 与 `eventRejectionReasons` 放一起看即可；
    * 刻意不再拆成两个字段，避免"桶多到看不清线上是否在被打"。
    */
