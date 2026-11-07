@@ -43,8 +43,6 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-browse/pages/comments/index': () => import('@/pkg-browse/pages/comments/index'),
   '/pkg-browse/pages/favorites/index': () => import('@/pkg-browse/pages/favorites/index'),
   '/pkg-vision/pages/scan/index': () => import('@/pkg-vision/pages/scan/index'),
-  '/pkg-vision/pages/scan-pr/index': () => import('@/pkg-vision/pages/scan-pr/index'),
-  '/pkg-vision/pages/scan-vision/index': () => import('@/pkg-vision/pages/scan-vision/index'),
   '/pkg-vision/pages/vision-result/index': () => import('@/pkg-vision/pages/vision-result/index'),
   '/pkg-browse/pages/following/index': () => import('@/pkg-browse/pages/following/index'),
   '/pkg-browse/pages/history/index': () => import('@/pkg-browse/pages/history/index'),
@@ -71,7 +69,6 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
 const TAB_ROUTES = [
   'pages/home/index',
   'pages/wish/index',
-  'pages/sell/index',
   'pages/chat/index',
   'pages/profile/index',
 ]
@@ -92,9 +89,15 @@ function PageMount({ path, params }: { path: string; params: Record<string, stri
         alive = false
       }
     }
-    void loader().then((mod) => {
-      if (alive) setComponent(() => mod.default)
-    })
+    void loader()
+      .then((mod) => {
+        if (alive) setComponent(() => mod.default)
+      })
+      .catch((err) => {
+        // 别静默吞掉：页面模块求值失败时（典型是模块顶层读了预览桩没有的全局量），
+        // 界面上只会停在「加载中…」，控制台必须留下线索。
+        console.error(`[preview] 页面模块加载失败: ${path}`, err)
+      })
     return () => {
       alive = false
     }

@@ -54,6 +54,7 @@
   z-index: 2;
   flex: 0 0 auto;
   padding-bottom: 24px;
+  /* 去渐变（2026-11-06 Owner 指定）：会话页与会话列表页的浅蓝页头保留（首页同样保留），其余页头去掉底色。 */
   background: var(--grad-page);
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
@@ -288,10 +289,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 56px;
-  padding: 0 22px;
+  /* DESIGN.md §3.1 S 档：卡片内小按钮统一 68 / 26，胶囊圆角（原 56 / 22 不在梯上） */
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -449,8 +451,10 @@
 }
 
 .conv__daysep-tx {
-  display: inline-block;
-  padding: 6px 20px;
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--accent-faint);
   font-size: var(--fs-2xs);
@@ -463,7 +467,10 @@
 }
 
 .conv__earlier-btn {
-  padding: 10px 28px;
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-faint);
   font-size: var(--fs-2xs);
@@ -503,7 +510,9 @@
 .conv__sys-tx {
   display: inline-block;
   max-width: 100%;
-  padding: 10px 22px;
+  min-height: var(--btn-h-label);
+  box-sizing: border-box;
+  padding: 6px var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--ink-weak);
   font-size: 20px;
@@ -821,13 +830,13 @@
   color: var(--danger-ink);
 }
 
-/* 失败重试胶囊：高 24pt，与媒体的上传失败共用 */
+/* 失败重试胶囊：DESIGN.md §3.1 S 档（68 / 26），与媒体的上传失败共用 */
 .conv__retry {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 48px;
-  padding: 0 18px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--danger-weak);
   border: 2px solid var(--danger-line);
@@ -944,7 +953,7 @@
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: var(--brand-deep);
+  background: var(--brand);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -977,18 +986,21 @@
   width: 16px;
   height: 18px;
   border: 0;
+  /* 两根竖条都画成图标墨色，中间那条缝留给圆钮自己的底色（`background` 只负责这道缝）：
+     竖条若跟着圆钮一起变成主色，最后一根就整条消失在圆钮上。 */
   border-left: 5px solid var(--surface);
-  border-right: 5px solid var(--brand-deep);
+  border-right: 5px solid var(--surface);
   border-top: 0;
   border-bottom: 0;
-  background: var(--brand-deep);
+  background: var(--brand);
   margin-left: 0;
 }
 
+/* 我方钮是白底：竖条翻成气泡蓝，缝留给白钮 */
 .conv__play.is-pause.is-mine .conv__play-glyph {
   border-left-color: var(--bubble-mine);
   border-right-color: var(--bubble-mine);
-  background: var(--bubble-mine);
+  background: var(--surface);
 }
 
 .conv__wave {
@@ -1012,7 +1024,7 @@
 
   /* 已播部分高亮 */
   &.is-on {
-    background: var(--brand-deep);
+    background: var(--brand);
   }
 
   /* 我方已播：实心白，与未播的 75%（2.14:1）一档拉开（实心白 = 2.67:1） */
@@ -1230,10 +1242,12 @@ $bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后�
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* 高度跟随 #605 的输入栏控件高（`$bar-control-px` = 68 = S 档 `--btn-h-sm`），
+     保证与输入框、语音、加号三颗钮严格同高；左右内边距取 S 档令牌。 */
   height: $bar-control-px;
-  padding: 0 30px;
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
 
   /* 未输入（禁用）态：淡底灰字（稿子 .send.is-off） */
   &.is-off {
@@ -1467,7 +1481,7 @@ $bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后�
   height: 56px;
   padding: 0 22px;
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-xs);
   font-weight: 600;

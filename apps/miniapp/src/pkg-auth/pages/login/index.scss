@@ -7,7 +7,8 @@
  *    这里按仓库要求全部映射到 `_tokens.scss` 的冰蓝令牌（主 CTA 用 `--brand-deep` 代替稿子的
  *    深薰衣草，同样是为了白字对比度）。微信按钮也**不引微信绿**：多一个第三方品牌色等于绕开
  *    DESIGN.md 的对比度校验，身份差异由「只有它这一枚 CTA」承担。
- * 2. 页头背景：稿子是四层 radial-gradient + 颗粒噪点，这里用令牌渐变 `--grad-page`。
+ * 2. 页头背景：稿子是四层 radial-gradient + 颗粒噪点，这里用一条字面单色渐变代替（原为令牌渐变
+ *    `--grad-page`；2026-11-06 全站去渐变时 Owner 拍板本页保留，见下方 `.login__bg`）。
  * 3. 玻璃卡：稿子 `rgba(255,255,255,.55)`，按 DESIGN.md §4「玻璃层必须同时给不透明兜底」
  *    改成 `rgba(255,255,255,.72)`。
  * 4. 学号 / 密码输入、分隔行、去注册入口的样式已随入口一起删除（不再有第二种登录方式）。
@@ -21,14 +22,15 @@
   background: var(--bg);
 }
 
-/* 页头渐变（稿子那四层 radial-gradient 的令牌化替身） */
+/* 页头渐变：全站去渐变后**唯一保留**的一处；取值 = 原 `--grad-page` 的算式
+   （Owner 2026-11-06 拍板本页保留），故写字面量而不引用已压平的令牌。 */
 .login__bg {
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
   height: 784px;
-  background: var(--grad-page);
+  background: linear-gradient(165deg, #dcebff 0%, #eaf2ff 46%, #f7faff 100%);
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
 }
@@ -149,9 +151,9 @@
   align-items: center;
   justify-content: center;
   gap: 12px;
-  height: 96px;
-  border-radius: 999px;
-  background: var(--brand-deep);
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
+  background: var(--brand);
   color: #fff;
   font-size: 32px;
   font-weight: 600;

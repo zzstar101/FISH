@@ -66,15 +66,15 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   'user-add': ['brand'],
   lock: ['fg'],
   mail: ['fg'],
-  key: ['fg'],
+  key: ['white'],
   shield: ['brand', 'muted', 'fg'],
   'shield-check': ['brand'],
   verified: ['brand'],
 
   /* 内容与状态 */
   bell: ['fg'],
-  camera: ['muted'],
-  image: ['muted'],
+  camera: ['muted', 'white'], // white：头像相机角标压在品牌蓝圆底上（白图才看得清）
+  image: ['muted', 'white'], // white：扫码页底部操作条压在品牌蓝底上（#637）
   tag: ['muted'],
   star: ['brand'],
   heart: ['muted', 'white'],

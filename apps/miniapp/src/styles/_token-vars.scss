@@ -22,12 +22,12 @@
 
   /* ---- 中性 ---- */
   --bg: #f7faff;
-  --ice: #eef6ff;
+  --ice: #eef4ff; // H218.8 同品牌色相（原 #eef6ff 偏青 −6.9°）
   --surface: #ffffff;
   --fg: #17233d;
   --muted: #71809c;
   --muted-2: #3e4b66;
-  --border: #dce7f5;
+  --border: #dce5f5; // H218.4 同品牌色相（原 #dce7f5 偏青 −5.1°）
   --line: #a8c5fa;
 
   /* ---- 语义色 ---- */
@@ -166,13 +166,23 @@
   --on-dark-track: rgba(255, 255, 255, 0.45);
   --hairline: rgba(255, 255, 255, 0.28); /* 深色卡内分割线 */
 
-  /* ---- 渐变 ---- */
-  --grad-brand: linear-gradient(135deg, #4285ff 0%, #19a7ff 55%, #19e6ff 100%);
-  --grad-icon: linear-gradient(145deg, #eaf1ff 0%, #e6f6ff 52%, #e8fdf7 100%);
-  --grad-page: linear-gradient(165deg, #dcebff 0%, #eaf4ff 46%, #f7faff 100%);
-  --grad-ph: linear-gradient(150deg, #eaf3ff 0%, #dcecff 58%, #cfe3ff 100%);
-  --grad-wave: linear-gradient(180deg, #dbe9ff 0%, #f0f6ff 100%);
-  --grad-ok: linear-gradient(150deg, #e0fdf7 0%, #ffffff 62%); /* B3 认证通过圆盘 */
+  /* ---- 渐变（2026-11-06 去渐变：六条全部改纯色） ----
+     令牌名不动 ⇒ 页面零改动。值取原渐变 50–58% 位置的颜色，主按钮取主色本身。
+     四条浅色的色相朝主色色相（#4285FF = 218.7°）拉正，改后落在 216.9–219.4°（偏差 ≤1.8°，肉眼无差）；
+     原值偏青（同一基准）：#e6f6ff 17.1°、#eaf4ff 7.3°、#dcecff 6.1°、#dbe9ff 2.1°。
+     原值逐行留档，回滚直接还原：
+       brand linear-gradient(135deg, #4285ff 0%, #19a7ff 55%, #19e6ff 100%)
+       icon  linear-gradient(145deg, #eaf1ff 0%, #e6f6ff 52%, #e8fdf7 100%)
+       page  linear-gradient(165deg, #dcebff 0%, #eaf4ff 46%, #f7faff 100%)
+       ph    linear-gradient(150deg, #eaf3ff 0%, #dcecff 58%, #cfe3ff 100%)
+       wave  linear-gradient(180deg, #dbe9ff 0%, #f0f6ff 100%)（0 处引用）
+       ok    linear-gradient(150deg, #e0fdf7 0%, #ffffff 62%)（0 处引用） */
+  --grad-brand: var(--brand);
+  --grad-icon: #e6efff;
+  --grad-page: #eaf2ff;
+  --grad-ph: #dce8ff;
+  --grad-wave: #e5efff;
+  --grad-ok: #effefb;
 
   /* ---- 阴影 ---- */
   --shadow-card: 0 2px 4px rgba(23, 35, 61, 0.05), 0 24px 56px -36px rgba(66, 133, 255, 0.45);
@@ -183,6 +193,23 @@
   --shadow-soft: 0 12px 28px -18px rgba(66, 133, 255, 0.45);
   /* 底部弹层向上投影（B4 退出确认 / C4 下架确认 / D1 润色候选卡 / D2 面板） */
   --shadow-sheet: 0 -16px 48px -20px rgba(23, 35, 61, 0.28);
+
+  /* ---- 按钮规格阶梯（DESIGN.md §3.1）：高度与左右内边距只取这四档 ----
+     L 96 整行主/次按钮、弹层双钮、底部操作栏
+     M 80 区块内主行动、输入条内按钮（与输入盒同高）
+     S 68 卡片内小按钮、次级文字按钮、可点选 chip / tab
+     label 44 纯状态标签、不可点 tag（左右内边距下限 20） */
+  --btn-h-lg: 96px;
+  --btn-h-md: 80px;
+  --btn-h-sm: 68px;
+  --btn-h-label: 44px;
+  --btn-px-lg: 40px;
+  --btn-px-md: 32px;
+  --btn-px-sm: 26px;
+  --btn-px-label: 20px;
+  /* 搜索胶囊内嵌按钮：容器 64（微信原生胶囊高）− 8，只用于这一处 */
+  --btn-h-cap: 56px;
+  --btn-px-cap: 24px;
 
   /* ---- 圆角 ---- */
   --r-pill: 999px;

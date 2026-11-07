@@ -68,8 +68,8 @@ const ROUTES = [
   // 一个请求都不发（因此**不进** WIRED）。带参数时才会打 `POST /visual-search`，
   // 那条腿要真实后端，在微信开发者工具里验（见 docs/miniapp-dev-workflow.md）。
   '/pkg-vision/pages/vision-result/index',
-  // 识图入口页（#324）：取图走原生面板、点了才上传，本脚本只加载路由、不做交互
-  '/pkg-vision/pages/scan-vision/index',
+  // 扫码页（#583，扫一扫 / 拍图搜）：取图走原生面板、点了才上传，本脚本只加载路由、不做交互
+  '/pkg-vision/pages/scan/index',
 ]
 
 /**

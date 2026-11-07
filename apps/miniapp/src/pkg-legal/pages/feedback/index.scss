@@ -50,11 +50,11 @@
 /* ──────────────────────────────── 渐变页头（稿 .headblock） */
 
 .fb__head {
-  background: var(--grad-page);
+  background: transparent;
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
   padding: 32px 40px 40px;
-  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+  /* 背板底色去掉后这圈空投影只剩盒边，一并去掉 */
 }
 
 .fb__kicker {
@@ -248,21 +248,29 @@
 
 /* ──────────────────────────────── 反馈类型：6 枚胶囊排两行（3×2） */
 
+/*
+ * 类型胶囊：内容自适应 + 自动换行（DESIGN.md §3.1 S 档，左右内边距 26）。
+ * 原来是 `repeat(3, 1fr)` 等宽三列，列宽只有 ~193rpx —— 5 字标签（连图标约 159rpx）
+ * 加上 26 的内边距要 211rpx，字会顶到框边（#630 修的就是这个）。
+ * 改成 flex 换行后每枚按内容取宽，一行放几枚由可用宽度算，不再被列宽夹住。
+ */
 .fb__pills {
   margin-top: 24px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 16px;
 }
 
 .fb__pill {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 72px;
-  padding: 0 8px;
-  border-radius: 999px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
   font-size: var(--fs-sm);
@@ -461,8 +469,8 @@
   justify-content: center;
   gap: 14px;
   width: 100%;
-  height: 96px;
-  border-radius: 999px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
   font-size: var(--fs-title);
@@ -619,8 +627,8 @@
   justify-content: center;
   gap: 12px;
   width: 100%;
-  height: 88px;
-  border-radius: 999px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
   font-size: var(--fs-body);

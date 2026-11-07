@@ -1,26 +1,29 @@
 /**
- * 扫码家族三段切换钮。**纯文字、不用胶囊容器**（Owner 2026-09-26 整改）：
- * 一行三等分铺满屏宽，挂在取景框下缘（竖直中线 + 半框 260px）下方 40px。
- * 激活项白色高亮（--surface），其余压灰（--on-dark）。
+ * 扫码页两段文字 tab（#583）。**纯文字、不用胶囊容器**，贴底部安全区一行居中。
+ * 位置不再按取景框几何写死（取景框已删）：由页面骨架自下而上排，tab 行是最底一行。
+ * 激活项白色加粗（--surface），其余压灰（--on-dark）；统一 text-shadow 保证亮场景可读。
  */
 
 .scantabs {
   position: absolute;
   left: 0;
   right: 0;
-  top: calc(50% + 300px);
+  bottom: calc(16px + env(safe-area-inset-bottom));
   z-index: 5;
   display: flex;
+  justify-content: center;
+  gap: 48px;
 }
 
 .scantabs__item {
-  flex: 1;
-  height: 48px;
+  height: 88px;
+  padding: 0 24px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: var(--fs-title);
   color: var(--on-dark);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
 
   &.is-active {
     color: var(--surface);

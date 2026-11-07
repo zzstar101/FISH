@@ -144,11 +144,11 @@
   @include ellipsis;
 }
 
+/* 状态胶囊：尺寸/字号全吃 `status-pill` mixin 的 label 档（44 / 20 / 胶囊 / --fs-2xs），
+   本页不再覆盖 height / padding —— 原先是 46 / 22，比 label 档各多 2，属离梯值。
+   三个语义变体（is-pending / is-done / is-cancel）在 mixin 内只改配色，不改尺寸。 */
 .meetup__st {
   @include status-pill;
-  height: 46px;
-  padding: 0 22px;
-  font-size: var(--fs-2xs);
 }
 
 /* ---- 商品摘要卡 ---- */
@@ -850,15 +850,17 @@
   background: var(--grad-ph);
 }
 
-/* 我还没评过：给写评价的入口（弹层与订单卡共用同一个组件） */
+/* 我还没评过：给写评价的入口（弹层与订单卡共用同一个组件）。
+   DESIGN.md §3.1 的 S 档（卡片内小按钮）：高 68、左右内边距 26、胶囊圆角。 */
 .meetup__rv-write {
   margin-top: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 72px;
-  border-radius: 36px;
-  background: var(--brand-deep);
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  border-radius: var(--r-pill);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -885,9 +887,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   margin: 44px 40px 0;
-  border-radius: 28px;
+  border-radius: var(--r-pill);
   border: 2px dashed var(--line);
   background: var(--ice);
   font-size: var(--fs-sm);
@@ -977,8 +980,8 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 96px;
-  border-radius: 48px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   font-size: var(--fs-title);
   font-weight: 600;
 }
@@ -993,9 +996,9 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 96px;
-  padding: 0 44px;
-  border-radius: 48px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  border-radius: var(--r-pill);
   font-size: var(--fs-title);
   font-weight: 600;
 }
@@ -1035,7 +1038,7 @@
 }
 
 .meetup__btn--pri {
-  background: var(--brand-deep);
+  background: var(--brand);
   color: #fff;
   box-shadow: var(--shadow-btn);
 

@@ -15,8 +15,10 @@ import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import TopBar from '@/components/top-bar'
 import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
+import { homeFeedCache } from '@/features/home/feed-cache'
 import type { FeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { flushRecommendationQueue } from '@/features/recommendation/queue'
@@ -24,7 +26,6 @@ import {
   type FeedTrackingContext,
   useFeedImpressions,
 } from '@/features/recommendation/use-impressions'
-import { startVisualSearch } from '@/features/visual-search/start'
 import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { useTabTransition } from '@/lib/use-tab-transition'
@@ -184,6 +185,43 @@ export default function Home() {
   }
 
   /**
+   * 把 `scope` 的本地快照先上屏（#631）。
+   *
+   * 只服务**进页**（`load('ALL')`）：切分类照旧骨架屏 —— 本单的范围就是冷启动进页，
+   * 而且分类列表先上屏一份可能已经卖掉的旧货，更容易让人误判。所以写入点也只落 `ALL`，
+   * 读的 scope 与写的严格同一个，不会拿「推荐」的货去顶别的分类。没有可用快照就什么都不
+   * 动，页面照旧走骨架屏 → 列表/错误态。
+   *
+   * 三件必须一起做的账：
+   *
+   * 1. **归因上下文置空**：快照没有 `requestId` / `positions`。`use-impressions` 里
+   *    `if (!requestId) return` 因此不会给这些卡发 IMPRESSION / QUICK_SKIP，进详情也没
+   *    归因 —— 它们本来就不是这次推荐会话的结果，契约不许把没有真实 requestId 的数据
+   *    算进曝光。
+   * 2. **`lastGoodRef` 跟写**：快照就是此时的屏幕事实。网络失败时 `applyLoadResult` 拿
+   *    它当 `previous`，列表原地留住（#626 的口径：同一分类的旧数据可留）。
+   * 3. **`failed` / `staleAfterFailure` 归零**：这一瞬还没有失败可言。
+   *
+   * 返回值 = 这次真的把快照画上去了。`load()` 用它判断「这一屏是快照顶上的」——进页失败时
+   * 页面不出错误块（旧数据被 `held` 留住），需要据此补一句旧数据提示。
+   */
+  const paintSnapshot = (scope: ListingCategory | 'ALL'): boolean => {
+    const snapshot = homeFeedCache.read(scope)
+    if (!snapshot) return false
+    // 本机隐藏名单优先：快照里可能还留着在别的页面被「不感兴趣」的卡片
+    const hidden = new Set(readHiddenListingIds())
+    const visible = snapshot.items.filter((item) => !hidden.has(item.id))
+    if (visible.length === 0) return false
+    lastGoodRef.current = { items: visible, loadedFor: scope }
+    setItems(visible)
+    setLoadedFor(scope)
+    setFailed(false)
+    setStaleAfterFailure(false)
+    setFeedContext({ requestId: null, positions: new Map() })
+    return true
+  }
+
+  /**
    * 拉一次列表并结转到屏幕上。
    *
    * 返回值给「用户主动点的那一次」（下拉刷新）用：`failed` = 这次真的失败了，
@@ -195,9 +233,23 @@ export default function Home() {
   ): Promise<{ failed: boolean; held: boolean }> => {
     const seq = reqSeq.current + 1
     reqSeq.current = seq
+    /*
+      身份指纹在**请求发出时**就捕获（#631）：快照要按身份隔离，而账号可能在这条请求
+      在途时被切走。写入时 `write` 会拿它跟当前身份比对，对不上就一个字都不落盘。
+    */
+    const viewerAtRequest = homeFeedCache.viewer()
     // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
     // 不摘的话切分类时会先闪一下「加载失败」再变骨架屏。
     setFailed(false)
+    /*
+      发请求之前先把「推荐」的快照上屏（#631）：冷启动省掉一整屏骨架。只有 `ALL` 有快照 ——
+      切分类照旧骨架屏（本单范围是进页，Owner 拍板）。
+      判据是「屏幕上现在什么都没有」（`lastGoodRef`，屏幕事实，不是 `loadedFor` state ——
+      `paintSnapshot` 里的 `setLoadedFor` 在同一次渲染内还不生效）：真进页才画；已经在别的
+      分类里、切回「推荐」时不画，否则会拿 24 条快照去顶刚拉到的 50 条，列表先缩再涨。
+    */
+    const paintedSnapshot =
+      next === 'ALL' && lastGoodRef.current.items.length === 0 ? paintSnapshot(next) : false
     // 「真实接口优先、只有演示构建才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
     const result =
@@ -249,10 +301,28 @@ export default function Home() {
     setFailed(applied.failed)
     setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
+    /*
+      这一屏是快照顶上的，而这次请求又失败了：列表被 `held` 留住了，页面**不出现**错误块，
+      屏幕上就再没有任何「这是半小时前的货」的信号（下拉刷新那条 toast 只有在用户主动刷新时
+      才会出现）。进页这次补一句，别让旧货看起来像刚刷出来的。
+      只在真进页画了快照时才弹：切分类/重试时不会走到这里，也不会重复打扰。
+    */
+    if (paintedSnapshot && result.failed) {
+      Taro.showToast({ title: '网络不太行，先看上次的', icon: 'none' })
+    }
+    /*
+      只给**这次真的拿到结果**的那一次落盘：`held`（失败但旧数据留住了）落的是上一次的
+      数据，重写一遍没有意义，还会把 `savedAt` 刷新成「刚刚」，让一份旧列表看起来更新。
+      也只落「推荐」：首页进页拉的就是它，分类列表的快照不在本单范围（见 `paintSnapshot`）。
+    */
+    if (!result.failed && next === 'ALL') {
+      homeFeedCache.write(next, applied.items, viewerAtRequest)
+    }
     return { failed: result.failed, held }
   }
 
   useLoad(() => {
+    // `load()` 会先把 `next` 的快照上屏（#631），网络回来再原地替换；没有快照就是骨架屏
     void load('ALL')
   })
 
@@ -317,20 +387,20 @@ export default function Home() {
     void Taro.navigateTo({ url: '/pkg-browse/pages/search/index' })
   }
 
-  /** 识图（相机热区）的上传在途：防连点（原生取图面板是模态的，上传腿不是），与搜索页同一个口径 */
+  /** 跳转在途：防连点压出两层扫码页 */
   const [visionBusy, setVisionBusy] = useState(false)
 
   /**
-   * 识图（#324）：相机图标走独立命中区，进入与搜索页识图按钮同一条链
-   * （`features/visual-search/start.ts`：来源弹窗 → 上传 → 跳识图结果页）。
-   *
-   * 本页没有文字搜索任务日志，所以不传 `onPicked` —— 不为对称硬造一个「作废在途任务」的回调。
+   * 识图（#324 / #583）：相机图标走独立命中区，进扫码页的「拍图搜」tab
+   * （与搜索页识图按钮同一个落点，拍 / 选图 → 整图上传 → 识图结果页都在那页）。
    */
   const visionSearch = async () => {
     if (visionBusy) return
     setVisionBusy(true)
     try {
-      await startVisualSearch()
+      await Taro.navigateTo({ url: scanPageUrl('photo') })
+    } catch {
+      void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
     } finally {
       setVisionBusy(false)
     }

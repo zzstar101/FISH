@@ -491,7 +491,7 @@ export default function ListingDetail() {
    * 「管理」ActionSheet 的在飞锁：拿的同样是**某一次点击**的令牌（`null` = 没有在途弹层）。
    *
    * 弹出层（原生 ActionSheet）的 `.then` 是跨帧回调：等待期间换号 / 卸载之后，A 的
-   * `tapIndex` 仍会去写编辑交接、`switchTab` 或重开卖家下架卡。铸任务见 `manageListing`，
+   * `tapIndex` 仍会去写编辑交接、`navigateTo` 出物页或重开卖家下架卡。铸任务见 `manageListing`，
    * 校验见 `isCurrentActionTask`。
    */
   const menuInFlightRef = useRef<number | null>(null)
@@ -1141,7 +1141,7 @@ export default function ListingDetail() {
    *
    * 令牌在**弹出之前**捕获（同 `chatWithSeller` / `buy` 的 `ActionTask` 口径，
    * 见 `./view`）：弹出层的结果是跨帧回调，等待期间换号 / 退出 / 卸载
-   * 之后，A 的 `tapIndex` 仍会去写编辑交接、`switchTab` 或给已经清场的页面重开卖家下架卡
+   * 之后，A 的 `tapIndex` 仍会去写编辑交接、`navigateTo` 出物页或给已经清场的页面重开卖家下架卡
    * —— 这三步都在服务器任何校验**之前**，商品归属校验挡不住。所以回调里先问
    * `isTaskLive`，过期就整条丢弃。
    */
@@ -1166,10 +1166,10 @@ export default function ListingDetail() {
         // 迟到的结果一律丢弃、不产生任何副作用：A → B → A 时账号名又相等，只比账号名挡不住
         if (!isTaskLive(task, menuInFlightRef.current)) return
         if (res.tapIndex === 0) {
-          // 与我的发布页同一条交接：出物页是 Tab 页不能带 query（`edit-target` 模块说明），
-          // 出物页取到交接后进编辑态并回填原商品信息
+          // 与我的发布页同一条交接（`edit-target` 模块说明）；#629 之后出物页是二级页，
+          // `navigateTo` 压栈进来，取到交接后进编辑态并回填原商品信息，返回即回本页
           requestSellEdit(id)
-          void Taro.switchTab({ url: '/pages/sell/index' })
+          void Taro.navigateTo({ url: '/pages/sell/index' })
         } else if (res.tapIndex === 1) {
           setOfflineSubmit('idle')
           setOfflineConfirmOpen(true)

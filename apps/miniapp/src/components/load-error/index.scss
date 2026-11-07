@@ -30,12 +30,12 @@
 .loaderr-btn {
   margin-top: 12px;
   min-width: 200px;
-  height: 72px;
-  padding: 0 40px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 36px;
+  border-radius: var(--r-pill);
   border: 2px solid var(--accent-faint);
   background: var(--accent-weak);
   color: var(--brand);

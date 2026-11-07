@@ -26,11 +26,11 @@
 /* ──────────────────────────────── 渐变页头 */
 
 .mfb__head {
-  background: var(--grad-page);
+  background: transparent;
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
   padding: 32px 40px 40px;
-  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+  /* 背板底色去掉后这圈空投影只剩盒边，一并去掉 */
 }
 
 .mfb__kicker {
@@ -113,13 +113,16 @@
 
 /* 类型胶囊：品牌浅底（与举报卡的「原因」tag 同一形态） */
 .mfb__type {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   font-size: var(--fs-2xs);
   font-weight: 600;
   color: var(--brand-deep);
   background: var(--accent-weak);
   border-radius: 999px;
-  padding: 6px 18px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
 }
 
 /* 状态胶囊：pending=处理中、replied=已回复、closed=已处理（带同色圆点） */

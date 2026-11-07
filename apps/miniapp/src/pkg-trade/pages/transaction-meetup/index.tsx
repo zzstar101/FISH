@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
+import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { findDisputeForTransaction } from '@/features/disputes/load'
@@ -718,7 +719,8 @@ export default function TransactionMeetup() {
   }
 
   const openScanner = () => {
-    void Taro.navigateTo({ url: '/pkg-vision/pages/scan-pr/index' })
+    // 带 from=meetup：扫码页据此给出「输入 6 位码」（点了返回本页输入）
+    void Taro.navigateTo({ url: scanPageUrl('scan', { fromMeetup: true }) })
   }
 
   /**

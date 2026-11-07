@@ -1874,7 +1874,8 @@ describe('浏览量（近 30 天去重浏览人数）', () => {
       userId,
       listingId,
       eventType: 'DETAIL_VIEW',
-      occurredAt: new Date(),
+      // 与浏览量窗口使用同一数据库时钟，避免宿主机时钟领先造成偶发漏计。
+      occurredAt: sql`now()`,
     })
   }
 

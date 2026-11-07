@@ -109,7 +109,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 20px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-weak);
   @include pressable;
@@ -165,6 +166,14 @@
   gap: 8px;
   font-size: var(--fs-2xs);
   color: var(--muted-2);
+
+  /* 视觉上只是一行小字（约 29rpx 高，远低于触控底线），但整块是要点的：
+     本元素撑到 88rpx（44pt）见方，上下用等量负 margin 抵掉，标题行的
+     `align-items: baseline` 与行高都不变 —— 只长热区，不长排版。
+     （本文件有一条守卫禁止任何伪元素，见 verified-badge-consistency.test.ts，
+     所以热区只能靠元素自身撑高，不能用伪元素外扩） */
+  min-height: 88px;
+  margin: -30px 0;
 }
 
 /* 排序箭头：1版稿的 ic-chev 是 14pt 框、描边约 1pt，所以框按 12px（6pt）+ 2px 描边取 */
@@ -356,11 +365,11 @@
 }
 
 /**
- * 卡尾动作钮。高度直接用 `btn-sm` 给的 72rpx（= 设计稿 36pt），**不要再写一遍
- * `height: 72px`** —— 在 `@include` 之后重复声明与 mixin 完全相同的值，Taro 的
- * pxtransform 会漏掉一次换算，产物里会同时留下 `height:72rpx;height:72px`，
- * 后者以设备 px 生效（按钮变成 72pt 高，是设计稿的两倍）。
- * 间距按稿取 6pt（mixin 给的是 5pt，值不同，能正常换算）。
+ * 卡尾动作钮。高度与左右内边距一律取 `btn-sm` 的 S 档（`--btn-h-sm` / `--btn-px-sm`，
+ * 见 DESIGN.md §3.1），这一层只补间距。
+ * **不要在 `@include` 之后重复声明高度或内边距** —— 与 mixin 同值的裸 px 会撞上 Taro
+ * pxtransform 的换算漏判，产物里同时留下 `height:68rpx;height:68px`，后者以设备 px
+ * 生效（按钮变成 68pt 高，是设计稿的两倍）。页面上要换档就换档位令牌，不要覆盖。
  */
 .orders__btn {
   @include btn-sm;
@@ -368,7 +377,6 @@
 }
 
 .orders__btn--ghost {
-  padding: 0 8px;
   gap: 10px;
   background: transparent;
   color: var(--muted-2);
@@ -379,7 +387,7 @@
 }
 
 .orders__btn--pri {
-  background: var(--brand-deep);
+  background: var(--brand);
   color: #fff;
   box-shadow: var(--shadow-btn);
 
@@ -452,10 +460,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
-  padding: 0 60px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   margin-top: 44px;
-  border-radius: 48px;
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-title);
@@ -583,7 +591,6 @@
 
 /* 取消交易：次级危险位（描边 + 深红字），不抢「打开二维码」的主位 */
 .orders__btn--danger {
-  padding: 0 8px;
   border: 2px solid var(--danger-line);
   color: var(--danger-ink);
 

@@ -224,8 +224,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 44px;
-  padding: 0 18px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--glass-bg);
   border: 2px solid #aec9f8; /* 稿 .pbadge：brand 30% + --border，预计算 */
@@ -568,11 +568,11 @@
 .profile__guest-btn {
   margin-top: 36px;
   width: 100%;
-  height: 88px;
+  height: var(--btn-h-lg);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 44px;
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-title);

@@ -251,7 +251,7 @@ export default function ProfileEdit() {
             <UserAvatar className="pe__avatar-face" src={previewSrc} />
           </Button>
           <View className="pe__avatar-badge">
-            <Image className="pe__avatar-badge-ic" src={ICONS.cameraMuted} mode="aspectFit" />
+            <Image className="pe__avatar-badge-ic" src={ICONS.cameraWhite} mode="aspectFit" />
           </View>
         </View>
 

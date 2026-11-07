@@ -1,5 +1,6 @@
 export default defineAppConfig({
-  // 主包只保留 5 个 tab 页（微信不允许 tab 页进分包），其余页面按业务域拆进 6 个分包。
+  // 主包只保留 4 个 tab 页 + 出物页（#629）：出物页已不是 Tab 页，但它体积小、又是底栏
+  // 中间钮的落点，仍留主包；其余页面按业务域拆进 6 个分包。
   // 分包根目录 = `src/pkg-<group>/`，页面在 `src/pkg-<group>/pages/<page>/`。
   pages: [
     'pages/home/index',
@@ -75,12 +76,7 @@ export default defineAppConfig({
     },
     {
       root: 'pkg-vision',
-      pages: [
-        'pages/vision-result/index',
-        'pages/scan-vision/index',
-        'pages/scan-pr/index',
-        'pages/scan/index',
-      ],
+      pages: ['pages/vision-result/index', 'pages/scan/index'],
     },
   ],
   window: {
@@ -101,8 +97,12 @@ export default defineAppConfig({
      * 原生 TabBar 只能整条贴底、不支持圆角悬浮与凸起。自定义之后
      * `Taro.hideTabBar()` 那套 workaround 也不需要了。
      *
-     * `list` 仍然必须保留：它是 `Taro.switchTab` 的合法路由表，也是自定义
-     * TabBar 里 `selected` 索引的依据。`text`/图标不再由系统渲染。
+     * `list` 仍然必须保留：它是 `Taro.switchTab` 的合法路由表。`text`/图标不再由系统渲染，
+     * 底栏的槽位与选中态由 `custom-tab-bar/` 按自己的 `TAB_ITEMS` 算（含中间那颗动作钮）。
+     *
+     * **出物页不在 `list` 里**（#629）：它已改成二级页 —— 底栏中间那颗凸起钮保留
+     * （见 `custom-tab-bar/` 的 `kind: 'action'` 项），但它是**压栈打开**页面，不是切 Tab。
+     * 出物页因此有了页面栈：左滑与左上返回都回到上一页，不再恒落首页 Tab。
      */
     custom: true,
     color: '#71809C',
@@ -112,7 +112,6 @@ export default defineAppConfig({
     list: [
       { pagePath: 'pages/home/index', text: '首页' },
       { pagePath: 'pages/wish/index', text: '许愿' },
-      { pagePath: 'pages/sell/index', text: '出物' },
       { pagePath: 'pages/chat/index', text: '消息' },
       { pagePath: 'pages/profile/index', text: '我的' },
     ],

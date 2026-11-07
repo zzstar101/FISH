@@ -1,7 +1,8 @@
 /**
  * 复用样式组合。页面与组件通过 `@use '@/styles/mixins' as *;` 引入。
  *
- * 只放「反复出现且容易写歪」的组合：卡片、胶囊、玻璃、截断。
+ * 只放「反复出现且容易写歪」的组合：卡片、按钮档位、玻璃、截断。按钮档位组合自带
+ * 默认高度/内边距（取 L 档），调用方可传参换档；其余组合的尺寸仍由调用方给。
  * 具体尺寸一律由调用方给，避免这里长成一个万能样式表。
  */
 
@@ -11,28 +12,6 @@
   border: 2px solid var(--border);
   border-radius: $radius;
   box-shadow: var(--shadow-card);
-}
-
-/* 筛选胶囊 / 标签：默认浅玻璃白，按下态是深墨底白字 */
-@mixin chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  height: 68px;
-  padding: 0 30px;
-  border-radius: var(--r-pill);
-  border: 2px solid var(--border);
-  background: rgba(255, 255, 255, 0.74);
-  color: var(--fg);
-  font-size: 26px;
-
-  &.is-on {
-    background: var(--ink);
-    border-color: var(--ink);
-    color: #fff;
-    font-weight: 500;
-  }
 }
 
 /*
@@ -67,33 +46,41 @@
   }
 }
 
-/* 品牌渐变主按钮 */
-@mixin btn-brand {
+/*
+ * 按钮规格阶梯（DESIGN.md §3.1）：高度与左右内边距只取 --btn-h-* / --btn-px-* 四档，
+ * 圆角一律胶囊（--r-pill）。页面里不要再写裸高度；特殊排版（flex: 1、图标、状态色）
+ * 也要从档位取值。
+ */
+@mixin btn-layout($h: var(--btn-h-lg), $px: var(--btn-px-lg)) {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 14px;
-  min-height: 96px;
-  border-radius: 28px;
+  min-height: $h;
+  padding: 0 $px;
+  border-radius: var(--r-pill);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* L 档主按钮：品牌渐变（整行 CTA、弹层主钮、底部操作栏） */
+@mixin btn-brand {
+  @include btn-layout(var(--btn-h-lg), var(--btn-px-lg));
   background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-title);
-  font-weight: 600;
   box-shadow: var(--shadow-btn);
 }
 
-/* 描边次按钮 */
+/* L 档次按钮：白底描边 */
 @mixin btn-ghost {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  min-height: 96px;
-  border-radius: 28px;
+  @include btn-layout(var(--btn-h-lg), var(--btn-px-lg));
   border: 2px solid var(--border);
   background: var(--surface);
   color: var(--fg);
   font-size: var(--fs-title);
+  font-weight: 400;
 }
 
 /* 玻璃层：必须自带不透明兜底底，Android 不支持 backdrop-filter 时不至于透明穿帮 */
@@ -104,6 +91,21 @@
   box-shadow: var(--shadow-float);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
+}
+
+/* 底部浮条材质：TabBar 与页面底部操作栏共用同一套配方。
+   比 `glass` 更透（56% 白）、饱和更高（190%），并带一圈内高光 —— 设计稿对底栏就是这么定的，
+   两处必须同源，否则同屏两条浮条会看出两种「冰蓝」。 */
+@mixin glass-bar {
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.56);
+  border: 2px solid rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 36px 84px -36px rgba(23, 35, 61, 0.52),
+    0 4px 12px -4px rgba(23, 35, 61, 0.16),
+    inset 0 2px 0 rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(30px) saturate(190%);
+  -webkit-backdrop-filter: blur(30px) saturate(190%);
 }
 
 /* 多行截断 */
@@ -122,14 +124,16 @@
   text-overflow: ellipsis;
 }
 
-/* 页头冰蓝背景：顶部渐变，底部圆角 */
+/* 页头冰蓝背景：底部圆角（2026-11-06 去渐变后背板默认透明，需要的页面自己补底色） */
 @mixin page-hero($height: 504px, $radius: 64px) {
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
   height: $height;
-  background: var(--grad-page);
+  /* 去渐变：背板底色去掉。这块原本靠渐变「渐隐到页底 #f7faff」才让 64px 圆角下缘隐形，
+     令牌压平后会成一条硬边蓝带（许愿页实测），故直接透明——尺寸占位与圆角留着，不影响布局。 */
+  background: transparent;
   border-radius: 0 0 $radius $radius;
   pointer-events: none;
 }
@@ -281,15 +285,15 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  height: 44px;
-  padding: 0 18px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   font-size: var(--fs-2xs);
   font-weight: 600;
   white-space: nowrap;
 
   &.is-pending {
-    background: var(--brand-deep);
+    background: var(--brand);
     color: #fff;
   }
 
@@ -311,8 +315,8 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 72px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: $bg;
   color: $fg;
