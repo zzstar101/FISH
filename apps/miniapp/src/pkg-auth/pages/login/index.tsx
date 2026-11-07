@@ -24,7 +24,8 @@ import './index.scss'
  *
  * 与旧版的差异，都按新稿走：
  * - 品牌区 = mark / wordmark 两张图 + 一句 tagline；
- * - 表单进一张玻璃卡 `.login__card`；
+ * - **Owner 2026-11-07 调整**：微信一键登录按钮在上、同意条款在下，两者不再包在任何
+ *   可视化容器里（原 `.login__card` 玻璃卡与 `.login__form` 已删除，见 `index.scss`）；
  * - 「我已阅读并同意」勾选保留：**未勾选不允许登录**（协议同意仍需要一个落点）；
  * - 学号 / 密码字段、`.login__or` 分隔行、去注册入口整段删除。
  *
@@ -176,56 +177,55 @@ export default function Login() {
           <Text className="login__tagline">同校面交 · 让闲置在校园里流动起来</Text>
         </View>
 
-        {/* ---- 表单卡 ---- */}
-        <View className="login__card">
-          <View className="login__form">
-            {/* 协议勾选：未勾选不允许登录 */}
-            <View
-              className={`login__agree${agreed ? ' is-on' : ''}`}
-              onClick={() => setAgreed((prev) => !prev)}
-            >
-              <View className="login__checkbox">
-                <Image className="login__checkbox-ic" src={ICONS.checkWhite} mode="aspectFit" />
-              </View>
-              <Text className="login__agree-tx">
-                我已阅读并同意
-                {/*
-                  链接必须吃掉冒泡：父级是「勾选框」的 onClick，不拦截的话点协议会顺手
-                  把默认勾选翻成未勾（然后点登录只得到「请先阅读并同意」的提示）。
+        {/* ---- 主操作区（Owner 2026-11-07：按钮在上、条款在下；不再包玻璃卡） ----
+            一层 `.login__actions` 只做纵向排布与间距，不画边框/底/阴影 —— 它不可见。 */}
+        <View className="login__actions">
+          {/* 唯一 CTA：微信一键登录 */}
+          <View
+            className={`login__cta login__cta--wechat${canWechat ? '' : ' is-off'}`}
+            onClick={wechatLogin}
+          >
+            {wechatBusy ? <View className="login__spin" /> : null}
+            <Text>{wechatBusy ? '微信登录中…' : '微信一键登录'}</Text>
+          </View>
 
-                  带 `?from=login`：法务页据此显示吸底同意条（稿状态 02）——
-                  从设置页进来是纯阅读，不该再点一次「同意」（稿取舍 ⑦）。
-                */}
-                <Text
-                  className="login__lk"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void Taro.navigateTo({ url: '/pkg-legal/pages/terms/index?from=login' })
-                  }}
-                >
-                  《用户协议》
-                </Text>
-                和
-                <Text
-                  className="login__lk"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void Taro.navigateTo({ url: '/pkg-legal/pages/privacy/index?from=login' })
-                  }}
-                >
-                  《隐私政策》
-                </Text>
+          {/* 协议勾选：未勾选不允许登录 */}
+          <View
+            className={`login__agree${agreed ? ' is-on' : ''}`}
+            onClick={() => setAgreed((prev) => !prev)}
+          >
+            <View className="login__checkbox">
+              <Image className="login__checkbox-ic" src={ICONS.checkWhite} mode="aspectFit" />
+            </View>
+            <Text className="login__agree-tx">
+              我已阅读并同意
+              {/*
+                链接必须吃掉冒泡：父级是「勾选框」的 onClick，不拦截的话点协议会顺手
+                把默认勾选翻成未勾（然后点登录只得到「请先阅读并同意」的提示）。
+
+                带 `?from=login`：法务页据此显示吸底同意条（稿状态 02）——
+                从设置页进来是纯阅读，不该再点一次「同意」（稿取舍 ⑦）。
+              */}
+              <Text
+                className="login__lk"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void Taro.navigateTo({ url: '/pkg-legal/pages/terms/index?from=login' })
+                }}
+              >
+                《用户协议》
               </Text>
-            </View>
-
-            {/* 唯一 CTA：微信一键登录 */}
-            <View
-              className={`login__cta login__cta--wechat${canWechat ? '' : ' is-off'}`}
-              onClick={wechatLogin}
-            >
-              {wechatBusy ? <View className="login__spin" /> : null}
-              <Text>{wechatBusy ? '微信登录中…' : '微信一键登录'}</Text>
-            </View>
+              和
+              <Text
+                className="login__lk"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void Taro.navigateTo({ url: '/pkg-legal/pages/privacy/index?from=login' })
+                }}
+              >
+                《隐私政策》
+              </Text>
+            </Text>
           </View>
         </View>
       </View>
