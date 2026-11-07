@@ -249,7 +249,13 @@ export function createHomeFeedCache(
     } catch {
       return null
     }
-    if (typeof raw !== 'string' || raw.length === 0) return null
+    if (typeof raw !== 'string') {
+      // 键下被别的东西占了（不是我们写进去的字符串）：顺手清掉，否则每次进页都白读一遍
+      if (raw !== undefined && raw !== null) drop(scope)
+      return null
+    }
+    // 空串 = 这条键不存在（Taro 对缺失的键返回 `''`），不是坏数据
+    if (raw.length === 0) return null
     if (utf8WorstCase(raw) > HOME_FEED_SNAPSHOT_MAX_BYTES) {
       drop(scope)
       return null
