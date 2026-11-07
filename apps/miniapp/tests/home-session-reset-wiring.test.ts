@@ -56,6 +56,20 @@ async function resetBody(): Promise<string> {
 }
 
 describe('#650/#652 身份变了之后首页重建：源码层接线', () => {
+  test('清列表前保留当前滚动所需的页面高度，当前请求落地后释放', async () => {
+    const body = await resetBody()
+    expect(body).toContain('scrollTopRef.current + Taro.getWindowInfo().windowHeight')
+    expect(body.indexOf('setIdentityScrollHeight(')).toBeGreaterThanOrEqual(0)
+    expect(body.indexOf('setIdentityScrollHeight(')).toBeLessThan(body.indexOf('setItems([])'))
+    const text = code(await homeSource())
+    expect(text).toMatch(/minHeight: `\$\{identityScrollHeight\}px`/)
+    const load = slice(text, 'const load = async', 'const categoryRef')
+    expect(load.indexOf('setIdentityScrollHeight(null)')).toBeGreaterThan(
+      load.indexOf('viewerAtRequest !== homeFeedCache.viewer()'),
+    )
+    expect(load).toContain('setIdentityScrollHeight(null)')
+  })
+
   test('首页订阅「本地身份变了」，且订阅装在 `useLoad` 里', async () => {
     const text = code(await homeSource())
     // 一条通道覆盖全部方向：登录 / 匿名→已登录 / A→B / 主动退出 / 401 撤销
