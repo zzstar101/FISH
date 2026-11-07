@@ -30,9 +30,9 @@
   flex-direction: column;
   align-items: center;
   padding: 0 40px 56px;
-  background: var(--grad-page);
+  background: transparent;
   border-radius: 0 0 64px 64px;
-  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+  /* 背板底色去掉后这圈空投影只剩盒边，一并去掉 */
   text-align: center;
 }
 

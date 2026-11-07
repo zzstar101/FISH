@@ -84,6 +84,27 @@ export default function NavBar({
   const metrics = useMemo(() => readNavMetrics(), [])
   const backGeo = backButtonGeometry(metrics.capsuleHeight)
 
+  /**
+   * 行底下留白：把整条栏补到 `totalHeight`（状态栏 + 44 设计栅格），与 `components/top-bar` 同高。
+   *
+   * 只下发 `padding-top`（状态栏 + 胶囊上留白）时，行高由行内最高的子元素撑出 —— 现有调用方
+   * 里这个子元素就是返回钮（与胶囊等高），所以整条栏 = 状态栏 + 上留白 + 胶囊高（本机
+   * 32 + 4 = 36），比设计栅格矮 8，且差额全缺在下方：玻璃底边的发丝线（`inset 0 -2px 0`）
+   * 于是正好压在返回钮的最后 2px 上（设置页截图实测圆钮下沿到发丝线 0–2px），
+   * 钮看起来被栏底切掉一截。
+   *
+   * 补上这段后钮上留 4、下留 8（设备 px，与设计稿 pt 同值），玻璃底边落在 `状态栏 + 44`。
+   *
+   * 减的是 `capsuleGap + capsuleHeight`（本组件的行内内容高 = 胶囊高），**不是**
+   * `contentHeight` —— 后者在部分机型上会大于 44（`contentHeight = gap × 2 + 胶囊高`），
+   * 减它会把栏算得比现在更矮。`components/top-bar` 写的是 `totalHeight − 状态栏 −
+   * contentHeight`，数值不同但结果同高：那套栏的内容行就是 `contentHeight`。
+   */
+  const bottomInset = Math.max(
+    0,
+    metrics.totalHeight - metrics.statusBarHeight - metrics.capsuleGap - metrics.capsuleHeight,
+  )
+
   const handleBack = () => {
     if (onBack) {
       onBack()
@@ -126,7 +147,10 @@ export default function NavBar({
   return (
     <View
       className={`navfloat${fixed ? ' navfloat--fixed' : ''}${glass ? ' navfloat--glass' : ''}`}
-      style={{ paddingTop: `${metrics.statusBarHeight + metrics.capsuleGap}px` }}
+      style={{
+        paddingTop: `${metrics.statusBarHeight + metrics.capsuleGap}px`,
+        paddingBottom: `${bottomInset}px`,
+      }}
     >
       {back ? (
         <View className="navfloat__btn" style={backGeo.btnStyle} onClick={handleBack}>
