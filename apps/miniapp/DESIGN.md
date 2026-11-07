@@ -165,7 +165,16 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 历史上有 313 处 `font-size` 写字面量 px（25 种取值，主峰 26px×60、24px×48、20px×46、22px×45），
 与令牌并行成了双轨。守门测试用「字面量债务基线」冻结现状 —— 粒度是**文件 → 取值 → 处数**的多重集，
 与实际情况严格相等才算通过：改值（如把 26px 改成 33px）、跨文件挪动、新增都会报红，
-归位一处就同步下调一处。归位按页面分批推进，基线清零后测试转为硬约束。当前：**297 处 / 48 个文件**。
+归位一处就同步下调一处。归位按页面分批推进，基线清零后测试转为硬约束。当前：**265 处 / 46 个文件**。
+
+这个数字不只随归位下降，删页/并页、整段旧样式被删也会让它变。`297 处 / 48 个文件` → `265 处 / 46 个文件`
+来自三处：**#637** 把 `pkg-vision/pages/scan-pr`、`scan-vision` 两页并进 `pkg-vision/pages/scan`
+（两个文件整条删掉，合并页自身 7 → 3）；**#657** 重做认证页（`verify` 10 → 1，只剩 `1px`）；
+**#622** 空头像收口等删掉的旧样式（`settings` 的 38px、`user` 的 62px、`watchers` 的 40px、
+`listing-detail` 的 24px×1 与 22px×1、`styles/_mixins.scss` 删 `@mixin chip` 带走的 26px×1）。
+
+并页不新增字面量债务：`scan` 页从原 `scan-vision` 搬来的 `.scanpage__act-label`
+使用等值的 `var(--fs-xs)`（22px），保持视觉尺寸不变；跨文件挪动的声明也照样遵守令牌规则。
 
 债务里还留着 17/18/19/25/27/29px 这些**奇数 px**（不是整 pt，例如 `pages/sell/index.scss` 的 27px、
 `components/review-dialog/index.scss` 的 17px、`pkg-auth/pages/account-deletion/index.scss` 的 25px×3）。

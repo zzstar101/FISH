@@ -150,7 +150,7 @@
 }
 
 .scanpage__act-label {
-  font-size: 22px;
+  font-size: var(--fs-xs);
   color: var(--surface);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
   white-space: nowrap;
