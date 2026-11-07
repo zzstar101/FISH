@@ -14,7 +14,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  /* 上内边距（状态栏 + 胶囊上留白）由组件行内下发（设备相关，样式表写不出） */
+  /* 上下内边距（上 = 状态栏 + 胶囊上留白，下 = 补到 totalHeight 的差额）由组件行内下发
+     （设备相关，样式表写不出）；这里的 0 只是被行内覆盖前的默认值。 */
   padding: 0 32px;
   pointer-events: none;
   /* 稿 `.mp-nav{transition:background .22s,box-shadow .22s,border-color .22s}` —— 玻璃底
