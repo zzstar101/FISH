@@ -50,12 +50,7 @@ function FollowedRow({
       className={`flex items-center gap-4 border border-line p-4 ${isFailureRow ? 'border-danger/40' : ''}`}
     >
       <Link params={{ userId: row.id }} to="/users/$userId">
-        <UserAvatar
-          avatarUrl={row.avatarUrl}
-          className="size-12"
-          emoji={row.nickname.slice(0, 1)}
-          size="default"
-        />
+        <UserAvatar avatarUrl={row.avatarUrl} className="size-12" size="default" />
       </Link>
       <div className="min-w-0 flex-1">
         <Link

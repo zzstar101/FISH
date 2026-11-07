@@ -2,6 +2,9 @@ import { expect, mock, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
 import { applyReadPoll, messageReadLabel } from '../src/pkg-social/pages/conversation/view'
 
+// Domain APIs now invalidate display snapshots through the Taro storage boundary.
+mock.module('@tarojs/taro', () => ({ default: {} }))
+
 /**
  * 演示回退里的「对方读位」（#359 四 审查回合）。
  *

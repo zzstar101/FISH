@@ -330,7 +330,7 @@ export default function History() {
     /**
      * 这次 effect 是不是**下拉刷新**：`reloadToken > 0` 且手里这份数据仍属于当前账号。
      * 是刷新就保留列表（系统已经拉出原生指示器，再换成骨架屏只会让用户丢掉阅读位置，
-     * 先例 `features/transaction/useOrderList` 的 `keepList`）。换账号时 `sameOwner` 为假，
+     * 先例 `features/transaction/useOrderList`）。换账号时 `sameOwner` 为假，
      * 一律按新的一次加载处理。
      */
     const sameOwner = previous !== null && userId !== null && previous.ownerId === userId
@@ -406,7 +406,7 @@ export default function History() {
     const sameOwner = previous !== null && previous.ownerId === userId
     /**
      * 下拉刷新（`reloadToken` 自增）且手里已有当前账号的列表 → 保留列表（系统已经拉出原生
-     * 指示器，再换成骨架屏只会让用户丢掉阅读位置，先例 `useOrderList` 的 `keepList`）；
+     * 指示器，再换成骨架屏只会让用户丢掉阅读位置，先例 `useOrderList`）；
      * 首次进入 / 换账号 / 切档重取才计一次在途 —— 有数据时上面那支也不会画骨架屏。
      */
     const isRefresh = reloadToken > 0 && sameOwner

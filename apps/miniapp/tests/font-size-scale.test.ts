@@ -113,10 +113,9 @@ const FROZEN_LITERALS: Record<string, Record<string, number>> = {
   'pkg-auth/pages/login-confirm/index.scss': { '29px': 1, '27px': 1 },
   'pkg-auth/pages/login/index.scss': { '32px': 1, '24px': 1 },
   'pkg-auth/pages/profile-edit/index.scss': { '32px': 1, '24px': 3 },
-  'pkg-auth/pages/settings/index.scss': { '38px': 2, '22px': 2 },
+  'pkg-auth/pages/settings/index.scss': { '38px': 1, '22px': 2 },
   'pkg-auth/pages/verify/index.scss': {
     '44px': 1,
-    '38px': 1,
     '32px': 1,
     '26px': 3,
     '22px': 3,
@@ -140,8 +139,7 @@ const FROZEN_LITERALS: Record<string, Record<string, number>> = {
     '29px': 2,
     '27px': 4,
     '26px': 5,
-    '24px': 5,
-    '22px': 1,
+    '24px': 4,
   },
   'pkg-browse/pages/match/index.scss': {
     '48px': 1,
@@ -169,7 +167,6 @@ const FROZEN_LITERALS: Record<string, Record<string, number>> = {
     '18px': 1,
   },
   'pkg-browse/pages/user/index.scss': {
-    '62px': 1,
     '44px': 1,
     '40px': 1,
     '26px': 1,
@@ -177,7 +174,7 @@ const FROZEN_LITERALS: Record<string, Record<string, number>> = {
     '22px': 1,
     '20px': 2,
   },
-  'pkg-browse/pages/watchers/index.scss': { '52px': 1, '40px': 1, '26px': 1, '24px': 1, '22px': 4 },
+  'pkg-browse/pages/watchers/index.scss': { '52px': 1, '26px': 1, '24px': 1, '22px': 4 },
   'pkg-legal/pages/about/index.scss': { '44px': 1, '27px': 1, '26px': 1, '22px': 1 },
   'pkg-legal/pages/feedback/index.scss': { '48px': 1, '32px': 1, '26px': 3, '24px': 1, '20px': 1 },
   'pkg-legal/pages/my-feedback/index.scss': { '48px': 1, '20px': 4 },

@@ -1,6 +1,9 @@
 import { expect, mock, test } from 'bun:test'
 import { conversationDtoSchema, messageDtoSchema } from '@fish/contracts/chat/schema'
 
+// Domain APIs now invalidate display snapshots through the Taro storage boundary.
+mock.module('@tarojs/taro', () => ({ default: {} }))
+
 Object.assign(globalThis, { __DEMO_AUTH__: true, __ALLOW_MOCK_FALLBACK__: true })
 const unavailable = () => Promise.reject(new Error('demo offline'))
 mock.module('@/lib/request', () => ({

@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  emptyPage,
   firstPageOf,
+  segmentErrorInfo,
+  segmentErrorSuffix,
   segmentOfTab,
   segTitleOf,
   shouldRefetch,
   totalOf,
+  UNKNOWN_SEGMENT_ERROR,
 } from '../src/pkg-browse/pages/user/segment-page'
 
 /**
@@ -37,6 +41,7 @@ describe('firstPageOf —— 首屏那一页从哪来', () => {
       loaded: true,
       loading: false,
       failed: false,
+      error: null,
     })
   })
 
@@ -48,6 +53,7 @@ describe('firstPageOf —— 首屏那一页从哪来', () => {
       loaded: false,
       loading: false,
       failed: false,
+      error: null,
     })
   })
 })
@@ -108,9 +114,9 @@ describe('他人主页接线（#581）', () => {
     const code = await page
     expect(code).toContain('const tabParam = router.params.tab')
     expect(code).toContain('useState<Segment>(() => segmentOfTab(tabParam))')
-    // 整页重载也从 `?tab=` 重算，不留「沿用当前段」的镜像
+    // 整页重载也从 `?tab=` 重算，不留「沿用当前段」的镜像；切段自愈时由调用方指名目标段
     const reload = slice(code, 'const load = useCallback(', 'if (userId ===')
-    expect(reload).toContain('const initial = segmentOfTab(tabParam)')
+    expect(reload).toContain('const initial = target ?? segmentOfTab(tabParam)')
     // 算出来的口径要真的被用上：换段与首屏都不许绕过它写死 ACTIVE
     expect(reload).toContain('setSeg(initial)')
     expect(code).toContain('setPage(firstPageOf(initial, result))')
@@ -155,15 +161,19 @@ describe('他人主页接线（#581）', () => {
     expect(body.indexOf('if (sent !== generation.current) return')).toBeLessThan(
       body.indexOf('mergeSegmentPage(prev, next, cursor)'),
     )
-    // 用户在这一步消失了（读取层把 404 折成 null）：整页退到 notFound，而不是当成列表失败
-    expect(body).toContain("setLoadState('notFound')")
+    // 段级 404（读取层把 404 折成 null）**只降级这一段**：整页 notFound 会把 ScrollView
+    // 连页头两格一起卸载，切一次段就丢掉整页（#598）。读取层没把码交上来，所以只写段内
+    // `failed`，不带 `error`（端上不许自造码，见「段级 404 只报中性段内失败」那条）
+    expect(body).not.toContain("setLoadState('notFound')")
+    expect(slice(body, 'if (next === null) {', 'return')).toContain('failed: true, error: null')
 
-    // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据之前
+    // 整页重载也要作废在途请求（#582 审查中-1 那个竞态的同构问题）：换代与放手都在重置数据
+    // 之前；#598 复审 F1 起代号顺带留在 `sent` 里，供 await 之后比对（见「切段自愈」那组）
     const reload = slice(code, 'const load = useCallback(', 'if (userId ===')
     expect(reload.replace(/\s+/g, ' ')).toContain(
-      'generation.current += 1 inFlight.current = false',
+      'const sent = ++generation.current inFlight.current = false',
     )
-    expect(reload.indexOf('generation.current += 1')).toBeLessThan(
+    expect(reload.indexOf('const sent = ++generation.current')).toBeLessThan(
       reload.indexOf('setPage(emptyPage())'),
     )
     // 两个 callback 都必须把 `seg` 放进依赖：少了它，切段后闭包仍是旧段的快照
@@ -238,11 +248,13 @@ describe('他人主页接线（#581）', () => {
   test('开拉与失败都把三态写全，不留旧值', async () => {
     const code = await page
     const body = slice(code, 'const loadSegment = useCallback(', 'const items = page.items')
-    // 开拉：清掉上一轮的失败态，否则失败后重试会一直停在错误提示上
-    expect(body).toContain('setPage((prev) => ({ ...prev, loading: true, failed: false }))')
+    // 开拉：清掉上一轮的失败态与错误码，否则失败后重试会一直停在错误提示上
+    expect(body).toContain(
+      'setPage((prev) => ({ ...prev, loading: true, failed: false, error: null }))',
+    )
     // 失败：把 loading 落回 false，否则续页失败后列表永远卡在「加载中」
     expect(body.replace(/\s+/g, ' ')).toContain(
-      'setPage((prev) => ({ ...prev, loading: false, failed: true }))',
+      'setPage((prev) => ({ ...prev, loading: false, failed: true, error: info }))',
     )
   })
 
@@ -288,5 +300,187 @@ describe('shouldRefetch / totalOf / segTitleOf —— 口径的单一来源（#5
   test('分段名两段不许互换', () => {
     expect(segTitleOf('ACTIVE')).toBe('在售')
     expect(segTitleOf('SOLD')).toBe('已售出')
+  })
+})
+
+/**
+ * #598：切段失败后「怎么切都出不来」。
+ *
+ * 根因是 `loadState` 成了终态而 `shouldRefetch` 硬要求 `'ok'` —— 补拉 effect 恒假，
+ * 一次 404 / 一次失败之后切段连请求都不发；段级 404 还会把整页打成 notFound，
+ * 连 `ScrollView` 和页头那两格一起卸载。这三处修复各自都会让下面的用例变红。
+ */
+describe('切段自愈与段级失败（#598）', () => {
+  const page = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
+
+  test('切段后一定重新发请求：switchSegment 整份换成 emptyPage()，补拉 effect 由假转真', async () => {
+    // 行为（#582 既有口径）：`shouldRefetch` 只在 `!loaded && !loading && !failed` 时放行，
+    // `failed` 一律不自动重试 —— 所以「切段能不能重新拉」全看这一段有没有被整份重置。
+    expect(shouldRefetch('ok', emptyPage())).toBe(true)
+    expect(shouldRefetch('failed', emptyPage())).toBe(false)
+    expect(shouldRefetch('notFound', emptyPage())).toBe(false)
+    // 接线：`failed: true` 的页面只有被整份换成 `emptyPage()` 才会重新为真。
+    // 删掉这一句 ⇒ 段失败后切段静默、连请求都不发（本用例变红）。
+    const body = slice(await page, 'const switchSegment = useCallback(', 'const openSoldListings')
+    expect(body).toContain('setPage(emptyPage())')
+    // 同时作废在途的旧段响应并放开闩，否则新段第一次补拉会被 `inFlight` 挡回
+    expect(body).toContain('generation.current += 1')
+    expect(body).toContain('inFlight.current = false')
+  })
+
+  test('接线：整页重载要领本轮代号，await 之后比对，晚到的响应不许回填', async () => {
+    // 失败条件（复审 F1）：`load` 只写 `generation.current += 1`、不把代号留在 `sent` 里，
+    // await 之后也没有比对 ⇒ 整页 failed 态的页头两格连点（在售→卖出，两格相邻、现实可达）
+    // 时 SOLD 的响应先回、ACTIVE 的后回，结果是 `seg === 'SOLD'` 却摆着一份在售首屏，
+    // 而 `loaded: true` 让 `shouldRefetch` 恒假，没有任何一条路会再修它。
+    const body = slice(await page, 'const load = useCallback(', 'const loadSegment = useCallback(')
+    expect(body).toContain('const sent = ++generation.current')
+    const awaitAt = body.indexOf('await loadPublicUserHome(userId)')
+    const guardAt = body.indexOf('if (sent !== generation.current) return')
+    expect(awaitAt).toBeGreaterThan(-1)
+    // 比对必须在 await **之后**：写在前面等于没写
+    expect(guardAt).toBeGreaterThan(awaitAt)
+    // 目标段仍随参数带过去，否则整页重来后被 `?tab=` 拽回在售
+    expect(await page).toContain('const initial = target ?? segmentOfTab(tabParam)')
+  })
+
+  test('错误标识从 ApiError 的形状里取，取不到就记 UNKNOWN（不伪装成某个码）', () => {
+    expect(segmentErrorInfo({ name: 'ApiError', code: 'VALIDATION_FAILED', status: 422 })).toEqual({
+      code: 'VALIDATION_FAILED',
+      status: 422,
+    })
+    // 超时 / 断网抛的不是 `ApiError`（`lib/request` 只在非 2xx 时抛它）
+    expect(segmentErrorInfo(new TypeError('request:fail timeout'))).toEqual(UNKNOWN_SEGMENT_ERROR)
+    expect(segmentErrorInfo(null)).toEqual(UNKNOWN_SEGMENT_ERROR)
+    // 三特征缺一个就不认，否则文案里会冒出 `undefined`
+    expect(segmentErrorInfo({ name: 'ApiError', code: 'VALIDATION_FAILED' })).toEqual(
+      UNKNOWN_SEGMENT_ERROR,
+    )
+  })
+
+  test('失败文案把错误码写在脸上：422 / 401 / 5xx 不能长得一样', () => {
+    const err422 = segmentErrorSuffix({ code: 'VALIDATION_FAILED', status: 422 })
+    expect(err422).toContain('VALIDATION_FAILED')
+    expect(err422).toContain('422')
+    expect(segmentErrorSuffix({ code: 'UNAUTHENTICATED', status: 401 })).toContain('401')
+    expect(segmentErrorSuffix({ code: 'INTERNAL_ERROR', status: 503 })).toContain('503')
+    // 没有失败态就不留一个空括号
+    expect(segmentErrorSuffix(null)).toBe('')
+    // 压根没走到响应（status 0）时说人话，不摆一个「错误码 … 0」出来
+    expect(segmentErrorSuffix(UNKNOWN_SEGMENT_ERROR)).not.toContain('错误码')
+  })
+
+  test('接线：列表失败文案与 Console 都带上码', async () => {
+    const code = await page
+    expect(code).toContain(`${'${'}segmentErrorSuffix(page.error)}`)
+    const body = slice(code, 'const loadSegment = useCallback(', 'const items = page.items')
+    expect(body).toContain('const info = segmentErrorInfo(error)')
+    expect(body).toContain('console.error(')
+    // 只 `console.warn(error)` 一句、不带码，真机验收（拿不到 Console）就没法区分 422 与 5xx
+    expect(body).not.toContain('console.warn(')
+  })
+
+  test('段级 404 只报中性段内失败：不自造错误码、不摆 HTTP 状态', async () => {
+    // `features/user/api.ts` 已把 404 折成 `null`（`code` / `status` 到不了这一层）。
+    // 修复前这一支自造 `{ code: 'LISTING_NOT_FOUND', status: 404 }`，页面文案于是摆出
+    // 「错误码 LISTING_NOT_FOUND 404」—— 一个服务端从没说过的码，配一个凭空断言的 HTTP 状态。
+    const body = slice(await page, 'const loadSegment = useCallback(', 'const items = page.items')
+    expect(body).not.toContain('LISTING_NOT_FOUND')
+    expect(body).not.toContain('USER_NOT_FOUND')
+    // 只钉「没有自造码」还不够：把这一支整个退回 `setLoadState('notFound')` 也照样绿。
+    // 真正的验收③是「404 只降级这一段列表」，所以还要钉住它写的是段内 `failed`、不带码。
+    const branch = slice(body, 'if (next === null) {', 'return')
+    expect(branch).toContain('failed: true, error: null')
+    expect(body).not.toContain("setLoadState('notFound')")
+  })
+
+  test('续页失败留一个可点的出口：列表尾部换成带码的重试行（复审 M1）', async () => {
+    // 修复前：`items.length > 0` 时只走 `list-end` 的「仅显示最近 N 件」—— 一句正常文案、
+    // 零诊断、没出口；失败空态的门是 `page.failed && items.length === 0`，够不着；
+    // 而滚底闸门又挡着 `page.failed` ⇒ 续页失败是死端，网络恢复也不会自愈。
+    const retry = slice(await page, 'page.failed && items.length > 0 ? (', "end === 'end'")
+    expect(retry).toContain('void loadSegment(page.nextCursor)')
+    expect(retry).toContain(`${'${'}segmentErrorSuffix(page.error)}`)
+    expect(retry).toContain('没拉到更多')
+  })
+
+  test('续页重试行只在按压时变淡：`--tap` 只能挂 `hoverClass`，不许进 `className`', async () => {
+    // 修复前：这一行的 `className` 同时带 `uhome__list-end--tap`，而样式是
+    // `.uhome__list-end--tap { opacity: 0.6 }`（没有 `:active` 之类的前置条件）⇒ 这一行
+    // **常驻** 0.6 透明度，按压反而看不出变化。同页的 `.uhome__stat--tap` 是正确写法：
+    // 只挂 `hoverClass`，由宿主在按压期间加类。
+    const retry = slice(await page, 'page.failed && items.length > 0 ? (', "end === 'end'")
+    expect(retry).toContain('hoverClass="uhome__list-end--tap"')
+    expect(retry).not.toMatch(/className="[^"]*--tap/)
+  })
+
+  test('接线：段失败后滚底不再重打同一个游标', async () => {
+    // 段级失败（含续页 404 降级）后 `nextCursor` 还留着：不挡 `page.failed`，
+    // 用户每上滑一次就重打同一游标、再失败一次
+    const body = slice(
+      await page,
+      'const onScrollToLower = useCallback(',
+      'const [left, right] = useMemo(',
+    )
+    expect(body).toContain('page.loading || page.failed || page.nextCursor === null')
+  })
+})
+
+describe('整页终态也留得住页头两格（#598 验收②）', () => {
+  const page = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
+
+  test('报错块落在滚区之内：ScrollView 不再被整页终态整块换掉', async () => {
+    const code = await page
+    const scrollAt = code.indexOf('<ScrollView')
+    const loadErrorAt = code.indexOf('title="主页加载失败"')
+    expect(scrollAt).toBeGreaterThan(-1)
+    // 修复前是 `{loadState === 'failed' ? <LoadError …/> : … : (<ScrollView>`：报错块在滚区
+    // **外面**、两者互斥 ⇒ 页头（含在售 / 卖出两格）跟着 ScrollView 一起被卸载，
+    // 整页终态下用户连「切段重试」都点不到
+    expect(loadErrorAt).toBeGreaterThan(scrollAt)
+  })
+
+  test('整页 failed 时降级页头只留两格，各自点了就按该段整页重拉', async () => {
+    const head = slice(
+      await page,
+      ") : loadState === 'failed' ? (",
+      ") : loadState === 'notFound' ? null : (",
+    )
+    expect(head).toContain('className="uhome__stats"')
+    // 复审 F2：`NavBar` 是透明覆盖层，降级页头也得有 `.uhome__identity` 那层让位
+    // （`identityTopGap` = 导航条总高 + 16），否则两格画进状态栏 / 返回钮那一带
+    expect(head).toContain('className="uhome__identity"')
+    expect(head).toContain(`${'${'}identityTopGap}px`)
+    expect(head).toContain("onClick={() => void load('ACTIVE')}")
+    expect(head).toContain("onClick={() => void load('SOLD')}")
+    // 终态下点两格若走 `switchSegment`，会被「同段早退」吃掉（`next === seg` 直接返回），
+    // 页面看着有按钮、点了没反应 —— 所以这两格直接 `load(next)`
+    expect(head).not.toContain('openActiveListings')
+    // 资料压根没到：不编一个假人，昵称 / 头像 / 关注钮一概不画
+    expect(head).not.toContain('uhome__pname')
+    expect(head).not.toContain('uhome__avatar')
+  })
+
+  test('整页失败的重试钮：保住当前段、给一句人话、并把滚动挪回顶部', async () => {
+    const err = slice(await page, 'title="主页加载失败"', 'onAction')
+    // 复审 F8：`load()` 无参会被 `?tab=` 拽回初值，用户已经切到的段就丢了
+    expect(err).toContain('void load(seg)')
+    expect(err).not.toContain('void load()')
+    // 复审 F7：整页路径上也得有可读的失败说明，不能只剩一个标题。
+    // #607 起那句说明不再是写死的「网络异常，请重试」，而是按 `ApiError` 的码算出来的
+    // （见 `tests/user-home-failure.test.ts`）——这里只钉「它还在，且真的接进了 LoadError」。
+    expect(err).toContain('text={homeFailureText(homeError)}')
+    // 复审 F10：`ScrollView` 自本单起常驻，`scrollTop` 会留着而顶栏两态已复位 ——
+    // 不归位就是「导航条透明、居中标题不出现」直到用户再滚一次
+    expect(err).toContain('backToTop()')
+  })
+
+  test('notFound 不画两格（页主不存在，没有可切的段）', async () => {
+    expect(await page).toContain(") : loadState === 'notFound' ? null : (")
+  })
+
+  test('标题行在整页终态下不再谎称「加载中」', async () => {
+    const cnt = slice(await page, 'className="uhome__sect-cnt num"', '</Text>')
+    expect(cnt).toContain("loadState === 'failed' || loadState === 'notFound'")
   })
 })

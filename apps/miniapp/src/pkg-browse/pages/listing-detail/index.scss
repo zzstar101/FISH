@@ -581,20 +581,6 @@
   justify-content: center;
 }
 
-.detail__cav-img {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  display: block;
-}
-
-.detail__cav-text {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--cond-fg);
-}
-
 .detail__cbody {
   flex: 1;
   min-width: 0;
@@ -691,10 +677,6 @@
 .detail__cav--reply {
   width: 52px;
   height: 52px;
-}
-
-.detail__cav--reply .detail__cav-text {
-  font-size: 22px;
 }
 
 .detail__cmt-empty {

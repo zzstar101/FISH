@@ -10,6 +10,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
+import UserAvatar from '@/components/user-avatar'
 import { useAuth } from '@/features/auth/store'
 import { fetchBlockState, setBlock } from '@/features/blocks/api'
 import {
@@ -23,6 +24,7 @@ import {
   loadPublicUserHome,
   loadPublicUserListingsPage,
   MOCK_FALLBACK_ENABLED,
+  type PublicUserFailure,
 } from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
 import { outOfMarketLabel } from '@/features/listing/status-mark'
@@ -36,12 +38,15 @@ import { goBackOrHome } from '@/lib/nav-back'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
+import { homeFailureText } from './home-failure'
 import { userListEnd } from './list-end'
-import type { Segment, SegmentPage } from './segment-page'
+import type { Segment, SegmentErrorInfo, SegmentPage } from './segment-page'
 import {
   emptyPage,
   firstPageOf,
   mergeSegmentPage,
+  segmentErrorInfo,
+  segmentErrorSuffix,
   segmentOfTab,
   segTitleOf,
   shouldRefetch,
@@ -108,6 +113,12 @@ export default function UserHome() {
   const isSelf = authedUser !== null && authedUser.id === userId
 
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
+  /**
+   * 整页失败带的错误码（#607）。与分段那条路径的 `page.error` 同源同形状 —— 三个终态里
+   * 只有 `failed` 有话说：`notFound` 是「后端说这个人不存在」，不该在空态上贴一个 404 码。
+   * `null` = 没有可显示的错误码（存在性判断漂移那支），文案退到不带码的通用句。
+   */
+  const [homeError, setHomeError] = useState<PublicUserFailure | null>(null)
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
   /**
    * 列表口径（#581）：**页内切换**，不换页面实例 —— 不 `navigateTo`、不写 URL 参数、
@@ -129,41 +140,61 @@ export default function UserHome() {
    */
   const inFlight = useRef(false)
 
-  const load = useCallback(async () => {
-    // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
-    setLoadState('loading')
-    setProfile(null)
-    const initial = segmentOfTab(tabParam)
-    // 先作废在途请求：上一轮还没回来的响应（含列表页）一个字段都不许写进新一轮
-    generation.current += 1
-    inFlight.current = false
-    // 段回到深链口径（`?tab=` 初值）。`load` 目前只在挂载与整页重试时调用，那时用户还没
-    // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
-    setSeg(initial)
-    setPage(emptyPage())
-    // 顶栏两态也要跟着复位：失败态会把 `ScrollView` 整块卸载，重试时它是新挂载的，
-    // 而这两个 page 级 state 会留着上一轮的值。
-    setGlassOn(false)
-    setTitled(false)
+  // `target` 只在「整页终态下点页头两格」时给：资料都没到，只能整页重来，而重来一遍不能
+  // 又被 `?tab=` 初值拽回原来那段（#598），所以目标段随参数带过去。
+  const load = useCallback(
+    async (target?: Segment) => {
+      // 重试先清残留：上一轮的终态、旧数据、还在飞的请求都不能带进新一轮。
+      setLoadState('loading')
+      setProfile(null)
+      // 上一轮的码也跟着复位。**目前这行是防御性的、不修画面**：`homeError` 只在
+      // `loadState === 'failed'` 那支里被读，而 `loadState` 在同一个同步块里已回到 `loading`
+      // （React 批处理成一次渲染，中途那一帧渲染的是骨架屏）——所以码清不清都不会被打出来。
+      // 留着是为了「一轮请求的所有残留都在入口处清干净」这条一致性，别据此推断 `LoadError`
+      // 在加载中仍然挂着（它没有）。
+      setHomeError(null)
+      const initial = target ?? segmentOfTab(tabParam)
+      // 先作废在途请求并领本轮代号：上一轮还没回来的响应（含列表页）一个字段都不许写进
+      // 新一轮。`sent` 还兼着挡**本轮自己**的过期回填（#598 复审 F1）：整页 failed 态的页头
+      // 两格相邻，连点「在售→卖出」现实可达 —— 后一次 `load` 会把代号再 +1，前一次的
+      // `loadPublicUserHome` 回来对不上就整包丢掉。不挡的话 SOLD 响应先回、ACTIVE 后回，
+      // 结果是 `seg === 'SOLD'` 却摆着一份在售首屏，而 `loaded: true` 让 `shouldRefetch`
+      // 恒假，没有任何一条路会再修它。
+      const sent = ++generation.current
+      inFlight.current = false
+      // 段回到深链口径（`?tab=` 初值）。`load` 的常规入口是挂载与整页重试，那时用户还没
+      // 切过段，`setSeg` 是幂等的 no-op —— 但它是「重载回到初始口径」的唯一落点，别当死代码删。
+      setSeg(initial)
+      setPage(emptyPage())
+      // 顶栏两态也要跟着复位：它们按滚动量算，整页重来后内容全换了，上一轮的值不再成立
+      // （`ScrollView` 自 #598 起常驻，重试不再靠卸载重挂来复位这两个 state）。
+      setGlassOn(false)
+      setTitled(false)
 
-    if (userId === '') {
-      // 没有 id 就没有"这个人"，不猜测是谁。
-      setLoadState('notFound')
-      return
-    }
+      if (userId === '') {
+        // 没有 id 就没有"这个人"，不猜测是谁。
+        setLoadState('notFound')
+        return
+      }
 
-    const result = await loadPublicUserHome(userId)
-    if (result.status !== 'ok') {
-      setLoadState(result.status)
-      return
-    }
-    setProfile(result.profile)
-    // 首屏那一页：「在售」段直接吃本次响应，「已售出」段拿到空页、由下面的 effect 补拉。
-    // 代价是已售出视图会多取一页用不上的在售列表（拆成两次请求会把 notFound / failed
-    // 的判定口径一分为二，不值得）。
-    setPage(firstPageOf(initial, result))
-    setLoadState('ok')
-  }, [tabParam, userId])
+      const result = await loadPublicUserHome(userId)
+      // 本轮已被后来的一次 `load` / 切段作废：一个字段都不写（见上面 `sent` 的说明）
+      if (sent !== generation.current) return
+      if (result.status !== 'ok') {
+        // `failed` 把读取层带上来的码落到页面上（#607）；`notFound` 没有码可言。
+        setHomeError(result.status === 'failed' ? result.error : null)
+        setLoadState(result.status)
+        return
+      }
+      setProfile(result.profile)
+      // 首屏那一页：「在售」段直接吃本次响应，「已售出」段拿到空页、由下面的 effect 补拉。
+      // 代价是已售出视图会多取一页用不上的在售列表（拆成两次请求会把 notFound / failed
+      // 的判定口径一分为二，不值得）。
+      setPage(firstPageOf(initial, result))
+      setLoadState('ok')
+    },
+    [tabParam, userId],
+  )
 
   /**
    * 拉当前口径的一页：`cursor === null` 是第一页，否则是「加载更多」的下一页。
@@ -176,14 +207,21 @@ export default function UserHome() {
       if (inFlight.current) return
       inFlight.current = true
       const sent = generation.current
-      setPage((prev) => ({ ...prev, loading: true, failed: false }))
+      setPage((prev) => ({ ...prev, loading: true, failed: false, error: null }))
       try {
         const next = await loadPublicUserListingsPage(userId, seg, cursor)
         // 切过段 / 重载过：这一份响应作废，一个字段都不写（连 `finally` 也不归还闩）
         if (sent !== generation.current) return
         if (next === null) {
-          // 用户在这一步消失了（注销 / 删除）：与首屏同一语义，整页退到 notFound。
-          setLoadState('notFound')
+          // 段级 404（页主在这一步注销 / 该段不可见）：**只降级这一段**。
+          // 不能整页退到 notFound —— 那会把 `ScrollView` 连页头那两格一起卸载，用户切一次段
+          // 就丢掉整页，且 `loadState` 成了终态、补拉 effect 恒假，怎么切都出不来（#598）。
+          // 码报不出来：`features/user/api.ts` 已把 404 折成 `null`，服务端的 `code` / `status`
+          // 到不了这一层。所以这里**只说一句中性的段内失败**，不替服务端编一个码（早前这一支
+          // 自造过一个「列表不存在」的码 + 404，页面于是摆出一个服务端从没说过的码、一个没有
+          // 任何一层真的读到的状态）。诊断留给 Console。
+          console.error('[miniapp] 他人主页：该段列表 404（该段不可见），按段内失败处理', seg)
+          setPage((prev) => ({ ...prev, loading: false, failed: true, error: null }))
           return
         }
         setPage((prev) => ({
@@ -191,12 +229,15 @@ export default function UserHome() {
           loaded: true,
           loading: false,
           failed: false,
+          error: null,
         }))
       } catch (error) {
         if (sent !== generation.current) return
         // 列表内的失败只降级列表（页头、顶栏都还在），不把整页打成 failed。
-        console.warn('[miniapp] 他人主页：列表加载失败', error)
-        setPage((prev) => ({ ...prev, loading: false, failed: true }))
+        // `code` / `status` 一并带上并写进页面文案：422 / 401 / 5xx 在端上必须可区分（#598）。
+        const info = segmentErrorInfo(error)
+        console.error('[miniapp] 他人主页：列表加载失败', seg, info.code, info.status, error)
+        setPage((prev) => ({ ...prev, loading: false, failed: true, error: info }))
       } finally {
         if (sent === generation.current) inFlight.current = false
       }
@@ -225,10 +266,13 @@ export default function UserHome() {
   /**
    * 滚到底补下一页。`onScrollToLower` 在内容不满一屏时也会触发，
    * 所以「没有下一页」与「正在拉」都必须先挡住，不能只靠事件本身。
+   * `page.failed` 同样要挡（#598）：失败后 `nextCursor` 还留着，不挡的话用户每上滑一次就
+   * 重打同一个游标、再失败一次。重试入口是**显式**的：首屏失败走列表空态那颗「重试」，
+   * 续页失败走列表尾部那行「没拉到更多…点这里重试」（见 `page.failed && items.length > 0`）。
    */
   const onScrollToLower = useCallback(() => {
     if (loadState !== 'ok') return
-    if (page.loading || page.nextCursor === null) return
+    if (page.loading || page.failed || page.nextCursor === null) return
     void loadSegment(page.nextCursor)
   }, [loadSegment, loadState, page])
 
@@ -331,6 +375,9 @@ export default function UserHome() {
       setSeg(next)
       setPage(emptyPage()) // 新段从第一页拉，不继承上一段的游标与失败态
       scrollToBody()
+      // 整页终态（`notFound` / `failed`）下这两格根本不走这里：`switchSegment` 的调用方只有
+      // 页头那两格，而它们在 `profile` 非空（即 `loadState === 'ok'`）时才渲染。终态下另有
+      // 一条路直接 `load(next)`（见降级页头），别在这儿再加一条同样够不着的分支。
     },
     [scrollToBody, seg],
   )
@@ -844,19 +891,13 @@ export default function UserHome() {
         actions={navReportAction}
       />
 
-      {loadState === 'failed' ? (
-        <LoadError title="主页加载失败" onRetry={() => void load()} />
-      ) : loadState === 'notFound' ? (
-        <EmptyState
-          title="用户不存在"
-          text="这个主页的主人可能已注销，或链接已失效"
-          icon={ICONS.boxMuted}
-          actionText="返回"
-          onAction={() => {
-            goBackOrHome()
-          }}
-        />
-      ) : (
+      {/* 三条加载态（loading / ok / 整页终态）共用**同一个**滚区（#598 验收②）：
+          整页 failed / notFound 原来是把 ScrollView 整块换掉，页头（含在售 / 卖出两格）
+          也跟着被卸载 —— 终态下切段无从点起，用户只剩一块报错。现在报错块退到列表区里
+          就地渲染（见下面列表区的第一条分支），页头与两格照常挂载。
+          这层的 `{ … }` 是有意的：它让整块 ScrollView 不必为条件退让而重排缩进，
+          #578 正在同一个文件的页头与两格里改东西，diff 越小越好合。 */}
+      {
         <ScrollView
           className="uhome__scroll"
           scrollY
@@ -879,21 +920,8 @@ export default function UserHome() {
               <View className="uhome__identity" style={{ marginTop: `${identityTopGap}px` }}>
                 <View className="uhome__profile" id="uhome-profile">
                   {/* 头像：契约的 `PublicUserProfileSchema.avatarUrl` 真实存在（可空），
-                      有图就渲染真图；只有「没有图」才退昵称首字 —— 首字是缺图的降级呈现，
-                      不是这个人的身份。首字降级与 `conversation` 同款
-                      （`watchers` 的缺图降级是 `—`，不是首字，别照抄那一处）。
-                      不做占位色块：本页有首字可退，比通用色块更可辨。 */}
-                  <View className="uhome__avatar">
-                    {profile.avatarUrl ? (
-                      <Image
-                        className="uhome__avatar-img"
-                        src={profile.avatarUrl}
-                        mode="aspectFill"
-                      />
-                    ) : (
-                      <Text className="uhome__avatar-tx">{profile.nickname.slice(0, 1)}</Text>
-                    )}
-                  </View>
+                      有图就渲染真图；没有图渲统一默认头像（#618），不再拿昵称首字顶替。 */}
+                  <UserAvatar className="uhome__avatar" src={profile.avatarUrl} />
                   <View className="uhome__pinfo">
                     <View className="uhome__nameRow">
                       <Text className="uhome__pname">{profile.nickname}</Text>
@@ -1056,7 +1084,35 @@ export default function UserHome() {
                   </View>
                 ) : null}
               </View>
-            ) : (
+            ) : loadState === 'failed' ? (
+              /* 整页加载失败（#598 验收②）：两格必须还在、还能点 —— 点一下就是「按这一段
+                 整页重拉」，目标段随 `load(next)` 带过去（不带就被 `?tab=` 拽回原段）。
+                 资料没到 ⇒ 头像 / 昵称 / 关注钮一概不画（不编一个假人），计数也无从谈起、
+                 退成 `--`；只保留两格与它们各自的点击。
+                 notFound（页主不存在）不画两格：那个人没有列表可切，点了也没有意义。
+                 `.uhome__identity` + `identityTopGap` 与另两态同口径：`NavBar` 是透明覆盖层，
+                 少了这层让位，两格会顶到状态栏 / 返回钮那一带（#598 复审 F2）。 */
+              <View className="uhome__identity" style={{ marginTop: `${identityTopGap}px` }}>
+                <View className="uhome__stats">
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={() => void load('ACTIVE')}
+                  >
+                    <Text className="uhome__stat-num num">--</Text>
+                    <Text className="uhome__stat-label">在售</Text>
+                  </View>
+                  <View
+                    className="uhome__stat uhome__stat--link"
+                    hoverClass="uhome__stat--tap"
+                    onClick={() => void load('SOLD')}
+                  >
+                    <Text className="uhome__stat-num num">--</Text>
+                    <Text className="uhome__stat-label">卖出</Text>
+                  </View>
+                </View>
+              </View>
+            ) : loadState === 'notFound' ? null : (
               /* 资料没拿到之前先给页头骨架：头像盘 + 昵称条 + 关注钮占位 + 数据行条
                   （稿 04 帧的页头骨架）。
                   **关注钮要占位**（#188 起它是真实钮：已登录且非本人主页时必然渲染），
@@ -1114,10 +1170,43 @@ export default function UserHome() {
                   件数取该段的服务端真总数（在售 `activeCount` / 已售出 `soldCount`），
                   不用 items.length —— 列表是分页的，用它会在还没加载完时低报。 */}
               <Text className="uhome__sect-title">{`TA 的${segTitle}`}</Text>
-              <Text className="uhome__sect-cnt num">{profile ? `${segTotal} 件` : '加载中'}</Text>
+              <Text className="uhome__sect-cnt num">
+                {/* 整页终态时下面那块是报错，不是「还在拉」，别在这儿写「加载中」 */}
+                {loadState === 'failed' || loadState === 'notFound'
+                  ? ''
+                  : profile
+                    ? `${segTotal} 件`
+                    : '加载中'}
+              </Text>
             </View>
 
-            {loadState === 'loading' || (!page.loaded && !page.failed) ? (
+            {loadState === 'failed' ? (
+              <LoadError
+                title="主页加载失败"
+                // 码要落到端上（#607）：这句以前是写死的「网络异常，请重试」，422 / 401 / 5xx
+                // 全长得一样，真机上没有 Console 就无从区分「版本不匹配」「会话失效」「服务端挂了」。
+                // 与分段那条路径共用 `segmentErrorSuffix`，只是前半句不同（见 ./home-failure.ts）。
+                text={homeFailureText(homeError)}
+                onRetry={() => {
+                  // 保住用户已经切到的段（`load()` 无参会被 `?tab=` 拽回初值），并把滚动挪回
+                  // 顶部：`ScrollView` 自 #598 起常驻，`scrollTop` 会留着，而 `glassOn` /
+                  // `titled` 已按「整页重来」复位 —— 不归位就是「导航条透明、居中标题不出现」
+                  // 直到用户再滚一次（#598 复审 F8/F10）。
+                  backToTop()
+                  void load(seg)
+                }}
+              />
+            ) : loadState === 'notFound' ? (
+              <EmptyState
+                title="用户不存在"
+                text="这个主页的主人可能已注销，或链接已失效"
+                icon={ICONS.boxMuted}
+                actionText="返回"
+                onAction={() => {
+                  goBackOrHome()
+                }}
+              />
+            ) : loadState === 'loading' || (!page.loaded && !page.failed) ? (
               <View className="uhome__grid">
                 {[0, 1, 2, 3].map((i) => (
                   <View key={`sk-${i}`} className="uhome__skel">
@@ -1130,10 +1219,12 @@ export default function UserHome() {
                 ))}
               </View>
             ) : page.failed && items.length === 0 ? (
-              /* 列表失败只降级列表：页头、顶栏都还在，所以不用整页 LoadError */
+              /* 列表失败只降级列表：页头、顶栏都还在，所以不用整页 LoadError。
+                 文案尾巴带上 `code` / `status`：422 / 401 / 5xx 在端上必须能分辨（#598），
+                 真机验收拿不到 Console 时就看这一行。 */
               <EmptyState
                 title="列表加载失败"
-                text={`${segTitle}商品没拉到，其它内容不受影响`}
+                text={`${segTitle}商品没拉到，其它内容不受影响${segmentErrorSuffix(page.error)}`}
                 icon={ICONS.boxMuted}
                 actionText="重试"
                 onAction={() => void loadSegment(null)}
@@ -1172,7 +1263,23 @@ export default function UserHome() {
                 或该段真总数大于已展示条数时改说「仅显示最近 N 件」，不能宣称 TA 就这些
                 （判定见 `./list-end.ts`）。
                 两条都**不带总数**：稿的 N 是列表长度，与服务端 COUNT 口径不同，带上会打架。 */}
-            {end === 'end' ? (
+            {/* 续页失败（#598 复审 M1）：商品已经在屏上、只是「更多」没拉到。
+                既不能整块换成上面的失败空态（那会把已展示的商品一起藏掉），也不能让
+                `list-end` 继续报「仅显示最近 N 件」这种正常文案 —— 一句好话、零诊断、没出口。
+                这里就地给一行可点的重试：`nextCursor` 还在，点一下就是重打同一游标。 */}
+            {page.failed && items.length > 0 ? (
+              <View
+                className="uhome__list-end"
+                hoverClass="uhome__list-end--tap"
+                onClick={() => void loadSegment(page.nextCursor)}
+              >
+                <View className="uhome__list-end-line" />
+                <Text className="uhome__list-end-txt num">
+                  {`没拉到更多${segmentErrorSuffix(page.error)}，点这里重试`}
+                </Text>
+                <View className="uhome__list-end-line" />
+              </View>
+            ) : end === 'end' ? (
               <View className="uhome__list-end">
                 <View className="uhome__list-end-line" />
                 <Text className="uhome__list-end-txt num">已经到底了</Text>
@@ -1187,7 +1294,7 @@ export default function UserHome() {
             ) : null}
           </View>
         </ScrollView>
-      )}
+      }
 
       {/* 回到顶部（内滚容器版：滚回由 scrollIntoView 锚点完成，见 backToTop） */}
       <BackTop show={showTop} onTop={backToTop} />

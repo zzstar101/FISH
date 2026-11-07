@@ -36,6 +36,7 @@ import {
   transactionDtoSchema,
   transactionListResponseSchema,
 } from '@fish/contracts/transactions/schema'
+import { listSnapshots } from '@/features/list-snapshots'
 import { apiRequest, isApiError } from '@/lib/request'
 
 /** 列表单页上限。契约 `transactionListQuerySchema.limit` 的上限是 50，超了被 422 拒掉。 */
@@ -142,8 +143,13 @@ export async function verifyMeetupCode(
 
 /** 双方确认面交（核销成功后的 nextAction；幂等，第二侧确认触发 COMPLETED + 商品 SOLD）。 */
 export async function confirmTransaction(id: string): Promise<TransactionDto> {
-  const payload = await apiRequest(TRANSACTION_ROUTES.confirm(id), { method: 'POST' })
-  return transactionDtoSchema.parse(payload)
+  const finish = listSnapshots.startMutation(['buyer', 'seller', 'favorites'])
+  try {
+    const payload = await apiRequest(TRANSACTION_ROUTES.confirm(id), { method: 'POST' })
+    return transactionDtoSchema.parse(payload)
+  } finally {
+    finish()
+  }
 }
 
 /*
@@ -181,11 +187,16 @@ export async function acceptTransaction(
   conversationId: string,
   amountCents: number,
 ): Promise<TransactionDto> {
-  const payload = await apiRequest(TRANSACTION_ROUTES.accept, {
-    method: 'POST',
-    body: { conversationId, amountCents },
-  })
-  return transactionDtoSchema.parse(payload)
+  const finish = listSnapshots.startMutation(['buyer', 'seller', 'favorites'])
+  try {
+    const payload = await apiRequest(TRANSACTION_ROUTES.accept, {
+      method: 'POST',
+      body: { conversationId, amountCents },
+    })
+    return transactionDtoSchema.parse(payload)
+  } finally {
+    finish()
+  }
 }
 
 /*
@@ -197,8 +208,13 @@ export async function acceptTransaction(
  * 的重复取消返回现状（200）；`COMPLETED` 上 409 `TRANSACTION_NOT_IN_PENDING`。
  */
 export async function cancelTransaction(id: string): Promise<TransactionDto> {
-  const payload = await apiRequest(TRANSACTION_ROUTES.cancel(id), { method: 'POST' })
-  return transactionDtoSchema.parse(payload)
+  const finish = listSnapshots.startMutation(['buyer', 'seller', 'favorites'])
+  try {
+    const payload = await apiRequest(TRANSACTION_ROUTES.cancel(id), { method: 'POST' })
+    return transactionDtoSchema.parse(payload)
+  } finally {
+    finish()
+  }
 }
 
 /*

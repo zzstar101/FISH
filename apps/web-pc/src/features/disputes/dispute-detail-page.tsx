@@ -558,13 +558,9 @@ function PartiesCard({ dispute, viewerId }: { dispute: DisputeDetail; viewerId: 
 function PartyRow({ label, nickname }: { label: string; nickname: string }) {
   return (
     <div className="flex items-center gap-3">
-      <UserAvatar
-        avatarUrl={null}
-        className="size-10"
-        emoji={nickname.slice(0, 1)}
-        fallbackClassName="text-base"
-        size="lg"
-      />
+      {/* 契约 `DisputeUserSummarySchema` 只有 id + nickname，没有 avatarUrl
+          （`packages/contracts/src/disputes/schema.ts`），所以这里恒为默认头像（#618） */}
+      <UserAvatar className="size-10" size="lg" />
       <div className="min-w-0">
         <p className="truncate font-medium text-sm">{nickname}</p>
         <p className="mt-0.5 text-ink-3 text-xs">{label}</p>

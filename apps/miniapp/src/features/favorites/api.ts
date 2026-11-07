@@ -23,6 +23,7 @@ import {
   type MyFavoritesResponse,
   MyFavoritesResponseSchema,
 } from '@fish/contracts/favorites/schema'
+import { listSnapshots } from '@/features/list-snapshots'
 import { apiRequest } from '@/lib/request'
 
 /**
@@ -42,10 +43,38 @@ export async function fetchFavoriteState(listingId: string): Promise<FavoriteSta
  * 也就不存在两次点击交错时「点两下变成收藏」的经典竞态。
  */
 export async function setFavorite(listingId: string, favorited: boolean): Promise<FavoriteState> {
-  const payload = await apiRequest(FAVORITE_ROUTES.favoriteRelation(listingId), {
-    method: favorited ? 'POST' : 'DELETE',
-  })
-  return FavoriteStateSchema.parse(payload)
+  const finish = listSnapshots.startMutation(['favorites'])
+  try {
+    const payload = await apiRequest(FAVORITE_ROUTES.favoriteRelation(listingId), {
+      method: favorited ? 'POST' : 'DELETE',
+    })
+    return FavoriteStateSchema.parse(payload)
+  } finally {
+    finish()
+  }
+}
+
+/** Sequential writes stay bound to the initiating account and page lifetime. */
+export async function removeFavorites(ids: readonly string[], isActive: () => boolean) {
+  const owner = listSnapshots.owner()
+  const finish = listSnapshots.startMutation(['favorites'])
+  const removedIds = new Set<string>()
+  const failed: string[] = []
+  try {
+    for (const id of ids) {
+      if (!listSnapshots.isOwner(owner) || !isActive()) break
+      try {
+        const result = await setFavorite(id, false)
+        if (result.favorited) failed.push(id)
+        else removedIds.add(id)
+      } catch {
+        failed.push(id)
+      }
+    }
+    return { removedIds, failed }
+  } finally {
+    finish()
+  }
 }
 
 /**

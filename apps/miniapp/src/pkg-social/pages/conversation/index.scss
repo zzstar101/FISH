@@ -422,8 +422,11 @@
   position: relative;
   z-index: 1;
   flex: 1;
-  /* 兜底：窄屏/小屏上也要留住能看两三条消息的高度，不被页头挤成一条缝 */
-  min-height: 260px;
+  /* 兜底：窄屏/小屏上也要留住能看两条消息的高度，不被页头与底部底座（键盘/面板）挤成一条缝。
+     改前是 260px —— 面板从流内块改成吸底浮层后，底部底座最高要吃掉一整把键盘（~280pt），
+     260 的兜底会让 flex 列溢出一截：`.conv` 是 `overflow: hidden`，溢出的部分直接把输入栏
+     顶出屏幕。真正的「高度分配」是 flex: 1，这条只是防塌。 */
+  min-height: 120px;
 }
 
 /* 消息列表：左右与商品摘要条同一 32px 栅格；打开即停在最新（底部）。
@@ -540,25 +543,6 @@
   justify-content: center;
   background: var(--grad-icon);
   border: 2px solid var(--border);
-}
-
-.conv__ava.is-mine {
-  background: var(--accent-faint);
-}
-
-.conv__ava-img {
-  width: 100%;
-  height: 100%;
-}
-
-.conv__ava-tx {
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--brand-deep-2);
-}
-
-.conv__ava.is-mine .conv__ava-tx {
-  color: var(--muted-2);
 }
 
 .conv__col {
@@ -1051,27 +1035,61 @@
 
 /* ---------------------------------------------------------------- 输入栏 */
 
-/* 吸底（flex 列的最后一个固定块）+ 安全区内衬；语音/加号/发送与输入框顶边对齐 */
+/*
+ * 输入栏几何口径（#577）。三端统一靠的是**同一个数**，不是三处分别写对 ——
+ * 之前 68 在四个控件上各写一遍、176 只写在输入框上，谁改一处就再也对不齐。
+ *
+ * 数值仍是设计稿 pt × 2（见文件头）：Taro 的 `designWidth` 是 750，wxss 里 1px = 1rpx，
+ * 所以 `68px` 落盘就是 `68rpx`。**不要**在这里写 rpx，全仓 scss 都按 px 写。
+ */
+$bar-control-px: 68px; // 空内容/单行：输入框与语音、加号、发送三颗钮同高（34pt）
+$bar-gap-px: 16px; // 输入行上下基础间距（8pt），上下都用它
+$bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后输入框内部滚动
+
+/* 底部底座（#597 / #577）：输入栏 + 「+」面板的公共容器。
+   - `position: relative`：面板是它的绝对定位子元素，得有个定位父级；
+   - `flex: 0 0 auto`：高度由内容（输入栏 + 下内边距）说了算，不参与瓜分剩余高度；
+   - `z-index: 20`：整块压在消息流（1）之上，面板与输入栏都在同一层里，不会互相夹；
+   - `background`（#577）：它是 flex 列的最后一个孩子，背景得由它一直铺到**小程序窗口底边**
+     那一条（收起态的安全区内衬就画在这里），否则底栏和窗口之间会露出一条底色缝；
+   - `padding-bottom: env(safe-area-inset-bottom)`（#577）：**安全区在本页只算这一次**。
+     键盘/面板展开时它由 JS 内联清零（`resolveBottomReserveStyles`），因为占用者自己已经把
+     屏幕底部那块高度占了；收起态才由这里兜住 home indicator。
+   结构约定：本容器只承担「贴底 + 背景 + 安全区 + 面板定位父级」，输入栏自己的几何
+   （内边距、68px 控件、间距）一律留在 `.conv__bar`。 */
+.conv__bottom {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  background: var(--surface);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* 吸底（flex 列的最后一个固定块）；语音/加号/发送与输入框底边对齐。
+   上下基础间距只用 `$bar-gap-px`：下边距在占用态会被 JS 内联覆盖成
+   `calc(占位高度 + $bar-gap-px)`，所以这里**不写安全区**，写了就是第二次计数。 */
 .conv__bar {
   position: relative;
   z-index: 20;
   flex: 0 0 auto;
   background: var(--surface);
   border-top: 2px solid var(--border);
-  padding: 16px 24px calc(16px + env(safe-area-inset-bottom));
+  padding: $bar-gap-px 24px;
 }
 
+/* 输入行：`flex-end`（#577）—— 多行输入把行撑高时，三颗钮跟着底边对齐、不被拉伸
+   （它们是 `flex: 0 0 auto` + 固定高，既压不扁也伸不上去）。单行时四者等高，看不出差别。 */
 .conv__bar-row {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 16px;
 }
 
-/* 语音/键盘切换（稿子 .cbtn）：68px 圆，按下（语音态）走淡品牌底 */
+/* 语音/键盘切换（稿子 .cbtn）：控件高的正圆，按下（语音态）走淡品牌底 */
 .conv__cbtn {
   flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: $bar-control-px;
+  height: $bar-control-px;
   border-radius: 50%;
   background: var(--ice);
   border: 2px solid var(--border);
@@ -1090,14 +1108,26 @@
   height: 40px;
 }
 
-/* 输入框：单行 34pt 起，随内容长高（上限 88pt），长文本能全看见 */
+/*
+ * 输入框：单行 = 控件高（`$bar-control-px`，与三颗钮同一个数），随内容长高到上限
+ * `$bar-input-max-px`，超出后由原生在框内滚动、光标跟着走。
+ *
+ * 上下 padding **不是拍出来的数**，而是 `(控件高 − 行高) / 2`：这样单行时盒高（border-box）
+ * 正好等于控件高，`--fs-body` 以后换字号也不会悄悄比按钮高出一截（改前写死 14px：
+ * 28px × 1.4 = 39.2 + 28 = 67.2，靠 `min-height: 68px` 兜到 68，文字比预算低 0.4px 居中）。
+ * `1.4em` 就是下面那条 `line-height: 1.4`，改一个另一个必须跟着改 —— 两处同一个数，别分家。
+ *
+ * ⚠️ 前置条件：这条算式假设**原生 textarea 的单行行盒 == `1.4em`（39.2rpx）**。若某个平台/基础库的
+ * 单行行盒更高，`min-height: $bar-control-px` 就只是下限，盒高会超出去、输入框比三颗钮高一截
+ * —— 那正是 #577 报的现象之一，只能在端上量（判定规则 2「四控件同高」是它的验收项）。
+ */
 .conv__input {
   flex: 1;
   min-width: 0;
   width: auto;
-  min-height: 68px;
-  max-height: 176px;
-  padding: 14px 24px;
+  min-height: $bar-control-px;
+  max-height: $bar-input-max-px;
+  padding: calc((#{$bar-control-px} - 1.4em) / 2) 24px;
   border-radius: 34px;
   background: var(--ice);
   font-size: var(--fs-body);
@@ -1169,8 +1199,8 @@
 /* 「+」：展开态深墨底 + 图标转白 + 转 45°（语义从「更多」变成「收起」） */
 .conv__plus {
   flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
+  width: $bar-control-px;
+  height: $bar-control-px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1200,7 +1230,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 68px;
+  height: $bar-control-px;
   padding: 0 30px;
   border-radius: var(--r-pill);
   background: var(--brand-deep);
@@ -1221,28 +1251,41 @@
   color: var(--surface);
 }
 
-/* 面板：吸在输入行下方，三等分格（图片 / 拍照 / 商品） */
+/* 面板：**吸底浮层**，不再是输入栏里的流内块（#597）。
+   它绝对定位在 `.conv__bottom` 里、贴住屏幕底边，高度由**内容自己撑开**（`height: auto`）——
+   就是三格图标的实际高度，与键盘高度**解耦**（#597 追加任务：按上次键盘高撑开会在面板下方
+   留一大片空白）。底座让出多少高度由 `view.ts` 的 `resolvePanelHeightPx()` 算（= 这里的上下
+   内边距 + 圆钮 + 间隙 + 一行文字 + 底部安全区），JSX 内联成 `.conv__bar` 的下内边距。
+   于是键盘 ↔ 面板切换时底座会**一次**变高/变矮（差一个「键盘高 − 面板高」），这是预期行为。
+   `z-index: 21`：输入栏自己是不透明的（`background: var(--surface)` + `z-index: 20`），
+   它的盒子连内边距一起铺满整个底座，面板要画在那条内边距带上就必须压过它一格。
+   面板内容恒比那条让位带矮 16px（`$bar-gap-px`），所以这一格只会盖住**内边距**、不会盖住
+   输入行本身（两者永不重叠）；文字行高的估算误差也由这 16px 吸收。 */
 .conv__panel {
-  display: flex;
-  gap: 20px;
-  padding: 24px 4px 0;
-  margin-top: 20px;
-  border-top: 2px solid var(--accent-faint);
-}
-
-/* 「+」面板的点外部收起遮罩（#541）：透明，吃掉「面板与输入栏之外」的触摸 —— 面板
-   展开期间这片区域不再响应手势（消息流暂时滑不动，收起后恢复），这是「点空白即收起」
-   的必然代价。
-   层级夹在消息流（1）与输入栏（20）之间，所以输入栏和面板自己照常可点，消息流里的
-   长按菜单 / 点图看大图 / 商品条进详情也拿不到这些触摸；
-   顶边由 JSX 内联给（导航行底边 = `metrics.totalHeight`），返回钮不在遮罩下。 */
-.conv__panel-mask {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 3;
+  z-index: 21;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  /* 水平 28px = 老版「输入栏 24px 内边距 + 面板 4px」，三格与旧版的视觉位置保持一致。
+     下内边距带安全区（#577）：面板展开时它是**占用者**，`.conv__bottom` 的安全区内衬已被
+     `resolveBottomReserveStyles` 内联清零，所以这里的 env 是那个状态下唯一一次计数 ——
+     面板高度 = 内容高 + 这条安全区（`resolvePanelHeightPx`），贴到屏幕底边时格子不会掉进
+     home indicator 里。
+     下面三个数与 `view.ts` 的 `PANEL_PADDING_RPX` / `PANEL_DISC_RPX` / `PANEL_TILE_GAP_RPX` /
+     `PANEL_LABEL_RPX` 一一对应，改这里必须同步改那里（单测钉住两边一致） */
+  padding: 24px 28px calc(24px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 2px solid var(--accent-faint);
 }
+
+/* 注：点外部收起不再用遮罩层（#597）。改前那层透明浮层绝对定位铺满消息流
+   （z-index: 3，压在 scroll 的 1 与输入栏的 20 之间），代价是面板展开期间这一片收不到手势 ——
+   消息流滑不动、长按/点图全被吃掉。现在改由消息流的**点击**收起面板：触摸先落到 ScrollView
+   自己身上，拖动照常滚动（触摸开始只记起点），松手时位移在容差内才算点空白。 */
 
 .conv__ptile {
   flex: 1;
@@ -1268,7 +1311,173 @@
   height: 48px;
 }
 
+/* 行高必须**写死**（#597）：面板高度由 `view.ts` 的 `PANEL_LABEL_RPX` 算，
+   不写 `line-height` 时行盒落在 `normal` 上、取端上字体的一套行距，纯函数算出来的就不是
+   面板真实高度了。22px 字号配 1.36 倍 = 30px，与 `PANEL_LABEL_RPX` 逐项对应。 */
 .conv__ptile-label {
   font-size: 22px;
+  line-height: 30px;
   color: var(--muted-2);
+}
+
+/**
+ * 消息流末尾的「交易进度」块（#613）：阶段胶囊 + 交易气泡。
+ *
+ * 位置在消息流末尾、贴着输入栏那一段，**居中**一块 —— 它不属于任何一方，买卖两侧
+ * 看到的是同一张卡（`.conv__list` 是 `align-items: flex-start`，所以这里要自己
+ * `align-self: stretch` 才能占满整行）。
+ *
+ * 配色口径：沿用消息 Tab 列表 `.chat__pill`（`pages/chat/index.scss:259`）的「浅底彩字」
+ * 语言，色值取 token（`--ok-weak` / `--ok-ink`）。刻意**不复用**订单页 `status-pill` 的
+ * 深底实心：那套会把「交易成功」画成一块黑标签（`features/chat/capsule.ts` 文件头记着
+ * 这条 Owner 结论）。
+ *
+ * 只有成交档（交易成功 / 交易全流程完成）会出胶囊 —— 提案 / 接受 / 拒绝三档的说法由流里
+ * 的 SYSTEM 灰胶囊承担，已取消档由顶部状态条承担；这两档的 `capsule.tone` 都是 `is-ok`，
+ * 所以这里只落一档绿色，不按 `TxBarTone` 铺四套配色（那四档只属于顶部状态条）。
+ */
+.conv__txstage {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0 6px;
+}
+
+.conv__txstage-pill {
+  max-width: 100%;
+  padding: 10px 22px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  /* 长文案（「商品被拍下，前往确认」）在窄屏上省略，不挤压气泡宽度 */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 绿 = 交易成功 / 全流程完成（`capsule.tone === 'is-ok'`，当前唯一会出胶囊的档） */
+.conv__txstage-pill.is-ok {
+  background: var(--ok-weak);
+  color: var(--ok-ink);
+}
+
+.conv__txstage-pill-tx {
+  font-size: inherit;
+}
+
+/* 气泡：居中等宽卡（不吃消息气泡的左右分侧布局） */
+.conv__txstage-card {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 26px;
+  border-radius: 32px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.conv__txstage-title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 一行三段：商品图 + 名与价 + 右侧动作区（动作区竖排，卖家的「确认 / 拒绝」就靠它） */
+.conv__txstage-item {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.conv__txstage-thumb {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+  overflow: hidden;
+  background: var(--ink-weak);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conv__txstage-img {
+  width: 100%;
+  height: 100%;
+}
+
+.conv__txstage-ph {
+  width: 48px;
+  height: 48px;
+}
+
+/* 名与价吃掉中间剩余宽度：商品名一行省略，价格不换行 */
+.conv__txstage-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conv__txstage-nm {
+  font-size: var(--fs-xs);
+  /* 用 --muted-2（#3e4b66，已定义）：`--ink-2` 在本仓**没有定义**（`styles/_token-vars.scss`
+     里只有 --ink / --ink-weak*），拿它写颜色会静默失效 */
+  color: var(--muted-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.conv__txstage-price {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--price);
+  white-space: nowrap;
+}
+
+.conv__txstage-price-n {
+  font-size: inherit;
+}
+
+/* 动作区：竖排（「确认」在上、「拒绝」在下，与 Owner 口述的排列一致） */
+.conv__txstage-acts {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.conv__txstage-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 132px;
+  height: 56px;
+  padding: 0 22px;
+  border-radius: var(--r-pill);
+  background: var(--brand-deep);
+  color: var(--surface);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 次要动作（拒绝）走描边：与顶部状态条 `.conv__pbar-act--ghost` 同一视觉语言 */
+.conv__txstage-act.is-ghost {
+  background: transparent;
+  color: var(--muted-2);
+  /* 用 inset 阴影画描边而不是 border：两颗钮高度一致，不吃盒模型差异 */
+  box-shadow: inset 0 0 0 2px rgba(23, 35, 61, 0.22);
 }

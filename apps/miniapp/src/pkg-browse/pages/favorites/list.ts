@@ -75,8 +75,11 @@ type FavoriteBase = {
    * 填 `null`，页面据此只给提示、不猜人。
    */
   sellerId: string | null
-  /** 头像色块（`AVATAR_BLOCKS` 的下标，见文件头「色块不新增色值」） */
-  avatarUrl: string
+  /**
+   * 卖家头像 URL（#618）：真实行取契约 `listing.seller.avatarUrl`，**缺图保持 `null`**，
+   * 由视图层画统一默认头像；演示 fixture 仍取 `AVATAR_BLOCKS` 色块（演示数据不动）。
+   */
+  avatarUrl: string | null
   verified: boolean
   /**
    * 「N 人想要」：契约 `ListingCardSchema.wants` = 该商品已建会话的买家数（#74 口径），
@@ -344,10 +347,9 @@ export function toFavoriteItems(
       priceCents: listing.priceCents,
       seller: listing.seller?.nickname ?? '',
       sellerId: listing.seller?.id ?? null,
-      // 契约的 `avatarUrl` 可为 `null`（库里是无约束 text）。缺图给通用占位色块，
-      // 与 `features/listing/adapt.ts` 同一取法 —— 占位图是「这张图没有」的呈现，
-      // 不是编造这个人的身份。
-      avatarUrl: listing.seller?.avatarUrl ?? AVATAR_BLOCKS[0] ?? '',
+      // 契约的 `avatarUrl` 可为 `null`（库里是无约束 text），**原样保留**：缺图由视图层
+      // 画统一默认头像（#618），与 `features/listing/adapt.ts` 同一取法。
+      avatarUrl: listing.seller?.avatarUrl ?? null,
       verified: listing.seller?.authStatus === 'VERIFIED',
       // 想要数：契约 `ListingCardSchema.wants`（= 该商品已建会话的买家数）直传，页面按需渲染
       wants: listing.wants,

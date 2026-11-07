@@ -83,6 +83,35 @@ export function lastEventOfMessages(messages: readonly MessageDto[]): TxMessageE
 }
 
 /**
+ * 同一会话多笔历史交易的 latest-wins 判据 —— **唯一一份**（#613 明确不许分叉出第三套）。
+ *
+ * 已取消的行可以被**后来的**提案盖过：取消把 listing 放回 ACTIVE，同一会话即可重新提案
+ * （`propose` 只写消息、不落表），此时行与提案并存。终态不写 SYSTEM 消息（契约
+ * `transactionSystemEventSchema` 三元），所以「最后一个交易事件是提案」只可能来自
+ * accepted 之后的新提案 —— 此刻更能回答「现在等我做什么」的是提案。
+ *
+ * 完成态与 PENDING_MEETUP 不适用：前者商品已 SOLD、后者被 RESERVED 锁住，
+ * `propose` 都会 409，不可能再有新提案。
+ *
+ * 返回 `null` = 这笔行此刻不作数（已被提案盖过），调用方改按提案陈述。
+ *
+ * **已确认的边界（Owner 定论 2026-11-03：保留现状）**：同一会话存在过一笔 `CANCELLED`
+ * 交易行、买家再提案、卖家拒绝之后，拒绝只写一条 `tx.rejected`（不落表），于是「消息里
+ * 最后一个 `tx.*` 事件」变成 `tx.rejected` ⇒ 这里返回那笔 `CANCELLED` 行 ⇒ 顶部按终态
+ * 陈述「交易已取消 · 查看」，不再退回「在售」。商品事实上仍在售，与 #551 验收第 2 条
+ * 「拒绝后顶部退回『在售 · 查看』」的字面只在**首次提案（无历史交易行）**时完全一致；
+ * 多笔历史交易时按终态陈述。此处不要「顺手修」—— 它同时决定列表胶囊与两处状态位，
+ * 改判据需 Owner 重新拍板。
+ */
+export function currentTxOf<T extends { status: string }>(
+  tx: T | null | undefined,
+  lastEventType: string | null | undefined,
+): T | null {
+  const proposalSupersedes = tx?.status === 'CANCELLED' && lastEventType === 'tx.proposal'
+  return proposalSupersedes ? null : (tx ?? null)
+}
+
+/**
  * 单个会话行的胶囊状态。`null` = 没有交易意向，不显示。
  *
  * `txEvents` 是**已扫描**的提案索引（可缺省）：命中该会话时用它（`null` 也照用，
@@ -98,25 +127,18 @@ export function capsuleFor(
   const event = txEvents?.has(conversation.id)
     ? (txEvents.get(conversation.id) ?? null)
     : lastEventOfLastMessage(conversation)
-  /*
-   * 已取消的行可以被**后来的**提案盖过：取消把 listing 放回 ACTIVE，同一会话即可
-   * 重新提案（`propose` 只写消息、不落表），此时行与提案并存。终态不写 SYSTEM 消息
-   * （契约 `transactionSystemEventSchema` 三元），所以「最后一个交易事件是提案」
-   * 只可能来自 accepted 之后的新提案 —— 此刻更能回答「现在等我做什么」的是提案。
-   *
-   * 完成态与 PENDING_MEETUP 不适用：前者商品已 SOLD、后者被 RESERVED 锁住，
-   * `propose` 都会 409，不可能再有新提案。
-   */
-  const proposalSupersedes = tx?.status === 'CANCELLED' && event?.type === 'tx.proposal'
-  if (tx && !proposalSupersedes) {
+  /** 取消后又被新提案盖过时，这一行按提案陈述（判据见 `currentTxOf`，唯一一份） */
+  const currentTx = currentTxOf(tx, event?.type)
+  if (currentTx) {
     // 终态：完成走绿、取消走浅底灰字（唯一不用做任何事的一档）。
-    if (tx.status === 'COMPLETED') return { label: '已完成', cls: 'is-ok' }
-    if (tx.status === 'CANCELLED') return { label: '已取消', cls: 'is-plain' }
+    if (currentTx.status === 'COMPLETED') return { label: '已完成', cls: 'is-ok' }
+    if (currentTx.status === 'CANCELLED') return { label: '已取消', cls: 'is-plain' }
     /**
      * PENDING_MEETUP：还没面交 → 「待面交」（黄，最需要被看见）；我已确认、
      * 在等对方点确认 → 「待对方确认」（蓝）。两档同屏时颜色即「等我 / 等对方」的分界。
      */
-    const myConfirmedAt = tx.role === 'buyer' ? tx.buyerConfirmedAt : tx.sellerConfirmedAt
+    const myConfirmedAt =
+      currentTx.role === 'buyer' ? currentTx.buyerConfirmedAt : currentTx.sellerConfirmedAt
     return myConfirmedAt === null
       ? { label: '待面交', cls: 'is-warn' }
       : { label: '待对方确认', cls: 'is-pending' }

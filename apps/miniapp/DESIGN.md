@@ -121,7 +121,12 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 历史上有 313 处 `font-size` 写字面量 px（25 种取值，主峰 26px×60、24px×48、20px×46、22px×45），
 与令牌并行成了双轨。守门测试用「字面量债务基线」冻结现状 —— 粒度是**文件 → 取值 → 处数**的多重集，
 与实际情况严格相等才算通过：改值（如把 26px 改成 33px）、跨文件挪动、新增都会报红，
-归位一处就同步下调一处。归位按页面分批推进，基线清零后测试转为硬约束。当前：**297 处 / 48 个文件**。
+归位一处就同步下调一处。归位按页面分批推进，基线清零后测试转为硬约束。当前：**291 处 / 48 个文件**。
+
+比 #628 提交时的 297 处少 6 处，**不是本分支顺带归位了新条目**，而是合并最新 `main` 后 #618 统一默认头像：
+`pkg-auth/pages/settings`、`pkg-auth/pages/verify`、`pkg-browse/pages/user`、`pkg-browse/pages/watchers`、
+`pkg-browse/pages/listing-detail` 里旧头像结构的首字字号（`*-av-tx`、`detail__cav-text`）随整块删除
+（38px×2、62px、40px、24px、22px 共 6 处）。债务只下不增，基线按本树实际统计同步下调。
 
 债务里还留着 17/18/19/25/27/29px 这些**奇数 px**（不是整 pt，例如 `pages/sell/index.scss` 的 27px、
 `components/review-dialog/index.scss` 的 17px、`pkg-auth/pages/account-deletion/index.scss` 的 25px×3）。
@@ -171,7 +176,8 @@ src/
 **约定**
 
 - 页面级样式写在各自 `index.scss`，只允许用令牌色与 `_mixins` 里的组合。
-- 组件用目录 + `index.tsx` + `index.scss`。
+- 组件用目录 + `index.tsx` + `index.scss`。`user-avatar` 是样式接线的明确例外：样式仍在组件目录，
+  由 `app.scss` 全局 `@use` 一次，避免跨分包共享时 `mini-css-extract-plugin` 的 CSS 顺序冲突。
 - 不新增运行时依赖（出图用的 `@resvg/resvg-wasm` 只是 devDependency）；图标统一从 `@/assets/lib-icons` 的 `ICONS` 取。真源与生成器在仓库内 `tools/icons/`
 - **非图标类成品图**不走 `ICONS`：品牌图走 `@/assets/brand` 的 `BRAND.*`（`tools/brand/` 从母版生成），认证徽章走 `@/assets/badge` 的 `BADGE.*`（外供设计稿成品图，无母版、不由生成器产出）
   （`glyphs/*.svg` × `manifest.ts`，`bun run --filter @fish/miniapp icons` 重出图）；命名 = 字形 + 语义色
@@ -184,6 +190,90 @@ src/
   真接口数据的投影规则见 `src/features/listing/adapt.ts`。
 - 类型对齐 `packages/contracts`：`ListingCard` / `WishDto` / `ConversationDto` / `MessageDto` 等，
   Mock 层只做「投影」，不改语义（金额一律整数分 `*Cents`）。
+
+### 图标显示尺寸四档的场景口径（草案，待 Owner 拍板）
+
+**四档的取值**已收敛（#513）：显示尺寸只写 24 / 32 / 40 / 48（SCSS px = rpx），守门测试
+`apps/miniapp/tests/icon-display-size.test.ts` 拦越档与菱形。**缺的是「哪种场景用哪一档」**。
+
+#### 现状实测（口径写清，别人要能复现）
+
+**怎么数的**（基线 `origin/main = 7cfa1d4f`，与守门测试同一扫描口径）：
+
+1. **点位**：`apps/miniapp/src/**/*.tsx` 里 `<Image>` 的 `src` 取自图标表的两类都算 ——
+   字面量 `src={ICONS.x}`（**175 处**），加上守门测试 `INDIRECT_ICON_IMAGES` 登记的 8 类间接点
+   （`custom-tab-bar/index.tsx` 的 `tabbar__img` / `tabbar__plus`、`components/empty-state/index.tsx`
+   的 `empty__icon-img`、`pkg-social/pages/conversation/index.tsx` 的 `conv__ptile-ic`、
+   `pkg-auth/pages/settings/index.tsx` 的 `st__ric-ic`、`pages/chat/index.tsx` 的 `notif__ic-img`、
+   `pages/profile/index.tsx` 的 `profile__row-ic` / `profile__cell-ic`）和
+   `ICONS[...]` / `HOME_CATEGORY_ICONS[...]` 变量取值点（10 处）—— 合计 **193 处**。
+   `src` 为三元表达式、一图多键的 7 处不计入这组统计。
+2. **档位**：取该 `<Image>` **自身** className 在 scss 里的 `width`（px 即 rpx）；一个
+   `<Image>` 只计一次，不按出现次数或渲染次数累加。尺寸写在 inline style 里的点（自绘导航
+   2 处）单列，不进分布，也不进跨档统计。
+3. **跨档键**：同一个 `ICONS` 键出现在 **≥2 个不同档位**的点位上就计 1 个；只在多个页面用
+   同一档不算跨档，与点位数无关。
+
+**结果**（193 处）：四档 **24 → 32、32 → 88、40 → 25、48 → 46**（合计 191），另有 2 处 inline
+自适应例外（见下），**越档 0 处**、解析不出尺寸 0 处。跨档键 **22 个**，其中四档全占 3 个：
+`warnFg`、`infoFg`、`plusWhite`（`plusWhite` 的 48 只来自 TabBar 凸起钮这一处间接点；只看
+字面量点是 24/32/40）。视觉上「同一种语义在不同页面权重不同」，要不要归位见下文约束 2。
+
+#### ⚠️ 三个图标的跨档描述：Issue 正文不准，以实测为准
+
+Issue #591 正文对这三个键的描述与 `origin/main` 现状不符（逐点核过，可按下面的锚点复核）：
+
+| 键                  | Issue 写的   | 实测                                                           |
+| ------------------- | ------------ | -------------------------------------------------------------- |
+| `chevronRightMuted` | 24 / 32 / 40 | **24 / 32**（17 处，**没有 40**）                              |
+| `cameraMuted`       | 24 / 32 / 48 | **32 / 48**（6 处，**没有 24**）                               |
+| `plusWhite`         | 四档全占     | **24 / 32 / 40**（字面量 3 处）+ **48**（TabBar 凸起钮）＝四档 |
+
+- `chevronRightMuted` —— 24：`components/legal-doc/index.tsx:324`、`components/order-list/index.tsx:333`、
+  `pages/profile/index.tsx:670` / `:691`、`pkg-browse/pages/listing-detail/index.tsx:1709`；
+  32：`components/empty-state/index.tsx:34`、`pages/profile/index.tsx:527` / `:541`、
+  `pkg-legal/pages/about/index.tsx:72` / `:76` / `:83` / `:90` / `:97`、
+  `pkg-legal/pages/feedback/index.tsx:476`、`pkg-social/pages/conversation/index.tsx:3425`、
+  `pkg-trade/pages/my-disputes/index.tsx:225`、`pkg-trade/pages/my-reports/index.tsx:261`
+- `cameraMuted` —— 32：`pages/home/index.tsx:469`、`pkg-auth/pages/profile-edit/index.tsx:257`、
+  `pkg-browse/pages/search/index.tsx:316`、`pkg-vision/pages/vision-result/index.tsx:490` / `:606`；
+  48：`pages/sell/index.tsx:1356`（出物徽章缩略图占位）。会话「+」面板的拍照格是变量点
+  （`conv__ptile-ic`，48），仍落 32/48，不引入 24。
+- `plusWhite` —— 24：`pages/wish/index.tsx:360`；32：`pkg-browse/pages/user/index.tsx:931`；
+  40：`pages/sell/index.tsx:1390`；48：`custom-tab-bar/index.tsx:76`（渲染处 `tabbar__plus`，
+  见 `custom-tab-bar/index.scss:170`）。结论「四档全占」成立，但支撑 48 的只有 TabBar 这一处，
+  容易被读成「这个键到处乱用」。
+
+下面这张表是**草案**，Owner 拍板后才成为规范：
+
+| 档位 | 折合 | 适用场景（草案）                                     | 现在的主用场（实测）                         |
+| ---- | ---- | ---------------------------------------------------- | -------------------------------------------- |
+| 24   | 12pt | 列表行内辅助图标、气泡内动作、密排元信息、输入框内嵌 | 许愿 / 出物 / 搜索 / 我的 / 空态内联         |
+| 32   | 16pt | **主力档**：列表左侧、设置行、按钮内、正文区块头     | 设置页、法务长文、出物、反馈、订单列表、会话 |
+| 40   | 20pt | 区块标题、强调入口、卡片动作、报告/申诉类页头        | 商品详情、举报/申诉、账号注销、关注者        |
+| 48   | 24pt | 空状态、上传占位、结果页主图、交易状态大图           | 交易见面、我的宫格、登录确认、关注者空态     |
+
+两条配套约束：
+
+1. **「图标看不清」先改 `GLYPH_ZOOM`（`tools/icons/build.ts`），不要抬显示尺寸。** 字形在 72px
+   画布里占 83%–93%（`GLYPH_ZOOM = 1.2`），四档显示框本身不动；抬档位会连带改布局留白。
+2. **逐处归位上面那批跨档图标是视觉决策，不在 #591 范围**：口径定稿后再按表归位，归位时改的是
+   `.scss` 的 `width/height`，一次一批，不夹带其它改动。
+
+**放大的代价：描边同比变粗（待 Owner 拍板）。** `tools/icons/glyphs/*.svg` 统一是
+`stroke-width="1.75"`（24 单位网格）。`GLYPH_ZOOM` 把 viewBox 裁成 20 单位后整幅等比放大，
+**线宽也跟着放大 1.2 倍**：等效 2.1 网格单位，72px 画布上从 5.25px 变成 **6.3px**
+（在 `plus-white@3x.png` 上量实测线厚：5px → 6px，alpha 加权 5.25 → 6.5px）。
+这与「字形大 20%」是同一笔账（放大的是整幅图，不是只放字形轮廓），视觉上线会明显更「重」。
+
+若 Owner 认为线宽应保持原视觉重量，改法是在 `zoomViewBox` 里同时把 `stroke-width` 除以
+`GLYPH_ZOOM`（`1.75 → 1.46`），让「字形放大、线宽不变」；这属视觉决策，**本轮不做**——
+#591 只做字形放大，线宽保持同比。注意 `tests/lib-icons.test.ts` 目前没有守 `stroke-width`
+的断言；将来若补，期望值要跟 `build.ts` 的实际换算一起改。
+
+**不走四档的两处例外**（自绘导航，随微信胶囊高度等比缩放，scss 里没有固定尺寸）：
+`pkg-auth/pages/profile-edit/index.tsx` 的返回钮与 `pkg-browse/pages/user/index.tsx` 的举报钮，
+尺寸写的是 `Math.round(backGeo.size * (40 / 72))`，已在守门测试的 `INLINE_SIZED_ICONS` 里登记。
 
 ## 7. 导航结构
 

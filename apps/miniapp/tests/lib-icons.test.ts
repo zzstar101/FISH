@@ -10,6 +10,7 @@ import {
   ENTRY,
   entrySource,
   GLYPH_DIR,
+  GLYPH_ZOOM,
   ICON_PX,
   OUT_DIR,
   type RenderedIcon,
@@ -169,20 +170,45 @@ describe('图标契约', () => {
    * 口径说明（#513 验收第 3 条）：验收原文写的是「bbox 48–56px（占画布 44%–60%）」，
    * 括号里的面积区间是对**正方形**字形的换算（48²/72²=44%、56²/72²=60%）。对勾、箭头、
    * 横排分类图标这类非正方形字形，短边不可能也 ≥48px（否则会撑满画布），因此本条断言
-   * 取**最长边 ∈ [48,56]px**，面积区间对非正方形字形豁免：实测 88 张图面积占比
-   * 27%–58%（旧库 5%–92%），相对旧库是数量级收敛。若要改成真正的面积下限
-   * （例如 ≥25%）应先改验收口径再改断言。
+   * 取**最长边 ∈ [48,56]px**，面积区间对非正方形字形豁免：87 张图**放大后**面积占比
+   * 38.9%–86.6%（`GLYPH_ZOOM` 之前是 27.1%–58.4%），相对旧库是数量级收敛。若要改成
+   * 真正的面积下限（例如 ≥25%）应先改验收口径再改断言。
+   *
+   * 字形现在按 `GLYPH_ZOOM` 放大（显示尺寸四档不变，见 `tools/icons/build.ts`），
+   * 所以断言先把 bbox 换算回 1.0 倍口径再比 [48,56]，改 zoom 不用动这条；
+   * 留白下限随之收紧到 2px（实测 +20% 后 2–5px，最小的是 `entry-onsale-brand`）。
    */
-  test('24pt 网格：字形最长边 48–56px、四周留白 ≥ 8px、最深处不发虚（alpha ≥ 200）', () => {
+  test('24pt 网格：字形最长边 48–56px（含 GLYPH_ZOOM 换算）、四周留白 ≥ 2px、最深处不发虚（alpha ≥ 200）', () => {
     for (const icon of icons) {
       const { w, h, margin, maxAlpha } = inkBox(icon.pixels)
-      const size = Math.max(w, h)
+      const size = Math.max(w, h) / GLYPH_ZOOM
       expect({ file: icon.file, size: size >= 48 && size <= 56, margin, maxAlpha }).toMatchObject({
         file: icon.file,
         size: true,
       })
-      expect(margin).toBeGreaterThanOrEqual(8)
+      expect(margin).toBeGreaterThanOrEqual(2)
       expect(maxAlpha).toBeGreaterThanOrEqual(200)
+    }
+  })
+
+  /**
+   * 绝对下限（防回归）：上面那条把 bbox 除以 `GLYPH_ZOOM` 换算回 1.0 倍口径，守的是
+   * 「字形相对画布的比例」这个不变量 —— 于是把 `GLYPH_ZOOM` 调回 1.0（字形回到 50–55px、
+   * 留白 8–11px）它**依然全绿**，「字形确实被放大」这个核心效果其实没人守。
+   *
+   * 这条**不除 zoom**，直接要求最长边 ≥ 画布的 80%（`GLYPH_ZOOM = 1.2` 实测 83.3%–93.1%）。
+   * 守的失败条件：`GLYPH_ZOOM` 被调小、或 `zoomViewBox` 失效（viewBox 没有被裁）——
+   * 两种都会让字形退回 69%–76%，这里立刻红。上限方向由上面那条的「留白 ≥ 2px」拦
+   * （调大 zoom 先撞留白，再撞这里的 100%）。
+   */
+  test('字形最长边占画布 ≥ 80%（不除 GLYPH_ZOOM，锁住「字形确实被放大」）', () => {
+    for (const icon of icons) {
+      const { w, h } = inkBox(icon.pixels)
+      const ratio = Math.max(w, h) / ICON_PX
+      expect({ file: icon.file, ok: ratio >= 0.8, pct: Math.round(ratio * 100) }).toMatchObject({
+        file: icon.file,
+        ok: true,
+      })
     }
   })
 

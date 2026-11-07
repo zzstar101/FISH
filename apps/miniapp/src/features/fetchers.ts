@@ -727,6 +727,8 @@ function toReplyExcerpt(item: MockMessage): string {
  * 服务端游标没有前进）页面不显示那些由总数派生的文案 —— 而不是把不完整的数据说成全部。
  */
 export type LoadedOrders = {
+  /** Raw validated display data; absent for mock/error results. */
+  snapshot?: Awaited<ReturnType<typeof fetchAllTransactions>>
   items: OrderCardView[]
   /**
    * 失败分类（#304）：非 `null` 就是「真实接口失败且**没有**回退 mock（生产口径）」，
@@ -754,6 +756,7 @@ export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
     const page = await fetchAllTransactions(role)
     return {
       items: page.items.map((dto) => toOrderCard(dto)),
+      snapshot: page,
       failureKind: null,
       truncated: page.truncated,
     }
@@ -950,11 +953,36 @@ export {
  *
  * `nextCursor` 是读取层对「这份列表是不是全部」的诚实回答（契约原样的游标）：
  * 非 null 时页面既不能宣称「已经到底了」，也要把它当作「加载更多」的入口（#565）。
+ *
+ * `failed` 带着 `error`（#607）：失败原因必须能写到端上的文案里，不能在读取层就断掉 ——
+ * `null` 表示「这次没有可显示的错误码」（例如资料与列表的存在性判断漂移，压根没抛异常），
+ * 页面据此退到不带码的通用句，绝不编一个码出来。
  */
 export type PublicUserResult =
   | { status: 'ok'; profile: PublicUserProfile; listings: MockListing[]; nextCursor: string | null }
   | { status: 'notFound' }
-  | { status: 'failed' }
+  | { status: 'failed'; error: PublicUserFailure | null }
+
+/**
+ * 整页加载失败时要交给页面的错误标识（#607）：`ApiError` 的 `code` / `status`。
+ *
+ * 字段与页面侧 `pkg-browse/pages/user/segment-page.ts` 的 `SegmentErrorInfo` **逐字相同**，
+ * 这不是巧合：两条失败路径共用同一个文案后缀函数（`segmentErrorSuffix`），字段名一漂移，
+ * 整页那条就会静默退化成「没有码」。读取层不能反过来 import 页面模块，所以各留一份类型。
+ */
+export type PublicUserFailure = { code: string; status: number }
+
+/**
+ * 认不出形状的异常（断网 / 超时 / 契约解析失败）：`status: 0`。与页面侧的
+ * `UNKNOWN_SEGMENT_ERROR` 同口径 —— 文案会翻成「网络异常，请重试」，而不是摆一个 `0` 出来。
+ */
+const UNKNOWN_PUBLIC_USER_FAILURE: PublicUserFailure = { code: 'UNKNOWN', status: 0 }
+
+/** `unknown` 抛错 → 端上可显示的错误标识；形状判据用 `lib/request` 的 `isApiError`（本层已是 Taro 侧） */
+function publicUserFailureOf(error: unknown): PublicUserFailure {
+  if (!isApiError(error)) return UNKNOWN_PUBLIC_USER_FAILURE
+  return { code: error.code, status: error.status }
+}
 
 /** 一次翻页的结果：卡片 + 下一页游标（`null` = 这就是最后一页）。 */
 export type PublicUserListingsPage = {
@@ -1006,9 +1034,10 @@ export async function loadPublicUserHome(
     // 后端对「非法 uuid」与「不存在的用户」给同一个 404（契约刻意不区分）。
     if (profile === null && page === null) return { status: 'notFound' }
     // 只有一个 null：两个端点的存在性判断漂移了。按 failed 报，不猜哪一个是真相。
+    // 这一支没有异常可取码，`error: null` —— 页面退到不带码的通用句，不借一个码来充数。
     if (profile === null || page === null) {
       console.warn('[miniapp] 他人主页：资料与在售列表的存在性判断不一致，按失败处理')
-      return { status: 'failed' }
+      return { status: 'failed', error: null }
     }
 
     return {
@@ -1021,7 +1050,9 @@ export async function loadPublicUserHome(
     }
   } catch (error) {
     reportFailure('他人主页', error, false)
-    return { status: 'failed' }
+    // 码跟着失败态一起交出去（#607）：整页这条路以前把 `ApiError` 吞成裸 `failed`，
+    // 端上只剩一句写死的「网络异常，请重试」，422 / 401 / 5xx 在真机上长得一模一样。
+    return { status: 'failed', error: publicUserFailureOf(error) }
   }
 }
 

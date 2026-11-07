@@ -17,6 +17,7 @@ import {
   type ListingSort,
   type ListingUpdateInput,
 } from '@fish/contracts/listings/schema'
+import { listSnapshots } from '@/features/list-snapshots'
 import { apiRequest, isApiError } from '@/lib/request'
 
 /**
@@ -136,8 +137,13 @@ export async function createListing(input: ListingCreateInput): Promise<ListingD
  * 读协议），前端没有全量替换所需的输入，所以编辑态图片只读（与 Web 端同一取舍）。
  */
 export async function updateListing(id: string, input: ListingUpdateInput): Promise<ListingDetail> {
-  const payload = await apiRequest(LISTING_ROUTES.detail(id), { method: 'PATCH', body: input })
-  return ListingDetailSchema.parse(payload)
+  const finish = listSnapshots.startMutation(['buyer', 'seller', 'favorites'])
+  try {
+    const payload = await apiRequest(LISTING_ROUTES.detail(id), { method: 'PATCH', body: input })
+    return ListingDetailSchema.parse(payload)
+  } finally {
+    finish()
+  }
 }
 
 export type MyListingsPage = {
@@ -188,14 +194,24 @@ export async function fetchMyListings(sellerId: string): Promise<MyListingsPage>
  * 审核中的商品不在本页给这个入口（它是 REVIEW，不是「在售」）。
  */
 export async function offlineListing(id: string): Promise<ListingDetail> {
-  const payload = await apiRequest(LISTING_ROUTES.offline(id), { method: 'POST' })
-  return ListingDetailSchema.parse(payload)
+  const finish = listSnapshots.startMutation(['buyer', 'seller', 'favorites'])
+  try {
+    const payload = await apiRequest(LISTING_ROUTES.offline(id), { method: 'POST' })
+    return ListingDetailSchema.parse(payload)
+  } finally {
+    finish()
+  }
 }
 
 /** 重新上架：`OFFLINE → ACTIVE`；对已 ACTIVE 幂等。REVIEW / BLOCKED 会被服务端拒绝（409）。 */
 export async function onlineListing(id: string): Promise<ListingDetail> {
-  const payload = await apiRequest(LISTING_ROUTES.online(id), { method: 'POST' })
-  return ListingDetailSchema.parse(payload)
+  const finish = listSnapshots.startMutation(['buyer', 'seller', 'favorites'])
+  try {
+    const payload = await apiRequest(LISTING_ROUTES.online(id), { method: 'POST' })
+    return ListingDetailSchema.parse(payload)
+  } finally {
+    finish()
+  }
 }
 
 /**
@@ -206,5 +222,10 @@ export async function onlineListing(id: string): Promise<ListingDetail> {
  * 本地移除该卡片即可，没有需要回读的状态。
  */
 export async function deleteListing(id: string): Promise<void> {
-  await apiRequest(LISTING_ROUTES.detail(id), { method: 'DELETE' })
+  const finish = listSnapshots.startMutation(['buyer', 'seller', 'favorites'])
+  try {
+    await apiRequest(LISTING_ROUTES.detail(id), { method: 'DELETE' })
+  } finally {
+    finish()
+  }
 }

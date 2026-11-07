@@ -193,36 +193,9 @@
   box-shadow: var(--shadow-card);
 }
 
-/* 46pt 圆头像：稿是**两层** —— 色圈垫底（`.frow__av` 的 background）+ 首字压在上面 */
+/* 46pt 圆头像（稿 46pt）：圆槽位在这里，里面画什么由 `components/user-avatar` 决定 */
 .fw__av {
   @include avatar(92px);
-  position: relative;
-}
-
-/* 真实头像：**独占整圆**，首字不渲染在上面（把人脸压一个字母是错的） */
-.fw__av-photo {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-}
-
-/* 演示色块：绝对定位铺满整圆，让首字能压在上面 */
-.fw__av-img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-}
-
-/* 首字：`position: relative` 抬到色块之上（同 `pages/watchers` 的首字口径） */
-.fw__av-tx {
-  position: relative;
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  color: var(--brand-deep);
 }
 
 .fw__main {
