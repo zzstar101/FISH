@@ -43,10 +43,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 96px;
+  height: var(--btn-h-lg);
   margin: 0;
   padding: 0;
-  border-radius: 48px;
+  border-radius: var(--r-pill);
   font-size: var(--fs-title);
   font-weight: 600;
   line-height: 1;

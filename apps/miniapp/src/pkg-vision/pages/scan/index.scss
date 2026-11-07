@@ -63,8 +63,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 76px;
-  padding: 0 44px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--fg);
@@ -150,7 +150,7 @@
 }
 
 .scanpage__act-label {
-  font-size: 22px;
+  font-size: var(--fs-xs);
   color: var(--surface);
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
   white-space: nowrap;
@@ -241,9 +241,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   margin-top: 40px;
-  border-radius: 44px;
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
   font-size: 29px;

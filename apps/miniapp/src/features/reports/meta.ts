@@ -96,7 +96,7 @@ const USER_REASON_COPY: Record<UserReportReason, { label: string; hint: string }
   },
 }
 
-/** 商品类原因（顺序即契约 `LISTING_REPORT_REASONS` 的顺序，也是稿子里胶囊的排布 3+2）。 */
+/** 商品类原因（顺序即契约 `LISTING_REPORT_REASONS` 的顺序，即稿子里胶囊的排列顺序）。 */
 export const LISTING_REPORT_REASONS: ReportReasonOption[] = CONTRACT_LISTING_REASONS.map((key) => ({
   key,
   ...LISTING_REASON_COPY[key],
