@@ -17,7 +17,6 @@ import {
   type SearchTaskLog,
 } from '@/features/listing/search-task'
 import { searchByVisualQuery, visualSearchErrorMessage } from '@/features/visual-search/api'
-import { toViewRect } from '@/features/visual-search/crop'
 import { readVisualShot } from '@/features/visual-search/handoff'
 import {
   VISUAL_QUERY_LOCAL_PATH_PARAM,
@@ -106,11 +105,11 @@ export default function VisionResult() {
   )
 
   /**
-   * 共享元素式切换的另一半：入口页拍照时 stash 的**原图 + 取框**。
+   * 共享元素式切换的另一半：入口页拍照时 stash 的**原图**。
    *
-   * 有它时背景用原图、并在上面画出「这次用的是哪一块」（参考图②）；没有它（搜索页 / 结果页
-   * 的「换图」没有相机）就退回用 URL 里的查询图铺底。按 `objectKey` 取（见 `./handoff`），
-   * 所以重复渲染拿到同一份、换了图则拿到 `null`。
+   * 有它时背景用原图；没有它（搜索页 / 结果页的「换图」不 stash）就退回用 URL 里的查询图铺底。
+   * 按 `objectKey` 取（见 `./handoff`），所以重复渲染拿到同一份、换了图则拿到 `null`。
+   * #583 起整图上传、不再取框，所以背景上**不画**取框。
    */
   const shot = useMemo(() => readVisualShot(objectKey), [objectKey])
 
@@ -149,8 +148,6 @@ export default function VisionResult() {
   /** 面板当前高度（设备 px）与「拖动中」标记；拖动期间 `dragging` 为真（此时不加 CSS 过渡） */
   const [height, setHeight] = useState(() => sheetHeight('open', viewHeight))
   const [dragging, setDragging] = useState(false)
-  /** 窗口宽度（设备 px）：背景取框的显示坐标换算要用它 */
-  const [viewWidth] = useState(() => Taro.getWindowInfo().windowWidth)
   /**
    * 本次拖动的轨迹：起点、上一次触点、以及「上一次那一刻的高度」。
    *
@@ -377,38 +374,12 @@ export default function VisionResult() {
 
   const open = sheetHeight('open', viewHeight)
 
-  /**
-   * 背景图上那个「这次用的是哪一块」的取框（显示坐标）。
-   *
-   * 交接来的取框是**图片像素**，这里用 `toViewRect` 换回当前显示区坐标 —— 入口页与结果页的
-   * 显示区尺寸可能不同（状态栏 / 安全区），所以要用图片像素做中转，不能直接把入口页的
-   * 显示坐标搬过来。没有交接（搜索页进来的）就没有这个框。
-   */
-  const cropFrame = useMemo(() => {
-    if (!shot) return null
-    return toViewRect(shot.crop, { width: viewWidth, height: viewHeight }, shot)
-  }, [shot, viewWidth, viewHeight])
-
   return (
     <View className="vres">
       {/* ---------------- 全屏查询图（本页的「底」，共享元素式切换的另一半） ---------------- */}
       <View className="vres__stage">
         {shot ? (
-          <>
-            <Image className="vres__photo" src={shot.path} mode="aspectFill" />
-            {/* 这次取框的那一块：原图变暗、框内保持原亮度（参考图②的「整张照片 + 框住主体」） */}
-            {cropFrame ? (
-              <View
-                className="vres__frame"
-                style={{
-                  left: `${cropFrame.x}px`,
-                  top: `${cropFrame.y}px`,
-                  width: `${cropFrame.w}px`,
-                  height: `${cropFrame.h}px`,
-                }}
-              />
-            ) : null}
-          </>
+          <Image className="vres__photo" src={shot.path} mode="aspectFill" />
         ) : localPath ? (
           <Image className="vres__photo" src={localPath} mode="aspectFill" />
         ) : (

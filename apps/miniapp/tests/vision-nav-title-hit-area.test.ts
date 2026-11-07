@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 /**
- * 识图家族四个页面的**顶部标题层命中区契约**（#533 防回归）。
+ * 识图家族带标题层页面的**顶部标题层命中区契约**（#533 防回归）。
  *
  * 标题层都是全宽绝对定位（`left: 0; right: 0`）、与返回钮同 `z-index` 且在 DOM 中
  * 后渲染：一旦漏掉 `pointer-events: none`，它会盖住 `left: 32px` 的返回钮，点返回
@@ -9,6 +9,8 @@ import { describe, expect, test } from 'bun:test'
  * 时的状态）。本仓 `tests/` 没有 WXSS 渲染基建，按先例
  * （`tests/tabbar-capsule-sizing.test.ts`、`tests/back-top-scroll-source.test.ts`）
  * 读样式源码、钉住具体规则块。
+ *
+ * 扫码页（#583）顶部只剩返回钮、不再有标题层，所以不在此列。
  */
 const PAGES = [
   {
@@ -16,24 +18,6 @@ const PAGES = [
     file: '../src/pkg-vision/pages/vision-result/index.scss',
     title: '.vres__title {',
     back: '.vres__back {',
-  },
-  {
-    name: 'scan-vision',
-    file: '../src/pkg-vision/pages/scan-vision/index.scss',
-    title: '.scanvis__title {',
-    back: '.scanvis__back {',
-  },
-  {
-    name: 'scan',
-    file: '../src/pkg-vision/pages/scan/index.scss',
-    title: '.scanqr__topbar-title {',
-    back: '.scanqr__back {',
-  },
-  {
-    name: 'scan-pr',
-    file: '../src/pkg-vision/pages/scan-pr/index.scss',
-    title: '.scan__topbar-title {',
-    back: '.scan__back {',
   },
 ] as const
 

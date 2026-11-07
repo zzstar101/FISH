@@ -8,7 +8,7 @@ import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
-import { eq, inArray } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { createSqlPublicUserStore } from './store'
 
 // 与 packages/db 的集成测试同一约定：没有 DATABASE_URL 就明确失败，而不是静默跳过。
@@ -236,14 +236,14 @@ test("listListings(…, 'ACTIVE', …) 只出 ACTIVE + APPROVED，时间倒序�
           userId: sellerId,
           listingId: viewed,
           eventType: 'DETAIL_VIEW',
-          occurredAt: new Date(),
+          occurredAt: sql`now()`,
         },
         {
           eventId: newId(),
           userId: buyerId,
           listingId: viewed,
           eventType: 'DETAIL_VIEW',
-          occurredAt: new Date(),
+          occurredAt: sql`now()`,
         },
       ])
       const after = await store.listListings(sellerId, 'ACTIVE', 20, null)

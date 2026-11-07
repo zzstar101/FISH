@@ -23,8 +23,8 @@ import { requestSubscribe } from '@/features/subscribe/request'
 import { pickPhotos, uploadListingImage } from '@/features/upload/api'
 import { cancellable } from '@/lib/cancellable'
 import { categoryLabel } from '@/lib/listing-labels'
+import { goBackOrHome } from '@/lib/nav-back'
 import { isApiError } from '@/lib/request'
-import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 
 import {
   parsePriceToCents,
@@ -77,7 +77,8 @@ import './index.scss'
  *    编辑态图片**可增删换**（Owner 2026-09-28）：详情响应在本人视角给回 `objectKey`
  *    （`ListingImageSchema.objectKey`），提交时 `objectKeys` 全量替换 —— 原有键与新上传的键
  *    一起回传。服务端对"本来就在库里的键"豁免确认记录校验，所以原样回传是安全的。
- *    编辑目标由 `features/listing/edit-target.ts` 一次性交接（Tab 页不能带 query 跳转），
+ *    编辑目标由 `features/listing/edit-target.ts` 一次性交接（`prefill` 带的是对象，
+ *    塞不进 query；编辑沿用同一条通道，不开第二条路），
  *    在 `useDidShow` 里消费；也兼容 `?id=`（开发者工具演示 / 带参进入）。
  *    **同一条交接也承载「再次上架」**（我的发布 · 已售出）：契约没有「照成交记录另起一条在售」的
  *    端点，所以那是**新建**而不是编辑 —— 交接里带的是 `prefill` 草稿（文案字段），图片必须重选。
@@ -91,6 +92,11 @@ import './index.scss'
  *    `redacted` 说明脱敏。判定全在 `./polish`（可测），页面只做接线。
  *
  * 明确不做（等后续单）：web 端润色入口；编辑态换图。
+ *
+ * **#629：本页已从「Tab 页」改为二级页**（`app.config.ts` 的 `tabBar.list` 里没有它）：
+ * 由底栏中间那颗发布钮 / 我的发布 / 商品详情 `navigateTo` 压栈进来，左上返回钮与系统左滑
+ * 都回到打开它的那一页（栈深 1 时兜底回首页，见 `lib/nav-back`）。因此本页不再需要
+ * 「隐藏底栏」那套机制 —— 非 Tab 页本来就不渲染自定义底栏。
  */
 
 const CONDITIONS: { key: SellCondition; label: string }[] = [
@@ -124,8 +130,8 @@ function priceToInput(priceCents: number): string {
 }
 
 export default function Sell() {
-  // 出物是 Tab 页：Tab 页只能用 navigateTo 跳登录页（见 guard.ts 文件头）
-  const authStatus = useAuthGuard({ tab: true })
+  // 本页是二级页（#629）：未登录时由守卫 `redirectTo` 登录页，与其它二级页同一口径
+  const authStatus = useAuthGuard()
   const router = useRouter()
   /** URL 上的 `?id=`（开发者工具演示 / reLaunch 等带参进入）；我的发布页走 `edit-target` 交接 */
   const routeId = router.params.id ?? null
@@ -145,10 +151,10 @@ export default function Sell() {
   /**
    * 账号作用域（#170 判据 C）。
    *
-   * 出物是常驻 Tab 页，实例会跨过一次换号（`authed(A) → authed(B)`，或退出到匿名）：
-   * 页面级 state 与四条异步链（编辑目标 / 图片上传 / 提交 / AI 润色）的结果都属于**发起的
-   * 那个账号**。这里给每条链发一个「任务」，落地前必须仍然属于当前账号、且没被换号或卸载
-   * 作废（判据在 `./view`）。
+   * 换号会发生在**本页还被压住的时候**：表单填到一半出去了（详情 / 消息），在别处退出登录或
+   * 换号，回来这一帧就跨了账号（`authed(A) → authed(B)`，或掉成匿名）。页面级 state 与四条
+   * 异步链（编辑目标 / 图片上传 / 提交 / AI 润色）的结果都属于**发起的那个账号**。这里给每条
+   * 链发一个「任务」，落地前必须仍然属于当前账号、且没被换号或卸载作废（判据在 `./view`）。
    *
    * 只比对 `ownerId` 不够：`A → B → A` 时当前账号又变回 A，A 的旧响应会被写进 A 的**新**
    * 会话，所以还要叠一个只在换号 / 卸载时前进的代次。
@@ -386,22 +392,26 @@ export default function Sell() {
   /**
    * 每次显示本页时决定「新建还是改某一件 / 复制某一件」。
    *
-   * 用 `useDidShow` 而不是 `useLoad`：出物是 Tab 页，实例常驻，`useLoad` 只在首次创建时跑一次，
-   * 之后再从「我的发布」点编辑就进不来了。`takeSellHandoff()` 取一次即失效（见该模块说明）。
+   * 用 `useDidShow` 而不是 `useLoad`：`navigateTo` 进来后本页可能被详情页压住再显示回来
+   * （`openPublishedDetail` / 「继续发布」），`useLoad` 只在首次创建时跑一次，那一次就漏了。
+   * `takeSellHandoff()` 取一次即失效（见该模块说明）。
    *
-   * 没有待取目标时若本页还停在编辑态，必须清空回新建：否则从底栏点「出物」会把上一件商品
-   * 的标题/价格当成新发布的内容。`prefill`（「再次上架」/「重新上架」）只是把字段灌进新建表单，
+   * 没有待取目标时若本页还停在编辑态，必须清空回新建：否则再次显示时会把上一件商品的
+   * 标题/价格当成新发布的内容。#629 之后本页是二级页、每次进入都是新实例，这段清空因此
+   * 变成**纯防御**（同一实例被重复显示的场景），但代价为零、也堵住「带 `?id=` 的实例
+   * 显示第二遍」这条路。
+   * `prefill`（「再次上架」/「重新上架」）只是把字段灌进新建表单，
    * 同一段清空逻辑对它同样成立 —— 它没有自己的持久模式。
    *
    * **`prefill` 优先于 `routeId`**：交接是「用户刚刚按下的那一下」，`routeId` 却是本页实例
-   * 创建时抓到的 `?id=`（Tab 页正常进不来，但一旦来了就永远是那个旧值）。
+   * 创建时抓到的 `?id=`（正常入口走交接、不带参，只有开发者工具演示 / 分享直入才有）。
    * 若先看 `routeId`，从「我的发布」点「再次上架」会掉进**另一件商品的编辑态**，
    * 而且那份 prefill 草稿被静默丢掉。
    *
    * **尾页只保留一次**：`pendingReviewId` 的整页「已提交，正在审核」与 `publishedId` 的
    * 「发布成功」（只在跳详情页失败时出现）都只在提交后、
-   * 用户没离开过本页的这段停留里可见；本页是隐藏 Tab 页且实例常驻，不清的话微信
-   * 热启动恢复栈顶后「从哪里打开都在尾页」。所以 onShow 先把它们重置回初始表单
+   * 用户没离开过本页的这段停留里可见；本页被详情页压住再显示回来时不清的话
+   * 会「从哪里打开都在尾页」。所以 onShow 先把它们重置回初始表单
    * —— 放在 handoff 分支**之前**，同一次 show 里来了 prefill / edit 交接时，
    * 交接在重置后的表单上接管，「再次上架 / 编辑」的预填不受影响。
    * 已知例外：实例带 `?id=` 创建的演示兼容路径（生产导航不带参进出物页，见上），
@@ -449,9 +459,6 @@ export default function Sell() {
   }
 
   useDidShow(syncEditTarget)
-  // 本页不渲染底栏，但**必须广播**：tab-bar 实例挂载早于页面栈更新，不广播的话
-  // 「本页不渲染」的早退判定没有重渲染触发，底栏会顶着上一页的高光常驻（实测）。
-  useDidShow(notifyTabbarRoute)
 
   /**
    * 身份就绪后补一次编辑目标交接。
@@ -473,12 +480,11 @@ export default function Sell() {
   /**
    * 发布 / 编辑成功 → 商品详情。
    *
-   * 用 `redirectTo`（而不是 `navigateTo`）把本页**从栈里换掉**（#562）：详情页成为栈底，
-   * 它的返回键走已有的「栈深 1 → 回首页」兜底（`lib/nav-back` 同口径），用户不会落回
-   * 一张被 `resetForm()` 清空、看不出刚才发生了什么的空表单。顺带根除底栏 bug：本页被
-   * 销毁，它那个常驻底栏实例不复存在，「底栏卡在本页上」无从发生。
+   * 用 `redirectTo`（而不是 `navigateTo`）把本页**从栈里换掉**（#562）：用户不会返回一张
+   * 被 `resetForm()` 清空、看不出刚才发生了什么的空表单，详情页的返回直接落到打开出物页的
+   * 那一页（#629 之后本页在栈里有父级，不再是 Tab 页那种「栈深恒 1」）。
    *
-   * 平台对 `redirectTo` 的限制是**目标**页不能是 tabBar 页（不限制从 Tab 页跳走）；
+   * 平台对 `redirectTo` 的限制是**目标**页不能是 tabBar 页（两侧都不是 tabBar 页，合法）；
    * 万一某端拒绝这条跳转，退化到 `reLaunch`（栈同样只剩详情页，代价是整栈重开）。
    * **两条都失败**时不再把用户丢在一张空表单上：记下这件商品的 id（`publishedId`），
    * 由「发布成功」结果视图接住 —— 商品已经建出来了，它的入口不能跟着跳转一起消失；
@@ -1015,9 +1021,7 @@ export default function Sell() {
           ) : editState === 'notfound' ? (
             <EmptyState
               actionText="返回"
-              onAction={() => {
-                void Taro.navigateBack()
-              }}
+              onAction={goBackOrHome}
               text="找不到这件闲置,可能已被下架或删除"
               title="无法编辑"
             />
@@ -1037,7 +1041,7 @@ export default function Sell() {
   return (
     <View className="sell">
       <View className="sell__hero-bg" />
-      {/* 本页不渲染底栏（见 `@/lib/tabbar-route` 的 `TABBAR_HIDDEN_ROUTE`），返回钮是唯一出口 */}
+      {/* 本页是二级页（#629）：左上返回钮 + 系统左滑都回上一页，栈深 1 时兜底回首页 */}
       {/* 页名大字跟其它页面顶栏同款：前段黑 + 尾段品牌蓝，跟在返回钮右边不居中 */}
       <TopBar back variant="glass" spacer title={editing ? '编' : '发'} titleEm="闲置" />
 
