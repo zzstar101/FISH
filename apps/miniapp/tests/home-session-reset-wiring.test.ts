@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 
 /**
- * 「会话被清掉后首页列表重建」在**源码层**的接线（#650）。
+ * 「身份变了之后首页列表重建」在**源码层**的接线（#650 退出/401，#652 扩展登录与换号）。
  *
  * 这条链上每一环都写得出来、也都不报错，但错一环用户看到的就是上一个账号的商品：
  *
- * 1. **订阅必须挂在 `useLoad`**：会话经常在首页**不可见**时被清（在设置页点「退出登录」），
- *    挂到 `useDidShow` 上要等用户切回来才补，中间它照样挂着旧身份的数据。
+ * 1. **订阅必须挂在 `useLoad`**：身份变化经常在首页**不可见**时发生（在设置页点「退出登录」
+ *    再登录成另一个账号），挂到 `useDidShow` 上要等用户切回来才补，中间它照样挂着旧身份的数据。
+ *    订阅的是 `onSessionChanged`（会话真的变了）而不是 auth store 的快照：后者每次
+ *    `emit()` 都变，改个昵称/头像也会通知，首页就被无谓地打回骨架屏重拉一次。
  * 2. **回调要走 ref 镜像**：订阅一辈子只注册一次，直接传函数就把闭包钉在注册那次渲染上 ——
  *    用户切到「教材书籍」再退出登录，重拉的还是进页时的「推荐」。
  * 3. **在途可见段要丢弃、不要结算**：结算会把上一个身份看到的停留补发成 IMPRESSION /
@@ -16,6 +18,8 @@ import { describe, expect, test } from 'bun:test'
  * 4. **重拉的是当前分类，不是写死的 `ALL`**：`load('ALL')` 会把 `loadedFor` 记成 `ALL`，而
  *    `category` 还停在别的档上 → `homeListState` 恒给骨架屏，重拉成功了也还是骨架屏。
  * 5. **本机「不感兴趣」名单不动**：那是本机口径，不跟着账号走。
+ * 6. **旧身份的在途响应不许落地**：判定必须比的是「请求发出时的身份」与「落地时的身份」，
+ *    不能只靠 `reqSeq` —— 那是「又发了一次请求」的意思，不是「换了个人」的意思。
  *
  * 断言一律跑在去掉注释之后的源码上（本文件注释里正逐条解释这些机制，只在原文上 `toContain`
  * 的话把某行注释掉也能过）。本仓 `tests/` 没有 Taro 组件渲染基建，页面接线这一层历来靠
@@ -51,23 +55,25 @@ async function resetBody(): Promise<string> {
   return slice(code(await homeSource()), 'const resetForIdentityChange = () => {', '\n  }')
 }
 
-describe('#650 会话被清掉后首页重建：源码层接线', () => {
-  test('首页订阅「本地会话被清掉」，且订阅装在 `useLoad` 里', async () => {
+describe('#650/#652 身份变了之后首页重建：源码层接线', () => {
+  test('首页订阅「本地身份变了」，且订阅装在 `useLoad` 里', async () => {
     const text = code(await homeSource())
-    expect(text).toContain("import { onSessionCleared } from '@/lib/session'")
-    // 用「行首两格缩进的收尾」切体，而不是找第一个 `}` `)`：后者换个缩进/嵌套就会切错
-    expect(slice(text, 'useLoad(() => {', '\n  })')).toContain('onSessionCleared(')
-    // 挂在 useLoad 而不是 useDidShow：会话可能在页面不可见时被清
-    expect(slice(text, 'useDidShow(() => {', '\n  })')).not.toContain('onSessionCleared')
+    // 一条通道覆盖全部方向：登录 / 匿名→已登录 / A→B / 主动退出 / 401 撤销
+    expect(text).toContain("import { onSessionChanged } from '@/lib/session'")
+    expect(slice(text, 'useLoad(() => {', '\n  })')).toContain('onSessionChanged(')
+    // 挂在 useLoad 而不是 useDidShow：身份可能在页面不可见时变
+    expect(slice(text, 'useDidShow(() => {', '\n  })')).not.toContain('onSessionChanged')
+    // `onSessionChanged` 已经包含「被清掉」，再挂一条 `onSessionCleared` 就是同一次变化重置两遍
+    expect(text).not.toContain('onSessionCleared')
   })
 
   test('回调走 ref 镜像，订阅只注册一次也总能调到最新闭包', async () => {
     const text = code(await homeSource())
     expect(text).toContain('const resetRef = useRef(resetForIdentityChange)')
     expect(text).toContain('resetRef.current = resetForIdentityChange')
-    expect(text).toContain('onSessionCleared(() => resetRef.current())')
+    expect(text).toContain('onSessionChanged(() => resetRef.current())')
     // 直接传函数 = 闭包钉在注册那次渲染上，读不到之后的 category
-    expect(text).not.toContain('onSessionCleared(resetForIdentityChange)')
+    expect(text).not.toContain('onSessionChanged(resetForIdentityChange)')
   })
 
   test('作废屏幕事实、归因上下文与在途可见段', async () => {
@@ -97,6 +103,17 @@ describe('#650 会话被清掉后首页重建：源码层接线', () => {
     const text = code(await homeSource())
     expect(text).toContain("const categoryRef = useRef<ListingCategory | 'ALL'>(category)")
     expect(text).toContain('categoryRef.current = category')
+  })
+
+  test('旧身份的在途响应不许落地：比「发出时的身份」与「落地时的身份」，不是只看序号', async () => {
+    const text = code(await homeSource())
+    const body = slice(text, 'const load = async (', '\n    return { failed: result.failed, held }')
+    const gate =
+      'if (viewerAtRequest !== homeFeedCache.viewer()) return { failed: false, held: false }'
+    expect(body).toContain(gate)
+    // 序号检查之后（先按「又发了一次」丢掉过期结果）、任何一次上屏之前
+    expect(body.indexOf(gate)).toBeGreaterThan(body.indexOf('if (seq !== reqSeq.current)'))
+    expect(body.indexOf(gate)).toBeLessThan(body.indexOf('applyLoadResult('))
   })
 
   test('页面卸载时摘掉订阅（迟到的清理不该写已销毁的页面）', async () => {

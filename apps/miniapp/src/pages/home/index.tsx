@@ -28,7 +28,7 @@ import {
 import { startVisualSearch } from '@/features/visual-search/start'
 import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
-import { onSessionCleared } from '@/lib/session'
+import { onSessionChanged } from '@/lib/session'
 import { useTabTransition } from '@/lib/use-tab-transition'
 import type { ListingCategory, MockListing } from '@/mock/types'
 import { applyLoadResult, homeListState } from './list-state'
@@ -258,6 +258,15 @@ export default function Home() {
     // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
     if (seq !== reqSeq.current) return { failed: false, held: false }
     /*
+      身份那道闸（#652）：这次请求是**上一个身份**发出去的（`viewerAtRequest` 记的就是它），
+      而落地时本地已经是另一个人了 —— 这份数据一个字节都不许上屏，也不许落快照。
+
+      正常路径上它已经被上一条挡住：身份一变，`onSessionChanged` 的订阅会立刻 `load()` 一次、
+      把 `reqSeq` 推上去，旧响应回来时序号必然过期。但 `reqSeq` 是「又发了一次请求」的意思，
+      不是「换了个人」的意思 —— 这条按身份本身判，不依赖重建有没有跑起来。
+    */
+    if (viewerAtRequest !== homeFeedCache.viewer()) return { failed: false, held: false }
+    /*
       本地隐藏名单在这里过滤（R1 没有服务端隐藏接口，见 `recommendation/hidden`）。
       过滤发生在**取数之后、上屏之前**：`positions` 仍按服务端那份 feed 的原始下标算，
       重新编号会让后续曝光与详情归因整体错位。
@@ -331,12 +340,13 @@ export default function Home() {
   categoryRef.current = category
 
   /**
-   * 身份变了（退出登录 / 换账号 / 会话被后端撤销的 401）：屏幕上这一屏商品属于**上一个**
-   * 身份，必须整体作废重拉（#650）。
+   * 身份变了：退出登录、登录、匿名→已登录、A→B 换号，以及会话被后端撤销的 401。屏幕上这一屏
+   * 商品属于**上一个**身份，必须整体作废重拉（#650 两个退出方向、#652 补齐登录方向）。
    *
    * 为什么只有订阅能治：身份变化是个**事件** —— 不切分类、不发请求，`useDidShow` 也不会
    * 因为它多跑一次，页面自己察觉不到。用户退出登录后回到首页，看到的还是上一个账号的推荐流
-   * （含他那份「不感兴趣」过滤结果），点进详情才发现自己已经未登录。
+   * （含他那份「不感兴趣」过滤结果），点进详情才发现自己已经未登录；换号后看到的则是上一个人的
+   * 商品，点进去按新身份报错，像「点了没反应」。
    *
    * 清四样，缺一样都会把旧身份的东西留在屏幕上、归因里或埋点里：
    * - `items` + `lastGoodRef`：后者不清的话，重拉失败时 `applyLoadResult` 会把上一个身份的
@@ -354,7 +364,8 @@ export default function Home() {
    * 重置；何况重拉 `ALL` 会把 `loadedFor` 记成 `ALL`、`category` 还停在别的档上，两者对不上
    * → `homeListState` 恒给骨架屏，重拉成功也还是骨架屏。
    *
-   * 在途的旧身份请求不用单独掐：`load()` 自己自增 `reqSeq`，旧响应回来时序号已过期。
+   * 在途的旧身份请求由 `load()` 里两道闸拦住：重建必然推一次 `reqSeq`（旧响应序号过期），
+   * 外加身份指纹那道（发出时的 `viewerAtRequest` 与落地时不同就丢弃，见 `load()` 里的注释）。
    * 本机「不感兴趣」名单（`hiddenIds`）不动：那是本机口径，不跟着账号走。
    *
    * 重拉不会打转：Feed 与分类列表都**匿名可用**（`apps/api/src/modules/recommendation/router.ts`
@@ -378,11 +389,16 @@ export default function Home() {
 
   useLoad(() => {
     /*
-      订阅挂在 `useLoad` 而不是 `useDidShow`：会话可能在**本页不可见**时被清掉（在设置页点
-      「退出登录」），那时首页还在页面栈里；挂到 `useDidShow` 上要等用户切回来才补，
-      这中间它照样挂着上一个身份的商品。
+      订阅挂在 `useLoad` 而不是 `useDidShow`：身份可能在**本页不可见**时变化（在设置页点
+      「退出登录」、再登录成另一个账号），那时首页还在页面栈里；挂到 `useDidShow` 上要等
+      用户切回来才补，这中间它照样挂着上一个身份的商品。
+
+      订阅的是「会话变了」（`onSessionChanged`）而不是登录态快照：快照在改昵称、换头像
+      这些同一个人身上的更新里也会变（`features/auth/store` 的 `applyProfile`），订阅它
+      会让首页被无谓地打回骨架屏重拉一次。会话变了 = 本地是谁变了，退出 / 401 / 登录 /
+      换号四个方向都在这一条通道上，不会漏也不会重复重置（#652）。
     */
-    unsubscribeSessionRef.current = onSessionCleared(() => resetRef.current())
+    unsubscribeSessionRef.current = onSessionChanged(() => resetRef.current())
     // `load()` 会先把 `next` 的快照上屏（#631），网络回来再原地替换；没有快照就是骨架屏
     void load('ALL')
   })
