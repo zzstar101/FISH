@@ -12,8 +12,12 @@
  * 行为契约：
  * - 输入只有 `git ls-files`（含暂存区），未跟踪文件永远不传给 biome；
  * - 已在工作区删除的被跟踪文件会被跳过 —— 否则 biome 会报「文件不存在」伪造失败；
- * - 「适用」交给 biome 自己判断：仍然尊重 `biome.json` 的 `files.includes` 与 vcs ignore，
- *   因此 `packages/db/src/migrations`、`routeTree.gen.ts` 这类被排除的路径不会因为显式传参又跑起来；
+ * - 已跟踪文件**不会**被 ignore 文件裁掉：这一次 biome 调用带 `--vcs-use-ignore-file=false`。
+ *   否则本机独有的忽略状态会把已跟踪文件静默跳过，而干净的 CI 上又照样检查
+ *   （`.git/info/exclude`、未跟踪的嵌套 `.gitignore`、根 `.gitignore` 命中已跟踪文件都能复现）；
+ * - 「适用」仍交给 biome 自己判断：`biome.json` 的 `files.includes` 继续生效，
+ *   因此 `packages/db/src/migrations`、`routeTree.gen.ts` 这类**仓库声明**的生成文件不会因为
+ *   显式传参又跑起来；但那份名单只放生成文件 —— 放「本地垃圾」模式会连已跟踪文件一起静默跳过；
  *   用 `--no-errors-on-unmatched` 兜住「某一批全是排除项」的情况（否则 biome 会以
  *   「No files were processed」exit 1）；
  * - 文件名含空格时按单个 argv 元素传（不拼 shell），路径前缀以 `-` 开头时补 `./` 免得被当成命令行参数；
@@ -136,7 +140,10 @@ export function runLint(options: LintRunOptions = {}): LintRunResult {
   let output = ''
   for (const batch of batches) {
     const args = batch.map((path) => (path.startsWith('-') ? `./${path}` : path))
-    const result = spawnCapture([biome, 'check', '--no-errors-on-unmatched', ...args], root)
+    const result = spawnCapture(
+      [biome, 'check', '--no-errors-on-unmatched', '--vcs-use-ignore-file=false', ...args],
+      root,
+    )
     output += result.output
     if (result.exitCode !== 0 && exitCode === 0) exitCode = result.exitCode
   }

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { runLint } from './lint'
@@ -18,6 +18,36 @@ const BIOME_CONFIG = `{
 const CLEAN = 'export const ok = 1\n'
 /** `==` 命中 `lint/suspicious/noDoubleEquals`（error）。 */
 const BROKEN = 'export function eq(a: number, b: number): boolean {\n  return a == b\n}\n'
+/** 语法错误的 JSON：无论 linter 规则怎么配，biome 都会报 `parse`。 */
+const BROKEN_JSON = '{ "broken": '
+
+/**
+ * 仓库真实 `biome.json` 的 `files.includes`。`scripts/lint.ts` 把「这个文件适不适用」交给
+ * biome 判断，所以这串排除一旦命中**已跟踪**文件，该文件就被静默跳过 —— 用例直接读真配置，
+ * 保证以后往这里加排除也会被测试拦住。
+ */
+const REPO_INCLUDES: string[] = (() => {
+  const parsed = JSON.parse(readFileSync(join(import.meta.dir, '..', 'biome.json'), 'utf-8')) as {
+    files?: { includes?: string[] }
+  }
+  const includes = parsed.files?.includes
+  if (!Array.isArray(includes)) throw new Error('仓库 biome.json 缺少 files.includes')
+  return includes
+})()
+
+/** 仓库真实的文件选择（`files.includes`）+ 一条确定性 error 规则，其余细节关掉。 */
+const REPO_SELECTION_CONFIG = JSON.stringify({
+  formatter: { enabled: false },
+  files: { includes: REPO_INCLUDES },
+  linter: { rules: { preset: 'none', suspicious: { noDoubleEquals: 'error' } } },
+})
+
+/** 按仓库当前口径打开 vcs ignore 读取：验证本地 ignore 文件不能裁掉已跟踪文件。 */
+const VCS_IGNORE_CONFIG = JSON.stringify({
+  vcs: { enabled: true, clientKind: 'git', useIgnoreFile: true },
+  formatter: { enabled: false },
+  linter: { rules: { preset: 'none', suspicious: { noDoubleEquals: 'error' } } },
+})
 
 const created: string[] = []
 
@@ -51,11 +81,11 @@ function commit(cwd: string): void {
 }
 
 /** 造一个临时 git 仓库：`files` 全部提交（= 被跟踪），返回仓库路径。 */
-function makeRepo(files: Record<string, string>): string {
+function makeRepo(files: Record<string, string>, config: string = BIOME_CONFIG): string {
   const cwd = mkdtempSync(join(tmpdir(), 'fish-lint-'))
   created.push(cwd)
   git(cwd, ['init', '-q'])
-  write(cwd, { 'biome.json': BIOME_CONFIG, ...files })
+  write(cwd, { 'biome.json': config, ...files })
   commit(cwd)
   return cwd
 }
@@ -167,5 +197,69 @@ describe('runLint', () => {
 
     expect(result.batches).toEqual([['biome.json'], ['generated/broken.ts']])
     expect(result.exitCode).toBe(0)
+  })
+
+  test('仓库 files.includes 不会吞掉已跟踪的合法文件', () => {
+    const cwd = makeRepo(
+      {
+        'copy 2.ts': BROKEN,
+        '.robobun/local.ts': BROKEN,
+        'project.private.config.json': BROKEN_JSON,
+      },
+      REPO_SELECTION_CONFIG,
+    )
+
+    const result = runLint({ cwd })
+
+    expect(result.output).toContain('copy 2.ts')
+    expect(result.output).toContain('.robobun/local.ts')
+    expect(result.output).toContain('project.private.config.json')
+    expect(result.exitCode).not.toBe(0)
+  })
+
+  test('只存在于本地的 .git/info/exclude 不能排除已跟踪文件', () => {
+    const cwd = makeRepo({ '.gitignore': 'node_modules\n', 'bad.ts': BROKEN }, VCS_IGNORE_CONFIG)
+    writeFileSync(join(cwd, '.git/info/exclude'), 'bad.ts\n')
+
+    const result = runLint({ cwd })
+
+    expect(result.output).toContain('bad.ts')
+    expect(result.exitCode).not.toBe(0)
+  })
+
+  test('未跟踪的嵌套 .gitignore 不能排除已跟踪文件', () => {
+    const cwd = makeRepo(
+      { '.gitignore': 'node_modules\n', 'src/ok.ts': CLEAN, 'src/bad.ts': BROKEN },
+      VCS_IGNORE_CONFIG,
+    )
+    // 本地新建、未进索引、CI 上不存在的垃圾 ignore。
+    write(cwd, { 'src/.gitignore': 'bad.ts\n' })
+
+    const result = runLint({ cwd })
+
+    expect(result.output).toContain('src/bad.ts')
+    expect(result.exitCode).not.toBe(0)
+  })
+
+  test('仓库 .gitignore 命中已跟踪文件时也不能排除它', () => {
+    const cwd = makeRepo({ '.gitignore': 'bad.ts\n', 'ok.ts': CLEAN }, VCS_IGNORE_CONFIG)
+    // 已跟踪却命中 .gitignore（`git add -f` 才进得去）：`git ls-files` 照样列出它。
+    write(cwd, { 'bad.ts': BROKEN })
+    git(cwd, ['add', '-f', 'bad.ts'])
+
+    const result = runLint({ cwd })
+
+    expect(result.output).toContain('bad.ts')
+    expect(result.exitCode).not.toBe(0)
+  })
+
+  test('同名垃圾未跟踪时不影响，git add 之后立刻纳入', () => {
+    const cwd = makeRepo({ 'ok.ts': CLEAN }, REPO_SELECTION_CONFIG)
+    write(cwd, { 'copy 2.ts': BROKEN })
+
+    expect(runLint({ cwd }).exitCode).toBe(0)
+
+    git(cwd, ['add', 'copy 2.ts'])
+    expect(runLint({ cwd }).exitCode).not.toBe(0)
   })
 })

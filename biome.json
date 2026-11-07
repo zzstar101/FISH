@@ -11,11 +11,7 @@
       "!**/node_modules",
       "!**/dist",
       "!**/src/routeTree.gen.ts",
-      "!packages/db/src/migrations",
-      "!**/.robobun",
-      "!**/project.private.config.json",
-      "!**/* 2.*",
-      "!**/.m4-evidence"
+      "!packages/db/src/migrations"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
