@@ -104,7 +104,7 @@
  *
  * 绿点用系统成功色 `--ok`（认证徽章的描边同款），离线态压成中性灰 `--muted`：
  * 在线/离线只靠颜色区分（形状一致），文案已经把「多久没上线」说清楚了。
- * 字号比昵称小一档（21px = 稿 10.5pt），与认证徽章同处昵称块。
+ * 字号比昵称小一档（`--fs-2xs` = 20px，稿 10pt），与认证徽章同处昵称块。
  */
 .uhome__presence {
   display: flex;
@@ -246,7 +246,7 @@
 
 .uhome__psign-txt {
   display: block;
-  font-size: var(--fs-sm); /* 稿 12.5pt ×2 */
+  font-size: var(--fs-sm); /* 稿 12pt ×2（`--fs-sm`） */
   line-height: 1.55;
   color: var(--muted-2);
   overflow: hidden;

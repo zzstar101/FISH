@@ -27,16 +27,17 @@
   box-sizing: border-box;
 }
 
-/* 一级标题：35px ≈ 17.5pt。
-   稿子对这行文字**没有统一规格**：只有 `messages.html` 写了可见标题的尺寸
-   （`.mp-title{font-size:calc(34 * .52px)}` ≈ 17.7pt），`wish.html` 写的是
-   `.navtitle{font-size:20px}`（40px），`home.html` 顶栏放的是品牌 logo，
-   `profile.html` 的标题是 `sr-only`（不可见）。
-   这里取 17.7pt 一档：它与 iOS 原生导航标题（17pt）同级，且 `.mp-title` 是三个
-   `mp-nav` 页面在用的那套写法里的值。要换成许愿稿的 20pt，改这一个数即可。 */
+/* 一级标题取 `--fs-lg`（34px = 17pt，iOS 原生导航标题档），与同组件居中标题
+   `.topbar__title--center`、mylist / following 等页面级标题同档。
+   稿子对这行文字**没有统一规格**：`messages.html` 的可见标题是
+   `.mp-title{font-size:calc(34 * .52px)}` ≈ 17.7pt、`wish.html` 是
+   `.navtitle{font-size:20px}`（40px = `--fs-h3`），`home.html` 顶栏是品牌 logo、
+   `profile.html` 的标题是 `sr-only`（不可见）。原先这里单独写 35px 去贴 17.7pt，
+   与同页居中标题差 1px，变成了本组件里的第二套字号；现统一到 17pt 档。
+   要改成许愿稿的 20pt，改的是令牌档位（`--fs-lg` → `--fs-h3`），不是这里的数。 */
 .topbar__title {
   flex: 0 0 auto;
-  font-size: 35px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1;
@@ -63,9 +64,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 字号取 34px（17pt，iOS 原生导航标题档）——与既有两份页面级居中标题
-     （mylist / following 的手抄版）同值；要整体统一成 35px 时随迁移批次一起改 */
-  font-size: 34px;
+  /* 字号取 `--fs-lg`（34px = 17pt，iOS 原生导航标题档）——与 mylist / following
+     等页面级居中标题同档；要整体改档只改令牌，别在这里写字面量 */
+  font-size: var(--fs-lg);
   /* 左右让出返回钮与胶囊，标题长了也不压到它们身上 */
   padding: 0 110px;
   /* 纯展示：点击穿过它落到下层，不挡住栏内其它可点内容 */

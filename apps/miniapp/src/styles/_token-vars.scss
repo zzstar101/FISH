@@ -218,13 +218,17 @@
   --r-card-lg: 40px;
   --r-hero: 64px;
 
-  /* ---- 字号（设计稿 pt × 2）---- */
-  --fs-h1: 54px;
-  --fs-h2: 42px;
-  --fs-h3: 36px;
-  --fs-title: 30px;
-  --fs-body: 28px;
-  --fs-sm: 25px;
-  --fs-xs: 23px;
-  --fs-2xs: 21px;
+  /* ---- 字号阶梯（设计稿 pt × 2，档位与用途见 DESIGN.md §5.1）----
+     档位值只在本文件改；调用方一律 `font-size: var(--fs-*)`，不写 px 字面量
+     （守门测试 tests/font-size-scale.test.ts）。 */
+  --fs-h1: 54px; /* 27pt 页面主标题、巨型数字 */
+  --fs-h2: 48px; /* 24pt 金额、统计大数字 */
+  --fs-h3: 40px; /* 20pt 卡片大标题、大号数字 */
+  --fs-lg: 34px; /* 17pt 价格大号、页面级居中标题、自绘导航标题（iOS 原生导航栏档） */
+  --fs-title: 32px; /* 16pt 区块标题、按钮主文案 */
+  --fs-lead: 28px; /* 14pt 强调正文、列表主标题 */
+  --fs-body: 26px; /* 13pt 正文（page 基准字号） */
+  --fs-sm: 24px; /* 12pt 次要正文、表单标签 */
+  --fs-xs: 22px; /* 11pt 元信息、时间戳、辅助说明 */
+  --fs-2xs: 20px; /* 10pt 角标、极小辅助 */
 }

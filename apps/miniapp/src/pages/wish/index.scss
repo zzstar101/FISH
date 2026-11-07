@@ -413,7 +413,7 @@
 .mw__kw {
   display: block;
   margin-top: 8px;
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   line-height: 1.35;
   @include clamp(2);
@@ -650,7 +650,7 @@
 
 .pool__kw {
   display: block;
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   line-height: 1.35;
   @include ellipsis;

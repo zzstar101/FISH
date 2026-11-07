@@ -52,14 +52,14 @@
 
 .lc__name {
   margin-top: 28px;
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 700;
   color: var(--fg);
 }
 
 .lc__headline {
   margin-top: 40px;
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--fg);
 }
