@@ -215,7 +215,7 @@ export default function VisionResult() {
         `[miniapp] 识图完成 queryId=${result.queryId} strategy=${result.strategyVersion} model=${result.embeddingModel} sort=${activeVisualSort(next)}`,
       )
       setInterpretation(result.interpretation)
-      setSubjectBox(result.subjectBox)
+      setSubjectBox(result.subjectBox ?? null)
       setItems(result.items)
       setSoldStats(result.stats)
       setLoading(false)

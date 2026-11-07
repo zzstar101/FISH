@@ -12,6 +12,8 @@
 import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import {
   MAX_VISUAL_QUERY_IMAGE_BYTES,
+  VISUAL_SEARCH_CAPABILITIES_HEADER,
+  VISUAL_SEARCH_CAPABILITY_SUBJECT_BOX,
   VisualQueryUploadResponseSchema,
   type VisualSearchResponse,
   VisualSearchResponseSchema,
@@ -131,7 +133,13 @@ export async function searchByVisualQuery(
     method: 'POST',
     // 缺省档位不占请求体的位置：契约的 `strictObject` 只认这两个键，而服务端补 `relevance`
     body: options.sort === undefined ? { objectKey } : { objectKey, sort: options.sort },
-    headers: { [RECOMMENDATION_HEADERS.sessionId]: ensureVisualSearchSessionId() },
+    headers: {
+      [RECOMMENDATION_HEADERS.sessionId]: ensureVisualSearchSessionId(),
+      // 能力协商（#638）：声明自己认识 `subjectBox`，服务端才会带上它。走请求头而不是请求体 ——
+      // 已发布服务端的请求 schema 是 strictObject，body 多一个键会 422；头会被它直接忽略，
+      // 那种服务端的响应没有 `subjectBox`，`VisualSearchResponseSchema` 把它当整图检索接受。
+      [VISUAL_SEARCH_CAPABILITIES_HEADER]: VISUAL_SEARCH_CAPABILITY_SUBJECT_BOX,
+    },
   })
   return VisualSearchResponseSchema.parse(data)
 }

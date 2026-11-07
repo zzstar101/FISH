@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
-import { MAX_VISUAL_QUERY_IMAGE_BYTES } from '@fish/contracts/visual/schema'
+import {
+  MAX_VISUAL_QUERY_IMAGE_BYTES,
+  VISUAL_SEARCH_CAPABILITIES_HEADER,
+} from '@fish/contracts/visual/schema'
 import { UploadAbortedError } from '@/features/upload/active'
 
 /**
@@ -62,7 +65,7 @@ mock.module('@tarojs/taro', () => ({
   },
 }))
 
-const { uploadVisualQueryImage, visualSearchErrorMessage } = await import(
+const { searchByVisualQuery, uploadVisualQueryImage, visualSearchErrorMessage } = await import(
   '@/features/visual-search/api'
 )
 
@@ -159,5 +162,38 @@ describe('uploadVisualQueryImage', () => {
     )
     expect(error).toBeInstanceOf(UploadAbortedError)
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe('searchByVisualQuery（#638 能力协商）', () => {
+  const searchBody = {
+    queryId: '44444444-4444-4444-8444-444444444444',
+    interpretation: null,
+    strategyVersion: 'visual-search-v1',
+    embeddingModel: 'stub-visual-embedding',
+    items: [],
+    stats: { soldAvgPriceCents: null, soldSampleCount: 0 },
+  }
+
+  beforeEach(() => {
+    store.clear()
+    calls.length = 0
+  })
+
+  test('声明自己认识主体框（走请求头），请求体仍只有旧服务端认识的键', async () => {
+    presignResponse = { statusCode: 200, data: { ...searchBody, subjectBox: null }, header: {} }
+    await searchByVisualQuery(OBJECT_KEY, { sort: 'newest' })
+
+    const call = callAt(0)
+    expect(call.url).toContain('/visual-search')
+    expect(call.header[VISUAL_SEARCH_CAPABILITIES_HEADER]).toBe('subject-box')
+    expect(call.data).toEqual({ objectKey: OBJECT_KEY, sort: 'newest' })
+  })
+
+  test('旧服务端不带 subjectBox 的响应照样接受（按整图处理，不画框）', async () => {
+    presignResponse = { statusCode: 200, data: searchBody, header: {} }
+    const result = await searchByVisualQuery(OBJECT_KEY)
+    expect(result.subjectBox ?? null).toBeNull()
+    expect(result.items).toEqual([])
   })
 })
