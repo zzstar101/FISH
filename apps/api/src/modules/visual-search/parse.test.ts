@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import type { VisualInterpretation } from '@fish/contracts/visual/schema'
+import type { VisualInterpretation, VisualSubjectBox } from '@fish/contracts/visual/schema'
 import type { VisualParseEnv } from '@fish/shared/env'
 import { createVisualParser, visualTextQueryOf } from './parse'
 
@@ -46,13 +46,95 @@ function stubChatCompletion(content: unknown): string[] {
 }
 
 /** 装上假 fetch 后解析一次，返回解析结果与（已断言的）请求 URL 列表。 */
-async function parseWith(
-  content: unknown,
-): Promise<{ interpretation: VisualInterpretation | null; requests: string[] }> {
+async function parseWith(content: unknown): Promise<{
+  interpretation: VisualInterpretation | null
+  subjectBox: VisualSubjectBox | null
+  requests: string[]
+}> {
   const requests = stubChatCompletion(content)
-  const interpretation = await createVisualParser(ENV).parse(IMAGE_BYTES, 'image/png')
-  return { interpretation, requests }
+  const result = await createVisualParser(ENV).parse(IMAGE_BYTES, 'image/png')
+  return { ...result, requests }
 }
+
+/** 收集一段代码执行期间的 `console.warn`。 */
+async function captureWarnings(run: () => Promise<unknown>): Promise<string[]> {
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map((arg) => String(arg)).join(' '))
+  }
+  try {
+    await run()
+  } finally {
+    console.warn = originalWarn
+  }
+  return warnings
+}
+
+describe('createVisualParser 的主体框（#584）', () => {
+  test('0–1000 归一化的 [x1, y1, x2, y2] 换算成图宽高的比例，其余字段照常解析', async () => {
+    const { interpretation, subjectBox } = await parseWith({
+      text: 'EPSON GD-420S',
+      category: 'DIGITAL',
+      subject: [250, 100, 750, 900],
+    })
+
+    expect(subjectBox).toEqual({ x: 0.25, y: 0.1, width: 0.5, height: 0.8 })
+    // subject 不属于 interpretation 契约：剥掉后其余字段仍按 strictObject 校验通过。
+    expect(interpretation).toEqual({ text: 'EPSON GD-420S', category: 'DIGITAL' })
+  })
+
+  test('越出 0–1000 的坐标夹回图内', async () => {
+    const { subjectBox } = await parseWith({ subject: [-20, 500, 1100, 1000] })
+
+    expect(subjectBox).toEqual({ x: 0, y: 0.5, width: 1, height: 0.5 })
+  })
+
+  test('只有主体框、没有文字信号时：框照给，interpretation 为 null', async () => {
+    const { interpretation, subjectBox } = await parseWith({ subject: [0, 0, 500, 500] })
+
+    expect(interpretation).toBeNull()
+    expect(subjectBox).toEqual({ x: 0, y: 0, width: 0.5, height: 0.5 })
+  })
+
+  test('interpretation 形状不符整段拒绝时，主体框不受牵连', async () => {
+    const { interpretation, subjectBox } = await parseWith({
+      text: 42,
+      subject: [0, 0, 1000, 1000],
+    })
+
+    expect(interpretation).toBeNull()
+    expect(subjectBox).toEqual({ x: 0, y: 0, width: 1, height: 1 })
+  })
+
+  test('不是 4 个有限数字 / 面积为零的框按无主体处理，并各留一条日志', async () => {
+    for (const subject of [[1, 2, 3], ['0', 0, 10, 10], [0, 0, Number.NaN, 10], { x: 0 }]) {
+      const warnings = await captureWarnings(async () => {
+        const { subjectBox, interpretation } = await parseWith({ category: 'BOOKS', subject })
+        expect(subjectBox).toBeNull()
+        expect(interpretation).toEqual({ category: 'BOOKS' })
+      })
+      expect(warnings.some((line) => line.includes('subject 不是 4 个数字'))).toBe(true)
+    }
+
+    const warnings = await captureWarnings(async () => {
+      const { subjectBox } = await parseWith({ subject: [600, 100, 400, 900] })
+      expect(subjectBox).toBeNull()
+    })
+    expect(warnings.some((line) => line.includes('subject 面积为零'))).toBe(true)
+  })
+
+  test('省略 subject 或回 null 时没有框，也不留日志', async () => {
+    for (const payload of [{ category: 'BOOKS' }, { category: 'BOOKS', subject: null }]) {
+      const warnings = await captureWarnings(async () => {
+        const { subjectBox, interpretation } = await parseWith(payload)
+        expect(subjectBox).toBeNull()
+        expect(interpretation).toEqual({ category: 'BOOKS' })
+      })
+      expect(warnings).toEqual([])
+    }
+  })
+})
 
 describe('createVisualParser 的解析结果归一', () => {
   test('text 是字符串数组（百炼实测形状）时仍解析成功，并归一成一个查询串', async () => {

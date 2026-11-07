@@ -135,6 +135,23 @@ export const VisualInterpretationSchema = z.strictObject({
 export type VisualInterpretation = z.infer<typeof VisualInterpretationSchema>
 
 /**
+ * 查询图的主体框（#584）：服务端按它裁出主体再向量化，客户端在原图上把它画出来。
+ *
+ * 坐标是**比例**（0–1），相对于**按 EXIF 方向摆正之后**的查询图：客户端显示的就是摆正后的图，
+ * 用比例而不是像素，客户端不必知道服务端内部把图缩到了多大。
+ */
+const unit = z.number().min(0).max(1)
+
+export const VisualSubjectBoxSchema = z.strictObject({
+  x: unit,
+  y: unit,
+  width: unit,
+  height: unit,
+})
+
+export type VisualSubjectBox = z.infer<typeof VisualSubjectBoxSchema>
+
+/**
  * 结果项（#324 M6）：卡片 + 收藏数。
  *
  * **`favoriteCount` 是收藏数，不是「想要数」**（2026-10-04 澄清）：它由 `favorites` 表批量
@@ -187,6 +204,11 @@ export type VisualSearchStats = z.infer<typeof VisualSearchStatsSchema>
 export const VisualSearchResponseSchema = z.strictObject({
   queryId: z.uuid(),
   interpretation: VisualInterpretationSchema.nullable(),
+  /**
+   * 本次检索实际用的主体框（#584）。`null` = 没检测到可用主体，本次按**整图**检索，客户端不画框。
+   * 非 `null` 时图片向量来自这个框（服务端再略外扩一圈）裁出的区域。
+   */
+  subjectBox: VisualSubjectBoxSchema.nullable(),
   strategyVersion: z.string().min(1),
   embeddingModel: z.string().min(1),
   items: z.array(VisualSearchResultItemSchema),
