@@ -23,9 +23,9 @@ async function scss(): Promise<string> {
 }
 
 /** 取某个选择器的规则体（这些规则内部没有嵌套块，按首个 `}` 截断即可） */
-async function ruleBody(selector: string): Promise<string> {
+async function ruleBody(selector: string, anchor = `${selector} {`): Promise<string> {
   const source = await scss()
-  const start = source.indexOf(`${selector} {`)
+  const start = source.indexOf(anchor)
   expect(start, `index.scss 里找不到 ${selector} 规则`).toBeGreaterThanOrEqual(0)
   const end = source.indexOf('\n}', start)
   expect(end, `${selector} 规则没有闭合`).toBeGreaterThan(start)
@@ -66,13 +66,15 @@ describe('出物结果卡宽窗口上限（#632）', () => {
     ).toBe('normal')
   })
 
-  test('次钮高度是下限而非固定值，折行时自己长高', async () => {
+  test('次钮高度是下限而非固定值，档位与基类同值', async () => {
+    // 锚点带 `\n`：`.sell__result .sell__btn-line` 也含这个子串，要取的是基类那条
+    const tier = declaration(await ruleBody('.sell__btn-line', '\n.sell__btn-line {'), 'height')
     const body = await ruleBody('.sell__result .sell__btn-line')
+    expect(tier, '基类 .sell__btn-line 应给出档位高度').toBeDefined()
     // 基类 `.sell__btn-line` 是固定 height，卡内折行时文字会越过胶囊下沿
     expect(declaration(body, 'height'), '次钮需要 height: auto').toBe('auto')
-    expect(
-      declaration(body, 'min-height'),
-      '次钮需要 min-height: var(--btn-h-lg) 保住档位高度',
-    ).toBe('var(--btn-h-lg)')
+    expect(declaration(body, 'min-height'), 'min-height 应与基类同档：不降档、也不新增规格').toBe(
+      tier,
+    )
   })
 })
