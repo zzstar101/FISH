@@ -10,8 +10,8 @@ import {
   ENTRY,
   entrySource,
   GLYPH_DIR,
-  GLYPH_ZOOM,
   ICON_PX,
+  MAX_LONG,
   OUT_DIR,
   type RenderedIcon,
   renderAll,
@@ -34,7 +34,7 @@ function dominantColor(px: Uint8Array): string {
   return [...count.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'none'
 }
 
-/** 字形墨迹（alpha > 0）的外接框与最大 alpha */
+/** 字形墨迹（alpha > 0）的外接框、中心与最大 alpha */
 function inkBox(px: Uint8Array) {
   let x0 = ICON_PX
   let y0 = ICON_PX
@@ -55,7 +55,10 @@ function inkBox(px: Uint8Array) {
   const w = x1 - x0 + 1
   const h = y1 - y0 + 1
   const margin = Math.min(x0, y0, ICON_PX - 1 - x1, ICON_PX - 1 - y1)
-  return { w, h, margin, maxAlpha }
+  // 墨迹中心（像素坐标，画布中心是 ICON_PX / 2）
+  const cx = (x0 + x1 + 1) / 2
+  const cy = (y0 + y1 + 1) / 2
+  return { w, h, margin, maxAlpha, cx, cy }
 }
 
 describe('产物与真源一致（改了 svg / manifest 要重跑 `bun run --filter @fish/miniapp icons`）', () => {
@@ -167,49 +170,71 @@ describe('图标契约', () => {
   })
 
   /**
-   * 口径说明（#513 验收第 3 条）：验收原文写的是「bbox 48–56px（占画布 44%–60%）」，
-   * 括号里的面积区间是对**正方形**字形的换算（48²/72²=44%、56²/72²=60%）。对勾、箭头、
-   * 横排分类图标这类非正方形字形，短边不可能也 ≥48px（否则会撑满画布），因此本条断言
-   * 取**最长边 ∈ [48,56]px**，面积区间对非正方形字形豁免：87 张图**放大后**面积占比
-   * 38.9%–86.6%（`GLYPH_ZOOM` 之前是 27.1%–58.4%），相对旧库是数量级收敛。若要改成
-   * 真正的面积下限（例如 ≥25%）应先改验收口径再改断言。
+   * 光学归一（#660）：字形不再靠全库一个 `GLYPH_ZOOM` 一刀切放大，而是**逐字形**量墨迹后
+   * 定 viewBox —— 中心对齐画布中心、按等效边长 `sqrt(w·h)` 做面积配平、长边不超过 `MAX_LONG`。
    *
-   * 字形现在按 `GLYPH_ZOOM` 放大（显示尺寸四档不变，见 `tools/icons/build.ts`），
-   * 所以断言先把 bbox 换算回 1.0 倍口径再比 [48,56]，改 zoom 不用动这条；
-   * 留白下限随之收紧到 2px（实测 +20% 后 2–5px，最小的是 `entry-onsale-brand`）。
+   * 这条守三个不变量：
+   * - **长边落在 91%–95%**（实测 91.7%–94.4%，极差 2.8pp）。上限由「留白 ≥ 2px」拦，
+   *   下限防止字形被调小；窄字形（`cat-beauty` 宽 48%）也一样达标。
+   * - **面积配平**：等效边长 ≥ 90%，或者长边已经顶到 `MAX_LONG` 上限 —— 后者是扁字形
+   *   （`check-double` 高 55%、`cat-sports` 高 56%）的几何极限：再放大就会切边，
+   *   用长边换面积已经是它能到的最大光学尺寸。
+   * - **居中**：墨迹中心与画布中心偏差 ≤ 1px（实测 0.0px；归一前最大偏 2.5px，`tab-home`）。
+   *
+   * 另外沿用的硬底线：四周留白 ≥ 2px、最深处 alpha ≥ 200（不发虚）。
    */
-  test('24pt 网格：字形最长边 48–56px（含 GLYPH_ZOOM 换算）、四周留白 ≥ 2px、最深处不发虚（alpha ≥ 200）', () => {
+  test('光学归一：长边 91%–95%、面积配平（等效边长 ≥90% 或长边顶到上限）、留白 ≥2px、居中偏差 ≤1px、不发虚', () => {
     for (const icon of icons) {
-      const { w, h, margin, maxAlpha } = inkBox(icon.pixels)
-      const size = Math.max(w, h) / GLYPH_ZOOM
-      expect({ file: icon.file, size: size >= 48 && size <= 56, margin, maxAlpha }).toMatchObject({
+      const { w, h, margin, maxAlpha, cx, cy } = inkBox(icon.pixels)
+      const longRatio = Math.max(w, h) / ICON_PX
+      const dRatio = Math.sqrt(w * h) / ICON_PX
+      expect({ file: icon.file, longBand: longRatio >= 0.91 && longRatio <= 0.95 }).toMatchObject({
         file: icon.file,
-        size: true,
+        longBand: true,
       })
+      expect({
+        file: icon.file,
+        optical: dRatio >= 0.9 || longRatio >= MAX_LONG - 0.005,
+      }).toMatchObject({ file: icon.file, optical: true })
+      expect({ file: icon.file, margin }).toMatchObject({ file: icon.file })
       expect(margin).toBeGreaterThanOrEqual(2)
       expect(maxAlpha).toBeGreaterThanOrEqual(200)
+      expect(Math.abs(cx - ICON_PX / 2)).toBeLessThanOrEqual(1)
+      expect(Math.abs(cy - ICON_PX / 2)).toBeLessThanOrEqual(1)
     }
   })
 
   /**
-   * 绝对下限（防回归）：上面那条把 bbox 除以 `GLYPH_ZOOM` 换算回 1.0 倍口径，守的是
-   * 「字形相对画布的比例」这个不变量 —— 于是把 `GLYPH_ZOOM` 调回 1.0（字形回到 50–55px、
-   * 留白 8–11px）它**依然全绿**，「字形确实被放大」这个核心效果其实没人守。
-   *
-   * 这条**不除 zoom**，直接要求最长边 ≥ 画布的 80%（`GLYPH_ZOOM = 1.2` 实测 83.3%–93.1%）。
-   * 守的失败条件：`GLYPH_ZOOM` 被调小、或 `zoomViewBox` 失效（viewBox 没有被裁）——
-   * 两种都会让字形退回 69%–76%，这里立刻红。上限方向由上面那条的「留白 ≥ 2px」拦
-   * （调大 zoom 先撞留白，再撞这里的 100%）。
+   * 绝对下限（防回归）：上面那条守的是「归一之后的形态」，这条守「真的被放大了」——
+   * 不用任何常量换算，直接要求最长边 ≥ 画布的 90%。它会红的三种情况：归一被退回一刀切
+   * 小系数、`opticalViewBox` 失效（viewBox 没被收紧）、新字形画得太小没量到。
    */
-  test('字形最长边占画布 ≥ 80%（不除 GLYPH_ZOOM，锁住「字形确实被放大」）', () => {
+  test('字形最长边占画布 ≥ 90%（锁住「字形确实被放大」）', () => {
     for (const icon of icons) {
       const { w, h } = inkBox(icon.pixels)
       const ratio = Math.max(w, h) / ICON_PX
-      expect({ file: icon.file, ok: ratio >= 0.8, pct: Math.round(ratio * 100) }).toMatchObject({
+      expect({ file: icon.file, ok: ratio >= 0.9, pct: Math.round(ratio * 100) }).toMatchObject({
         file: icon.file,
         ok: true,
       })
     }
+  })
+
+  test('同族极差：32 个 brand 字形的长边占比极差 ≤ 4pp（光学大小一致）', () => {
+    const ratios = icons
+      .filter((i) => i.tone === 'brand')
+      .map((i) => {
+        const { w, h } = inkBox(i.pixels)
+        return Math.max(w, h) / ICON_PX
+      })
+    const spread = Math.max(...ratios) - Math.min(...ratios)
+    expect({
+      n: ratios.length,
+      spread: Number(spread.toFixed(4)),
+      ok: spread <= 0.04,
+    }).toMatchObject({
+      ok: true,
+    })
   })
 
   test('没有字节完全相同的两张图', () => {

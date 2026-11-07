@@ -139,9 +139,10 @@
   @include row-icon;
 }
 
+/* #660：行图标 = 底线方片（`row-icon` 60）的 2/3，与「我的」页的 48/72 同一比例 */
 .st__ric-ic {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
 }
 
 .st__rlabel {
