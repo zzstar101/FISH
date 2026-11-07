@@ -13,10 +13,15 @@
  * 当前选中项从 `Taro.getCurrentPages()` 最后一项的 route 推断 —— 页面组件不需要再传
  * `active`，切页由 `switchTab` 驱动。浏览器预览（TARO_ENV=h5）里没有页面栈，
  * 改从 hash 路由读，保证预览与真机同一套组件。
+ *
+ * #629：出物页已从 Tab 页改为**二级页**，`tabBar.list` 只剩 4 个普通 Tab。底栏仍是 5 个
+ * 槽位（4 个 Tab + 中间的发布**动作钮**），但中间格不是 Tab：点它用 `Taro.navigateTo`
+ * 压栈打开出物页，所以它没有选中态，也不走 `switchTab` 的胶囊过渡。槽位索引仍按 5 格算
+ * （`TAB_SLOT_RPX`），别把中间格从 `TAB_ITEMS` 里删掉 —— 删了消息/我的会各左移一格。
  */
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
 import { hydrateUnread, unreadBadgeText, useUnreadSnapshot } from '@/features/chat/unread'
@@ -33,7 +38,6 @@ import {
   readNotifyPrefsFromStorage,
 } from '@/features/settings/unread-badge'
 import { TAB_SLOT_RPX, TAB_TRANSITION_MS } from '@/lib/tab-transition'
-import { isTabbarHiddenRoute } from '@/lib/tabbar-route'
 import {
   currentTabRoute as currentRoute,
   readTabTransition,
@@ -42,26 +46,42 @@ import {
 } from '@/lib/tabbar-sync'
 import './index.scss'
 
-type TabKey = 'home' | 'wish' | 'sell' | 'chat' | 'profile'
+/** 普通 Tab：`switchTab` 能切换的那 4 个页面 */
+type TabKey = 'home' | 'wish' | 'chat' | 'profile'
+
+/** 底栏 5 个槽位的 key —— 4 个 Tab + 中间那一格发布动作钮（#629 起不是 Tab） */
+type BarKey = TabKey | 'publish'
 
 type TabItem = {
-  key: TabKey
+  key: BarKey
   label: string
-  /** switchTab 用的绝对路径 */
+  /** 点击后用哪条导航 API 打开的绝对路径：Tab 走 `switchTab`，动作钮走 `navigateTo` */
   path: string
-  /** 用于与页面 route / hash 匹配 */
-  route: string
+  /** 与页面 route / hash 匹配的片段；动作钮没有（它不是常驻的 Tab 页） */
+  route?: string
+  /** `tab` = 普通 Tab（有选中态），`action` = 中间动作钮（压栈打开出物页） */
+  kind: 'tab' | 'action'
   icon: string
   iconOn: string
 }
 
-/** 顺序必须与 `app.config.ts` 的 `tabBar.list` 完全一致 */
+/** 收窄成「普通 Tab」的判据：`route` 只在 Tab 项上存在 */
+function isTabSlot(item: TabItem): item is TabItem & { key: TabKey; route: string } {
+  return item.kind === 'tab' && item.route !== undefined
+}
+
+/**
+ * 底栏 5 个槽位，顺序即渲染顺序。4 个 `kind: 'tab'` 项必须与 `app.config.ts` 的
+ * `tabBar.list` 完全一致（`tests/sell-secondary-page.test.ts` 守着这条）；中间那一格
+ * 是动作钮，不在 `tabBar.list` 里 —— 它的存在只为占住第 3 个槽位，让消息/我的落回原位。
+ */
 const TAB_ITEMS: TabItem[] = [
   {
     key: 'home',
     label: '首页',
     path: '/pages/home/index',
     route: 'pages/home/index',
+    kind: 'tab',
     icon: ICONS.tabHomeMuted,
     iconOn: ICONS.tabHomeBrand,
   },
@@ -70,15 +90,17 @@ const TAB_ITEMS: TabItem[] = [
     label: '许愿',
     path: '/pages/wish/index',
     route: 'pages/wish/index',
+    kind: 'tab',
     icon: ICONS.tabWishMuted,
     iconOn: ICONS.tabWishBrand,
   },
-  // 中间「出物」是凸起钮：品牌渐变圆底 + 反白加号，与其余 4 个槽位一样用图标资源绘制
+  // 中间「出物」是凸起钮：品牌渐变圆底 + 反白加号，与其余 4 个槽位一样用图标资源绘制。
+  // #629 起它压栈打开出物页（那一页已是二级页），所以没有 `route`、没有选中态。
   {
-    key: 'sell',
+    key: 'publish',
     label: '出物',
     path: '/pages/sell/index',
-    route: 'pages/sell/index',
+    kind: 'action',
     icon: ICONS.plusWhite,
     iconOn: ICONS.plusWhite,
   },
@@ -87,6 +109,7 @@ const TAB_ITEMS: TabItem[] = [
     label: '消息',
     path: '/pages/chat/index',
     route: 'pages/chat/index',
+    kind: 'tab',
     icon: ICONS.tabMessageMuted,
     iconOn: ICONS.tabMessageBrand,
   },
@@ -95,6 +118,7 @@ const TAB_ITEMS: TabItem[] = [
     label: '我的',
     path: '/pages/profile/index',
     route: 'pages/profile/index',
+    kind: 'tab',
     icon: ICONS.tabMeMuted,
     iconOn: ICONS.tabMeBrand,
   },
@@ -118,19 +142,18 @@ function capsuleMotion() {
 
 function currentTabKey(): TabKey {
   const route = currentRoute()
-  const hit = TAB_ITEMS.find((item) => route.includes(item.route))
-  return hit?.key ?? 'home'
+  for (const item of TAB_ITEMS) {
+    if (isTabSlot(item) && route.includes(item.route)) return item.key
+  }
+  return 'home'
 }
 
 /**
- * 显隐判据的真源在 `lib/tabbar-route`（`isTabbarHiddenRoute`）：唯一不渲染底栏的 Tab 页
- * 是出物页，理由与边界都写在那里。
- *
- * ⚠️ 显隐**不能**在渲染期现读 `currentRoute()`（#562 根因 2）：本实例在被别的页面压住
+ * ⚠️ 选中态**不能**在渲染期现读 `currentRoute()`（#562 根因 2）：本实例在被别的页面压住
  * 期间仍然挂载，未读快照（`useUnreadSnapshot` / `hydrateUnread`）、`useAuth()` 等异步源
- * 随时会让它重渲染，那时栈顶已不是自己 —— 现读会命中「不隐藏」→ 把底栏画进一个看不见
- * 的页面；回到本页时 sync 里 `setActive` 与离开前同值 → React bail out → 没人再求值 →
- * 上一次画出来的底栏被原样显示。所以显隐跟着 `route` **状态**走（只由 onShow 广播更新）。
+ * 随时会让它重渲染，那时栈顶已不是自己 —— 现读会算出「别的页」→ 把底栏画成别的选中项，
+ * 回到本页时 sync 里 `setActive` 与离开前同值 → React bail out → 没人再求值 →
+ * 上一次画出来的底栏被原样显示。所以选中态跟着 `active` **状态**走（只由 onShow 广播更新）。
  */
 
 /**
@@ -141,12 +164,12 @@ function currentTabKey(): TabKey {
 
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
-  /**
-   * 当前页面 route（显隐判据的唯一输入）。初值取挂载时的栈顶，之后**只**由 onShow 广播
-   * 更新 —— 与 `active` 同一通道、同一时机（`lib/tabbar-sync`）。
-   */
-  const [route, setRoute] = useState<string>(() => currentRoute())
   const [motion, setMotion] = useState(capsuleMotion)
+  /**
+   * 动作钮的连点锁：`Taro.navigateTo` 是异步的，第二次点击可能在第一次跳转生效前就进来，
+   * 于是压出两个出物页（返回一次还停在出物页）。上锁到 promise 落定为止。
+   */
+  const navigatingRef = useRef(false)
   /** 「消息」tab 的未读徽标文案（#431 任务二：蓝点 → 红色数字胶囊）；`null` = 不显示 */
   const [badge, setBadge] = useState<string | null>(null)
   const { status: authStatus, user } = useAuth()
@@ -267,12 +290,11 @@ export default function CustomTabBar() {
     )
   }, [authStatus, userId, unread, demoUnread, notifyPrefs, badge])
 
-  // 选中态与显隐同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
+  // 选中态同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
   // 复用实例不重新渲染，靠广播是它唯一能感知「我又被显示」的机会。
   useEffect(() => {
     const sync = () => {
       setActive(currentTabKey())
-      setRoute(currentRoute())
       const next = capsuleMotion()
       setMotion((previous) => (previous?.id === next?.id ? previous : next))
     }
@@ -284,14 +306,22 @@ export default function CustomTabBar() {
   }, [])
 
   const go = (item: TabItem) => {
+    // 中间动作钮：用 navigateTo 压栈打开出物页 —— 它已经不是 Tab 页，switchTab 打不开它。
+    if (item.kind === 'action') {
+      // 连点不叠加：跳转在途时忽略后续点击（异步 API，光靠 active 早退挡不住）。
+      if (navigatingRef.current) return
+      navigatingRef.current = true
+      void Taro.navigateTo({ url: item.path })
+        .catch(() => undefined)
+        .finally(() => {
+          navigatingRef.current = false
+        })
+      return
+    }
     if (item.key === active) return
     // 立即导航；只有实际到达的普通 Tab 会消费动效意图。
     switchTabWithTransition(item.path)
   }
-
-  // 出物页早退：写在所有 hook 之后（hook 数量不能随路由变化）。
-  // 判据读 `route` **状态**，不是渲染期现读页面栈 —— 见 `lib/tabbar-route` 的注释。
-  if (isTabbarHiddenRoute(route)) return null
 
   return (
     <View className="tabbar">
@@ -315,19 +345,14 @@ export default function CustomTabBar() {
         }}
       />
       {TAB_ITEMS.map((item) => {
-        const on = item.key === active
-        if (item.key === 'sell') {
+        const on = item.kind === 'tab' && item.key === active
+        if (item.kind === 'action') {
           /**
-           * 中间的凸起钮也要给 `is-on`：设计稿（D1 第 04 帧）里当前 Tab 的**文字**是品牌色，
-           * 凸起钮本身恒为品牌渐变。少了这个 class，用户在「出物」页时整条底栏没有任何
-           * 选中反馈——按钮「看起来一样」但点了有反应，是最容易让人以为坏了的状态。
+           * 中间凸起钮是**动作**不是 Tab（#629）：点它压栈打开出物页，所以它没有选中态，
+           * 也不带 `is-on` —— 出物页不在 `tabBar.list` 里，用户在那里看不到这条底栏。
            */
           return (
-            <View
-              key={item.key}
-              className={`tabbar__tab tabbar__tab--pub${on ? ' is-on' : ''}`}
-              onClick={() => go(item)}
-            >
+            <View key={item.key} className="tabbar__tab tabbar__tab--pub" onClick={() => go(item)}>
               <View className="tabbar__pub">
                 <Image className="tabbar__plus" src={item.icon} mode="aspectFit" />
               </View>

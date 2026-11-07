@@ -11,8 +11,9 @@ import { describe, expect, test } from 'bun:test'
  * 并且 `app.config.ts` 依赖 Taro 的编译期全局 `defineAppConfig`，两者都不能在 bun 里 import。
  * （同样的做法见 `tests/verify-messages.test.ts` 对页面接线的断言。）
  *
- * 分包化之后页面清单分两处：主包 `pages`（5 个 tab 页）与 `subPackages`（6 个分包，
- * 页面路径相对各自 `root`）。这里两处都解析，拼成完整路由再与预览壳比对。
+ * 分包化之后页面清单分两处：主包 `pages`（4 个 tab 页 + 出物页 —— #629 起出物页是二级页
+ * 但仍留在主包）与 `subPackages`（6 个分包，页面路径相对各自 `root`）。这里两处都解析，
+ * 拼成完整路由再与预览壳比对。
  */
 
 /** 取 `anchor` 之后第一个 `= {` 到下一个行首 `}` 之间的内容。 */
@@ -84,7 +85,7 @@ const previewPages = pageRoutes(
 
 describe('H5 预览路由表 vs app.config 页面清单', () => {
   test('解析器没取空：两边都解析出了完整清单', () => {
-    // 5 个主包 tab 页 + 39 个分包页
+    // 5 个主包页（4 个 tab 页 + 出物页）+ 39 个分包页（#583：scan-pr / scan-vision 已并入 scan）
     expect(appPages.length).toBe(44)
     expect(previewPages.length).toBe(appPages.length)
   })
