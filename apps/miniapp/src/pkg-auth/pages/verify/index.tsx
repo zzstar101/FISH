@@ -354,6 +354,7 @@ export default function Verify() {
         <NavBar fixed />
 
         <View className="verify__content">
+          {/* 第一层：成功头（薄荷光晕圆盘 + 结论 + 一句说明） */}
           <View className="verify__okwrap">
             <View className="verify__okdisc">
               <View className="verify__okring">
@@ -364,6 +365,7 @@ export default function Verify() {
             <Text className="verify__oktext">你现在可以发布闲置、接受交易，并获得认证徽章。</Text>
           </View>
 
+          {/* 第二层：徽章卡（整页唯一带投影的主卡，徽章是这张的结论物） */}
           <View className="verify__card">
             <Text className="verify__card-title">徽章展示位置</Text>
             <Text className="verify__card-sub">个人页 / 卖家页 · 同一徽章</Text>
@@ -395,8 +397,9 @@ export default function Verify() {
             </View>
           </View>
 
-          {/* 认证信息来自 `GET /verification/status`（邮箱只给脱敏形式）；拿不到就显示 `—` */}
-          <View className="verify__card">
+          {/* 第三层：认证信息（去投影的淡蓝说明卡，与徽章卡分主次）。
+              数据来自 `GET /verification/status`（邮箱只给脱敏形式）；拿不到就显示 `—` */}
+          <View className="verify__info">
             <View className="verify__prow">
               <Text className="verify__pname">教育邮箱</Text>
               <Text className="verify__ptag num">{status?.maskedEmail ?? '—'}</Text>
@@ -438,145 +441,188 @@ export default function Verify() {
       </View>
 
       <View className="verify__content">
-        {/* ---- 未认证说明（稿 01 帧：白卡 + 左侧渐变圆盘 + 右侧黄胶囊） ---- */}
-        <View className="verify__vcard">
-          <View className="verify__vcard-disc">
-            <Image className="verify__vcard-ic" src={ICONS.shieldBrand} mode="aspectFit" />
+        {/* ---- 两步进度（纯版式，跟着 `stage` 走，不参与任何判据） ---- */}
+        <View className="verify__steps">
+          <View className={`verify__step ${stage === 'code' ? 'is-done' : 'is-on'}`}>
+            <View className="verify__step-dot">
+              <Text className="verify__step-no num">1</Text>
+            </View>
+            <Text className="verify__step-tx">填邮箱</Text>
           </View>
-          <View className="verify__vcard-txt">
-            <Text className="verify__vcard-title">未认证</Text>
-            <Text className="verify__vcard-desc">{VERIFY_INTRO_DESC}</Text>
+          <View className={`verify__step-bar${stage === 'code' ? ' is-done' : ''}`} />
+          <View className={`verify__step ${stage === 'code' ? 'is-on' : ''}`}>
+            <View className="verify__step-dot">
+              <Text className="verify__step-no num">2</Text>
+            </View>
+            <Text className="verify__step-tx">输验证码</Text>
           </View>
-          <Text className="verify__chip">未认证</Text>
         </View>
 
-        {/* ---- 邮箱（发码后变成只读行 + 修改） ---- */}
         {stage === 'email' ? (
-          <View className="verify__field">
-            <View className="verify__flabel">
-              <Text>教育邮箱</Text>
-              <Text className="verify__req">* 必填</Text>
-            </View>
-            <View className={`verify__input${emailError ? ' is-error' : ''}`}>
-              <Image className="verify__input-ic" src={ICONS.mailFg} mode="aspectFit" />
-              <Input
-                className="verify__val"
-                type="text"
-                value={email}
-                placeholder={`yourname${CAMPUS_EMAIL_DOMAIN}`}
-                placeholderClass="verify__ph"
-                onInput={(event) => {
-                  setEmail(event.detail.value)
-                  setEmailError('')
-                }}
-              />
-            </View>
-            {emailError ? (
-              <Text className="verify__ferr">{emailError}</Text>
-            ) : (
-              // 5 分钟与后端 `CODE_TTL_MINUTES`（apps/api/src/modules/auth/verification-store.ts，
-              // 邮件正文同源）一致；该常量未进契约，后端改了要同步这里
-              <Text className="verify__fhelp">仅支持校园教育邮箱，验证码 5 分钟内有效。</Text>
-            )}
-
-            <View
-              className={`verify__btn-main${sending ? ' is-off' : ''}`}
-              onClick={() => void send()}
-            >
-              {sending ? <View className="verify__spin" /> : null}
-              <Text>{sending ? '发送中…' : '发送验证码'}</Text>
-            </View>
-          </View>
-        ) : (
-          <View className="verify__field">
-            <View className="verify__flabel">
-              <Text>教育邮箱</Text>
-            </View>
-            <View className="verify__input is-readonly">
-              <Image className="verify__input-ic" src={ICONS.mailFg} mode="aspectFit" />
-              <Text className="verify__val num">{maskEmail(email)}</Text>
-              <Text
-                className="verify__edit"
-                onClick={() => {
-                  setStage('email')
-                  setLeft(0)
-                  setCodeError('')
-                }}
-              >
-                修改
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* ---- 验证码 6 格 ---- */}
-        {stage === 'code' ? (
-          <View className="verify__field">
-            <View className="verify__flabel">
-              <Text>6 位验证码</Text>
-              <Text className="verify__opt num">6 位数字</Text>
-            </View>
-
-            <View className="verify__cells">
-              {CODE_SLOTS.map((slot) => {
-                const ch = code[slot.index] ?? ''
-                return (
-                  <View
-                    key={slot.id}
-                    className={`verify__cell${ch ? ' is-filled' : ''}${
-                      codeError ? ' is-bad' : ''
-                    }${slot.index === code.length && !codeError ? ' is-focus' : ''}`}
-                  >
-                    <Text className="verify__cell-tx num">{ch}</Text>
-                  </View>
-                )
-              })}
-              <Input
-                className="verify__cells-input"
-                type="number"
-                maxlength={CODE_LEN}
-                value={code}
-                onInput={(event) => {
-                  setCode(event.detail.value.replace(/\D/g, '').slice(0, CODE_LEN))
-                  setCodeError('')
-                }}
-              />
-            </View>
-
-            {codeError ? (
-              <View className="verify__errbox">
-                <Image className="verify__err-ic" src={ICONS.warnDanger} mode="aspectFit" />
-                <Text className="verify__err-tx">{codeError}</Text>
+          <>
+            {/* ---- 未认证状态条（暖色档）。已发码换成品牌色回执条、已认证换成薄荷色成功头：
+                    三态三种色调，不再共用「白卡 + 左圆盘 + 右黄胶囊」同一骨架 ---- */}
+            <View className="verify__state">
+              <View className="verify__state-disc">
+                <Image className="verify__state-ic" src={ICONS.shieldBrand} mode="aspectFit" />
               </View>
-            ) : null}
+              <View className="verify__state-txt">
+                <View className="verify__state-row">
+                  <Text className="verify__state-title">未认证</Text>
+                  <Text className="verify__state-pill">待填写</Text>
+                </View>
+                <Text className="verify__state-desc">{VERIFY_INTRO_DESC}</Text>
+              </View>
+            </View>
 
-            {/* 稿 02 帧 `.resend` 是**两个都在**：左侧说明 + 右侧胶囊钮，倒计时期间按钮置灰
-                （`.rb.is-off`）而不是把按钮换成一行字 —— 后者会让这一行在倒计时结束时
-                左右跳一次。按钮的点击在 `send()` 里已有 `left > 0` 守卫，置灰只是外观。 */}
-            <View className="verify__resend">
-              <Text className="verify__resend-tx num">
-                {left > 0 ? `没收到？${left}s 后可重新发送` : '没收到？可以重新发送验证码'}
-              </Text>
+            {/* ---- 邮箱（发码后由下面的回执条接管，不再留只读行） ---- */}
+            <View className="verify__field">
+              <View className="verify__flabel">
+                <Text>教育邮箱</Text>
+              </View>
+              <View className={`verify__input${emailError ? ' is-error' : ''}`}>
+                <Image className="verify__input-ic" src={ICONS.mailFg} mode="aspectFit" />
+                <Input
+                  className="verify__val"
+                  type="text"
+                  value={email}
+                  placeholder={`yourname${CAMPUS_EMAIL_DOMAIN}`}
+                  placeholderClass="verify__ph"
+                  onInput={(event) => {
+                    setEmail(event.detail.value)
+                    setEmailError('')
+                  }}
+                />
+              </View>
+              {emailError ? (
+                // 行内错误行：与下面的辅助说明同一行位，出现/消失只换内容不换版式骨位
+                <View className="verify__ferr">
+                  <Image className="verify__ferr-ic" src={ICONS.warnDanger} mode="aspectFit" />
+                  <Text className="verify__ferr-tx">{emailError}</Text>
+                </View>
+              ) : (
+                // 5 分钟与后端 `CODE_TTL_MINUTES`（apps/api/src/modules/auth/verification-store.ts，
+                // 邮件正文同源）一致；该常量未进契约，后端改了要同步这里
+                <Text className="verify__fhelp">仅支持校园教育邮箱，验证码 5 分钟内有效。</Text>
+              )}
+
               <View
-                className={`verify__resend-btn${left > 0 ? ' is-off' : ''}`}
+                className={`verify__btn-main${sending ? ' is-off' : ''}`}
                 onClick={() => void send()}
               >
-                <Image className="verify__resend-ic" src={ICONS.clockMuted} mode="aspectFit" />
-                <Text>重新发送</Text>
+                {sending ? <View className="verify__spin" /> : null}
+                <Text>{sending ? '发送中…' : '发送验证码'}</Text>
               </View>
             </View>
-
-            <View
-              className={`verify__btn-main${
-                code.length === CODE_LEN && !submitting ? '' : ' is-off'
-              }`}
-              onClick={() => void submit()}
-            >
-              {submitting ? <View className="verify__spin" /> : null}
-              <Text>{submitting ? '认证中…' : '确认认证'}</Text>
+            {/* ---- 邮箱获取途径：主 CTA 下方留白里的纯文字，与上面的辅助说明同一档，
+                    不做卡片 / 按钮 / 图标容器 ---- */}
+            <View className="verify__where">
+              <Text className="verify__where-lead">教育邮箱在哪儿看</Text>
+              <Text className="verify__where-line">企业微信 → 设置 → 账号与安全</Text>
+              <Text className="verify__where-line">企业微信 → 邮件 → 收件箱</Text>
             </View>
-          </View>
-        ) : null}
+          </>
+        ) : (
+          <>
+            {/* ---- 已发码：品牌色回执条突出「验证码已发到 who@…」；「改邮箱」入口仍可点，
+                    点击行为与原只读行的「修改」完全一致 ---- */}
+            <View className="verify__sent">
+              <View className="verify__sent-head">
+                <Image className="verify__sent-ic" src={ICONS.mailFg} mode="aspectFit" />
+                <Text className="verify__sent-lead">验证码已发到</Text>
+              </View>
+              <View className="verify__sent-row">
+                <Text className="verify__sent-mail num">{maskEmail(email)}</Text>
+                <Text
+                  className="verify__edit"
+                  onClick={() => {
+                    setStage('email')
+                    setLeft(0)
+                    setCodeError('')
+                  }}
+                >
+                  改邮箱
+                </Text>
+              </View>
+              <Text className="verify__sent-note">
+                验证码 5 分钟内有效，没收到可在下方重新发送。
+              </Text>
+            </View>
+
+            {/* ---- 验证码 6 格 ---- */}
+            {stage === 'code' ? (
+              <View className="verify__field">
+                <View className="verify__flabel">
+                  <Text>6 位验证码</Text>
+                  <Text className="verify__opt num">6 位数字</Text>
+                </View>
+
+                <View className="verify__cells">
+                  {CODE_SLOTS.map((slot) => {
+                    const ch = code[slot.index] ?? ''
+                    return (
+                      <View
+                        key={slot.id}
+                        className={`verify__cell${ch ? ' is-filled' : ''}${
+                          codeError ? ' is-bad' : ''
+                        }${slot.index === code.length && !codeError ? ' is-focus' : ''}`}
+                      >
+                        <Text className="verify__cell-tx num">{ch}</Text>
+                      </View>
+                    )
+                  })}
+                  <Input
+                    className="verify__cells-input"
+                    type="number"
+                    maxlength={CODE_LEN}
+                    value={code}
+                    onInput={(event) => {
+                      setCode(event.detail.value.replace(/\D/g, '').slice(0, CODE_LEN))
+                      setCodeError('')
+                    }}
+                  />
+                </View>
+
+                {/* 错误行紧随 6 格下方，按内容自然撑高（Owner 2026-11-07 拍板：不留常驻空白槽）。
+                单行错误约 67px、长文案会换行 —— 固定槽对两行错误本来就兜不住，索性把空白还回去 */}
+                <View className="verify__errslot">
+                  {codeError ? (
+                    <View className="verify__err">
+                      <Image className="verify__err-ic" src={ICONS.warnDanger} mode="aspectFit" />
+                      <Text className="verify__err-tx">{codeError}</Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* 稿 02 帧 `.resend` 是**两个都在**：左侧说明 + 右侧胶囊钮，倒计时期间按钮置灰
+                （`.rb.is-off`）而不是把按钮换成一行字 —— 后者会让这一行在倒计时结束时
+                左右跳一次。按钮的点击在 `send()` 里已有 `left > 0` 守卫，置灰只是外观。 */}
+                <View className="verify__resend">
+                  <Text className="verify__resend-tx num">
+                    {left > 0 ? `没收到？${left}s 后可重新发送` : '没收到？可以重新发送验证码'}
+                  </Text>
+                  <View
+                    className={`verify__resend-btn${left > 0 ? ' is-off' : ''}`}
+                    onClick={() => void send()}
+                  >
+                    <Image className="verify__resend-ic" src={ICONS.clockMuted} mode="aspectFit" />
+                    <Text>重新发送</Text>
+                  </View>
+                </View>
+
+                <View
+                  className={`verify__btn-main${
+                    code.length === CODE_LEN && !submitting ? '' : ' is-off'
+                  }`}
+                  onClick={() => void submit()}
+                >
+                  {submitting ? <View className="verify__spin" /> : null}
+                  <Text>{submitting ? '认证中…' : '确认认证'}</Text>
+                </View>
+              </View>
+            ) : null}
+          </>
+        )}
 
         {/* 稿 01 帧把这条说明做成了居中脚注（.fnote 居中变体） */}
         <Text className="verify__fnote">{VERIFY_FOOTNOTE}</Text>
