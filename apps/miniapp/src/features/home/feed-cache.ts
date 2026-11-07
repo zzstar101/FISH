@@ -14,6 +14,10 @@
  *
  * **不做什么**：不碰推荐排序、归因、曝光去重、「不感兴趣」语义；也不是一个通用的 GET
  * 缓存层 —— 只服务首页 feed，只有「上一次成功结果」这一种数据。
+ *
+ * **只缓存「推荐」**（Owner 拍板）：首页进页拉的就是 `ALL`，切分类仍走骨架屏 —— 少一屏
+ * 骨架，比先上屏一份可能已经卖掉的旧货更不容易让用户误判。Key 依然按分类命名（验收①的
+ * 隔离口径，也保证任何分类的旧数据不会冒充另一个分类），只是当前只有 `ALL` 会被写入。
  */
 import Taro from '@tarojs/taro'
 import { CATEGORY_LABEL } from '@/lib/listing-labels'
@@ -23,8 +27,9 @@ import type { ImageRatio, ListingCategory, MockListing, MockUser } from '@/mock/
 /**
  * 一个分类一个 key：分类之间天然隔离，写入覆盖的是同一个分类，不会互相顶掉。
  *
- * 最坏占用 = 9 个分类 × `HOME_FEED_SNAPSHOT_MAX_BYTES`（见下方上限），仍是小程序的
- * 单 key 上限（1MB）与总配额（10MB）之内的量级。
+ * 当前只有「推荐」（`ALL`）会落盘（写入点在 `apps/miniapp/src/pages/home/index.tsx` 的
+ * `load()` 里），所以真实占用是一个 key、上限 `HOME_FEED_SNAPSHOT_MAX_BYTES`，远在
+ * 小程序单 key 上限（1MB）与总配额（10MB）之内。
  */
 const KEY_PREFIX = 'fish:home.feed-snapshot:'
 

@@ -8,8 +8,9 @@ import { describe, expect, test } from 'bun:test'
  *
  * 1. 快照必须在**发请求之前**上屏 —— 顺序反过来，快照要等网络回来才上屏，
  *    这个单子就白做了（而且没人会从运行结果里看出来）。
- * 2. 读的 scope 必须和写的是**同一个分类**：写侧按分类落盘（`write(next, …)`），
- *    读侧写成固定 `'ALL'` 就会拿「推荐」的货去顶别的分类，8 个分类的 key 也永远没人读。
+ * 2. 只有**进页那条路径**（`next === 'ALL'`）读写快照：切分类照旧骨架屏（Owner 拍板，
+ *    分类列表先上屏一份可能已售的旧货更容易让人误判）。读写两侧的判据必须一致，
+ *    写成「写所有分类、只读推荐」就是白付同步写盘。
  * 3. 快照上屏时**归因上下文必须置空**：快照没有 `requestId` / `positions`，忘了清就会
  *    拿上一次会话的 requestId 给这批卡发 IMPRESSION / QUICK_SKIP —— 契约禁止。
  * 4. 身份指纹要在**请求发出时**捕获、写入时比对：写成「写入时才取身份」（草稿的实现）
@@ -43,10 +44,9 @@ describe('首页进页快照：源码层接线', () => {
     const text = code(await homeSource())
     // 进页与切分类都走 `load()`，所以快照上屏必须排在这次网络往返之前
     const beforeRoundTrip = slice(text, 'const load = async (', 'await loadHomeFeed')
-    expect(beforeRoundTrip).toContain('paintSnapshot(next)')
-    // 同一次 `load()` 里不要重复画：`paintSnapshot` 的 `setLoadedFor` 还没生效，只能看 `lastGoodRef`
+    // 只有「推荐」有快照：切分类照旧骨架屏（Owner 拍板的口径，别悄悄扩成九个分类）
     expect(beforeRoundTrip).toContain(
-      'if (lastGoodRef.current.loadedFor !== next) paintSnapshot(next)',
+      "if (next === 'ALL' && lastGoodRef.current.loadedFor !== next) paintSnapshot(next)",
     )
     // 进页那条入口仍然只是拉「推荐」
     expect(slice(text, 'useLoad(() => {', '})')).toContain("void load('ALL')")
@@ -73,8 +73,7 @@ describe('首页进页快照：源码层接线', () => {
     expect(text.indexOf('const viewerAtRequest = homeFeedCache.viewer()')).toBeLessThan(
       text.indexOf('await loadHomeFeed'),
     )
-    expect(text).toContain(
-      'if (!result.failed) homeFeedCache.write(next, applied.items, viewerAtRequest)',
-    )
+    expect(text).toContain("if (!result.failed && next === 'ALL') {")
+    expect(text).toContain('homeFeedCache.write(next, applied.items, viewerAtRequest)')
   })
 })
