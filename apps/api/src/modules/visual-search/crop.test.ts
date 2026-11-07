@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import {
+  analyzeQueryImage,
   cropSubject,
   decodePng,
   encodePng,
@@ -8,6 +9,26 @@ import {
   VISUAL_WORKING_IMAGE_MAX_SIDE,
   workingImageOf,
 } from './crop'
+import { createVisualParser } from './parse'
+
+test('解析关闭时不生成工作图，原始字节和 MIME 直接用于整图检索', async () => {
+  const image = encodePng(gradient(200, 100))
+  const resize = spyOn(Bun.Image.prototype, 'resize')
+  try {
+    const result = await analyzeQueryImage(
+      image,
+      'image/png',
+      createVisualParser({ transport: 'off' }),
+    )
+    expect(result.image).toBe(image)
+    expect(result.mime).toBe('image/png')
+    expect(result.interpretation).toBeNull()
+    expect(result.subjectBox).toBeNull()
+    expect(resize).not.toHaveBeenCalled()
+  } finally {
+    resize.mockRestore()
+  }
+})
 
 /** 每个像素的 RGB 都由坐标算出来：裁剪 / 解码出错时能看出偏到了哪一格。 */
 function gradient(width: number, height: number): RasterImage {

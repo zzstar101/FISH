@@ -71,6 +71,32 @@ async function captureWarnings(run: () => Promise<unknown>): Promise<string[]> {
   return warnings
 }
 
+test('思考型解析模型的 token 预算同时容纳思考与最终主体 JSON', async () => {
+  let budget = 0
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { max_tokens: number }
+    budget = body.max_tokens
+    return Response.json({
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            reasoning_content: 'synthetic reasoning',
+            content: '{"keywords":["红色圆形"],"subject":[583,375,750,625]}',
+          },
+        },
+      ],
+    })
+  }) as typeof fetch
+  const result = await createVisualParser({ ...ENV, model: 'deepseek-flash' }).parse(
+    IMAGE_BYTES,
+    'image/png',
+  )
+  // 真实服务的 512 预算被思考消耗，finish_reason=length，仅剩截断 JSON；2048 实测完整返回。
+  expect(budget).toBe(2048)
+  expect(result.subjectBox?.x).toBe(0.583)
+})
+
 describe('createVisualParser 的主体框（#584）', () => {
   test('0–1000 归一化的 [x1, y1, x2, y2] 换算成图宽高的比例，其余字段照常解析', async () => {
     const { interpretation, subjectBox } = await parseWith({

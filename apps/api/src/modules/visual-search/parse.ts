@@ -30,8 +30,8 @@ import type { VisualParseEnv } from '@fish/shared/env'
 /** 解析调用的超时。比向量化宽松：一次 VLM 生成比一次 embedding 慢。 */
 export const VISUAL_PARSE_TIMEOUT_MS = 15_000
 
-/** 生成的 token 上限。解析结果是一小段 JSON，给多了只会让模型话多。 */
-export const VISUAL_PARSE_MAX_TOKENS = 512
+/** 思考型模型会从同一预算扣除 reasoning token；512 实测截断最终 JSON，2048 可完整返回。 */
+export const VISUAL_PARSE_MAX_TOKENS = 2048
 
 /** 文本路查询串的长度上限：超过这个长度的"关键词"对检索没有帮助，只会推高一次上游调用。 */
 export const VISUAL_TEXT_QUERY_MAX_LENGTH = 400
@@ -46,6 +46,8 @@ export type VisualParseResult = {
 const NOTHING: VisualParseResult = { interpretation: null, subjectBox: null }
 
 export type VisualParser = {
+  /** off 模式跳过解析前的工作图转码，保留原始整图检索路径。 */
+  readonly enabled: boolean
   /** 解析失败/未启用时两个字段都是 `null`（调用方据此退化为纯视觉排序、整图检索）。 */
   parse(image: Uint8Array, mime: VisualImageMime): Promise<VisualParseResult>
 }
@@ -233,12 +235,13 @@ export function createVisualParser(env: VisualParseEnv): VisualParser {
   if (env.transport === 'off') {
     // `off` 是 CI 与本机默认：不产生"看起来合理的假结果"，只是少做一步可选增强，
     // 所以返回空结论而不是造一个空壳解析结果（后者会让文本路以为自己有输入）。
-    return { parse: async () => NOTHING }
+    return { enabled: false, parse: async () => NOTHING }
   }
 
   const endpoint = `${env.baseUrl.replace(/\/+$/, '')}/chat/completions`
 
   return {
+    enabled: true,
     async parse(image, mime) {
       const body = JSON.stringify({
         model: env.model,

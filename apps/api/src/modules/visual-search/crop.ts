@@ -149,6 +149,9 @@ export async function analyzeQueryImage(
   mime: VisualImageMime,
   parser: VisualParser,
 ): Promise<AnalyzedQueryImage> {
+  if (!parser.enabled) {
+    return { interpretation: null, subjectBox: null, image: bytes, mime }
+  }
   const workingImage = await workingImageOf(bytes)
   if (!workingImage) {
     const parsed = await parser.parse(bytes, mime)
