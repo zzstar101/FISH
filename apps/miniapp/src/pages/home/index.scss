@@ -65,7 +65,7 @@
  * 而**图标与占位文案的位置一个像素都不动**。
  *
  * 热区补偿 —— 需 Owner 认可：28×32 CSS px 低于「所有可点区域视觉高度 ≥ 44pt」
- * （`apps/miniapp/待设计页面.md` 的口径，同口径先例见 `apps/miniapp/src/pages/scan-vision/index.scss`
+ * （`apps/miniapp/待设计页面.md` 的口径，同口径先例见 `apps/miniapp/src/pkg-vision/pages/scan/index.scss`
  * 的命中区 ≥ 88px）。这里只做「不再点到整条胶囊」的最小补偿，没有撑到 44pt ——
  * 因为再往横向放大就会吃进占位文案的命中区，违反 #324「点文字区走普通搜索」的验收条目。
  * 低于 44pt 的显式标注写法同 `apps/miniapp/src/components/legal-doc/index.scss`、

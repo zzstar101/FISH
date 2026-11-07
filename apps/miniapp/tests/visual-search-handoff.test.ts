@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { bindVisualShot, readVisualShot, stashVisualShot } from '@/features/visual-search/handoff'
 
 /**
- * 「原图 + 取框」从识图入口页交给结果页的交接位（Owner 2026-09-30：共享元素式切换）。
+ * 「原图」从识图入口页交给结果页的交接位（Owner 2026-09-30：共享元素式切换）。
  *
  * 两条不变量，写错了端上都很难看出来：
  * 1. **按 objectKey 读**：换了图（键对不上）必须拿到 `null` —— 否则结果页背景会显示
@@ -10,8 +10,7 @@ import { bindVisualShot, readVisualShot, stashVisualShot } from '@/features/visu
  * 2. **重复读拿到同一份**：`useMemo` 的初始化在开发态可能跑两次，取一次就清空会让
  *    「背景时有时无」。
  */
-const CROP = { x: 10, y: 20, w: 100, h: 120 }
-const SHOT = { path: '/tmp/shot.jpg', width: 3000, height: 4000, crop: CROP }
+const SHOT = { path: '/tmp/shot.jpg' }
 
 beforeEach(() => {
   // 每个用例从干净状态开始：把可能残留的交接读掉（键必然对不上时会自清）

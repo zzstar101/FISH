@@ -43,8 +43,6 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-browse/pages/comments/index': () => import('@/pkg-browse/pages/comments/index'),
   '/pkg-browse/pages/favorites/index': () => import('@/pkg-browse/pages/favorites/index'),
   '/pkg-vision/pages/scan/index': () => import('@/pkg-vision/pages/scan/index'),
-  '/pkg-vision/pages/scan-pr/index': () => import('@/pkg-vision/pages/scan-pr/index'),
-  '/pkg-vision/pages/scan-vision/index': () => import('@/pkg-vision/pages/scan-vision/index'),
   '/pkg-vision/pages/vision-result/index': () => import('@/pkg-vision/pages/vision-result/index'),
   '/pkg-browse/pages/following/index': () => import('@/pkg-browse/pages/following/index'),
   '/pkg-browse/pages/history/index': () => import('@/pkg-browse/pages/history/index'),

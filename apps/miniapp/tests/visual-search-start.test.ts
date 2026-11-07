@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 /**
  * 「取图 → 上传 → 跳结果页」这条链的**取消语义**。
  *
- * 为什么值得单独钉住：三个调用方（识图入口页 / 搜索页识图钮 / 结果页重拍）都用
+ * 为什么值得单独钉住：结果页「换图」用
  * `onPicked` 挂「作废在途的旧检索」。如果这个钩子在用户**还没选图之前**就被调用，
  * 「点开弹窗又取消」会把一次本来能成的检索作废掉 —— 结果页会永久停在骨架屏
- * （它的迟到守卫直接 `return`，`loading` 无人复位），搜索页会丢一次搜索且结果区空白。
+ * （它的迟到守卫直接 `return`，`loading` 无人复位）。
  * 所以这里断言的核心就是：**取消时一次钩子都不许调**。
  *
  * 为什么用 `mock.module`：`./start` 会拉起 `@tarojs/taro`（`showLoading` / `navigateTo`），
@@ -54,7 +54,8 @@ mock.module('@/features/visual-search/api', () => ({
     error instanceof Error ? `文案：${error.message}` : '识图失败，请稍后重试',
 }))
 
-const { startVisualSearch } = await import('@/features/visual-search/start')
+const { startVisualSearch, submitVisualQuery } = await import('@/features/visual-search/start')
+const { readVisualShot, stashVisualShot } = await import('@/features/visual-search/handoff')
 
 const PHOTO = { path: '/tmp/q.png', mime: 'image/png', sizeBytes: 4 }
 
@@ -126,5 +127,19 @@ describe('startVisualSearch 的失败语义', () => {
     const outcome = await startVisualSearch()
     expect(outcome).toBe('failed')
     expect(calls).toContain('toast:页面打开失败，请重试')
+  })
+})
+
+describe('submitVisualQuery 的原图交接', () => {
+  test('上一张照片的残留不会被改绑到新的查询图上：结果页背景是这一张', async () => {
+    // 拍 A 后没走到结果页（上传失败 / 返回）就留下了一份 stash；再从相册选 B 上传
+    stashVisualShot({ path: '/tmp/a.jpg' })
+    const outcome = await submitVisualQuery({
+      path: '/tmp/b.jpg',
+      mime: 'image/jpeg',
+      sizeBytes: 4,
+    })
+    expect(outcome).toBe('navigated')
+    expect(readVisualShot('visual-search/abc/def.png')?.path).toBe('/tmp/b.jpg')
   })
 })

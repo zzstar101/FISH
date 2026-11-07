@@ -5,12 +5,12 @@ import { describe, expect, test } from 'bun:test'
  *
  * 这几条都**只在源码里可见**，写错了不会有任何编译错误，端上演示也很容易漏掉：
  *
- * 1. **先掐冒泡、再启动识图**：相机热区嵌在整条 `.home__search` 里，而胶囊自己有
+ * 1. **先掐冒泡、再进识图**（#583 起进扫码页的「拍图搜」tab）：相机热区嵌在整条 `.home__search` 里，而胶囊自己有
  *    `onClick={goSearch}`。Taro 合成事件的冒泡是运行时行为，`stopPropagation()` 一旦被挪到
  *    `await` 之后（或干脆漏掉），同一次点击就会**既进识图又跳文字搜索页** —— 表现是「点了
  *    相机，结果页上又叠了一层搜索页」，端上要连点两次才看得出来。
  * 2. **在途守卫在置位之前**：`if (visionBusy) return` 必须排在 `setVisionBusy(true)` 前面。
- *    反过来写等于没有守卫 —— 上传在途时连点会打出多次真实计费的上游调用。
+ *    反过来写等于没有守卫 —— 跳转在途时连点会压出两层扫码页。
  * 3. **命中区靠负 margin 还宽**：热区多占的宽度必须由**等量**负 margin 还回 flex 行，
  *    否则后面的「搜『键盘』…」占位文案会被整条右推。这是纯算术，不是视觉判断。
  * 4. **热区补偿要留痕**：本页热区只有 28×32 CSS px，低于仓库「可点区域视觉高度 ≥ 44pt」
@@ -98,16 +98,10 @@ describe('识图在途守卫', () => {
     expect(armed).toBeGreaterThanOrEqual(0)
     // 守卫必须在置位之前 —— 反过来写等于没守卫
     expect(guard).toBeLessThan(armed)
-    // 复位放 finally：startVisualSearch 的失败分支不会 throw，但 try 里将来加一行就会漏
-    expect(fn).toContain('await startVisualSearch()')
+    // 复位放 finally：跳转失败分支被 catch 吞掉，但 try 里将来加一行就会漏
+    expect(fn).toContain("await Taro.navigateTo({ url: scanPageUrl('photo') })")
     expect(fn).toContain('finally')
     expect(fn).toContain('setVisionBusy(false)')
-  })
-
-  test('本页不传 onPicked（没有文字搜索任务日志可作废）', async () => {
-    const fn = await slice('const visionSearch = async () => {', 'const onCameraTap = ')
-    expect(fn).toContain('startVisualSearch()')
-    expect(fn).not.toContain('onPicked')
   })
 })
 

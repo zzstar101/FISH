@@ -1,41 +1,30 @@
 /**
- * 扫码家族的三段纯文字切换钮（扫一扫 / 识图 / 交易码）。
+ * 扫码页底部的两段纯文字 tab（扫一扫 / 拍图搜）。
  *
- * 取景框正下方一行三等分：激活项白色高亮、其余压灰，无胶囊容器。
- * 跳转行为在 `tabs.ts`（可单测），本组件只消费它的结果；redirect 用
- * `redirectTo` 替换当前页，保证两个扫码页来回切不会把页面栈堆满。
+ * #583：**页内状态**，不再 `redirectTo` 兄弟页 —— 当前 tab 由页面持有，点别的 tab 只回调
+ * `onChange`，相机模式的切换（`scanCode` ↔ `normal`）由页面换 key 重挂完成。
+ * 激活项白色加粗、其余压灰；文字统一带阴影，亮场景（白桌面 / 亮屏）也读得清。
  */
 import { Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
-import { SCAN_TABS, type ScanTabKey, scanTabAction } from './tabs'
+import { SCAN_TABS, type ScanTabKey } from './tabs'
 import './index.scss'
 
 type ScanTabsProps = {
-  /** 当前页对应的 tab；点它不动作 */
+  /** 当前 tab；点它不动作 */
   active: ScanTabKey
+  onChange: (next: ScanTabKey) => void
 }
 
-export default function ScanTabs({ active }: ScanTabsProps) {
-  const handleTap = (key: ScanTabKey) => {
-    const action = scanTabAction(key, active)
-    if (!action) return
-    if (action.kind === 'toast') {
-      void Taro.showToast({ title: action.title, icon: 'none' })
-      return
-    }
-    void Taro.redirectTo({ url: action.url }).catch(() => {
-      // 页面栈满等导航失败：留在本页并给反馈，不静默吞掉
-      void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
-    })
-  }
-
+export default function ScanTabs({ active, onChange }: ScanTabsProps) {
   return (
     <View className="scantabs">
       {SCAN_TABS.map((tab) => (
         <View
           key={tab.key}
           className={`scantabs__item${tab.key === active ? ' is-active' : ''}`}
-          onClick={() => handleTap(tab.key)}
+          onClick={() => {
+            if (tab.key !== active) onChange(tab.key)
+          }}
         >
           <Text>{tab.label}</Text>
         </View>
