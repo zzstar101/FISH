@@ -882,9 +882,19 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 22px;
-  margin-top: 48px;
-  padding: 48px 32px;
+  gap: 18px;
+  /*
+   * #632：结果卡原来撑满整页，宽窗口下更没有上限。
+   * 宽度收到 600rpx 并居中；`600px` 会被 pxtransform 编译成 `600rpx`（= 窗口宽的 80%），
+   * 在 PC 微信 / iPad 上仍然随窗口放大，所以再补一条大写 `600PX` —— 大写单位逃过
+   * pxtransform，落到 wxss 就是物理 600px，宽窗口到此为止。
+   * `box-sizing: border-box` 让这 600 是含内边距的实宽（本仓没有全局 border-box）。
+   */
+  width: 600px;
+  max-width: 600PX;
+  box-sizing: border-box;
+  margin: 32px auto 0;
+  padding: 32px 28px;
   background: var(--surface);
   border: 2px solid var(--border);
   border-radius: var(--r-card);
@@ -893,8 +903,8 @@
 }
 
 .sell__result-badge {
-  width: 112px;
-  height: 112px;
+  width: 96px;
+  height: 96px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -903,8 +913,8 @@
 }
 
 .sell__result-ic {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
 }
 
 .sell__result-title {
@@ -919,8 +929,11 @@
   color: var(--muted-2);
 }
 
-.sell__result .sell__submit,
-.sell__result .sell__btn-line {
+/*
+ * #632：主钮仍占满卡宽，保住主次层级；次钮退到内容宽 —— 父级已是 `align-items: center`，
+ * 不再要 `width: 100%` 那种双 CTA 顶满整行的观感。
+ */
+.sell__result .sell__submit {
   width: 100%;
 }
 
@@ -931,6 +944,7 @@
  */
 .sell__result .sell__btn-line {
   flex: none;
+  width: auto;
 }
 
 /* ---- 提交中遮罩：飞行途中禁止交互（避免「所见」与「已提交」不一致） ---- */
