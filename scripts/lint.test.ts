@@ -1,8 +1,12 @@
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { runLint } from './lint'
+
+// 本文件启动真实 git / Biome 子进程；CI 首次冷启动曾超过默认 5 秒。
+// 验证的是文件选择与失败传播，不是进程启动性能；--isolate 将预算限定在本文件。
+setDefaultTimeout(30_000)
 
 /** 关掉 formatter、只留一条确定性的 error 规则，避免格式细节干扰断言。 */
 const BIOME_CONFIG = `{
