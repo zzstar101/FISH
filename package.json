@@ -20,7 +20,7 @@
     "build:web-pc": "bun run --filter '@fish/web-pc' build",
     "build:miniapp": "bun run --filter '@fish/miniapp' build:weapp",
     "typecheck": "bun run --filter '@fish/*' typecheck",
-    "lint": "biome check .",
+    "lint": "bun scripts/lint.ts",
     "format": "biome format --write .",
     "test": "bun test --isolate",
     "ws:smoke": "bun run scripts/ws-smoke.ts",
