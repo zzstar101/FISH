@@ -30,7 +30,7 @@ CI 的 `static` 跑的也是 `bun run lint`，干净检出里「被跟踪文件�
 | **Git 输入选择**   | `scripts/lint.ts`（`git ls-files` + 关掉 ignore） | 哪些文件进入 lint —— 只有被跟踪文件                                                                      |
 | **仓库声明的排除** | `biome.json` 的 `files.includes`                  | 仓库有意不 lint 的**生成文件**：`node_modules`、`dist`、`routeTree.gen.ts`、`packages/db/src/migrations` |
 
-**不要再往 `files.includes` 里加「本地垃圾」的路径模式**（曾经有 `!**/.robobun`、`!**/project.private.config.json`、`!**/* 2.*`、`!**/.m4-evidence`，已删除）。`files.includes` 对**已跟踪**文件同样生效，且是静默跳过：一旦有合法文件命中这些模式（例如有人把一个 `foo 2.ts` 提交了），它就会在**本地和 CI 一起**被跳过 —— 那才是真的漏 lint。本地垃圾由上面第一层挡掉，不需要第二个名单。
+**不要再往 `files.includes` 里加「本地垃圾」的路径模式**（曾经有 `!**/.robobun`、`!**/project.private.config.json`、`!**/* 2.*`、`!**/.m4-evidence`，已删除）。`files.includes` 对**已跟踪**文件同样生效，且是静默跳过：一旦有合法文件命中这些模式（例如有人把一个 `foo 2.ts` 提交了），它就会在**本地和 CI 一起**被跳过 —— 那才是真的漏 lint。对 `lint` 而言，本地垃圾由上面第一层挡掉，不需要第二个 Biome 名单。`.robobun/` 等本地产物仍在 `.gitignore` 声明，避免全树 `format` 遍历、改写它们；若用 `git add -f` 强制跟踪，`lint` 仍会检查。
 
 ### 为什么还要 `--vcs-use-ignore-file=false`
 
@@ -53,7 +53,7 @@ bun test --isolate ./scripts/lint.test.ts
 - 本地 lint 红，先确认报错文件是否被跟踪：`git ls-files --error-unmatch <path>`（非 0 = 未跟踪）；
   `git status --porcelain` 能看到未跟踪项。
 - 需要全树检查（含本地垃圾）时用 `bunx biome check .`：它会在本地未跟踪文件上报红，这**不代表** `main` 的门禁坏了，也不要把文件手工挪到 `/tmp` 再挪回来。
-- 怀疑某个已跟踪文件「不见了」，先看 `biome.json` 的 `files.includes` 有没有命中它 —— 那是唯一还能静默裁掉已跟踪文件的地方。
+- 怀疑某个已跟踪文件「不见了」，先看 `biome.json` 的 `files.includes` 是否排除了它；也检查 Biome 自身的文件大小限制（`files.maxSize`，默认 1 MiB）和是否支持该后缀。过大文件会有 warning，未支持的后缀不会被检查；这些规则在本地与 CI 一致，Git 输入数量不等于实际检查数量。
 
 ## 不在本单范围
 
