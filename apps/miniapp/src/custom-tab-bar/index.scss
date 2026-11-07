@@ -155,7 +155,7 @@
   position: absolute;
   top: -8px;
   right: -12px;
-  @include num-badge(30px, 20px, $ring: 4px);
+  @include num-badge(30px, var(--fs-2xs), $ring: 4px);
 }
 
 .tabbar__label {

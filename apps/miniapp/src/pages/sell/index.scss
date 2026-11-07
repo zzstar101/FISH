@@ -379,7 +379,7 @@
 }
 
 .sell__price-cur {
-  font-size: 34px;
+  font-size: var(--fs-lg);
   font-weight: 700;
   color: var(--price);
 }
