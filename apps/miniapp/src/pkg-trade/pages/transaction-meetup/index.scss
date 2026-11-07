@@ -860,7 +860,7 @@
   height: var(--btn-h-sm);
   padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
-  background: var(--brand-deep);
+  background: var(--brand);
   color: var(--surface);
   font-size: var(--fs-sm);
   font-weight: 600;
@@ -1038,7 +1038,7 @@
 }
 
 .meetup__btn--pri {
-  background: var(--brand-deep);
+  background: var(--brand);
   color: #fff;
   box-shadow: var(--shadow-btn);
 

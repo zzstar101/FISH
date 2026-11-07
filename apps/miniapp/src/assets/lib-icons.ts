@@ -13,6 +13,7 @@ import backFg from '@/assets/lib-icons/back-fg@3x.png'
 import bellFg from '@/assets/lib-icons/bell-fg@3x.png'
 import boxMuted from '@/assets/lib-icons/box-muted@3x.png'
 import cameraMuted from '@/assets/lib-icons/camera-muted@3x.png'
+import cameraWhite from '@/assets/lib-icons/camera-white@3x.png'
 import cartFg from '@/assets/lib-icons/cart-fg@3x.png'
 import catApparelBrand from '@/assets/lib-icons/cat-apparel-brand@3x.png'
 import catBeautyBrand from '@/assets/lib-icons/cat-beauty-brand@3x.png'
@@ -143,6 +144,7 @@ export const ICONS = {
   verifiedBrand,
   bellFg,
   cameraMuted,
+  cameraWhite,
   imageMuted,
   imageWhite,
   tagMuted,
