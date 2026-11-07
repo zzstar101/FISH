@@ -90,6 +90,8 @@ export default function Home() {
    * 一个入口，而且列表看起来和刷新成功没有区别 —— 一句话都没人告诉他这次没刷上。
    */
   const [staleAfterFailure, setStaleAfterFailure] = useState(false)
+  // 身份清空期间只保留滚动所需的几何高度，不保留旧商品；不能用骨架卡数量猜像素高度。
+  const [identityScrollHeight, setIdentityScrollHeight] = useState<number | null>(null)
 
   /**
    * 本机「不感兴趣」名单：进页读一次，`useDidShow` 每次回到本页再读一次。
@@ -311,6 +313,8 @@ export default function Home() {
     setFailed(applied.failed)
     setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
+    // 与新列表同次落地释放高度；新列表确实更短时允许自然夹到新的末尾。
+    setIdentityScrollHeight(null)
     /*
       这一屏是快照顶上的，而这次请求又失败了：列表被 `held` 留住了，页面**不出现**错误块，
       屏幕上就再没有任何「这是半小时前的货」的信号（下拉刷新那条 toast 只有在用户主动刷新时
@@ -372,6 +376,9 @@ export default function Home() {
    * 不挂 `requireAuth`），退出后的这次请求照常 200，不会再靠 401 清一次会话来触发下一轮。
    */
   const resetForIdentityChange = () => {
+    setIdentityScrollHeight((previous) =>
+      Math.max(previous ?? 0, scrollTopRef.current + Taro.getWindowInfo().windowHeight),
+    )
     impressions.discardAll()
     lastGoodRef.current = { items: [], loadedFor: null }
     setFeedContext({ requestId: null, positions: new Map() })
@@ -667,7 +674,10 @@ export default function Home() {
   }
 
   return (
-    <View className="home">
+    <View
+      className="home"
+      style={identityScrollHeight === null ? undefined : { minHeight: `${identityScrollHeight}px` }}
+    >
       <View className="home__hero-bg" />
 
       {/*
