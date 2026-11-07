@@ -228,12 +228,34 @@ export default function Search() {
   /**
    * 识图（#324 / #583）：进扫码页的「拍图搜」tab（拍 / 选图 → 整图上传 → 识图结果页都在那页）。
    *
-   * 本页**不动**自己的关键词状态与在途搜索：识图是另一条检索路径，结果渲染在独立的结果页
-   * （`pages/vision-result`），用户从扫码页返回时本页的搜索照常可用。
+   * 本页**不动**自己的关键词 / 排序 / 历史 / 已展示结果：识图是另一条检索路径，结果渲染在独立的
+   * 结果页（`pages/vision-result`），用户从扫码页返回时本页照常可用。
+   *
+   * 但在途的文本 / 编号搜索**必须就地作废**（#637）：扫码页是 `navigateTo` 压在本页之上的，
+   * 本页不卸载、卸载 effect 不触发 —— 跳转期间编号查询迟到命中会过守卫后 `navigateTo`，
+   * 把商品详情又压在扫码页之上；关键词搜索迟到则把结果写回用户已经离开的页面。
+   *
+   * 作废的代价是迟到的响应在守卫处**直接 return**，跳过它自己的收尾（`setLoading(false)`），
+   * 所以这里得替它收尾，否则从扫码页返回时本页会永远停在「请求在途」。
    */
   const visionSearch = async () => {
     if (visionBusy) return
     setVisionBusy(true)
+    invalidateSearchTasks(taskLog)
+    /*
+      被打断的搜索分两种收尾：
+      - 屏幕上已经有一批结果：什么都不用动，返回时照旧看得到（`loading` 归 false 而已）；
+      - 还没有任何结果（`results` 为空、也没有编号查询的结论）：**不能**留在结果区 ——
+        空结果会被渲染成「没有找到相关闲置」，把「没查完」说成「没这件东西」，还把人往许愿墙引。
+        此时退回建议面板：输入框里的词、排序口径、搜索历史都不动，按一下搜索就能重来。
+    */
+    if (loading) {
+      setLoading(false)
+      if (results.length === 0 && numberState === 'none') {
+        setSubmitted('')
+        setPanelOpen(true)
+      }
+    }
     try {
       await Taro.navigateTo({ url: scanPageUrl('photo') })
     } catch {
