@@ -73,7 +73,7 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
 
   /* 内容与状态 */
   bell: ['fg'],
-  camera: ['muted'],
+  camera: ['muted', 'white'], // white：头像相机角标压在品牌蓝圆底上（白图才看得清）
   image: ['muted', 'white'],
   tag: ['muted'],
   star: ['brand'],
