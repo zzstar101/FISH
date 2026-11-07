@@ -1,5 +1,10 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "files": {
     "includes": [
       "**",
@@ -7,7 +12,9 @@
       "!**/dist",
       "!**/src/routeTree.gen.ts",
       "!packages/db/src/migrations",
-      "!**/.robobun/evidence",
+      "!**/.robobun",
+      "!**/project.private.config.json",
+      "!**/* 2.*",
       "!**/.m4-evidence"
     ]
   },
