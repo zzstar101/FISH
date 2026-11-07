@@ -156,6 +156,17 @@ export type FeedImpressions = {
    * 那一次结算不会再补 QUICK_SKIP（见 `SettleReason`）。
    */
   settleListing: (listingId: string, reason?: SettleReason) => void
+  /**
+   * 丢掉**所有**在途可见段，一条事件都不发（#650：身份变化时用）。
+   *
+   * 与 `settleListing` 的区别是「这几段停留该不该记」：结算 = 用户确实看了那么久，应当补记；
+   * 丢弃 = 这段停留属于**上一个身份**。服务端按**投递那一刻**的身份校验归属
+   * （`apps/api/src/modules/recommendation/service.ts` 的 `ownsRequest()`：请求行记的 owner 对不上就判
+   * `identity_mismatch` 拒收，对外与「请求不存在」同一响应），补发既不会记账、也不会记到新身份头上，
+   * 但会白跑一趟请求并把拒收计数冲高 —— 与 `recommendation/queue` 在身份变化时清队列同一口径：
+   * 旧身份的账不在新身份下结算。
+   */
+  discardAll: () => void
 }
 
 export function useFeedImpressions(options: {
@@ -382,5 +393,18 @@ export function useFeedImpressions(options: {
 
   useEffect(() => settleAll, [settleAll])
 
-  return { markOpened, settleListing }
+  /**
+   * 丢弃在途可见段：停掉计时器、清空账本，一条事件都不发（见 `FeedImpressions.discardAll`）。
+   *
+   * 调用时机是**上下文清空之前**：下面那个 `useEffect`（数据换批时收尾结算）会在渲染后
+   * 把「requestId 与当前上下文不同」的段全部结算掉 —— 先清上下文，它们就已经发出去了。
+   */
+  const discardAll = useCallback(() => {
+    for (const segment of segmentsRef.current.values()) {
+      if (segment.timer !== null) clearTimeout(segment.timer)
+    }
+    segmentsRef.current.clear()
+  }, [])
+
+  return { markOpened, settleListing, discardAll }
 }

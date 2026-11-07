@@ -49,6 +49,35 @@ export function onSessionCleared(listener: SessionClearedListener): () => void {
   }
 }
 
+type SessionChangedListener = () => void
+
+const changedListeners = new Set<SessionChangedListener>()
+
+/**
+ * 订阅「本地身份变了」—— 匿名→某个账号、A→B、以及会话被清掉（退出 / 401 撤销）。
+ *
+ * 与 `onSessionCleared` 的分工：那条只报「会话没了」（登录态 store 据此把自己拉回
+ * 未登录），这条报「本地是谁变了」，**两个方向都有**。首页据此作废屏幕上那一屏商品并重拉
+ * （#652）：身份变化是个事件，不切分类、不发请求，页面自己察觉不到 —— 用户退出登录后回到
+ * 首页，看到的还是上一个账号的推荐流，点进详情才发现认错了人。
+ *
+ * 口径卡在**会话本身有没有变**，而不是登录态快照有没有变：store 的 `emit()` 在改昵称、
+ * 换头像这些「同一个人」的更新上也会广播（`applyProfile` / `applyVerification`），订阅它
+ * 就会把首页无谓地打回骨架屏重拉一次。会话只在**身份建立**时被写入
+ * （`apps/api/src/modules/auth/router.ts` 的 `/wechat/session`、`/wechat/scan/ticket/:ticket/exchange`、
+ * `/register`、`/login` 四处下发 cookie），所以「会话变了」等价于「换了个身份」。
+ */
+export function onSessionChanged(listener: SessionChangedListener): () => void {
+  changedListeners.add(listener)
+  return () => {
+    changedListeners.delete(listener)
+  }
+}
+
+function notifySessionChanged(): void {
+  for (const listener of changedListeners) listener()
+}
+
 /**
  * 从 `Set-Cookie` 数组里挑出会话 cookie。
  * `Taro.request` 的响应把 cookie 放在 `cookies: string[]`，每项形如 `name=value; Path=/; ...`。
@@ -76,21 +105,34 @@ export function readSession(): string | null {
 }
 
 export function saveSession(cookie: string): void {
+  // 落地前先记下当前身份：`request.ts` 对**每条**带 `Set-Cookie` 的响应都会调这里，
+  // 值没变（同一段会话又下发了一次）就不是身份变化，不该惊动订阅方重拉首页。
+  const previous = readSession()
   try {
     Taro.setStorageSync(SESSION_KEY, cookie)
   } catch {
     /* 存储失败不致命：本次会话内仍可继续用返回值 */
+    // 没写进去 = 本地身份还是原来那个，别广播一个没发生的变化
+    return
   }
+  if (previous === cookie) return
+  notifySessionChanged()
 }
 
 export function clearSession(): void {
+  const had = readSession() !== null
   epoch += 1
+  let removed = false
   try {
     Taro.removeStorageSync(SESSION_KEY)
+    removed = true
   } catch {
     /* 忽略 */
   }
   for (const listener of clearedListeners) listener()
+  // 两种情况下本地身份没变：本来就没登录（401 之后又收到一次 401 之类），
+  // 或者存储删不掉（那个会话还读得出来）。都别让页面白重建一次。
+  if (had && removed) notifySessionChanged()
 }
 
 /** 给请求头用的 Cookie 值；未登录返回 undefined（后端按匿名处理） */
