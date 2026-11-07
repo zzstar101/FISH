@@ -44,9 +44,13 @@ describe('首页进页快照：源码层接线', () => {
     const text = code(await homeSource())
     // 进页与切分类都走 `load()`，所以快照上屏必须排在这次网络往返之前
     const beforeRoundTrip = slice(text, 'const load = async (', 'await loadHomeFeed')
-    // 只有「推荐」有快照：切分类照旧骨架屏（Owner 拍板的口径，别悄悄扩成九个分类）
+    /*
+      只有「推荐」有快照：切分类照旧骨架屏（Owner 拍板的口径，别悄悄扩成九个分类）。
+      判据是「屏幕上现在什么都没有」而不是「当前分类不是推荐」—— 后者会让切回「推荐」时
+      拿 24 条快照顶掉刚拉到的 50 条，列表先缩再涨。
+    */
     expect(beforeRoundTrip).toContain(
-      "if (next === 'ALL' && lastGoodRef.current.loadedFor !== next) paintSnapshot(next)",
+      "next === 'ALL' && lastGoodRef.current.items.length === 0 ? paintSnapshot(next) : false",
     )
     // 进页那条入口仍然只是拉「推荐」
     expect(slice(text, 'useLoad(() => {', '})')).toContain("void load('ALL')")
@@ -62,8 +66,18 @@ describe('首页进页快照：源码层接线', () => {
     // 本机「不感兴趣」名单优先：快照里可能还留着别处隐藏掉的卡
     expect(paint).toContain('readHiddenListingIds()')
     // 没有快照 / 全被隐藏就是不画 —— 页面照旧走骨架屏
-    expect(paint).toContain('if (!snapshot) return')
-    expect(paint).toContain('if (visible.length === 0) return')
+    expect(paint).toContain('if (!snapshot) return false')
+    expect(paint).toContain('if (visible.length === 0) return false')
+  })
+
+  test('快照顶上的那一屏请求失败时要说明这是旧数据', async () => {
+    const text = code(await homeSource())
+    /*
+      进页命中快照 + 这次失败：列表被 `held` 留住、页面不出现错误块，屏幕上就没有任何
+      「这是半小时前的货」的信号 —— 只有下拉刷新才有一条 toast。这里补的正是进页这一次。
+    */
+    expect(text).toContain('if (paintedSnapshot && result.failed) {')
+    expect(text).toContain("Taro.showToast({ title: '网络不太行，先看上次的', icon: 'none' })")
   })
 
   test('身份指纹在请求发出前捕获，落盘在成功分支上', async () => {

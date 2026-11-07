@@ -201,20 +201,24 @@ export default function Home() {
    * 2. **`lastGoodRef` 跟写**：快照就是此时的屏幕事实。网络失败时 `applyLoadResult` 拿
    *    它当 `previous`，列表原地留住（#626 的口径：同一分类的旧数据可留）。
    * 3. **`failed` / `staleAfterFailure` 归零**：这一瞬还没有失败可言。
+   *
+   * 返回值 = 这次真的把快照画上去了。`load()` 用它判断「这一屏是快照顶上的」——进页失败时
+   * 页面不出错误块（旧数据被 `held` 留住），需要据此补一句旧数据提示。
    */
-  const paintSnapshot = (scope: ListingCategory | 'ALL'): void => {
+  const paintSnapshot = (scope: ListingCategory | 'ALL'): boolean => {
     const snapshot = homeFeedCache.read(scope)
-    if (!snapshot) return
+    if (!snapshot) return false
     // 本机隐藏名单优先：快照里可能还留着在别的页面被「不感兴趣」的卡片
     const hidden = new Set(readHiddenListingIds())
     const visible = snapshot.items.filter((item) => !hidden.has(item.id))
-    if (visible.length === 0) return
+    if (visible.length === 0) return false
     lastGoodRef.current = { items: visible, loadedFor: scope }
     setItems(visible)
     setLoadedFor(scope)
     setFailed(false)
     setStaleAfterFailure(false)
     setFeedContext({ requestId: null, positions: new Map() })
+    return true
   }
 
   /**
@@ -240,10 +244,12 @@ export default function Home() {
     /*
       发请求之前先把「推荐」的快照上屏（#631）：冷启动省掉一整屏骨架。只有 `ALL` 有快照 ——
       切分类照旧骨架屏（本单范围是进页，Owner 拍板）。
-      判据用 `lastGoodRef`（屏幕事实）而不是 `loadedFor` state —— `paintSnapshot` 里的
-      `setLoadedFor` 在同一次渲染内还不生效，读 state 会把同一份快照重复画一遍。
+      判据是「屏幕上现在什么都没有」（`lastGoodRef`，屏幕事实，不是 `loadedFor` state ——
+      `paintSnapshot` 里的 `setLoadedFor` 在同一次渲染内还不生效）：真进页才画；已经在别的
+      分类里、切回「推荐」时不画，否则会拿 24 条快照去顶刚拉到的 50 条，列表先缩再涨。
     */
-    if (next === 'ALL' && lastGoodRef.current.loadedFor !== next) paintSnapshot(next)
+    const paintedSnapshot =
+      next === 'ALL' && lastGoodRef.current.items.length === 0 ? paintSnapshot(next) : false
     // 「真实接口优先、只有演示构建才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
     const result =
@@ -295,6 +301,15 @@ export default function Home() {
     setFailed(applied.failed)
     setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
+    /*
+      这一屏是快照顶上的，而这次请求又失败了：列表被 `held` 留住了，页面**不出现**错误块，
+      屏幕上就再没有任何「这是半小时前的货」的信号（下拉刷新那条 toast 只有在用户主动刷新时
+      才会出现）。进页这次补一句，别让旧货看起来像刚刷出来的。
+      只在真进页画了快照时才弹：切分类/重试时不会走到这里，也不会重复打扰。
+    */
+    if (paintedSnapshot && result.failed) {
+      Taro.showToast({ title: '网络不太行，先看上次的', icon: 'none' })
+    }
     /*
       只给**这次真的拿到结果**的那一次落盘：`held`（失败但旧数据留住了）落的是上一次的
       数据，重写一遍没有意义，还会把 `savedAt` 刷新成「刚刚」，让一份旧列表看起来更新。

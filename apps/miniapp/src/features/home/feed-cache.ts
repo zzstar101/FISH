@@ -62,7 +62,10 @@ export type HomeFeedScope = ListingCategory | 'ALL'
 
 export type HomeFeedSnapshot = {
   items: MockListing[]
-  /** 写入时刻（ms）。读出来时已经校验过 TTL，页面只把它当「有多旧」用 */
+  /**
+   * 写入时刻（ms）。读出来时 TTL 已经校验过，所以页面上不需要再算新旧 —— 当前**没有
+   * 消费点**，留着是为了在工具里看 Storage 时能一眼判断这条快照有多旧。
+   */
   savedAt: number
 }
 
@@ -144,10 +147,12 @@ function pick<T extends string>(value: unknown, table: Record<T, unknown>): T | 
 }
 
 /**
- * 展示型枚举（分类 / 成色 / 状态 / 卖家认证态）**不做校验**，只做类型窄化：
- * 它们只喂给 `categoryLabel` / `conditionLabel` / `outOfMarketLabel` 这类带默认分支的
- * 文案函数，未知值最坏退回默认文案；为这个丢掉一张卡（甚至整屏快照）不划算。
- * 形状层面的漂移由 `SNAPSHOT_VERSION` 负责。
+ * 展示型枚举（成色 / 状态 / 卖家认证态）**不做校验**，只做类型窄化：
+ * 它们只喂给 `conditionLabel` / `outOfMarketLabel` 这类带默认分支的文案函数，未知值最坏
+ * 退回默认文案；为这个丢掉一张卡（甚至整屏快照）不划算。
+ *
+ * 分类不在此列 —— 它决定卡片走哪套宽高比与占位图，未知值会画塌，所以 `toListing` 里对
+ * `CATEGORY_LABEL` 是硬校验。形状层面的漂移由 `SNAPSHOT_VERSION` 负责。
  */
 function asShown<T extends string>(value: unknown, fallback: T): T {
   return typeof value === 'string' && value.length > 0 ? (value as T) : fallback
