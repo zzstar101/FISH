@@ -1,10 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import {
-  beginSearchTask,
-  invalidateSearchTasks,
-  isSearchTaskCurrent,
-  type SearchTaskLog,
-} from '../src/features/listing/search-task'
 
 /**
  * 搜索页识图钮离开本页时**不再有作废语义**的回归（#637 原 PR 正文「只报告、未修」那一条）。
@@ -22,7 +16,7 @@ import {
  *
  * 本仓没有 Taro 组件渲染基建（先例 `tests/search-count-row.test.ts`），`visionSearch` 的接线
  * 只能读源码钉住；「迟到的响应还算不算数」是纯逻辑，`tests/listing-search-task.test.ts` 已逐条
- * 覆盖，这里只按页面的真实调用顺序复述本票的场景，并补一条「作废之后本页仍能继续搜」。
+ * 覆盖，这里只钉住本次改动的页面接线，不重复测试未改动的纯函数。
  */
 
 async function pageSource(): Promise<string> {
@@ -114,19 +108,5 @@ describe('搜索页识图钮：离开本页前作废在途搜索（#637）', () 
     expect(guard, 'runNumber 命中后没有先问代次：作废也拦不住导航').toBeGreaterThanOrEqual(0)
     expect(navigated).toBeGreaterThanOrEqual(0)
     expect(guard).toBeLessThan(navigated)
-  })
-})
-
-describe('作废之后本页不会永久失效', () => {
-  test('离开去识图作废在途编号查询：迟到命中不算数，返回后再搜一次仍然算数', () => {
-    const log: SearchTaskLog = { current: 0 }
-    // 用户输入 12 位编号并点了搜索：`run` 开新任务，`runNumber` 在途
-    const inFlight = beginSearchTask(log)
-    // 此刻点识图钮跳扫码页（`visionSearch` 的第一件事）
-    invalidateSearchTasks(log)
-    // 迟到命中：守卫不通过 → 既不开详情页，也不写回结果
-    expect(isSearchTaskCurrent(log, inFlight)).toBe(false)
-    // 回到本页重新搜索：新代次仍是当前任务，页面没有被打成「永久作废」
-    expect(isSearchTaskCurrent(log, beginSearchTask(log))).toBe(true)
   })
 })
