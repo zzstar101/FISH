@@ -8,7 +8,8 @@
  * 光栅化用 `@resvg/resvg-wasm`：WASM 在任何平台上逐字节一致，CI 才能用
  * 「重出图后 `git status --porcelain apps/miniapp/src/assets` 为空」守住产物与真源一致。
  *
- * 出图规格：72×72（= 24pt@3x）。页面显示尺寸只用 24/32/40/48rpx 四档，均 ≤ 24pt，不拉伸。
+ * 出图规格：96×96（= 32pt@3x）。页面显示尺寸用 24/32/40/48/56/64rpx 六档，均 ≤ 32pt，不拉伸
+ * （#660 把最大档从 48 抬到 64：方片 72 里塞 48 的图标只占 2/3，看着小一档）。
  * 字形在画布里的位置与占比由**逐字形光学归一**决定（文字见 `OPTICAL_D` / `MAX_LONG`）。
  */
 import { readdirSync, unlinkSync } from 'node:fs'
@@ -16,7 +17,7 @@ import { join } from 'node:path'
 import { initWasm, Resvg } from '@resvg/resvg-wasm'
 import { ACCENT_OPACITY, MANIFEST, TONES, type Tone } from './manifest'
 
-export const ICON_PX = 72
+export const ICON_PX = 96
 
 /**
  * 光学归一（#660）：每个字形单独测量墨迹，再决定 viewBox 窗口与描边宽度。

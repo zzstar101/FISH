@@ -5,8 +5,9 @@ import path from 'node:path'
 /**
  * 图标显示尺寸守卫（#513 根因 4）。
  *
- * 图标资源按 24pt 出图（72px = 24pt@3x），SCSS 里 px 即 rpx（DESIGN.md §1），所以 48 是唯一
- * 不缩放的尺寸。验收要求所有图标 `<Image>` 的显示尺寸只落在 24/32/40/48 四档，且是正方形。
+ * 图标资源按 32pt 出图（96px = 32pt@3x，#660 由 24pt 抬升），SCSS 里 px 即 rpx（DESIGN.md §1），
+ * 所以 64 是唯一不缩放的尺寸。尺寸只落在 24/32/40/48/56/64 六档，且是正方形
+ * （#660 新增 56/64：方片 72 里 48 的图标只占 2/3，行图标显得比宫格小一档）。
  *
  * 扫描口径：
  * - `src/` 下 tsx 里 `src` 是 `ICONS.xxx` / `ICONS[...]` / `HOME_CATEGORY_ICONS[...]` 的 `<Image>`；
@@ -25,7 +26,7 @@ import path from 'node:path'
  */
 
 const SRC = path.join(import.meta.dir, '../src')
-const TIERS = new Set([24, 32, 40, 48])
+const TIERS = new Set([24, 32, 40, 48, 56, 64])
 const ICON_SRC = /\b(?:ICONS|HOME_CATEGORY_ICONS)\s*[.[]/
 
 /** src 不是图标表达式字面量、但渲染的就是 `ICONS` 图标的 `<Image>`（路径相对 `src/`）。 */
