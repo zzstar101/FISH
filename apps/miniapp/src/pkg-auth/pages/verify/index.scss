@@ -210,8 +210,8 @@
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  height: 40px;
-  padding: 0 16px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--warn-line);
@@ -349,9 +349,9 @@
   justify-content: center;
   gap: 16px;
   width: 100%;
-  height: 96px;
+  height: var(--btn-h-lg);
   margin-top: 40px;
-  border-radius: 48px;
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-title);
@@ -564,8 +564,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 68px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
@@ -747,8 +747,11 @@
 }
 
 .verify__badge-tag {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
-  padding: 8px 20px;
+  height: var(--btn-h-label);
+  padding: 0 var(--btn-px-label);
   border-radius: var(--r-pill);
   background: var(--ok-weak);
   border: 2px solid var(--ok-line);

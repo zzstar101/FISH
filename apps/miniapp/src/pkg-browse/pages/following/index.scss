@@ -262,8 +262,8 @@
   align-items: center;
   justify-content: center;
   min-width: 124px;
-  height: 64px;
-  padding: 0 24px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   box-sizing: border-box;
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
@@ -298,7 +298,10 @@
 }
 
 .fw__more-btn {
-  padding: 12px 32px;
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--accent-faint);
   font-size: var(--fs-xs);
@@ -391,8 +394,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
-  padding: 0 44px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   margin-top: 36px;
   border-radius: var(--r-pill);
   background: var(--brand-deep);
