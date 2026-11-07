@@ -69,7 +69,6 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
 const TAB_ROUTES = [
   'pages/home/index',
   'pages/wish/index',
-  'pages/sell/index',
   'pages/chat/index',
   'pages/profile/index',
 ]

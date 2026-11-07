@@ -268,8 +268,13 @@ Issue #591 正文对这三个键的描述与 `origin/main` 现状不符（逐点
 
 ## 7. 导航结构
 
-**自定义 TabBar**（`app.config.ts` 里 `tabBar.custom: true`）：
-`首页 pages/home/index` → `许愿 pages/wish/index` → `出物 pages/sell/index` → `消息 pages/chat/index` → `我的 pages/profile/index`
+**自定义 TabBar**（`app.config.ts` 里 `tabBar.custom: true`）：4 个 Tab + 中间那颗「发布」动作钮
+（动作钮不是 Tab，不参与选中态）：
+`首页 pages/home/index` → `许愿 pages/wish/index` → **`发布`（动作钮，`navigateTo` 打开 `pages/sell/index`）** → `消息 pages/chat/index` → `我的 pages/profile/index`
+
+`pages/sell/index`（出物页）**是二级页（#629）**：留在主包 `pages` 里但不在 `tabBar.list` 里，
+由动作钮 / 我的发布 / 商品详情 `navigateTo` 压栈进来，左上返回钮与系统左滑都回上一页
+（栈深 1 时兜底回首页）。
 
 非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`、`pages/orders-buy/index`（我买到的）、`pages/orders-sell/index`（我卖出的）。
 
@@ -294,7 +299,9 @@ Issue #591 正文对这三个键的描述与 `origin/main` 现状不符（逐点
    整条栏 101rpx ≈ 50pt，与原生栏一致）；**位置（左右 30rpx / 距底 53rpx）2026-09-26 起
    Owner 拍板改用瑞幸稿悬浮位，栏体形态不变**，
    **改这几个值必须同步改这 4 处 `padding-bottom`**。
-   **出物页不渲染底栏**（该页设计稿没有底栏），该页留白只让出安全区。
+   **出物页（`pages/sell/index`）不渲染底栏**：它 #629 起是二级页、不在 `tabBar.list` 里，
+   框架本来就不会给它渲染自定义底栏，页面留白只让出安全区即可（原先那套
+   「Tab 页隐藏底栏」的机制已随之删除）。
 3. **令牌要在组件内自己声明**。令牌靠 CSS 自定义属性继承下发，而自定义 TabBar 由框架
    挂在 `<page>` 之外，`page` 上的变量继承不到它 —— 组件根节点必须 `@include vars`
    （`@use '@/styles/token-vars'`）。不这么做的话 `var(--r-pill)`（圆角）、

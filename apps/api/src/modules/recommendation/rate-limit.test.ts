@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import {
+  RECOMMENDATION_FEED_IP_RATE_LIMIT,
+  RECOMMENDATION_FEED_RATE_LIMIT,
+} from '@fish/contracts/recommendation/observability'
 import { RECOMMENDATION_RATE_LIMITED } from '@fish/contracts/recommendation/schema'
 import {
   createTokenBucketLimiter,
+  isIpRateLimitSubject,
   RECOMMENDATION_UNATTRIBUTED_SUBJECT,
   RecommendationRateLimitError,
   rateLimitSubjects,
@@ -172,6 +177,113 @@ describe('createTokenBucketLimiter（R6 限流）', () => {
     expect(() =>
       createTokenBucketLimiter({ capacity: 1, refillPerSecond: 1, maxSubjects: 0 }),
     ).toThrow('令牌桶主体上限必须是正整数')
+  })
+})
+
+describe('按主体分档的令牌桶（#643 匿名 Feed 的 NAT 场景）', () => {
+  /**
+   * 直接引用契约常量：会话/用户桶 60 / 1·s⁻¹，出口 IP 桶 300 / 20·s⁻¹（#643）。
+   * 不写死数字——契约数值被改坏（例如把 IP 桶收窄回会话档）时这条验收用例会变红。
+   */
+  const SESSION_SPEC = RECOMMENDATION_FEED_RATE_LIMIT
+  const IP_SPEC = RECOMMENDATION_FEED_IP_RATE_LIMIT
+  const NAT_IP = 'ip:203.0.113.7'
+
+  function natLimiter(clock: () => number) {
+    return createTokenBucketLimiter({
+      ...SESSION_SPEC,
+      maxSubjects: 1_000,
+      clock,
+      tierFor: (subject) => (isIpRateLimitSubject(subject) ? IP_SPEC : null),
+    })
+  }
+
+  test('20 个匿名会话共用同一个 ip 主体，会话主体各自独立', () => {
+    const sessions = Array.from({ length: 20 }, (_, index) => `session-${index}`)
+    const subjects = sessions.map((sessionId) =>
+      rateLimitSubjects({
+        viewerId: null,
+        anonymousSessionIds: [sessionId],
+        clientIp: '203.0.113.7',
+      }),
+    )
+    // 每个会话一条自己的 session 主体 + 同一个 ip 主体（NAT 出口）。
+    expect(new Set(subjects.map((group) => group[0])).size).toBe(20)
+    expect(new Set(subjects.map((group) => group[1])).size).toBe(1)
+  })
+
+  test('同一出口 IP 下 20 个独立匿名会话刷 30s：429 比例 < 1%', () => {
+    const clock = fakeClock()
+    const limiter = natLimiter(clock.now)
+    const sessions = Array.from({ length: 20 }, (_, index) => `session:nat-${index}`)
+    let total = 0
+    let rejected = 0
+    // 整栋楼 20 rps（20 个会话各 1 rps），持续 30 秒 = 600 次请求。
+    for (let second = 0; second < 30; second += 1) {
+      for (const session of sessions) {
+        total += 1
+        if (!limiter.takeAll([session, NAT_IP]).allowed) rejected += 1
+      }
+      clock.advance(1_000)
+    }
+    expect(total).toBe(600)
+    expect(rejected / total).toBeLessThan(0.01)
+  })
+
+  test('单会话 10 rps 脚本仍被限流（防刷未被削弱）', () => {
+    const clock = fakeClock()
+    const limiter = natLimiter(clock.now)
+    const total = 300 // 10 rps × 30s
+    let allowed = 0
+    for (let tick = 0; tick < total; tick += 1) {
+      if (limiter.takeAll(['session:script', NAT_IP]).allowed) allowed += 1
+      clock.advance(100)
+    }
+    // 会话桶容量 60 + 30 秒补 30 ≈ 90 次通过，其余 210 次必须被拒。
+    expect(allowed).toBeLessThanOrEqual(95)
+  })
+
+  test('换会话脚本也逃不过 IP 桶：100 个新会话各打 10 次，只有 300 次能过', () => {
+    const clock = fakeClock()
+    const limiter = natLimiter(clock.now)
+    let allowed = 0
+    for (let session = 0; session < 100; session += 1) {
+      for (let request = 0; request < 10; request += 1) {
+        if (limiter.takeAll([`session:rotated-${session}`, NAT_IP]).allowed) allowed += 1
+      }
+    }
+    // 每个会话的桶都是满的（10 < 60），能拦住的是 IP 桶的 300 个突发令牌。
+    expect(allowed).toBe(300)
+  })
+
+  test('未命中 tierFor 的主体（ip:unattributed / session / user）继续用默认严格规格', () => {
+    const clock = fakeClock()
+    const limiter = createTokenBucketLimiter({
+      capacity: 1,
+      refillPerSecond: 1,
+      maxSubjects: 10,
+      clock: clock.now,
+      tierFor: (subject) => (isIpRateLimitSubject(subject) ? IP_SPEC : null),
+    })
+    for (const subject of ['ip:unattributed', 'unattributed', 'session:s-1', 'user:u-1']) {
+      expect(limiter.take(subject)).toEqual({ allowed: true })
+      expect(limiter.take(subject)).toEqual({ allowed: false, retryAfterSeconds: 1 })
+    }
+    // 同进程里的可归因 IP 主体仍是 IP 档：默认档容量只有 1，这里连取 300 次都通过，
+    // 第 301 次才拒绝 —— 证明 tierFor 真的返回了 300 的 IP_SPEC，而不是回落到默认档。
+    for (let i = 0; i < IP_SPEC.capacity; i += 1) {
+      expect(limiter.take(NAT_IP)).toEqual({ allowed: true })
+    }
+    expect(limiter.take(NAT_IP)).toEqual({ allowed: false, retryAfterSeconds: 1 })
+  })
+
+  test('isIpRateLimitSubject 只认可归因的 ip: 主体', () => {
+    expect(isIpRateLimitSubject(NAT_IP)).toBe(true)
+    expect(isIpRateLimitSubject('ip:10.0.0.1')).toBe(true)
+    expect(isIpRateLimitSubject('ip:unattributed')).toBe(false)
+    expect(isIpRateLimitSubject('unattributed')).toBe(false)
+    expect(isIpRateLimitSubject('session:s-1')).toBe(false)
+    expect(isIpRateLimitSubject('user:u-1')).toBe(false)
   })
 })
 

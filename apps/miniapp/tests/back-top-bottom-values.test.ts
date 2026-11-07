@@ -8,8 +8,8 @@ import { describe, expect, test } from 'bun:test'
  *
  * - 三个 Tab 页（home / chat / wish）避让**悬浮底栏**（`custom-tab-bar/`，顶边 = 距底 53
  *   + 栏高 101 = 154rpx），再留 16rpx → `170rpx`。
- * - `mylist` **不是 Tab 页**（`app.config.ts` 的 tabBar 只有 home / wish / sell / chat /
- *   profile），它右下的悬浮层是**本页自己的**「+ 发布」（`.ml__fab`：
+ * - `mylist` **不是 Tab 页**（`app.config.ts` 的 tabBar 只有 home / wish / chat / profile；
+ *   出物页 #629 起也是二级页），它右下的悬浮层是**本页自己的**「+ 发布」（`.ml__fab`：
  *   `fixed; bottom: 44px; height: 104px`）。回顶钮按 fab 几何推：
  *   44 + 104 + 40（20pt 缝）= `188rpx`。
  *
@@ -203,7 +203,6 @@ describe('回顶钮 bottom：mylist 按本页 FAB 定位', () => {
     expect(paths).toEqual([
       'pages/home/index',
       'pages/wish/index',
-      'pages/sell/index',
       'pages/chat/index',
       'pages/profile/index',
     ])
