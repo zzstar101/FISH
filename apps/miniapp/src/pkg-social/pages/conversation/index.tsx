@@ -13,7 +13,7 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
-import { SCAN_CODE_PAGE } from '@/components/scan-tabs/tabs'
+import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import UserAvatar from '@/components/user-avatar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
@@ -1892,7 +1892,7 @@ export default function Conversation() {
    * `resetUi` 说明「现在复位是否还安全」（#535 follow-up F1）。同一条判断也决定**提不提示**：
    * 晚到的失败与用户当下的操作无关，弹出来只会让他以为刚说的话没录上（#549 审查 L3）。
    *
-   * 权限被拒要给「去设置」入口，用的是与扫码页（`pages/scan` / `pages/scan-pr`）同一范式：
+   * 权限被拒要给「去设置」入口，用的是与扫码页（`pkg-vision/pages/scan`）同一范式：
    * `Taro.getSetting` 先确认这个 scope 真的是被用户拒的，再 `Taro.openSetting` 把人送进
    * 设置页。不是被拒（例如麦克风被别的应用占着）就别拉设置页，那会让用户白跑一趟。
    */
@@ -3780,7 +3780,7 @@ export default function Conversation() {
     if (action.kind === 'review') return openMeetup(action.transactionId)
     if (action.kind === 'reviews') return openMyReviews()
     if (action.kind === 'scan') {
-      void Taro.navigateTo({ url: SCAN_CODE_PAGE })
+      void Taro.navigateTo({ url: scanPageUrl('scan') })
       return
     }
     if (action.kind === 'retry') return retryTx()

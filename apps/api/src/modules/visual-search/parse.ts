@@ -3,6 +3,7 @@ import type { VisualImageMime } from '@fish/contracts/visual/provider'
 import {
   type VisualInterpretation,
   VisualInterpretationSchema,
+  type VisualSubjectBox,
 } from '@fish/contracts/visual/schema'
 import type { VisualParseEnv } from '@fish/shared/env'
 
@@ -13,7 +14,7 @@ import type { VisualParseEnv } from '@fish/shared/env'
  * 要求模型只回一个严格 JSON 对象，再用 `VisualInterpretationSchema` 校验——**解析结果是不可信输入**，
  * 模型可能多回字段、回空串、回不在枚举里的分类。
  *
- * ## 失败一律 fail-open（返回 null），绝不抛
+ * ## 失败一律 fail-open（返回空结论），绝不抛
  *
  * 解析是**可选增强**：它能给文本路召回提供关键词，但拍照识图的本体是图片向量。
  * 如果解析失败就让整次搜索 5xx，等于用"一个附加信号"否决了主链路——
@@ -29,18 +30,36 @@ import type { VisualParseEnv } from '@fish/shared/env'
 /** 解析调用的超时。比向量化宽松：一次 VLM 生成比一次 embedding 慢。 */
 export const VISUAL_PARSE_TIMEOUT_MS = 15_000
 
-/** 生成的 token 上限。解析结果是一小段 JSON，给多了只会让模型话多。 */
-export const VISUAL_PARSE_MAX_TOKENS = 512
+/** 思考型模型会从同一预算扣除 reasoning token；512 实测截断最终 JSON，2048 可完整返回。 */
+export const VISUAL_PARSE_MAX_TOKENS = 2048
 
 /** 文本路查询串的长度上限：超过这个长度的"关键词"对检索没有帮助，只会推高一次上游调用。 */
 export const VISUAL_TEXT_QUERY_MAX_LENGTH = 400
 
+export type VisualParseResult = {
+  interpretation: VisualInterpretation | null
+  /** 主体框（#584）；模型没给或给得不合法即 `null`，与 `interpretation` 各自 fail-open。 */
+  subjectBox: VisualSubjectBox | null
+}
+
+/** 解析失败 / 未启用时的结果：两路都没有结论。 */
+const NOTHING: VisualParseResult = { interpretation: null, subjectBox: null }
+
 export type VisualParser = {
-  /** 解析失败/未启用返回 `null`（调用方据此退化为纯视觉排序）。 */
-  parse(image: Uint8Array, mime: VisualImageMime): Promise<VisualInterpretation | null>
+  /** off 模式跳过解析前的工作图转码，保留原始整图检索路径。 */
+  readonly enabled: boolean
+  /** 解析失败/未启用时两个字段都是 `null`（调用方据此退化为纯视觉排序、整图检索）。 */
+  parse(image: Uint8Array, mime: VisualImageMime): Promise<VisualParseResult>
 }
 
 const CATEGORY_VALUES: readonly string[] = ListingCategorySchema.options
+
+/**
+ * Qwen-VL 系列的 grounding 坐标：按图片宽高归一化到 `0–1000` 的 `[x1, y1, x2, y2]`
+ * （2026-11-06 用 `qwen3-vl-plus` 实测：1200×800 图里圆心 (800,400)、半径 100 的红圆，
+ * 回 `[580, 370, 750, 625]`，真值 `[583, 375, 750, 625]`）。
+ */
+const GROUNDING_SCALE = 1000
 
 const PROMPT = `你是二手交易平台的图像理解组件。看这张用户拍摄的照片，输出一个 JSON 对象，字段如下：
 - "text": 图中清晰可读的文字（书名、型号、品牌标签等），没有则省略
@@ -48,7 +67,8 @@ const PROMPT = `你是二手交易平台的图像理解组件。看这张用户�
 - "brand": 品牌名，没有则省略
 - "model": 型号，没有则省略
 - "keywords": 3 到 8 个用于检索的中文关键词数组
-只输出 JSON，不要解释，不要 markdown 代码块。无法识别的字段直接省略，不要编造。`
+- "subject": 画面里最主要的那一件物品（通常最大、最居中、最清晰）的边框 [x1, y1, x2, y2]，坐标按图片宽高归一化到 0 到 ${GROUNDING_SCALE}；画面里有多件物品时也只框最主要的那一件；只有画面里完全没有物品时才省略
+只输出 JSON，不要解释，不要 markdown 代码块。除 subject 外，无法识别的字段直接省略，不要编造。`
 
 /**
  * 把解析结果压成一次文本查询。
@@ -129,13 +149,51 @@ function normalizeInterpretationPayload(payload: unknown): unknown {
 }
 
 /**
+ * 主体框（#584）的校验与换算：`[x1, y1, x2, y2]`（0–1000）→ 比例坐标的 `{ x, y, width, height }`。
+ *
+ * 越界的角点夹回图内（模型偶尔会给 1001 / -3 这类擦边值，夹一下仍是同一个框）；
+ * 形状不对（不是 4 个有限数字）或夹完之后面积为零（`x2 <= x1`）就是没有框，**不**去猜模型的意思。
+ * 框过小不在这里判：能不能拿来裁剪取决于图的实际像素，由裁剪那一步决定（`./crop.ts`）。
+ */
+function subjectBoxOf(raw: unknown): VisualSubjectBox | null {
+  // `null` 是"看不出主体"的另一种说法（提示词要求省略，模型偶尔回 null），不是形状错误。
+  if (raw === null) return null
+  if (
+    !Array.isArray(raw) ||
+    raw.length !== 4 ||
+    !raw.every((value) => typeof value === 'number' && Number.isFinite(value))
+  ) {
+    console.warn('[visual-search] 语义解析 subject 不是 4 个数字，按无主体处理')
+    return null
+  }
+  const [x1, y1, x2, y2] = raw.map((value: number) =>
+    Math.min(Math.max(value / GROUNDING_SCALE, 0), 1),
+  )
+  if (
+    x1 === undefined ||
+    y1 === undefined ||
+    x2 === undefined ||
+    y2 === undefined ||
+    x2 <= x1 ||
+    y2 <= y1
+  ) {
+    console.warn('[visual-search] 语义解析 subject 面积为零，按无主体处理')
+    return null
+  }
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
+}
+
+/**
  * 从模型输出里取出解析结果。
  *
  * `response_format: json_object` 之下**不应该**有代码块围栏，但真实模型偶尔还是会加，
  * 所以剥一层 ```json 围栏再解析：这不是"宽容地接受坏数据"，而是接受一种已知的、
  * 内容仍然要过严格 schema 的包装差异（多出来的字段照样被 strictObject 拒掉）。
+ *
+ * `subject` 先摘出来**单独**校验（#584）：它不属于 `VisualInterpretation` 契约，
+ * 且两路各自 fail-open —— 框给坏了不连累关键词，关键词给坏了也不连累框。
  */
-function parseInterpretation(content: string): VisualInterpretation | null {
+function parseResult(content: string): VisualParseResult {
   const trimmed = content.trim()
   const unfenced = trimmed.startsWith('```')
     ? trimmed.replace(/^```(?:json)?\s*/i, '').replace(/```$/, '')
@@ -146,28 +204,44 @@ function parseInterpretation(content: string): VisualInterpretation | null {
     payload = JSON.parse(unfenced)
   } catch {
     console.warn('[visual-search] 语义解析返回的不是合法 JSON')
-    return null
+    return NOTHING
+  }
+
+  let subjectBox: VisualSubjectBox | null = null
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    !Array.isArray(payload) &&
+    'subject' in payload
+  ) {
+    const { subject, ...rest } = payload as Record<string, unknown>
+    subjectBox = subjectBoxOf(subject)
+    // 只有框、没有任何别的字段：解析结论是"没有"，而不是一个全空的 `{}`（理由同
+    // `normalizeInterpretationPayload` 末尾的注释）。
+    if (Object.keys(rest).length === 0) return { interpretation: null, subjectBox }
+    payload = rest
   }
 
   const parsed = VisualInterpretationSchema.safeParse(normalizeInterpretationPayload(payload))
   if (!parsed.success) {
     // 只记校验错误的形状：模型输出含用户图片里的文字，不能进日志。
     console.warn('[visual-search] 语义解析结果不符合契约', parsed.error.message)
-    return null
+    return { interpretation: null, subjectBox }
   }
-  return parsed.data
+  return { interpretation: parsed.data, subjectBox }
 }
 
 export function createVisualParser(env: VisualParseEnv): VisualParser {
   if (env.transport === 'off') {
     // `off` 是 CI 与本机默认：不产生"看起来合理的假结果"，只是少做一步可选增强，
-    // 所以返回 null 而不是造一个空壳解析结果（后者会让文本路以为自己有输入）。
-    return { parse: async () => null }
+    // 所以返回空结论而不是造一个空壳解析结果（后者会让文本路以为自己有输入）。
+    return { enabled: false, parse: async () => NOTHING }
   }
 
   const endpoint = `${env.baseUrl.replace(/\/+$/, '')}/chat/completions`
 
   return {
+    enabled: true,
     async parse(image, mime) {
       const body = JSON.stringify({
         model: env.model,
@@ -205,19 +279,19 @@ export function createVisualParser(env: VisualParseEnv): VisualParser {
           // 丢弃响应体：既不解析也不记日志（可能回显请求细节，含图片的 base64）。
           await response.body?.cancel()
           console.warn(`[visual-search] 语义解析上游返回 status=${response.status}`)
-          return null
+          return NOTHING
         }
 
         const content = readMessageContent(await response.json())
         if (content === null) {
           console.warn('[visual-search] 语义解析上游响应里没有 message.content')
-          return null
+          return NOTHING
         }
-        return parseInterpretation(content)
+        return parseResult(content)
       } catch (error) {
         const detail = error instanceof Error ? error.name : 'unknown'
         console.warn(`[visual-search] 语义解析调用失败：${detail}`)
-        return null
+        return NOTHING
       }
     },
   }

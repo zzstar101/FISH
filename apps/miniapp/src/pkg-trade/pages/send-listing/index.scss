@@ -71,6 +71,9 @@
 
 /* ----------------------------------------------------------------- 搜索框 */
 
+/* 搜索/输入条：与浏览页搜索栏（`pkg-browse/pages/search/index.scss` 的 `.search__field`）
+   同高 64px —— 该值来自微信原生胶囊高，刻意对齐，不走 §3.1 的按钮四档。
+   本条内不嵌按钮（只有图标 + Input），所以无需再加「容器高 − 8」的内嵌按钮档。 */
 .sl__search {
   position: relative;
   z-index: 1;
@@ -79,8 +82,8 @@
   gap: 14px;
   margin: 8px 40px 20px;
   padding: 0 24px;
-  height: 72px;
-  border-radius: 999px;
+  height: 64px;
+  border-radius: var(--r-pill);
   background: var(--card);
   border: 2px solid var(--border);
 }
@@ -162,9 +165,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 64px;
-  padding: 0 32px;
-  border-radius: 999px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  border-radius: var(--r-pill);
   color: #fff;
   font-size: 26px;
   font-weight: 600;

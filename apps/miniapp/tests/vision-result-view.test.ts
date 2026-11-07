@@ -7,6 +7,7 @@ import {
   queryCardCopy,
   resultStats,
   soldAvgText,
+  subjectFrameRect,
   VISUAL_SORT_OPTIONS,
   visualSortQuery,
 } from '@/pkg-vision/pages/vision-result/view'
@@ -189,5 +190,48 @@ describe('soldAvgText', () => {
     expect(
       soldAvgText({ soldAvgPriceCents: 100, soldSampleCount: VISUAL_SOLD_AVG_MIN_SAMPLES }),
     ).toBe(`¥1 · ${VISUAL_SOLD_AVG_MIN_SAMPLES} 件`)
+  })
+})
+
+describe('subjectFrameRect（#584 主体框 → aspectFill 背景上的屏幕矩形）', () => {
+  test('竖屏容器放横图：按高放大、左右裁掉，框随居中偏移平移', () => {
+    // 1000×500 的图放进 400×800：scale = max(0.4, 1.6) = 1.6 ⇒ 显示 1600×800，左右各裁 600。
+    const frame = subjectFrameRect(
+      { x: 0.4, y: 0.25, width: 0.2, height: 0.5 },
+      { width: 1000, height: 500 },
+      { width: 400, height: 800 },
+    )
+    if (!frame) throw new Error('应当画框')
+    // 浮点乘法有 1e-13 量级的误差：按 0.01px 比较。
+    for (const [key, value] of Object.entries({ left: 40, top: 200, width: 320, height: 400 })) {
+      expect(frame[key as keyof typeof frame]).toBeCloseTo(value, 2)
+    }
+  })
+
+  test('框有一截落在被裁掉的区域：只画容器内那截', () => {
+    const frame = subjectFrameRect(
+      { x: 0, y: 0, width: 0.5, height: 1 },
+      { width: 1000, height: 500 },
+      { width: 400, height: 800 },
+    )
+    // 图左半在屏上是 -600…200，夹到 0…200。
+    expect(frame).toEqual({ left: 0, top: 0, width: 200, height: 800 })
+  })
+
+  test('框整个在裁掉的区域里 / 尺寸未知：不画', () => {
+    expect(
+      subjectFrameRect(
+        { x: 0, y: 0, width: 0.2, height: 1 },
+        { width: 1000, height: 500 },
+        { width: 400, height: 800 },
+      ),
+    ).toBeNull()
+    expect(
+      subjectFrameRect(
+        { x: 0, y: 0, width: 1, height: 1 },
+        { width: 0, height: 0 },
+        { width: 400, height: 800 },
+      ),
+    ).toBeNull()
   })
 })

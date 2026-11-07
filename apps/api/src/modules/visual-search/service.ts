@@ -23,6 +23,7 @@ import { newId } from '@fish/db/ids'
 import { sniffImageMime } from '@fish/shared/image-mime'
 import { toListingCard } from '../listings/card'
 import { probeImage } from '../messages/media-probe'
+import { analyzeQueryImage } from './crop'
 import { type VisualParser, visualTextQueryOf } from './parse'
 import {
   freshnessScore,
@@ -42,7 +43,7 @@ import type { ResolvedVisualSearchSubject } from './subject'
  * 拍照识图搜索的用例层（#324 M4/M6）。
  *
  * 一次搜索的完整链路：主体校验 → 配额 → 台账/对象二次校验（尺寸、魔术字节、像素）→
- * 图片向量化 → 两路召回 → 混合排序 → 卡片。
+ * 语义解析（含主体框）→ 主体裁剪 → 图片向量化 → 两路召回 → 混合排序 → 卡片。
  *
  * ## 图片不可信的三道闸
  *
@@ -248,10 +249,12 @@ export function createVisualSearchService(deps: {
       // 记一次使用（观测用），但不因"已用过"而拒绝——见文件头注释。
       await store.markQueryImageUsed(input.objectKey)
 
-      const visualVector = await embedImageOrUnavailable(bytes, mime)
-
-      // 解析是可选增强，`parse` 契约上不抛（内部 fail-open 返回 null）。
-      const interpretation: VisualInterpretation | null = await parser.parse(bytes, mime)
+      // 主体检测（#584）：解析（同一次 VLM 调用顺带给出主体框）→ 按框裁出主体 → 向量化。
+      // 解析是可选增强，不抛（内部 fail-open）；没有可用的框就是整图，与 #584 之前一致。
+      const query = await analyzeQueryImage(bytes, mime, parser)
+      const interpretation: VisualInterpretation | null = query.interpretation
+      const subjectBox = query.subjectBox
+      const visualVector = await embedImageOrUnavailable(query.image, query.mime)
 
       const candidates = new Map<string, SearchCandidate>()
       for (const hit of await store.recall({
@@ -362,6 +365,7 @@ export function createVisualSearchService(deps: {
       return VisualSearchResponseSchema.parse({
         queryId: queryImage.id,
         interpretation,
+        subjectBox,
         strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
         embeddingModel: provider.model,
         items,

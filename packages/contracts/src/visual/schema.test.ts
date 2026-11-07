@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { VISUAL_SEARCH_STRATEGY_VERSION } from './ranking'
 import {
+  acceptsVisualSubjectBox,
+  VISUAL_SEARCH_CAPABILITIES_HEADER,
   VISUAL_SEARCH_SORTS,
   VISUAL_SOLD_AVG_MIN_SAMPLES,
+  VisualSearchLegacyResponseSchema,
   VisualSearchRequestSchema,
   VisualSearchResponseSchema,
   VisualSearchResultItemSchema,
@@ -133,6 +136,7 @@ describe('VisualSearchResponseSchema', () => {
     const response: Record<string, unknown> = {
       queryId: '44444444-4444-4444-8444-444444444444',
       interpretation: null,
+      subjectBox: null,
       strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
       embeddingModel: 'stub-visual-deterministic-v1',
       items: [resultItem],
@@ -150,11 +154,86 @@ describe('VisualSearchResponseSchema', () => {
       VisualSearchResponseSchema.safeParse({
         queryId: '44444444-4444-4444-8444-444444444444',
         interpretation: null,
+        subjectBox: null,
         strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
         embeddingModel: 'stub-visual-deterministic-v1',
         items: [listingCard],
         stats: emptyStats,
       }).success,
     ).toBe(false)
+  })
+
+  test('主体框（#584）：可为 null，坐标是 0–1 的比例', () => {
+    const response = {
+      queryId: '44444444-4444-4444-8444-444444444444',
+      interpretation: null,
+      subjectBox: { x: 0.25, y: 0.1, width: 0.5, height: 0.8 },
+      strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
+      embeddingModel: 'stub-visual-deterministic-v1',
+      items: [resultItem],
+      stats: emptyStats,
+    }
+    expect(VisualSearchResponseSchema.safeParse(response).success).toBe(true)
+    expect(VisualSearchResponseSchema.safeParse({ ...response, subjectBox: null }).success).toBe(
+      true,
+    )
+    // 像素坐标（> 1）不是这个契约的形状。
+    expect(
+      VisualSearchResponseSchema.safeParse({
+        ...response,
+        subjectBox: { x: 250, y: 100, width: 500, height: 800 },
+      }).success,
+    ).toBe(false)
+  })
+
+  test('新客户端兼容旧服务端：响应里没有 subjectBox 也合法（整图检索，不画框）', () => {
+    const legacy = {
+      queryId: '44444444-4444-4444-8444-444444444444',
+      interpretation: null,
+      strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
+      embeddingModel: 'stub-visual-deterministic-v1',
+      items: [resultItem],
+      stats: emptyStats,
+    }
+    const parsed = VisualSearchResponseSchema.safeParse(legacy)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.subjectBox).toBeUndefined()
+  })
+})
+
+describe('VisualSearchLegacyResponseSchema（#638 分批发布：已发布小程序校验响应用的形状）', () => {
+  const base = {
+    queryId: '44444444-4444-4444-8444-444444444444',
+    interpretation: null,
+    strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
+    embeddingModel: 'stub-visual-deterministic-v1',
+    items: [resultItem],
+    stats: emptyStats,
+  }
+
+  test('不认识 subjectBox：带了就拒（旧客户端是 strictObject），不带才合法', () => {
+    expect(VisualSearchLegacyResponseSchema.safeParse(base).success).toBe(true)
+    expect(VisualSearchLegacyResponseSchema.safeParse({ ...base, subjectBox: null }).success).toBe(
+      false,
+    )
+  })
+})
+
+describe('识图能力协商（#638）', () => {
+  test('能力走请求头，不进请求体：旧服务端的 VisualSearchRequestSchema 是 strictObject', () => {
+    expect(VISUAL_SEARCH_CAPABILITIES_HEADER).toBe('x-visual-search-capabilities')
+    expect(
+      VisualSearchRequestSchema.safeParse({ objectKey: 'visual-search/a/b.png', capabilities: [] })
+        .success,
+    ).toBe(false)
+  })
+
+  test('只在明确声明 subject-box 时才算客户端认识主体框', () => {
+    expect(acceptsVisualSubjectBox('subject-box')).toBe(true)
+    expect(acceptsVisualSubjectBox('future-thing, subject-box')).toBe(true)
+    expect(acceptsVisualSubjectBox(null)).toBe(false)
+    expect(acceptsVisualSubjectBox(undefined)).toBe(false)
+    expect(acceptsVisualSubjectBox('')).toBe(false)
+    expect(acceptsVisualSubjectBox('subject-box-v2')).toBe(false)
   })
 })

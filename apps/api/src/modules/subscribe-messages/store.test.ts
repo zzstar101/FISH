@@ -51,7 +51,11 @@ async function grant(userId: string, kind: 'CHAT' | 'TX' | 'REVIEW', count: numb
   for (let i = 0; i < count; i += 1) await store.addAcceptedGrants(userId, [kind], 50)
 }
 
-/** 造一条待发投递行，返回它的 id。 */
+/**
+ * 造一条立即到期的待发夹具，返回它的 id。
+ * nextAttemptAt 与 attemptDelivery 的 now 使用同一测试进程时钟，避免数据库
+ * defaultNow() 与宿主时钟偏差让状态机用例错误地落入 not-due。
+ */
 async function newDelivery(
   recipientId: string,
   overrides: Partial<NewSubscribeDelivery> = {},
@@ -71,6 +75,8 @@ async function newDelivery(
         thing5: '备注',
       },
       page: 'pkg-trade/pages/transaction-meetup/index?id=txn_x',
+      // 「立即待投递」与用例传进 attemptDelivery 的 `now` 用同一个时钟（见函数注释）
+      nextAttemptAt: new Date(),
       ...overrides,
     })
     .returning({ id: subscribeMessageDeliveries.id })

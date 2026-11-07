@@ -66,7 +66,7 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   'user-add': ['brand'],
   lock: ['fg'],
   mail: ['fg'],
-  key: ['fg'],
+  key: ['white'],
   shield: ['brand', 'muted', 'fg'],
   'shield-check': ['brand'],
   verified: ['brand'],
@@ -74,7 +74,7 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   /* 内容与状态 */
   bell: ['fg'],
   camera: ['muted'],
-  image: ['muted'],
+  image: ['muted', 'white'],
   tag: ['muted'],
   star: ['brand'],
   heart: ['muted', 'white'],

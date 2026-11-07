@@ -32,8 +32,8 @@ type Props = {
    *   （`bottom: 32px`，顶边 133rpx）算了 145rpx；#235 已先一步进 main，
    *   值到落盘就已经过期。2026-09-28 修正为 170rpx。
    * - **自带悬浮钮的页面**按**那个钮**的几何推，别套底栏的值：`pages/mylist` 的右下钮是
-   *   它**自己**的「+ 发布」（`fixed; bottom: 44px; height: 104px`），没有底栏参与，所以
-   *   是 `'188rpx'` = fab 顶边（44 + 104）再留 40rpx 缝。
+   *   它**自己**的「+ 发布」（`fixed; bottom: 44px; height: var(--btn-h-lg)` = 96px），
+   *   没有底栏参与，所以是 `'180rpx'` = fab 顶边（44 + 96）再留 40rpx 缝。
    * - 默认 28pt + 安全区（无稿可依的新页面用）。
    */
   bottom?: string

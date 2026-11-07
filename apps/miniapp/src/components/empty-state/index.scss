@@ -41,8 +41,8 @@
 
 .empty__action {
   margin-top: 28px;
-  height: 84px;
-  padding: 0 40px;
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
   display: flex;
   align-items: center;
   gap: 12px;

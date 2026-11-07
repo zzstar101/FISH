@@ -1,12 +1,10 @@
 /**
- * 「这一次识图的原图与取框」从入口页交给结果页的**一次性交接位**。
+ * 「这一次识图的原图」从入口页交给结果页的**一次性交接位**。
  *
- * Owner 2026-09-30：结果页是**共享元素式**切换 —— 背后保留那张冻结的拍照原图，主内容从底部
- * 弹上来；原图上还要标出「这次是用哪一块去搜的」（参考图②的白色取框）。
+ * Owner 2026-09-30：结果页是**共享元素式**切换 —— 背后保留那张拍照原图，主内容从底部
+ * 弹上来。#583 起拍图搜**整图上传**、不再取框，结果页也不再画取框（交接位随之去掉 `crop`）。
  *
- * 这些数据不适合走 URL：原图路径 + 像素尺寸 + 取框矩形是四段结构化数据，塞进 query 要编码
- * 三次、还得在结果页拼回来；而且它们**只在这一次跳转里有效**。所以用交接位 —— 与
- * `features/listing/edit-target.ts`（我的发布 → 出物页）同一手法。
+ * 与 `features/listing/edit-target.ts`（我的发布 → 出物页）同一手法。
  *
  * ## 两段式：先 stash 原图，上传拿到 objectKey 后再 bind
  *
@@ -16,18 +14,11 @@
  * - 重复渲染拿到同一份（不会「背景时有时无」）；
  * - 换了图（键对不上）拿到 `null`，**不会把上一张照片当背景**——那比没有背景更糟。
  */
-import type { Rect } from './crop'
-
 export type VisualShot = {
   /** 这张原图对应的查询图对象键（与结果页 URL 里的 `visualObjectKey` 同一个值） */
   objectKey: string
   /** 拍照原图的本地临时路径（结果页的背景图） */
   path: string
-  /** 原图像素尺寸：把取框矩形映射回显示坐标要靠它 */
-  width: number
-  height: number
-  /** 这次使用的取框（**图片像素**坐标系，与 `crop.ts` 的 `toImageRect` 输出同源） */
-  crop: Rect
 }
 
 /** 未绑定 objectKey 的暂存态（上传还没回来） */
@@ -35,7 +26,7 @@ type PendingShot = Omit<VisualShot, 'objectKey'> & { objectKey: string | null }
 
 let pending: PendingShot | null = null
 
-/** 入口页调用（**上传之前**）：记下这次的原图与取框 */
+/** 入口页调用（**上传之前**）：记下这次的原图 */
 export function stashVisualShot(shot: Omit<VisualShot, 'objectKey'>): void {
   pending = { ...shot, objectKey: null }
 }
