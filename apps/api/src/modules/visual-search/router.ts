@@ -1,7 +1,10 @@
 import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import {
+  acceptsVisualSubjectBox,
+  VISUAL_SEARCH_CAPABILITIES_HEADER,
   VisualQueryUploadRequestSchema,
+  VisualSearchLegacyResponseSchema,
   VisualSearchRequestSchema,
 } from '@fish/contracts/visual/schema'
 import type { Context } from 'hono'
@@ -113,7 +116,15 @@ export function createVisualSearchRouter(options: VisualSearchRouterOptions) {
 
     const subject = await resolveSubject(c)
     try {
-      return c.json(await service.search(subject, parsed.data), 200)
+      const result = await service.search(subject, parsed.data)
+      // 分批发布（#638）：已发布小程序的响应 schema 是不含 `subjectBox` 的 strictObject，
+      // 多一个键整个识图都会失败。只有显式声明了 `subject-box` 能力的客户端才带这个键；
+      // 服务端的主体检测/裁剪与检索结果对两类客户端完全一致，差别只在响应形状。
+      if (acceptsVisualSubjectBox(c.req.header(VISUAL_SEARCH_CAPABILITIES_HEADER))) {
+        return c.json(result, 200)
+      }
+      const { subjectBox: _subjectBox, ...rest } = result
+      return c.json(VisualSearchLegacyResponseSchema.parse(rest), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

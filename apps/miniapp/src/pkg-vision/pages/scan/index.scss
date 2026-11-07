@@ -1,45 +1,28 @@
-@use "@/styles/mixins" as *;
-
 /**
- * 扫一扫（通用二维码）。几何与 `pages/scan-pr` 同一套深色取景层：
- * `--fg` 打底 + 相机预览，四块遮罩留出 500×520 的取景方框并**两轴居中**，
- * 框下是扫码家族三段切换钮（`components/scan-tabs`）与提示文案。
- * 遮罩/框/文案的位置都从「中线 ± 半框」反推（见下），不写死机型坐标。
+ * 扫码页（#583）。尺寸 = 设计稿 pt × 2（SCSS 里的 px 会被 Taro pxtransform 换算成 rpx）。
+ *
+ * 全屏相机，**不画**取景框 / 遮罩 / 扫描线 / 渐变；页面上的文字与图标一律白色并带阴影
+ * （text-shadow / drop-shadow），亮场景也读得清。
+ *
+ * 底部自下而上三行（都从安全区起算，不按取景几何写死）：
+ * 1. tab 行（`components/scan-tabs`，bottom 16px + safe-area，行高 88px）；
+ * 2. 操作行（bottom 128px + safe-area）：扫一扫 = 相册 · 空 · 输入 6 位码（条件）；
+ *    拍图搜 = 相册 · 快门 · 聊天记录；
+ * 3. 一行提示（bottom 312px + safe-area，压在操作行之上）。
  */
 
-.scanqr {
+.scanpage {
   position: relative;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background: var(--fg);
+  background: #000;
 }
 
-/* ---------------------------------------------------- 取景底（相机预览位） */
+/* ------------------------------------------------------------ 相机 / 不可用 */
 
-.scanqr__view {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--grad-ph);
-}
-
-.scanqr__view-label {
-  margin-top: 80px;
-  font-size: 20px;
-  letter-spacing: 0.14em;
-  color: var(--muted-2);
-  opacity: 0.7;
-}
-
-/** 原生相机：铺满取景底，依赖基础库同层渲染（低版本端上浮顶层，可接受降级）。 */
-.scanqr__camera {
+/** 原生相机：铺满全屏，依赖基础库同层渲染 */
+.scanpage__camera {
   position: absolute;
   left: 0;
   top: 0;
@@ -47,86 +30,41 @@
   height: 100%;
 }
 
-/* ------------------------------------------------------------ 遮罩 */
-
-.scanqr__mask {
+/** 相机不可用：纯黑底上居中一段说明 + 「去设置」，不遮底部入口 */
+.scanpage__noCam {
   position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 1;
-  background: var(--scrim-scan);
-}
-
-/* 遮罩四块由取景框几何**反推**（50% ± 半框），不再用稿子的固定 rpx：
-   稿子按 375×667 屏画（框顶 206pt），高屏上整体偏上、左右留白也不等；
-   反推后取景框在任意机型两轴居中，遮罩孔与框缘永远重合，角标不会被盖。 */
-
-.scanqr__mask--t {
-  left: 0;
-  right: 0;
-  top: 0;
-  /* 取景框 520px 高：上遮罩到框顶（竖直中线 − 半框高） */
-  height: calc(50% - 260px);
-}
-
-.scanqr__mask--b {
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: calc(50% - 260px);
-}
-
-.scanqr__mask--l {
-  left: 0;
-  /* 取景框 500px 宽：左遮罩到框左缘（水平中线 − 半框宽） */
-  width: calc(50% - 250px);
-  top: calc(50% - 260px);
-  height: 520px;
-}
-
-.scanqr__mask--r {
-  right: 0;
-  width: calc(50% - 250px);
-  top: calc(50% - 260px);
-  height: 520px;
-}
-
-/* ------------------------------------------------------------ 取景框 */
-
-/**
- * 相机不可用时的**就地说明**（Owner 2026-09-29：不再整屏压暗 + 居中弹窗）。
- * 放在提示文案同区（取景框下缘 + 切换钮行），不遮住底部三段切换钮。
- */
-.scanqr__noCam {
-  position: absolute;
-  left: 72px;
-  right: 72px;
-  top: calc(50% + 384px);
-  z-index: 6;
   display: flex;
   flex-direction: column;
   align-items: center;
+  padding: 0 80px;
   text-align: center;
 }
 
-.scanqr__noCam-title {
-  font-size: var(--fs-body);
+.scanpage__noCam-title {
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--surface);
 }
 
-.scanqr__noCam-text {
-  margin-top: 14px;
+.scanpage__noCam-text {
+  margin-top: 16px;
   font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--on-dark);
 }
 
-.scanqr__noCam-btn {
-  margin-top: 24px;
+.scanpage__noCam-btn {
+  margin-top: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 76px;
-  padding: 0 44px;
+  height: var(--btn-h-md);
+  padding: 0 var(--btn-px-md);
   border-radius: var(--r-pill);
   background: var(--surface);
   color: var(--fg);
@@ -134,137 +72,133 @@
   font-weight: 600;
 }
 
-.scanqr__window {
-  position: absolute;
-  /* 两轴居中：任意屏宽/屏高下框都在正中（遮罩由框几何反推，见上） */
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 500px;
-  height: 520px;
-  z-index: 2;
-  border-radius: 40px;
-  box-shadow: inset 0 0 0 2px var(--hairline);
-
-  &.is-dim {
-    opacity: 0.45;
-  }
-}
-
-.scanqr__scanline {
-  position: absolute;
-  left: 28px;
-  right: 28px;
-  top: 56%;
-  height: 5px;
-  border-radius: 4px;
-  background: var(--brand);
-}
-
-/* 四角 L 形描边：每个角只画两条边，各带一个圆角 */
-.scanqr__cnr {
-  position: absolute;
-  width: 60px;
-  height: 60px;
-  border: 7px solid var(--brand-deep);
-
-  &--tl {
-    left: -4px;
-    top: -4px;
-    border-right: 0;
-    border-bottom: 0;
-    border-radius: 28px 0 0 0;
-  }
-
-  &--tr {
-    right: -4px;
-    top: -4px;
-    border-left: 0;
-    border-bottom: 0;
-    border-radius: 0 28px 0 0;
-  }
-
-  &--bl {
-    left: -4px;
-    bottom: -4px;
-    border-right: 0;
-    border-top: 0;
-    border-radius: 0 0 0 28px;
-  }
-
-  &--br {
-    right: -4px;
-    bottom: -4px;
-    border-left: 0;
-    border-top: 0;
-    border-radius: 0 0 28px 0;
-  }
-}
-
 /* ---------------------------------------------------- 顶部（对齐微信胶囊） */
 
-/* 返回钮与标题是页面级绝对定位：top 由组件按 readNavMetrics 行内下发
-   （状态栏高度 + 胶囊内容行中线，设备 px），与右侧微信原生胶囊同一行居中。 */
+/* 返回钮 top 由组件按 readNavMetrics 行内下发（状态栏高度 + 胶囊内容行中线，设备 px），
+   与右侧微信原生胶囊同一行居中；宽高也由行内下发（= 胶囊高）。 */
 
-.scanqr__back {
+.scanpage__back {
   position: absolute;
-  left: 32px;
+  left: 24px;
   z-index: 5;
   transform: translateY(-50%);
-  @include float-btn;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.scanqr__back-chevron {
+.scanpage__back-chevron {
   border-left-style: solid;
-  border-left-color: var(--fg);
+  border-left-color: var(--surface);
   border-bottom-style: solid;
-  border-bottom-color: var(--fg);
+  border-bottom-color: var(--surface);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.55));
 }
 
-.scanqr__topbar-title {
+/* ------------------------------------------------------------ 提示 */
+
+.scanpage__hint {
+  position: absolute;
+  left: 48px;
+  right: 48px;
+  bottom: calc(312px + env(safe-area-inset-bottom));
+  z-index: 4;
+  text-align: center;
+  font-size: 26px;
+  color: var(--surface);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+/* ------------------------------------------------------------ 操作行 */
+
+/** 三等分：左 · 中 · 右（扫一扫的中间与条件缺省的右侧是占位） */
+.scanpage__actions {
   position: absolute;
   left: 0;
   right: 0;
-  z-index: 5;
-  transform: translateY(-50%);
-  /* 命中区穿透：#533，同 vision-result 的 `.vres__title`。 */
-  pointer-events: none;
-  text-align: center;
-  font-size: 40px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--surface);
+  bottom: calc(128px + env(safe-area-inset-bottom));
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  padding: 0 40px;
 }
 
-/* ------------------------------------------------------------ 提示文案 */
+.scanpage__act,
+.scanpage__act-slot {
+  flex: 1;
+  min-width: 0;
+}
 
-.scanqr__hint {
-  position: absolute;
-  left: 72px;
-  right: 72px;
-  /* 取景框下缘（中线 + 260px）+ 切换钮行（48px）+ 间距 */
-  top: calc(50% + 384px);
-  z-index: 4;
+.scanpage__act {
   display: flex;
   flex-direction: column;
   align-items: center;
-  text-align: center;
+  gap: 12px;
+  /* 命中区 ≥ 88px（44pt）：图标本身只有 48px，靠 padding 撑开 */
+  padding: 16px 0;
+
+  &.is-busy {
+    opacity: 0.6;
+  }
 }
 
-.scanqr__hint-title {
-  font-size: var(--fs-body);
-  font-weight: 600;
-  color: var(--surface);
+/* 白色图标（`ICONS.*White`，48px 档），整体 drop-shadow 保亮场景可读 */
+.scanpage__act-ic {
+  width: 48px;
+  height: 48px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.55));
 }
 
-.scanqr__hint-text {
-  margin-top: 14px;
+.scanpage__act-label {
   font-size: var(--fs-xs);
-  line-height: 1.6;
-  color: var(--on-dark);
+  color: var(--surface);
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
 }
 
-.scanqr__sheet {
+.scanpage__shutter-core {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--surface);
+  transition: transform 0.12s ease;
+}
+
+/** 快门：白圈 + 内实心（内芯写在前面：`:active` 的后代选择器特异性更高，须排在后） */
+.scanpage__shutter {
+  width: 128px;
+  height: 128px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 6px solid var(--surface);
+  box-sizing: border-box;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+
+  &:active .scanpage__shutter-core {
+    transform: scale(0.92);
+  }
+
+  &.is-busy {
+    opacity: 0.6;
+  }
+}
+
+/* ------------------------------------------------------ 失败面板 */
+
+/* 面板（z 60）之下的透明点击层：点面板以外的区域直接关闭回取景 */
+.scanpage__sheet-dismiss {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 50;
+}
+
+.scanpage__sheet {
   position: fixed;
   left: 0;
   right: 0;
@@ -277,7 +211,7 @@
   box-sizing: border-box;
 }
 
-.scanqr__grab {
+.scanpage__grab {
   width: 80px;
   height: 8px;
   border-radius: var(--r-pill);
@@ -285,139 +219,34 @@
   margin: 0 auto;
 }
 
-.scanqr__sheet-title {
+.scanpage__sheet-title {
   display: block;
-  margin-top: 24px;
+  margin-top: 32px;
   font-size: var(--fs-h3);
   font-weight: 600;
   text-align: center;
   color: var(--fg);
-
-  &--left {
-    text-align: left;
-    margin-top: 24px;
-  }
 }
 
-.scanqr__sheet-sub {
+.scanpage__sheet-sub {
   display: block;
   margin-top: 14px;
   font-size: var(--fs-sm);
   line-height: 1.6;
   text-align: center;
   color: var(--muted-2);
-
-  &--left {
-    text-align: left;
-  }
 }
 
-/* ------------------------------------------------------ 结果反馈列表 */
-
-.scanqr__sheet--list {
-  padding-top: 20px;
-}
-
-/* 面板（z 60）之下的透明点击层：点面板以外的相机区域直接关闭回取景 */
-.scanqr__sheet-dismiss {
-  position: fixed;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 50;
-}
-
-.scanqr__btn-close {
+.scanpage__sheet-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 88px;
-  margin-top: 28px;
-  border-radius: 44px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-  color: var(--fg);
+  height: var(--btn-h-lg);
+  padding: 0 var(--btn-px-lg);
+  margin-top: 40px;
+  border-radius: var(--r-pill);
+  background: var(--grad-brand);
+  color: var(--surface);
   font-size: 29px;
   font-weight: 600;
-}
-
-.scanqr__reasons {
-  margin-top: 24px;
-}
-
-.scanqr__frow {
-  display: flex;
-  align-items: flex-start;
-  gap: 20px;
-  padding: 22px 0;
-  border-top: 2px solid var(--accent-faint);
-
-  &:first-child {
-    border-top: 0;
-    padding-top: 8px;
-  }
-}
-
-/* 原因分类小标签：硬件/交易码 warn、解析 灰、无效 danger */
-.scanqr__pipe {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  height: 38px;
-  padding: 0 14px;
-  margin-top: 4px;
-  border-radius: 12px;
-  font-size: 20px;
-  font-weight: 600;
-
-  &.is-err {
-    background: var(--danger-weak);
-    color: var(--danger-ink);
-  }
-
-  &.is-warn {
-    background: var(--warn-weak);
-    color: var(--warn-ink);
-  }
-
-  &.is-mute {
-    background: var(--accent-faint);
-    color: var(--muted-2);
-  }
-}
-
-.scanqr__fmain {
-  flex: 1;
-  min-width: 0;
-}
-
-.scanqr__ft {
-  display: block;
-  font-size: 26px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.scanqr__fd {
-  display: block;
-  margin-top: 8px;
-  font-size: var(--fs-xs);
-  line-height: 1.6;
-  color: var(--muted-2);
-}
-
-.scanqr__fact {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 72px;
-  padding: 0 26px;
-  border-radius: var(--r-pill);
-  border: 2px solid var(--line);
-  color: var(--brand-deep);
-  font-size: 24px;
-  font-weight: 600;
-  white-space: nowrap;
 }

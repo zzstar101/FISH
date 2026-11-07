@@ -667,20 +667,21 @@
 }
 
 /*
- * 吸底同意条的两个按钮**照稿给显式值**，不用 `btn-brand` / `btn-ghost` 两个通用 mixin。
+ * 吸底同意条的两个按钮给显式值，不用 `btn-brand` / `btn-ghost`，只剩两处真正的差异：
+ * 1. **「不同意」在稿里没有边框也没有底色**（只有 `--muted-2` 字色），`btn-ghost` 会给它 2px
+ *    描边 + 白底 + `--fg` 字色 —— 主/次层级会反转，而这一屏正是「从登录流程进入」的验收状态；
+ * 2. 高度档不同：同意条主钮 L（96）、次钮 M（80），`btn-brand` / `btn-ghost` 都固定 L 档，
+ *    `btn-ghost` 也没有接高度的参数。
  *
- * 稿（`小程序1版用户协议.html` 的 `.btn-primary` / `.btn-ghost`）与 mixin 差三处，且都不是细节：
- * 1. 圆角：稿 999 胶囊，mixin 是 28px 圆角矩形（`DESIGN.md` §3 明确「胶囊 / 按钮 / 标签 = 999」）；
- * 2. 高度：稿 46pt / 38pt（92px / 76px），mixin 两个都是 96px；
- * 3. **「不同意」在稿里没有边框也没有底色**（只有 `--muted-2` 字色），mixin 会给它 2px 描边 +
- *    白底 + `--fg` 字色 —— 主/次层级会反转，而这一屏正是「从登录流程进入」的验收状态。
+ * 圆角已随 #630 与 mixin 一致（都是 `var(--r-pill)`），高度也走 `--btn-h-*` 令牌，
+ * 剩下的差异只有上面两条，所以仍然分开写而不是套 mixin。
  */
 .ld__agree-ok {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 92px;
+  height: var(--btn-h-lg);
   border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
@@ -703,7 +704,7 @@
   align-items: center;
   justify-content: center;
   margin-top: 16px;
-  height: 76px;
+  height: var(--btn-h-md);
   border-radius: var(--r-pill);
   font-size: var(--fs-sm);
   font-weight: 600;

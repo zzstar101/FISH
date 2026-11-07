@@ -1,33 +1,39 @@
 /**
- * 扫码家族（扫一扫 / 识图 / 交易码）底部分类切换的**纯逻辑**。
+ * 扫码页（`pkg-vision/pages/scan`）两段 tab 的**纯逻辑**：tab 定义、入口 URL 与参数解析。
  *
- * 三个页面共用同一组文字切换钮（Owner 2026-09-26 定版）：扫一扫页、识图页与交易码页
- * 互为兄弟页，切换用 `redirectTo` 把当前页从栈里换掉，避免来回切把页面栈堆满。
+ * #583（Owner 2026-11-03 拍板）：扫码家族合成一个页面，底部两段 tab「扫一扫 / 拍图搜」
+ * **页内切换、不跳页**；`?tab=scan|photo` 决定初始 tab，缺省 `scan`。
  *
- * 抽成纯函数是为了让「点哪个 tab 发生什么」可被单测覆盖——三个 redirect 的
- * URL 是页面间契约，写错只会在运行时表现为静默失败。
+ * 入口 URL 是页面间契约（写错只会在运行时表现为进错 tab / 进不去），所以各入口一律经
+ * `scanPageUrl` 拼，不手写字符串；参数解析放这里是为了可被单测覆盖。
  */
 
-export type ScanTabKey = 'scan' | 'vision' | 'code'
+export type ScanTabKey = 'scan' | 'photo'
 
-/** 扫一扫页（通用二维码）；交易码页见 `pages/scan-pr`；识图页见 `pages/scan-vision`。 */
-export const SCAN_QR_PAGE = '/pkg-vision/pages/scan/index'
-export const SCAN_CODE_PAGE = '/pkg-vision/pages/scan-pr/index'
-/** 识图（拍照找同款）：入口页只做取图 + 上传查询图，结果由搜索页渲染。 */
-export const SCAN_VISION_PAGE = '/pkg-vision/pages/scan-vision/index'
+/** 扫码页路由（扫一扫 / 拍图搜共用这一页） */
+export const SCAN_PAGE = '/pkg-vision/pages/scan/index'
 
-export type ScanTabAction = { kind: 'redirect'; url: string } | { kind: 'toast'; title: string }
-
-/** 点某个 tab 的去向；当前已在该 tab 上时返回 null（组件不重复跳转）。 */
-export function scanTabAction(key: ScanTabKey, active: ScanTabKey): ScanTabAction | null {
-  if (key === active) return null
-  if (key === 'vision') return { kind: 'redirect', url: SCAN_VISION_PAGE }
-  if (key === 'code') return { kind: 'redirect', url: SCAN_CODE_PAGE }
-  return { kind: 'redirect', url: SCAN_QR_PAGE }
-}
+/** 「从面交页进来」的标记参数值：只有它才显示「输入 6 位交易码」（点了返回面交页输入） */
+const FROM_MEETUP = 'meetup'
 
 export const SCAN_TABS: { key: ScanTabKey; label: string }[] = [
   { key: 'scan', label: '扫一扫' },
-  { key: 'vision', label: '识图' },
-  { key: 'code', label: '交易码' },
+  { key: 'photo', label: '拍图搜' },
 ]
+
+/** 进扫码页的 URL。`fromMeetup` 只由面交页传（见 `parseScanEntry`）。 */
+export function scanPageUrl(tab: ScanTabKey, options: { fromMeetup?: boolean } = {}): string {
+  const base = `${SCAN_PAGE}?tab=${tab}`
+  return options.fromMeetup === true ? `${base}&from=${FROM_MEETUP}` : base
+}
+
+/** 扫码页进页参数：未知 / 缺省的 `tab` 一律落 `scan`。 */
+export function parseScanEntry(params: { tab?: string; from?: string }): {
+  tab: ScanTabKey
+  fromMeetup: boolean
+} {
+  return {
+    tab: params.tab === 'photo' ? 'photo' : 'scan',
+    fromMeetup: params.from === FROM_MEETUP,
+  }
+}

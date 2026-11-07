@@ -15,6 +15,7 @@ import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import TopBar from '@/components/top-bar'
 import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
 import type { FeedAttribution } from '@/features/recommendation/attribution'
@@ -24,7 +25,6 @@ import {
   type FeedTrackingContext,
   useFeedImpressions,
 } from '@/features/recommendation/use-impressions'
-import { startVisualSearch } from '@/features/visual-search/start'
 import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { useTabTransition } from '@/lib/use-tab-transition'
@@ -317,20 +317,20 @@ export default function Home() {
     void Taro.navigateTo({ url: '/pkg-browse/pages/search/index' })
   }
 
-  /** 识图（相机热区）的上传在途：防连点（原生取图面板是模态的，上传腿不是），与搜索页同一个口径 */
+  /** 跳转在途：防连点压出两层扫码页 */
   const [visionBusy, setVisionBusy] = useState(false)
 
   /**
-   * 识图（#324）：相机图标走独立命中区，进入与搜索页识图按钮同一条链
-   * （`features/visual-search/start.ts`：来源弹窗 → 上传 → 跳识图结果页）。
-   *
-   * 本页没有文字搜索任务日志，所以不传 `onPicked` —— 不为对称硬造一个「作废在途任务」的回调。
+   * 识图（#324 / #583）：相机图标走独立命中区，进扫码页的「拍图搜」tab
+   * （与搜索页识图按钮同一个落点，拍 / 选图 → 整图上传 → 识图结果页都在那页）。
    */
   const visionSearch = async () => {
     if (visionBusy) return
     setVisionBusy(true)
     try {
-      await startVisualSearch()
+      await Taro.navigateTo({ url: scanPageUrl('photo') })
+    } catch {
+      void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
     } finally {
       setVisionBusy(false)
     }

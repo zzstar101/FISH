@@ -4,10 +4,11 @@
  * 三个刻意的选择：
  * 1. 不处理 `unknown`（冷启动 `GET /me` 未返回）。把「还不知道」当成「没登录」，
  *    已登录用户冷启动会先闪一下登录页。
- * 2. Tab 页（消息 / 出物）用 `navigateTo` 而不是 `redirectTo`：`redirectTo` 会**关掉**
+ * 2. Tab 页（消息 / 许愿）用 `navigateTo` 而不是 `redirectTo`：`redirectTo` 会**关掉**
  *    当前页，把 Tab 页从栈里换掉之后底栏结构就不完整了；`navigateTo` 只是把登录页
  *    压在栈上，登录成功后 `switchTab` 回首页，Tab 结构原样保留。
- *    （注意：官方对 `redirectTo` 的限制是**目标**页不能是 tabBar 页，不是不能从 Tab 页跳走。）
+ *    （注意：官方对 `redirectTo` 的限制是**目标**页不能是 tabBar 页，不是不能从 Tab 页跳走。
+ *    出物页 #629 之后是二级页，不再是 Tab 页，走默认的 `redirectTo`。）
  * 3. 跳转失败（页面栈满、平台限制等）时退到 `reLaunch`：守卫宁可把页面栈重开一遍，
  *    也不能静默失败 —— 那会让用户停在未登录的页面上，而 effect 不会再触发。
  */

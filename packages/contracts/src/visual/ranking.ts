@@ -16,8 +16,11 @@ import type { ListingCondition } from '../listings/schema'
  *
  * v2：新增召回相似度下限 `VISUAL_RECALL_MIN_SIMILARITY`（候选召回口径变了），
  * 权重与分项定义未动。
+ *
+ * v3（#584）：图片路召回的查询向量改为**主体框裁剪区域**的向量（检测不到主体时仍是整图），
+ * 候选召回口径变了；权重、分项定义与召回下限未动。
  */
-export const VISUAL_SEARCH_STRATEGY_VERSION = 'visual-hybrid-v2'
+export const VISUAL_SEARCH_STRATEGY_VERSION = 'visual-hybrid-v3'
 
 /**
  * 召回相似度下限（#406 第 6 项）。

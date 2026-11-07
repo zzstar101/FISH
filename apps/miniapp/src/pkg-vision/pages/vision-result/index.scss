@@ -40,6 +40,19 @@
   display: block;
 }
 
+/**
+ * 主体框（#584）：白色细描边 + 外圈投影，任何底色上都看得出；只是标注，不拦触摸。
+ * 位置与尺寸由 `view.ts` 的 `subjectFrameRect` 按 aspectFill 算好行内下发（设备 px）。
+ */
+.vres__subject {
+  position: absolute;
+  box-sizing: border-box;
+  border: 3px solid var(--surface);
+  border-radius: 16px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 12px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+}
+
 /** 两条路都拿不到图时的占位：深色底 + 一句说明（不画裂图） */
 .vres__photo-ph {
   width: 100%;
@@ -54,19 +67,6 @@
   font-size: 26px;
   letter-spacing: 0.08em;
   color: var(--on-dark-track);
-}
-
-/**
- * 这次取框的那一块：框内保持原亮度、框外整体压暗（`box-shadow` 的 9999px 扩散就是遮罩，
- * 与识图入口页取框态同一手法）。参考图②的「整张照片 + 框住主体」。
- */
-.vres__frame {
-  position: absolute;
-  z-index: 1;
-  box-sizing: border-box;
-  border: 4px solid var(--surface);
-  border-radius: 12px;
-  box-shadow: 0 0 0 9999px rgba(23, 35, 61, 0.42);
 }
 
 /* ------------------------------------------------------------ 顶部漂浮层 */
@@ -235,11 +235,11 @@
 }
 
 /**
- * 重拍：视觉高 64px（32pt），**命中区补偿**在包裹层上做。
+ * 重拍：视觉高 68px（= DESIGN.md §3.1 的 S 档，34pt），**命中区补偿**在包裹层上做。
  *
- * 稿的说明要求把 32pt 的视觉高撑到 44pt 命中区，而外层容器（`.vres__qhead`）的 gap 属于布局、
+ * 稿的说明要求把视觉高撑到 44pt 命中区，而外层容器（`.vres__qhead`）的 gap 属于布局、
  * 不会扩大子元素的点击区域；按钮自己加透明 padding 又会顶破 84px 的查询图缩略图那一行。
- * 所以把 `onClick` 挂在 88px（= 44pt）的包裹层上，胶囊保持 64px 的视觉高。
+ * 所以把 `onClick` 挂在 88px（= 44pt）的包裹层上，胶囊本身只占 S 档的 68px 视觉高。
  */
 .vres__retake-hit {
   flex: 0 0 auto;
@@ -252,8 +252,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 64px;
-  padding: 0 24px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
@@ -355,8 +355,8 @@
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 64px;
-  padding: 0 28px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
@@ -498,8 +498,8 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 96px;
-  border-radius: 48px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--grad-brand);
   color: var(--surface);
   font-size: var(--fs-title);
@@ -517,8 +517,8 @@
   align-items: center;
   justify-content: center;
   gap: 14px;
-  height: 92px;
-  border-radius: 46px;
+  height: var(--btn-h-lg);
+  border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
   color: var(--fg);

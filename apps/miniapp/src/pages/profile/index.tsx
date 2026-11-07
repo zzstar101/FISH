@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { BADGE } from '@/assets/badge'
 import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
+import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import UserAvatar from '@/components/user-avatar'
 import {
   applyProfile,
@@ -749,7 +750,7 @@ export default function Profile() {
           {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}
           <View
             className="profile__scanbtn"
-            onClick={() => void Taro.navigateTo({ url: '/pkg-vision/pages/scan-pr/index' })}
+            onClick={() => void Taro.navigateTo({ url: scanPageUrl('scan') })}
           >
             <Image className="profile__scanbtn-ic" src={ICONS.scanBrand} mode="aspectFit" />
           </View>

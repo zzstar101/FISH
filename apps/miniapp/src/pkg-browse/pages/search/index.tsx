@@ -6,6 +6,7 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import TopBar from '@/components/top-bar'
 import { loadSearch } from '@/features/fetchers'
 import { findListingByNumber } from '@/features/listing/api'
@@ -16,7 +17,6 @@ import {
   isSearchTaskCurrent,
 } from '@/features/listing/search-task'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
-import { startVisualSearch } from '@/features/visual-search/start'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
 import {
@@ -226,22 +226,40 @@ export default function Search() {
   }
 
   /**
-   * 识图（#324）：拍 / 选一张图 → 上传查询图 → 跳识图结果页。
+   * 识图（#324 / #583）：进扫码页的「拍图搜」tab（拍 / 选图 → 整图上传 → 识图结果页都在那页）。
    *
-   * 与识图入口页（`pages/scan-vision`）共用同一条链，见 `features/visual-search/start.ts`。
-   * 本页**不动**自己的关键词状态：识图是另一条检索路径，结果渲染在独立的结果页
-   * （`pages/vision-result`），不是本页的结果列表 —— 混进本页会让「已提交的关键词」
-   * 与「这一批图搜出来的结果」对不上。
+   * 本页**不动**自己的关键词 / 排序 / 历史 / 已展示结果：识图是另一条检索路径，结果渲染在独立的
+   * 结果页（`pages/vision-result`），用户从扫码页返回时本页照常可用。
    *
-   * 作废在途的文本搜索挂在 `onPicked`（取图成功、即将上传那一刻）：提前作废的话，
-   * 用户点开弹窗又取消就会白丢一次本来能成的搜索，而 `run()` 的迟到守卫会跳过
-   * `setLoading(false)` —— 本页在 `loading` 期间不渲染任何占位，结果是一片空白。
+   * 但在途的文本 / 编号搜索**必须就地作废**（#637）：扫码页是 `navigateTo` 压在本页之上的，
+   * 本页不卸载、卸载 effect 不触发 —— 跳转期间编号查询迟到命中会过守卫后 `navigateTo`，
+   * 把商品详情又压在扫码页之上；关键词搜索迟到则把结果写回用户已经离开的页面。
+   *
+   * 作废的代价是迟到的响应在守卫处**直接 return**，跳过它自己的收尾（`setLoading(false)`），
+   * 所以这里得替它收尾，否则从扫码页返回时本页会永远停在「请求在途」。
    */
   const visionSearch = async () => {
     if (visionBusy) return
     setVisionBusy(true)
+    invalidateSearchTasks(taskLog)
+    /*
+      被打断的搜索分两种收尾：
+      - 屏幕上已经有一批结果：什么都不用动，返回时照旧看得到（`loading` 归 false 而已）；
+      - 还没有任何结果（`results` 为空、也没有编号查询的结论）：**不能**留在结果区 ——
+        空结果会被渲染成「没有找到相关闲置」，把「没查完」说成「没这件东西」，还把人往许愿墙引。
+        此时退回建议面板：输入框里的词、排序口径、搜索历史都不动，按一下搜索就能重来。
+    */
+    if (loading) {
+      setLoading(false)
+      if (results.length === 0 && numberState === 'none') {
+        setSubmitted('')
+        setPanelOpen(true)
+      }
+    }
     try {
-      await startVisualSearch({ onPicked: () => invalidateSearchTasks(taskLog) })
+      await Taro.navigateTo({ url: scanPageUrl('photo') })
+    } catch {
+      void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
     } finally {
       setVisionBusy(false)
     }
@@ -306,8 +324,7 @@ export default function Search() {
             {/*
               识图按钮：与首页搜索框左侧那枚相机图标同一个能力（#324），这里补在输入框右端 ——
               搜索页是「已经在搜索里」的场景，用户在这里更可能想换一种输入方式（拍/选图）。
-              点它走与识图入口页同一条链（来源弹窗 → 上传 → 结果页），见
-              `features/visual-search/start.ts`。上传在途时按钮压暗防连点。
+              点它进扫码页的「拍图搜」tab（#583）。跳转在途时按钮压暗防连点。
             */}
             <View
               className={`search__vision${visionBusy ? ' is-busy' : ''}`}
