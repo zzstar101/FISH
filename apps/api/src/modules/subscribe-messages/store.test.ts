@@ -52,15 +52,9 @@ async function grant(userId: string, kind: 'CHAT' | 'TX' | 'REVIEW', count: numb
 }
 
 /**
- * 造一条待发投递行，返回它的 id。
- *
- * `next_attempt_at` **必须由本夹具用测试进程的时钟显式写入**，不能留给 schema 的
- * `defaultNow()`：那是数据库服务器的时钟，而各用例传给 `attemptDelivery` 的 `now`
- * 是测试进程的 `new Date()`。两个时钟分属两台机器（本机 Dev 容器里的 Postgres
- * 比宿主快 ~15ms），一旦数据库时钟在后，刚造出来的行在 `attemptDelivery` 眼里就是
- * 「还没到点」（`not-due`），用例测的就不再是状态机而是时钟偏差了。
- * 写入时机早于用例读 `now`，所以「立即待投递」在本进程时钟上恒成立；
- * 需要「未到点」的用例仍由 `overrides` 覆盖成将来时间。
+ * 造一条立即到期的待发夹具，返回它的 id。
+ * nextAttemptAt 与 attemptDelivery 的 now 使用同一测试进程时钟，避免数据库
+ * defaultNow() 与宿主时钟偏差让状态机用例错误地落入 not-due。
  */
 async function newDelivery(
   recipientId: string,
