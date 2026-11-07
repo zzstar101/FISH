@@ -125,8 +125,8 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  height: 60px;
-  padding: 0 26px;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
   background: var(--glass-strong);
   border: 2px solid rgba(255, 255, 255, 0.7);
