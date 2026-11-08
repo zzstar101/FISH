@@ -83,6 +83,7 @@ import {
   canRetry,
   canRetryMedia,
   clearDeferredReload,
+  cursorAfterRefresh,
   type DeferredReload,
   deferReload,
   growBottomAllowance,
@@ -97,7 +98,6 @@ import {
   isStaleMediaTask,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
-  keepsEarlierPages,
   lastTxAcceptedId,
   listingStatusText,
   localReplyExcerpt,
@@ -569,6 +569,14 @@ export default function Conversation() {
   const presenceSeq = useRef(0)
   /** 媒体那条流的 id 快照来源（silent 合并要用，同 `messagesRef` 的理由） */
   const mediaRef = useRef<MediaMessageDto[]>([])
+  /**
+   * 已加载的更早页（#610 复审）：`loadEarlier` 落地时**同步**记进来，不等 React commit。
+   * 刷新落地读 `messagesRef` / `mediaRef` 时，上一页的 `setMessages` 可能还在排队没渲染；
+   * 只读渲染期 ref 会误判「没有更早页」，把刚推进的分页游标顶回第一页。游标判据把这份
+   * 快照一起算上。
+   */
+  const loadedEarlierRef = useRef<MessageDto[]>([])
+  const loadedEarlierMediaRef = useRef<MediaMessageDto[]>([])
   /** 在途媒体（`useDidShow` 判「有在途发送」时要把上传中的媒体也算上） */
   const pendingMediaRef = useRef<PendingMedia[]>([])
   /** 当前这次录音的句柄（`null` = 没在录） */
@@ -682,6 +690,8 @@ export default function Conversation() {
     setRecallingId(null)
     setMedia([])
     setMediaCursor(null)
+    loadedEarlierRef.current = []
+    loadedEarlierMediaRef.current = []
     setPendingMedia([])
     setLocalPaths(new Map())
     setPlayingId(null)
@@ -865,7 +875,14 @@ export default function Conversation() {
              * false，让快照游标接管 —— 旧游标补不到两段之间的空洞，下次上翻由
              * `mergeEarlierMessages` 去重补齐（见 `./view`）。
              */
-            if (!keepsEarlierPages(messagesRef.current, page.items)) setNextCursor(page.nextCursor)
+            setNextCursor((current) =>
+              cursorAfterRefresh(
+                current,
+                [...loadedEarlierRef.current, ...messagesRef.current],
+                page.items,
+                page.nextCursor,
+              ),
+            )
           }
           /**
            * 消息区的落态**在守卫之外**（#608 审查第 3 条）：守卫只挡「拿失败快照覆盖已经在
@@ -896,9 +913,14 @@ export default function Conversation() {
               ),
             )
             /** 与消息流的游标同理（#610）：保留了更早的媒体页就不能被快照游标顶掉 */
-            if (!keepsEarlierPages(mediaRef.current, mediaPage.items)) {
-              setMediaCursor(mediaPage.nextCursor)
-            }
+            setMediaCursor((current) =>
+              cursorAfterRefresh(
+                current,
+                [...loadedEarlierMediaRef.current, ...mediaRef.current],
+                mediaPage.items,
+                mediaPage.nextCursor,
+              ),
+            )
           }
 
           /**
@@ -1444,6 +1466,8 @@ export default function Conversation() {
             return
           }
           setMessages((prev) => mergeEarlierMessages(prev, page.items))
+          // 同步记下，供刷新时的游标判据在 commit 之前看到这一页（见 ref 注释）
+          loadedEarlierRef.current = mergeEarlierMessages(loadedEarlierRef.current, page.items)
           setNextCursor(page.nextCursor)
         }),
       )
@@ -1460,6 +1484,11 @@ export default function Conversation() {
             if (!isLatestPageLoad(current, epoch.current)) return
             if (page.failed) return
             setMedia((prev) => mergeRefreshedMedia(prev, page.items, EMPTY_IDS))
+            loadedEarlierMediaRef.current = mergeRefreshedMedia(
+              loadedEarlierMediaRef.current,
+              page.items,
+              EMPTY_IDS,
+            )
             setMediaCursor(page.nextCursor)
           })
           .catch((error) => {

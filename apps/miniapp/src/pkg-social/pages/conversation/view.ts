@@ -1103,6 +1103,22 @@ export function keepsEarlierPages(
 }
 
 /**
+ * 刷新落地后要写入的分页游标（#610）。
+ *
+ * 抽成可执行函数而不是在页面里写 `if`：判据层只能证明「该不该守」，这里把**写入的值**
+ * 也钉进单测（沿用现有游标 / 采用快照游标两种结果），避免守卫写在不可达分支里也能
+ * 通过文本断言。
+ */
+export function cursorAfterRefresh(
+  current: string | null,
+  previous: readonly { id: string; createdAt: string }[],
+  incoming: readonly { id: string; createdAt: string }[],
+  snapshot: string | null,
+): string | null {
+  return keepsEarlierPages(previous, incoming) ? current : snapshot
+}
+
+/**
  * 刷新落地时把新快照合并回已有消息流（#186 P2-1；#89 起 silent 与整页重拉共用一条）。
  *
  * 刷新的快照**可能早于本次刷新期间才落地的消息** —— HTTP 响应顺序无法保证：

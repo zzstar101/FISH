@@ -14,6 +14,7 @@ import {
   canRetry,
   canRetryMedia,
   clearDeferredReload,
+  cursorAfterRefresh,
   deferReload,
   hasEarlierPage,
   initialDeferredReload,
@@ -1460,12 +1461,39 @@ describe('keepsEarlierPages —— 保留了更早页就不许顶掉分页游标
   })
 })
 
+describe('cursorAfterRefresh —— 刷新后写入的游标值（#610）', () => {
+  const olderPage = [text('m1', '2026-09-21T09:00:00.000Z')]
+  const snapshot = [text('m2', '2026-09-21T10:00:00.000Z')]
+
+  test('保留了更早页 → 沿用现有游标', () => {
+    expect(
+      cursorAfterRefresh('cursor-before-m1', [...olderPage, ...snapshot], snapshot, 'first-page'),
+    ).toBe('cursor-before-m1')
+  })
+
+  test('列表最旧就是快照最旧 → 采用快照游标', () => {
+    expect(cursorAfterRefresh('cursor-before-m2', snapshot, snapshot, 'first-page')).toBe(
+      'first-page',
+    )
+  })
+
+  test('无交集（积压超过一页）→ 采用快照游标，下次上翻补洞', () => {
+    expect(cursorAfterRefresh('cursor-before-m1', olderPage, snapshot, 'first-page')).toBe(
+      'first-page',
+    )
+  })
+
+  test('空快照 → 采用快照游标（null）', () => {
+    expect(cursorAfterRefresh('cursor-before-m1', olderPage, [], null)).toBeNull()
+  })
+})
+
 /**
  * 游标守卫的接线：判据层只能证明「该不该守」，钉住页面里那两个调用点是否真的守了
  * —— 手法同本文件的返回刷新接线用例。
  */
 describe('刷新落地的游标守卫接线（#610）', () => {
-  test('刷新块里的 nextCursor / mediaCursor 都由 keepsEarlierPages 守卫，且极性正确', async () => {
+  test('刷新块里的 nextCursor / mediaCursor 都经由 cursorAfterRefresh 写入，且两条流参数不串', async () => {
     const code = await Bun.file(
       new URL('../src/pkg-social/pages/conversation/index.tsx', import.meta.url),
     ).text()
@@ -1480,26 +1508,23 @@ describe('刷新落地的游标守卫接线（#610）', () => {
     expect(to, '刷新块终点应存在').toBeGreaterThan(from)
     const refreshBlock = stripped.slice(from, to)
     /**
-     * 必须连**极性、参数、守卫对象**一起钉住：只要求「判据与写入相邻」的话，
-     * 把守卫写反（`if (keepsEarlierPages(...)) setNextCursor(...)`）或把两条流
-     * 的参数写串（文本守卫用 `mediaRef.current` / `mediaPage.items`）同样能通过，
-     * 而游标被错误顶掉正是本单要防的核心。
-     * 同时断言「写入次数 == 1」：漏守一处、或额外多一处无守卫写入就红。
+     * 钉住**整条写入语句**：函数式更新 + 正确的 `previous` / `incoming` / `snapshot`
+     * 参数缺一不可。只断言「判据与写入相邻」的话，把守卫写反、参数写串（文本守卫用
+     * `mediaRef.current` / `mediaPage.items`）或写进不可达分支同样能通过。
+     * 同时断言出现次数 == 1：漏写、或额外多一处直接写快照游标就红。
      */
-    const normalized = refreshBlock.replace(/\s+/g, ' ')
-    const assertGuarded = (call: string, guardedCall: string) => {
-      const escaped = call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const calls = normalized.match(new RegExp(escaped, 'g')) ?? []
-      expect(calls.length, `${call} 在刷新块里应出现一次`).toBe(1)
-      expect(normalized, `${call} 必须由 !keepsEarlierPages 以正确参数守卫`).toContain(guardedCall)
+    const compact = refreshBlock.replace(/,\s*\)/g, ')').replace(/\s+/g, '')
+    const assertWrittenOnce = (statement: string) => {
+      const expected = statement.replace(/,\s*\)/g, ')').replace(/\s+/g, '')
+      const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const calls = compact.match(new RegExp(escaped, 'g')) ?? []
+      expect(calls.length, `${statement} 在刷新块里应出现一次`).toBe(1)
     }
-    assertGuarded(
-      'setNextCursor(page.nextCursor)',
-      'if (!keepsEarlierPages(messagesRef.current, page.items)) setNextCursor(page.nextCursor)',
+    assertWrittenOnce(
+      'setNextCursor((current) => cursorAfterRefresh(current, [...loadedEarlierRef.current, ...messagesRef.current], page.items, page.nextCursor))',
     )
-    assertGuarded(
-      'setMediaCursor(mediaPage.nextCursor)',
-      'if (!keepsEarlierPages(mediaRef.current, mediaPage.items)) { setMediaCursor(mediaPage.nextCursor) }',
+    assertWrittenOnce(
+      'setMediaCursor((current) => cursorAfterRefresh(current, [...loadedEarlierMediaRef.current, ...mediaRef.current], mediaPage.items, mediaPage.nextCursor))',
     )
   })
 })
