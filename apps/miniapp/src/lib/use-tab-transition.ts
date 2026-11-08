@@ -1,4 +1,4 @@
-import Taro, { useDidHide, useDidShow, useReady, useUnload } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow, useUnload } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import { notifyTabbarRoute, resetTabTransition } from './tabbar-sync'
 
@@ -7,33 +7,52 @@ import { notifyTabbarRoute, resetTabTransition } from './tabbar-sync'
  *
  * Tab 页首次被 `switchTab` 创建时，WebView 初始化会先露出一帧纯白原生底（本机
  * devtools 实测约 100–250ms），页面 JS 挂载后才画内容；这就是「切 Tab 白屏闪烁」。
- * 四个 Tab 页的 `index.config.ts` 都设了 `handleWebviewPreload: 'manual'`，由本 hook
- * 在页面显示后**延迟 200ms** 显式预热下一个页面：让开当前页首屏渲染与取数，也不会和
- * 框架默认的 onReady+200ms 自动预加载重复建 WebView。
  *
- * 每次 onShow / onReady 都会重新排一次：预热出来的 WebView 可能被中途的
- * `navigateTo`（如首页进商品详情再返回）消费，只在首次 ready 预热一次的话，之后再
- * 首访未打开过的 Tab 仍会白屏。
+ * 分工：
+ * - **安卓**保留框架默认预加载（Tab 页配置不设 `handleWebviewPreload`），不重复建
+ *   WebView；本 hook 在安卓直接跳过。
+ * - **iOS / devtools 等**框架不自动预加载的平台，在页面显示后延迟 200ms 显式调用
+ *   `Taro.preloadWebview()`：让开当前页首屏渲染与取数，再为下一次切 Tab 预热。
+ * - 每次 onShow 重排一次，返回本页会补预热（预加载 WebView 可能被中途 `navigateTo`
+ *   消费）；页面隐藏时若预热还没跑，立即补一次，尽量赶在目标页创建前。
  *
  * H5 没有该 API；低版本基础库不支持时打一条告警后跳过，不影响切页。
  */
-const PRELOAD_DELAY_MS = 200
+export const PRELOAD_DELAY_MS = 200
 let warnedNoPreload = false
+let warnedPreloadFailure = false
+
+function warnOnce(kind: 'missing' | 'failed'): void {
+  if (kind === 'missing' && !warnedNoPreload) {
+    warnedNoPreload = true
+    console.warn('[miniapp] 当前基础库不支持 preloadWebview，Tab 首切可能闪白')
+  }
+  if (kind === 'failed' && !warnedPreloadFailure) {
+    warnedPreloadFailure = true
+    console.warn('[miniapp] preloadWebview 调用失败，Tab 首切可能闪白')
+  }
+}
+
+/** 安卓由框架默认预加载；其他平台由本 hook 显式预热 */
+function isAndroid(): boolean {
+  try {
+    return Taro.getSystemInfoSync().platform === 'android'
+  } catch {
+    return false
+  }
+}
 
 function preloadNextWebview(): void {
   const preload = Taro.preloadWebview
   if (typeof preload !== 'function') {
-    if (!warnedNoPreload) {
-      warnedNoPreload = true
-      console.warn('[miniapp] 当前基础库不支持 preloadWebview，Tab 首切可能闪白')
-    }
+    warnOnce('missing')
     return
   }
   try {
     const task = preload({})
-    if (task && typeof task.catch === 'function') task.catch(() => undefined)
+    if (task && typeof task.catch === 'function') task.catch(() => warnOnce('failed'))
   } catch {
-    // 调用失败不阻断页面显示；manual 配置下这一次没有预热，下次显示会再排一次。
+    warnOnce('failed')
   }
 }
 
@@ -52,18 +71,22 @@ export function useTabTransition(): string {
   )
   /** 让开当前页首屏渲染/取数后再预热下一次切 Tab 的 WebView */
   const schedulePreload = () => {
+    if (isAndroid()) return
     clearTimeout(preloadTimer.current)
     preloadTimer.current = setTimeout(() => {
       preloadTimer.current = undefined
       preloadNextWebview()
     }, PRELOAD_DELAY_MS)
   }
-  useReady(schedulePreload)
   useDidHide(() => {
     clearTimeout(timer.current)
     timer.current = undefined
-    clearTimeout(preloadTimer.current)
-    preloadTimer.current = undefined
+    if (preloadTimer.current !== undefined) {
+      // 切页已在途、等不到 200ms 了：立刻补一次，尽量赶在目标页创建前预热。
+      clearTimeout(preloadTimer.current)
+      preloadTimer.current = undefined
+      preloadNextWebview()
+    }
     setClassName('')
   })
   useDidShow(() => {

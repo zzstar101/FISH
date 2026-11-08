@@ -2,26 +2,24 @@ import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 
 let show: () => void = () => {}
 let hide: () => void = () => {}
-let ready: () => void = () => {}
 let unmount: () => void = () => {}
 let contentClass = ''
 let updates = 0
 let preloadCalls = 0
 let preloadApi: (() => unknown) | undefined
+let platform = 'devtools'
 mock.module('@tarojs/taro', () => ({
   default: {
     get preloadWebview() {
       return preloadApi
     },
+    getSystemInfoSync: () => ({ platform }),
   },
   useDidShow: (callback: () => void) => {
     show = callback
   },
   useDidHide: (callback: () => void) => {
     hide = callback
-  },
-  useReady: (callback: () => void) => {
-    ready = callback
   },
   useUnload: () => {},
 }))
@@ -48,53 +46,67 @@ mock.module('../src/lib/tabbar-sync', () => ({
   }),
   resetTabTransition: () => {},
 }))
-const { useTabTransition } = await import('../src/lib/use-tab-transition')
+const { PRELOAD_DELAY_MS, useTabTransition } = await import('../src/lib/use-tab-transition')
 
 beforeEach(() => {
   contentClass = ''
   updates = 0
   preloadCalls = 0
+  platform = 'devtools'
   preloadApi = () => {
     preloadCalls++
     return Promise.resolve()
   }
-  show = hide = ready = unmount = () => {}
+  show = hide = unmount = () => {}
   useTabTransition()
 })
 afterEach(() => unmount())
 
-test('onShow / onReady 延迟预热下一次切 Tab；返回本页会补预热（#662）', async () => {
-  expect(preloadCalls).toBe(0)
+test('非安卓平台：延迟预热下一次切 Tab，返回本页会补预热（#662）', async () => {
   show()
-  ready()
-  // 让开首屏渲染/取数：200ms 内不调用
+  // 让开首屏渲染/取数：不足 200ms 时不应调用
+  await Bun.sleep(PRELOAD_DELAY_MS - 50)
   expect(preloadCalls).toBe(0)
-  await Bun.sleep(250)
+  await Bun.sleep(100)
   expect(preloadCalls).toBe(1)
   hide()
   show()
-  await Bun.sleep(250)
+  await Bun.sleep(PRELOAD_DELAY_MS + 50)
   expect(preloadCalls).toBe(2)
+})
+
+test('安卓保留框架默认预加载，hook 不重复建 WebView（#662）', async () => {
+  platform = 'android'
+  show()
+  await Bun.sleep(PRELOAD_DELAY_MS + 50)
+  expect(preloadCalls).toBe(0)
+})
+
+test('预热还没到 200ms 就切走：隐藏时立即补一次（#662）', () => {
+  show()
+  expect(preloadCalls).toBe(0)
+  hide()
+  expect(preloadCalls).toBe(1)
 })
 
 test('预热 API 不存在 / 同步抛错 / 异步失败都不影响页面（#662）', async () => {
   preloadApi = undefined
   expect(() => show()).not.toThrow()
-  await Bun.sleep(250)
+  await Bun.sleep(PRELOAD_DELAY_MS + 50)
   expect(preloadCalls).toBe(0)
 
   preloadApi = () => {
     throw new Error('unsupported')
   }
   expect(() => show()).not.toThrow()
-  await Bun.sleep(250)
+  await Bun.sleep(PRELOAD_DELAY_MS + 50)
 
   preloadApi = () => {
     preloadCalls++
     return Promise.reject(new Error('preload failed'))
   }
   show()
-  await Bun.sleep(250)
+  await Bun.sleep(PRELOAD_DELAY_MS + 50)
   expect(preloadCalls).toBe(1)
 })
 
