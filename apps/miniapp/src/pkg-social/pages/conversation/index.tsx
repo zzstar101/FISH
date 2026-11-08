@@ -861,6 +861,9 @@ export default function Conversation() {
              * 合并保留了「比快照更早」的已加载页时，**不能**用快照的游标顶掉现有游标
              * （#610）：快照只含第一页，它的游标指向第一页之前，顶掉就会让下一次上翻
              * 重拉同一页、出现重复条目。现有游标仍指向我们最旧那条之前，沿用即可。
+             * 例外：快照与已加载窗口**无交集**（积压超过一页）时 `keepsEarlierPages` 返回
+             * false，让快照游标接管 —— 旧游标补不到两段之间的空洞，下次上翻由
+             * `mergeEarlierMessages` 去重补齐（见 `./view`）。
              */
             if (!keepsEarlierPages(messagesRef.current, page.items)) setNextCursor(page.nextCursor)
           }

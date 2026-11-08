@@ -1330,6 +1330,15 @@ describe('mergeRefreshedMedia —— 后台刷新落地时不抹掉刷新期间�
     )
     expect(merged.map((item) => item.id)).toEqual(['p1', 'p2'])
   })
+
+  test('快照与已加载窗口无交集时媒体旧页仍保留（只由游标接管补洞，#610）', () => {
+    const merged = mergeRefreshedMedia(
+      [picture('p1', '2026-09-21T09:00:00.000Z')],
+      [picture('p150', '2026-09-21T12:00:00.000Z')],
+      new Set(['p1']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['p1', 'p150'])
+  })
 })
 
 /**
@@ -1375,6 +1384,15 @@ describe('mergeRefreshedMessages —— 刷新不得缩短已加载窗口（#610
     expect(merged.map((item) => item.id)).toEqual(['m2', 'm3'])
   })
 
+  test('快照与已加载窗口无交集时旧消息仍保留（只由游标接管补洞，#610）', () => {
+    const merged = mergeRefreshedMessages(
+      [text('m1', '2026-09-21T09:00:00.000Z')],
+      [text('m150', '2026-09-21T12:00:00.000Z')],
+      new Set(['m1']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1', 'm150'])
+  })
+
   test('同毫秒的边界条目按保留处理（DTO 只有毫秒，id 顺序不足以判定更早）', () => {
     const merged = mergeRefreshedMessages(
       [text('z-boundary', '2026-09-21T10:00:00.000Z')], // 与快照最旧同毫秒，id 字典序更大
@@ -1411,6 +1429,21 @@ describe('keepsEarlierPages —— 保留了更早页就不许顶掉分页游标
         [text('m2', '2026-09-21T10:00:00.000Z')],
       ),
     ).toBe(false)
+  })
+
+  test('同毫秒边界条目按保留处理 → true（不能被 id 顺序误判成窗口内）', () => {
+    expect(
+      keepsEarlierPages(
+        [
+          text('z-boundary', '2026-09-21T10:00:00.000Z'),
+          text('m-snapshot', '2026-09-21T10:00:00.000Z'),
+        ],
+        [
+          text('m-snapshot', '2026-09-21T10:00:00.000Z'),
+          text('m-latest', '2026-09-21T10:00:05.000Z'),
+        ],
+      ),
+    ).toBe(true)
   })
 
   test('快照与已加载窗口无交集（积压超过一页）→ false（让快照游标接管、下次上翻补洞）', () => {
