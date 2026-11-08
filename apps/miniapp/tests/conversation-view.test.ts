@@ -1375,6 +1375,15 @@ describe('mergeRefreshedMessages —— 刷新不得缩短已加载窗口（#610
     expect(merged.map((item) => item.id)).toEqual(['m2', 'm3'])
   })
 
+  test('同毫秒的边界条目按保留处理（DTO 只有毫秒，id 顺序不足以判定更早）', () => {
+    const merged = mergeRefreshedMessages(
+      [text('z-boundary', '2026-09-21T10:00:00.000Z')], // 与快照最旧同毫秒，id 字典序更大
+      [text('m-snapshot', '2026-09-21T10:00:00.000Z')],
+      new Set(['z-boundary']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m-snapshot', 'z-boundary'])
+  })
+
   test('空快照当作「没有窗口」：baseIds 内的旧条目照旧丢弃（不虚构历史）', () => {
     const merged = mergeRefreshedMessages(
       [text('m1', '2026-09-21T10:00:00.000Z')],
@@ -1404,6 +1413,15 @@ describe('keepsEarlierPages —— 保留了更早页就不许顶掉分页游标
     ).toBe(false)
   })
 
+  test('快照与已加载窗口无交集（积压超过一页）→ false（让快照游标接管、下次上翻补洞）', () => {
+    expect(
+      keepsEarlierPages(
+        [text('m1', '2026-09-21T09:00:00.000Z')],
+        [text('m150', '2026-09-21T12:00:00.000Z')],
+      ),
+    ).toBe(false)
+  })
+
   test('空快照 → false', () => {
     expect(keepsEarlierPages([text('m1', '2026-09-21T10:00:00.000Z')], [])).toBe(false)
   })
@@ -1429,23 +1447,27 @@ describe('刷新落地的游标守卫接线（#610）', () => {
     expect(to, '刷新块终点应存在').toBeGreaterThan(from)
     const refreshBlock = stripped.slice(from, to)
     /**
-     * 必须连**极性**一起钉住：只要求「判据与写入相邻」的话，把守卫写反
-     * （`if (keepsEarlierPages(...)) setNextCursor(...)` —— 保留了更早页时反而顶掉游标）
-     * 同样能通过，而游标被顶掉正是本单要防的核心。
-     * 同时断言「写入次数 == 被守卫的次数」：漏守一处就红。
+     * 必须连**极性、参数、守卫对象**一起钉住：只要求「判据与写入相邻」的话，
+     * 把守卫写反（`if (keepsEarlierPages(...)) setNextCursor(...)`）或把两条流
+     * 的参数写串（文本守卫用 `mediaRef.current` / `mediaPage.items`）同样能通过，
+     * 而游标被错误顶掉正是本单要防的核心。
+     * 同时断言「写入次数 == 1」：漏守一处、或额外多一处无守卫写入就红。
      */
-    const assertGuarded = (call: string) => {
-      const pattern = new RegExp(call, 'g')
-      const calls = refreshBlock.match(pattern) ?? []
-      const guarded =
-        refreshBlock.match(
-          new RegExp(`if \\(!keepsEarlierPages\\([^)]*\\)\\)[\\s\\S]{0,120}${call}`, 'g'),
-        ) ?? []
+    const normalized = refreshBlock.replace(/\s+/g, ' ')
+    const assertGuarded = (call: string, guardedCall: string) => {
+      const escaped = call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const calls = normalized.match(new RegExp(escaped, 'g')) ?? []
       expect(calls.length, `${call} 在刷新块里应出现一次`).toBe(1)
-      expect(guarded.length, `${call} 必须由 !keepsEarlierPages 守卫`).toBe(calls.length)
+      expect(normalized, `${call} 必须由 !keepsEarlierPages 以正确参数守卫`).toContain(guardedCall)
     }
-    assertGuarded('setNextCursor\\(page\\.nextCursor\\)')
-    assertGuarded('setMediaCursor\\(mediaPage\\.nextCursor\\)')
+    assertGuarded(
+      'setNextCursor(page.nextCursor)',
+      'if (!keepsEarlierPages(messagesRef.current, page.items)) setNextCursor(page.nextCursor)',
+    )
+    assertGuarded(
+      'setMediaCursor(mediaPage.nextCursor)',
+      'if (!keepsEarlierPages(mediaRef.current, mediaPage.items)) { setMediaCursor(mediaPage.nextCursor) }',
+    )
   })
 })
 

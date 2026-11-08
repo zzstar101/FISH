@@ -1020,7 +1020,7 @@ export function mergeRefreshedMedia(
   const carried: MediaMessageDto[] = []
   for (const item of previous) {
     if (seen.has(item.id)) continue
-    if (isOlderThanSnapshot(item, oldest)) {
+    if (isBeforeSnapshotWindow(item, oldest)) {
       seen.add(item.id)
       carried.push(item)
       continue
@@ -1053,28 +1053,20 @@ function oldestOf<T extends { id: string; createdAt: string }>(items: readonly T
 }
 
 /**
- * 比快照最旧一条更早的条目要不要保留（#610）。
+ * 条目是否落在快照窗口**之外（更早一侧）**，从而必须在刷新合并时保留（#610）。
  *
- * 刷新的快照只含**第一页**，永远不会带回用户已经翻过的更早页。旧实现拿「发起刷新时
- * 已显示的全部 id」当基线，把这些更早的条目一并丢掉 —— 每次刷新（从子页返回、发送落定
- * 后补刷、断线重连补刷）都把已加载的历史整段抹掉，`nextCursor` 还被重置成第一页游标，
- * 下一次上翻重拉同一页、出现重复条目。
- *
- * **保留区不参与后续快照校正**（审查记录）：刷新只拉第一页，所以保留下来的更早页不会
- * 再被 `load()` 校正 —— 那一段里的「对方撤回」只能靠实时通道（`message.recalled` 走
- * `applyRecalled`，按 id 命中、不区分条目来自哪一页）收回来；实时断线期间发生的撤回
- * 要等用户离开重进本页才会消失。
- *
- * 判据依赖两条数据前提：**单条消息不做硬删**（服务端只更新 `recalled_at`；整会话随商品
- * 删除时由 `messages → conversations` 的级联外键物理删除，那时页面整体失效，不会留下
- * 幽灵消息）；以及**在途期新增消息数 < 一页上限**（≥ 一页时保留区与快照之间可能留出
- * 现有游标补不齐的空洞，概率极低，未做兜底）。改合并语义前先确认这两条还成立。
+ * 边界只能用 DTO 的 `createdAt`：服务端按**微秒**排序，序列化成 ISO 字符串后只剩
+ * **毫秒**。快照最旧那条与更早页尾部同毫秒时，客户端只能退化成 id 字典序，而 UUIDv7
+ * 同毫秒尾部是随机的，可能把仍属更早页的条目判进窗口内。单条消息不做硬删（见
+ * `keepsEarlierPages` 的数据前提），所以「同毫秒但不在快照里」的条目只可能来自更早页
+ * —— 一律按保留处理；真正位于窗口内、又被服务端撤回 / 删除的条目仍由 `baseIds` 规则丢弃。
  */
-function isOlderThanSnapshot(
+function isBeforeSnapshotWindow(
   item: { id: string; createdAt: string },
   oldest: { id: string; createdAt: string } | null,
 ): boolean {
-  return oldest !== null && isOlderThan(item, oldest)
+  if (oldest === null) return false
+  return Date.parse(item.createdAt) <= Date.parse(oldest.createdAt)
 }
 
 /**
@@ -1090,7 +1082,14 @@ export function keepsEarlierPages(
   const oldest = oldestOf(incoming)
   if (oldest === null) return false
   const incomingIds = new Set(incoming.map((item) => item.id))
-  return previous.some((item) => !incomingIds.has(item.id) && isOlderThan(item, oldest))
+  /**
+   * 快照与已加载窗口**没有交集**：刷新期间新增的消息超过一页（断线重连 / 长时间后台），
+   * 两者之间隔着一段没加载过的空洞。旧游标只能继续往更早翻，补不到空洞；此时必须让
+   * 快照游标接管（它指向快照最旧一条之前），用户下次上翻时由 `mergeEarlierMessages`
+   * 去重后逐页把空洞补齐。
+   */
+  if (!previous.some((item) => incomingIds.has(item.id))) return false
+  return previous.some((item) => !incomingIds.has(item.id) && isBeforeSnapshotWindow(item, oldest))
 }
 
 /**
@@ -1104,7 +1103,7 @@ export function keepsEarlierPages(
  * 合并规则（`baseIds` = 本次刷新**发起时**消息流里的 id 快照）：
  * - 以服务端快照为准：它可能包含对方刚发来的新消息，也可能修正本地顺序；
  * - **比快照最旧一条更早**的旧条目一律保留（#610）—— 快照只含第一页，永远不会带回
- *   用户已经翻过的更早页；按旧规则（基线内即丢弃）每次刷新都把已加载历史整段抹掉；
+ *   用户已经翻过的更早页；同毫秒按保留处理，理由见 `isBeforeSnapshotWindow`；
  * - 额外保留 `baseIds` 之外、且不在快照里的消息 —— 那些是刷新发起**之后**才确认
  *   落地的（本地乐观气泡被服务端返回替换的那一刻）；
  * - 落在快照窗口内、又在 `baseIds` 里的旧条目仍以快照为准（服务端不再返回 = 已删除）；
@@ -1120,7 +1119,7 @@ export function mergeRefreshedMessages(
   const carried: MessageDto[] = []
   for (const item of previous) {
     if (seen.has(item.id)) continue
-    if (isOlderThanSnapshot(item, oldest)) {
+    if (isBeforeSnapshotWindow(item, oldest)) {
       seen.add(item.id)
       carried.push(item)
       continue
