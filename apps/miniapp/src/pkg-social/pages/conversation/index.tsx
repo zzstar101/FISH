@@ -332,7 +332,7 @@ export default function Conversation() {
   /**
    * 输入框的聚焦请求（#560 补）：切回键盘态时**显式**把光标叫回输入框。
    *
-   * 输入框两态常驻（见 `.conv__rowwrap` 里 `<Textarea>` 的注释），语音态只是把它 `opacity: 0`。
+   * 输入框两态常驻（见 `.conv__rowwrap` 里 `<Textarea>` 的注释），语音态由外层类名把它藏起来。
    * 端上现象是「点键盘图标只把『按住 说话』换回输入框、键盘不出来，得再点一次输入框」，
    * 微信原生则是点一下就原位切回 —— Owner 说的「不是直接原位置切换」。
    *
@@ -2023,7 +2023,9 @@ export default function Conversation() {
    * `event` 只为取「按下的起点 Y」（#535 上滑取消的基准），不做任何异步阻塞。
    */
   const startVoice = (event?: unknown) => {
-    if (!canSend || recordingRef.current) return
+    // 「按住说话」常驻（见 `.conv__rowwrap` 那段注释），键盘态它只是 `visibility: hidden`：
+    // 样式一旦失效 / 被别的层盖住，起录闸门不能只剩一条 CSS，所以按态再挡一次
+    if (!voiceMode || !canSend || recordingRef.current) return
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
       // 第二个回调管「录音器自己停了」（时长上限）：不接的话面板会继续计时且无提示
@@ -2373,8 +2375,10 @@ export default function Conversation() {
   /**
    * 放弃正在进行的录音（切输入态 / 切面板前必须调）。
    *
-   * 「按住说话」的结束靠那颗按钮的 `onTouchEnd` / `onTouchCancel`，而切语音态 / 开
-   * 「+」面板会把整颗按钮**卸载**掉 —— 手指还按着也不会再触发任何回调。不清的话：
+   * 「按住说话」的结束靠那颗按钮的 `onTouchEnd` / `onTouchCancel`。那颗按钮自 #560 二补
+   * 起**常驻不卸载**，所以切态时手指还按着仍会补发 `onTouchEnd` / `onTouchCancel` —— 靠这里
+   * 把 `recordingRef.current` 置 null，补发的回调在 `finishVoice` 里撞上空 session 直接早退。
+   * 不清的话：
    * 麦克风继续录到时长上限（那一段最终被丢弃），`recording` 常亮「松开 发送」，
    * 且 `startVoice` 的 `recordingRef.current` 判定从此恒真，**本次进页面再也按不下录音**
    * （#359 3b 审查）。切走即放弃，与 `onTouchCancel` 同一语义。
@@ -4408,36 +4412,53 @@ export default function Conversation() {
             输入框决定（语音态也如此，只是把它藏起来）。所以语音态不再需要拿
             `inputRowPx` 去给「按住说话」顶一个 `minHeight` —— 那条桥本身就是对
             「输入行会消失」的补偿。
+
+            与之同源、但触发点不同的一处（#560 二补）：「按住说话」也**常驻不卸载**，语音态
+            只给它加 `is-off`（`visibility: hidden`）。往这个 flex 行里插一个兄弟节点会让原生
+            textarea 重新量一次，按三行默认值报 91px（单行 35px），底栏当场长高 56px、消息区
+            矮 56px，切回后再塌回 —— 端上就是「往上扩展又恢复原状」的抽搐。
+
+            另一条同样能复现它的路（隔离实测：开发者工具、30ms 采样 `.conv__bar`）：给输入框写
+            随态变化的**内联 `style`** 也会被量成三行 —— `hold 常驻 + 内联 style` 时 `52 → 108`
+            （切态后约 0.7s 跳），`hold 常驻 + 外层类名` 时两态恒为 52、一条变化都没记到。
+            受控聚焦的 `focus` 两态也在翻，但实测不触发重算（那组零变化就是在它翻动时采到的）。
+            所以藏的动作只能交给类名。
+
+            这一块有两条不变式，改的时候都要守住：
+            ① 输入框与「按住说话」都常驻，`conv__rowwrap` 的子节点数不随态变化；
+            ② 除受控聚焦 `focus` 外，别再给输入框加随态变化的 props（尤其内联 `style`）——
+               藏起来交给 `.conv__rowwrap.is-voice > .conv__input`。
           */}
-            <View className="conv__rowwrap">
-              {voiceMode ? (
-                /*
+            <View className={`conv__rowwrap${voiceMode ? ' is-voice' : ''}`}>
+              {/*
                 按住说话：`onTouchStart` 起录、`onTouchEnd` 松开就发、`onTouchCancel`
                 手指滑出即放弃。微信的 `RecorderManager` 只有「停」没有「撤销」，
                 取消只能靠不把这段音频交给上传。
 
                 绝对定位盖满整行（`conv__rowwrap` 是它的定位父级）：高度跟着输入行走，
                 多行草稿切到语音态时手势区也是同样的高度。
-              */
-                <View
-                  className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
-                  onTouchStart={startVoice}
-                  onTouchMove={moveVoice}
-                  onTouchEnd={endVoice}
-                  onTouchCancel={() => finishVoice(true)}
-                >
-                  <Text className="conv__hold-tx">
-                    {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
-                  </Text>
-                </View>
-              ) : null}
+
+                **常驻不卸载**（#560 二补）：键盘态加 `is-off`，`visibility: hidden` 让它既不可见
+                也不吃触摸。按条件挂载会插一个兄弟节点进 `.conv__rowwrap`，见上面那段注释。
+              */}
+              <View
+                className={`conv__hold${voiceMode ? '' : ' is-off'}${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
+                onTouchStart={startVoice}
+                onTouchMove={moveVoice}
+                onTouchEnd={endVoice}
+                onTouchCancel={() => finishVoice(true)}
+              >
+                <Text className="conv__hold-tx">
+                  {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
+                </Text>
+              </View>
               <Textarea
                 className="conv__input"
                 /*
-                语音态只藏不卸载：`opacity: 0` 让它不参与视觉，`pointerEvents: 'none'`
-                把触摸让给上面那层 `conv__hold`。
+                语音态只藏不卸载，但**藏的动作交给外层类名**（`.conv__rowwrap.is-voice >
+                .conv__input`）：这里写随态变化的内联 `style` 会让原生 textarea 被量成三行
+                （实测 `bar` 52 → 108，见上面那段），所以别写回来。
               */
-                style={voiceMode ? { opacity: 0, pointerEvents: 'none' } : undefined}
                 /*
                 受控聚焦（#560 补）：小程序没有命令式的 `focus()`，只有这个属性，而且**只在它
                 变为 true 的那一帧生效** —— 收回点与理由见 `inputFocusRequest`。

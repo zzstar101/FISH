@@ -1465,13 +1465,20 @@ describe('键盘高度是单一真源（#560）', () => {
      * 输入框必须**常驻**：全页只有一个 `<Textarea>`，且它不在任何条件渲染里。
      */
     expect(source.split('<Textarea').length - 1).toBe(1)
-    const rowwrap = slice(source, '<View className="conv__rowwrap">', 'onLineChange=')
+    const rowwrap = slice(source, '<View className={`conv__rowwrap', 'onLineChange=')
     expect(rowwrap).toContain('<Textarea')
-    // 语音态那支在输入框之前就关掉了（`) : null}`）：输入框不在 `voiceMode ?` 的分支里
-    const holdToTextarea = slice(source, 'onTouchCancel={() => finishVoice(true)}', '<Textarea')
-    expect(holdToTextarea).toContain(') : null}')
-    // 语音态只藏不卸载：藏了还要让出手势，否则原生输入框的点击层照样抢焦点
-    expect(rowwrap).toContain('style={voiceMode ? { opacity: 0, pointerEvents: ')
+    /**
+     * 同一行里**也不许按条件挂载兄弟节点**（#560 二补）：往这个 flex 行插一个「按住 说话」，
+     * 原生 textarea 会重新量一次、报出三行默认高度（91px，单行 35px），底栏当场长高 56px、
+     * 消息区矮 56px，切回时再塌回 —— 端上就是「往上扩展又恢复原状」的抽搐。所以：
+     * ① 那一行里没有条件渲染分支；② 键盘态靠 `is-off`（`visibility: hidden`）藏起来；
+     * ③ 输入框不许挂随态变化的内联 `style`（实测它同样会被量成三行）。
+     */
+    expect(rowwrap).not.toContain(') : null}')
+    expect(rowwrap).not.toContain('{voiceMode ? (')
+    expect(rowwrap).toMatch(/conv__hold\$\{voiceMode \? '' : ' is-off'\}/)
+    // 输入框不许有随态变化的内联 style：实测它同样会被量成三行（bar 52 → 108）
+    expect(rowwrap).not.toContain('style={voiceMode')
 
     /**
      * scss 侧同样钉住：`conv__rowwrap` 是「按住说话」的定位父级；`.conv__hold` 改成盖满整行
@@ -1484,7 +1491,23 @@ describe('键盘高度是单一真源（#560）', () => {
     const holdStyle = slice(style, '.conv__hold {', '&:active')
     expect(holdStyle).toContain('position: absolute')
     expect(holdStyle).not.toContain('height: 68px')
+    // 键盘态常驻但不可见、不吃触摸（配上面「不按条件挂载」那条：藏要靠样式，不能靠卸载）
+    expect(holdStyle).toContain('&.is-off')
+    expect(holdStyle).toContain('visibility: hidden')
+    // 第二道闸：藏起来之外还得保证不吃触摸（`visibility` 换成 `opacity` 的那天不会静默变坏）
+    expect(holdStyle).toContain('pointer-events: none')
     expect(slice(style, '.conv__input {', '}')).toContain('min-height: $bar-control-px')
+    // 语音态藏输入框走外层类名：`opacity: 0` 藏视觉、`pointer-events: none` 把触摸让给那一层
+    const voiceInput = slice(style, '.conv__rowwrap.is-voice > .conv__input {', '}')
+    expect(voiceInput).toContain('opacity: 0')
+    expect(voiceInput).toContain('pointer-events: none')
+
+    /**
+     * 常驻的「按住说话」在键盘态只是 `visibility: hidden` —— 起录闸门不能只剩一条 CSS。
+     * 改动前它连节点都没有，`startVoice` 里那句 `canSend` 就够；常驻之后必须自己认状态。
+     */
+    const startVoiceHead = slice(source, 'const startVoice = (event?: unknown) => {', 'try {')
+    expect(startVoiceHead).toContain('!voiceMode')
   })
 
   test('发送清空输入后，输入行高度真源跟着回落（否则下一轮切语音又把消息流顶矮一截）', async () => {
