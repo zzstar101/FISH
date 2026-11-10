@@ -1,4 +1,5 @@
-import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
@@ -24,11 +25,27 @@ import {
 } from '@/features/chat/capsule'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
+import { searchListings } from '@/features/listing/api'
 import { fetchAllTransactions } from '@/features/transaction/api'
 import type { TxMessageEvent } from '@/features/transaction/tx-signal'
 import { useTabTransition } from '@/lib/use-tab-transition'
 import type { MockNotification } from '@/mock/types'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
+import {
+  type ChatSearchResults,
+  type ContactHit,
+  EMPTY_RESULTS,
+  type ListingHit,
+  MAX_MESSAGE_SCAN_CONVERSATIONS,
+  type MessageHit,
+  matchConversationMessages,
+  matchConversations,
+  mergeMarketListings,
+  normalizeQuery,
+  SEARCH_DEBOUNCE_MS,
+  sortMessageHits,
+} from './search'
+import { ChatSearchBar, ChatSearchResultsView } from './search-ui'
 import './index.scss'
 
 /**
@@ -155,6 +172,25 @@ export default function Chat() {
   const notifReadInFlight = useRef<Set<string>>(new Set())
 
   /**
+   * 消息页搜索（#669 V1）—— **纯端上**，不加后端接口：
+   * 会话 / 买家卖家来自已加载的 `items`，聊天记录懒拉最近
+   * `MAX_MESSAGE_SCAN_CONVERSATIONS` 条会话的消息页（`searchMessageCache` 复用），
+   * 商品走已有的 `GET /listings?q=`。端上目前没有消息搜索、也没有按昵称搜用户的
+   * 接口（见 issue #669 的 V2），所以聊天记录只覆盖最近聊过的会话 —— 结果区如实
+   * 标注扫描范围，不假装全量。
+   */
+  const [searchActive, setSearchActive] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<ChatSearchResults>(EMPTY_RESULTS)
+  const [searching, setSearching] = useState(false)
+  const [marketSearchFailed, setMarketSearchFailed] = useState(false)
+  const [scannedConversations, setScannedConversations] = useState(0)
+  /** 搜索代次：退出搜索 / 换关键词 / 换账号时自增，用来丢弃迟到的响应 */
+  const searchEpoch = useRef(0)
+  /** 会话 id → 已拉到的消息页：搜索期间复用，别每次输入都重拉同一批会话 */
+  const searchMessageCache = useRef(new Map<string, MessageDto[]>())
+
+  /**
    * 身份切换时的**渲染期重置**（adjust-state-during-render，React 官方推荐的
    * 「存上一帧信息」写法）：Tab 页实例跨登录态存活，`filter` / `items` / `notifs`
    * 都是上一个账号的视角，必须在**同一个 commit 内**换成空值。
@@ -186,6 +222,16 @@ export default function Chat() {
     setNotifsFailed(false)
     setTxMap(new Map())
     setTxSignals(new Map())
+    // 搜索结果是上一个账号的聊天记录与商品：与列表同一次 commit 内清空，
+    // 在途搜索代次自增作废（否则旧账号的命中会在新账号的搜索结果里出现）
+    searchEpoch.current += 1
+    searchMessageCache.current.clear()
+    setSearchActive(false)
+    setSearchQuery('')
+    setSearchResults(EMPTY_RESULTS)
+    setSearching(false)
+    setMarketSearchFailed(false)
+    setScannedConversations(0)
   }
 
   /**
@@ -528,6 +574,96 @@ export default function Chat() {
     void Taro.navigateTo({ url: `/pkg-social/pages/conversation/index?id=${id}` })
   }
 
+  /** 退出搜索模式：清关键词与结果，代次自增丢弃在途搜索（X 关闭的唯一入口） */
+  const closeSearch = () => {
+    searchEpoch.current += 1
+    setSearchActive(false)
+    setSearchQuery('')
+    setSearchResults(EMPTY_RESULTS)
+    setSearching(false)
+    setMarketSearchFailed(false)
+    setScannedConversations(0)
+  }
+
+  /** 取一个会话的消息页（搜索期间按会话 id 缓存，命中过就不再请求） */
+  const loadSearchedMessages = useCallback(async (conversationId: string) => {
+    const cached = searchMessageCache.current.get(conversationId)
+    if (cached) return cached
+    const page = await fetchMessagePage(conversationId)
+    searchMessageCache.current.set(conversationId, page.items)
+    return page.items
+  }, [])
+
+  /**
+   * 跑一次搜索。商品段是全站接口，它失败只降级提示、不吞掉会话内的结果；
+   * 消息段逐会话并发，单个会话失败按「这个会话没有命中」处理（不报错、不阻塞）。
+   */
+  const runSearch = useCallback(
+    async (query: string, epoch: number) => {
+      const targets = items.slice(0, MAX_MESSAGE_SCAN_CONVERSATIONS)
+      const local = matchConversations(items, query)
+      setScannedConversations(targets.length)
+      const pages = await Promise.allSettled(targets.map((item) => loadSearchedMessages(item.id)))
+      const messageHits: MessageHit[] = []
+      pages.forEach((page, index) => {
+        const conversation = targets[index]
+        if (!conversation || page.status !== 'fulfilled') return
+        messageHits.push(...matchConversationMessages(conversation, page.value, query))
+      })
+      let marketCards: ListingCard[] = []
+      let marketFailed = false
+      try {
+        marketCards = await searchListings(query, 'newest')
+      } catch (error) {
+        console.warn('[miniapp] 商品搜索失败，只显示会话内的结果', error)
+        marketFailed = true
+      }
+      if (epoch !== searchEpoch.current) return
+      setSearchResults({
+        contacts: local.contacts,
+        listings: mergeMarketListings(local.listings, marketCards, query),
+        messages: sortMessageHits(messageHits),
+      })
+      setMarketSearchFailed(marketFailed)
+      setSearching(false)
+    },
+    [items, loadSearchedMessages],
+  )
+
+  /**
+   * 输入即搜：没有搜索按钮，防抖 `SEARCH_DEBOUNCE_MS` 后跑一次。
+   * 关键词被清空（或只剩空白）时不发请求 —— 退回「未输入」的提示态。
+   */
+  useEffect(() => {
+    if (!searchActive) return
+    const query = normalizeQuery(searchQuery)
+    if (query.length === 0) {
+      searchEpoch.current += 1
+      setSearchResults(EMPTY_RESULTS)
+      setSearching(false)
+      setMarketSearchFailed(false)
+      return
+    }
+    setSearching(true)
+    const epoch = ++searchEpoch.current
+    const timer = setTimeout(() => void runSearch(query, epoch), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [searchActive, searchQuery, runSearch])
+
+  /** 点搜索结果：有会话的（联系人 / 聊天记录 / 会话内商品）直接进会话 */
+  const openSearchContact = (hit: ContactHit) => openConversation(hit.conversationId)
+  const openSearchMessage = (hit: MessageHit) => openConversation(hit.conversationId)
+  /** 全站商品没有会话可进，走商品详情页（与会话里的商品区别就在这） */
+  const openSearchListing = (hit: ListingHit) => {
+    if (hit.conversationId) {
+      openConversation(hit.conversationId)
+      return
+    }
+    void Taro.navigateTo({
+      url: `/pkg-browse/pages/listing-detail/index?id=${encodeURIComponent(hit.listingId)}`,
+    })
+  }
+
   /** tab 切换：#431 任务二起进「通知」tab 不再整表清零 —— 未读逐条点击才消（见 `openNotif`） */
   const chooseFilter = (key: ChatFilter) => {
     setFilter(key)
@@ -681,129 +817,157 @@ export default function Chat() {
       <View className="chat__header-gap" />
 
       {/*
-        会话列表（1版稿 .list）。「通知」tab 不再走会话列表：原独立通知页的列表
-        直接渲染在这里（页面已删）；「全部」tab 渲染真实会话行。
+        搜索栏（#669）：**不吸顶** —— 放在副行占位之后的普通内容流里，跟着列表一起
+        滚走。点搜索框才进搜索模式（抢焦点 + 出最右 X），不点就只是一条占位。
       */}
-      <View className={`chat__list ${tabContentClass}`}>
-        {filter === 'system' ? (
-          <View className="notif__list">
-            {notifs.map((item) => (
-              <View key={item.id} className="notif__item" onClick={() => openNotif(item)}>
-                <View className="notif__ic">
-                  <Image className="notif__ic-img" src={TONE_ICON[item.tone]} mode="aspectFit" />
-                  {/* 未读红点（#431 任务二）：`readAt` 权威，点击条目即消失 */}
-                  {item.readAt === null ? <View className="notif__dot" /> : null}
-                </View>
-                <View className="notif__body">
-                  <Text className="notif__body-title">{item.title}</Text>
-                  <Text className="notif__tm num">{relativeTime(item.createdAt)}</Text>
-                  <Text className="notif__text">{item.description}</Text>
-                </View>
-              </View>
-            ))}
+      <ChatSearchBar
+        value={searchQuery}
+        active={searchActive}
+        onChange={setSearchQuery}
+        onActivate={() => setSearchActive(true)}
+        onClose={closeSearch}
+      />
 
-            {/* 失败态优先于空态：没加载出来不等于没有通知；空态也要等结果，
-                避免请求途中闪过一句「还没有通知」 */}
-            {notifsFailed ? (
-              <LoadError onRetry={loadNotifs} />
-            ) : notifsReady && notifs.length === 0 ? (
-              <EmptyState
-                title="还没有通知"
-                text="愿望匹配上闲置、交易有进展时会出现在这里"
-                icon={ICONS.bellFg}
-              />
-            ) : null}
-          </View>
-        ) : state === 'error' ? (
-          /* 失败态优先于一切：没读到不等于没有会话 */
-          <LoadError onRetry={reloadConversations} />
-        ) : state === 'loading' ? (
-          <View className="chat__empty">
-            <Text className="chat__empty-title">正在加载会话…</Text>
-          </View>
-        ) : state === 'empty' ? (
-          <View className="chat__empty">
-            <Text className="chat__empty-title">这里还没有会话</Text>
-            <Text className="chat__empty-text">在商品详情点「我想要」就能开聊</Text>
-          </View>
-        ) : (
-          <>
-            {items.map((item) => {
-              /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
-              const user = item.counterpart
-              const unread = item.unreadCount
-              /** 交易进度胶囊（#89）：数据源与状态机见 `features/chat/capsule.ts` */
-              const capsule = capsuleFor(item, txMap, txSignals)
-
-              return (
-                <View
-                  key={item.id}
-                  className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
-                  onClick={() => openConversation(item.id)}
-                >
-                  {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
-                  <View className="chat__ava-wrap">
-                    {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）：空就走统一默认头像 */}
-                    <UserAvatar className="chat__ava" src={user.avatarUrl} />
-                    {unread > 0 ? (
-                      // 两位数与 `99+` 要缩字号才不裁字（见 index.scss 的 .is-multi）
-                      <Text className={`chat__bdg num${unread > 9 ? ' is-multi' : ''}`}>
-                        {badgeText(unread)}
-                      </Text>
-                    ) : null}
+      {searchActive ? (
+        /*
+          搜索模式下用结果区**替换**会话列表（不是叠在上面）：两套列表同时存在时，
+          滚动位置、下拉刷新、加载更多都各自为政，用户分不清看到的是哪一份。
+        */
+        <View className="chat__list">
+          <ChatSearchResultsView
+            query={searchQuery}
+            results={searchResults}
+            searching={searching}
+            marketFailed={marketSearchFailed}
+            scannedConversations={scannedConversations}
+            scanLimit={MAX_MESSAGE_SCAN_CONVERSATIONS}
+            onOpenContact={openSearchContact}
+            onOpenListing={openSearchListing}
+            onOpenMessage={openSearchMessage}
+          />
+        </View>
+      ) : (
+        <View className={`chat__list ${tabContentClass}`}>
+          {filter === 'system' ? (
+            <View className="notif__list">
+              {notifs.map((item) => (
+                <View key={item.id} className="notif__item" onClick={() => openNotif(item)}>
+                  <View className="notif__ic">
+                    <Image className="notif__ic-img" src={TONE_ICON[item.tone]} mode="aspectFit" />
+                    {/* 未读红点（#431 任务二）：`readAt` 权威，点击条目即消失 */}
+                    {item.readAt === null ? <View className="notif__dot" /> : null}
                   </View>
+                  <View className="notif__body">
+                    <Text className="notif__body-title">{item.title}</Text>
+                    <Text className="notif__tm num">{relativeTime(item.createdAt)}</Text>
+                    <Text className="notif__text">{item.description}</Text>
+                  </View>
+                </View>
+              ))}
 
-                  <View className="chat__corp">
-                    <View className="chat__corp-top">
-                      <Text className="chat__nm-tx">{user.nickname}</Text>
-                      {capsule ? (
-                        <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
+              {/* 失败态优先于空态：没加载出来不等于没有通知；空态也要等结果，
+                避免请求途中闪过一句「还没有通知」 */}
+              {notifsFailed ? (
+                <LoadError onRetry={loadNotifs} />
+              ) : notifsReady && notifs.length === 0 ? (
+                <EmptyState
+                  title="还没有通知"
+                  text="愿望匹配上闲置、交易有进展时会出现在这里"
+                  icon={ICONS.bellFg}
+                />
+              ) : null}
+            </View>
+          ) : state === 'error' ? (
+            /* 失败态优先于一切：没读到不等于没有会话 */
+            <LoadError onRetry={reloadConversations} />
+          ) : state === 'loading' ? (
+            <View className="chat__empty">
+              <Text className="chat__empty-title">正在加载会话…</Text>
+            </View>
+          ) : state === 'empty' ? (
+            <View className="chat__empty">
+              <Text className="chat__empty-title">这里还没有会话</Text>
+              <Text className="chat__empty-text">在商品详情点「我想要」就能开聊</Text>
+            </View>
+          ) : (
+            <>
+              {items.map((item) => {
+                /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
+                const user = item.counterpart
+                const unread = item.unreadCount
+                /** 交易进度胶囊（#89）：数据源与状态机见 `features/chat/capsule.ts` */
+                const capsule = capsuleFor(item, txMap, txSignals)
+
+                return (
+                  <View
+                    key={item.id}
+                    className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
+                    onClick={() => openConversation(item.id)}
+                  >
+                    {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
+                    <View className="chat__ava-wrap">
+                      {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）：空就走统一默认头像 */}
+                      <UserAvatar className="chat__ava" src={user.avatarUrl} />
+                      {unread > 0 ? (
+                        // 两位数与 `99+` 要缩字号才不裁字（见 index.scss 的 .is-multi）
+                        <Text className={`chat__bdg num${unread > 9 ? ' is-multi' : ''}`}>
+                          {badgeText(unread)}
+                        </Text>
                       ) : null}
                     </View>
-                    <Text className="chat__msg">{previewOf(item, txMap.get(item.id))}</Text>
-                    {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
-                    <Text className="chat__tm num">
-                      {conversationTimeLabel(item.lastMessageAt, now)}
-                    </Text>
-                  </View>
 
-                  {/* 右侧商品缩略图（1版稿 .thumb）：契约 `listing.coverUrl` */}
-                  <View className="chat__thumb">
-                    {item.listing.coverUrl ? (
-                      <Image
-                        className="chat__thumb-img"
-                        src={item.listing.coverUrl}
-                        mode="aspectFill"
-                      />
-                    ) : (
-                      <Image className="chat__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
-                    )}
-                  </View>
-                </View>
-              )
-            })}
+                    <View className="chat__corp">
+                      <View className="chat__corp-top">
+                        <Text className="chat__nm-tx">{user.nickname}</Text>
+                        {capsule ? (
+                          <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
+                        ) : null}
+                      </View>
+                      <Text className="chat__msg">{previewOf(item, txMap.get(item.id))}</Text>
+                      {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
+                      <Text className="chat__tm num">
+                        {conversationTimeLabel(item.lastMessageAt, now)}
+                      </Text>
+                    </View>
 
-            {/*
+                    {/* 右侧商品缩略图（1版稿 .thumb）：契约 `listing.coverUrl` */}
+                    <View className="chat__thumb">
+                      {item.listing.coverUrl ? (
+                        <Image
+                          className="chat__thumb-img"
+                          src={item.listing.coverUrl}
+                          mode="aspectFill"
+                        />
+                      ) : (
+                        <Image className="chat__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
+                      )}
+                    </View>
+                  </View>
+                )
+              })}
+
+              {/*
               更早的会话：契约按 `lastMessageAt` 降序 + 游标分页。没有这个入口，
               会话多于 50 条的用户就只能看到最近 50 条，且没有任何翻页办法。
               失败只在尾部提示重试，不推翻已经看到的列表。
             */}
-            {listNextCursor || loadMoreFailed ? (
-              <View className="chat__more">
-                {loadMoreFailed ? (
-                  <View className="chat__more-btn" onClick={loadMoreConversations}>
-                    <Text>更早的会话没加载出来 · 重试</Text>
-                  </View>
-                ) : (
-                  <View className="chat__more-btn" onClick={loadMoreConversations}>
-                    <Text>{loadingMore ? '正在加载…' : '加载更多会话'}</Text>
-                  </View>
-                )}
-              </View>
-            ) : null}
-          </>
-        )}
-      </View>
+              {listNextCursor || loadMoreFailed ? (
+                <View className="chat__more">
+                  {loadMoreFailed ? (
+                    <View className="chat__more-btn" onClick={loadMoreConversations}>
+                      <Text>更早的会话没加载出来 · 重试</Text>
+                    </View>
+                  ) : (
+                    <View className="chat__more-btn" onClick={loadMoreConversations}>
+                      <Text>{loadingMore ? '正在加载…' : '加载更多会话'}</Text>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+            </>
+          )}
+        </View>
+      )}
 
       {/* 1版稿 .totop：滚过一屏半浮现；Tab 页抬到底栏上方 */}
       <BackTop show={showTop} onTop={backToTop} bottom="170rpx" />

@@ -471,3 +471,238 @@
   color: var(--muted);
   @include clamp(2);
 }
+
+/* ───────── 搜索栏（#669）：不吸顶，跟列表一起滚走 ───────── */
+
+.csearch {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  /* 横向 40 与筛选行（.chat__filters）对齐；上 8 给筛选 Tab 留一口气 */
+  padding: 8px 40px 0;
+}
+
+.csearch__field {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 76px;
+  padding: 0 26px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--border);
+}
+
+/* 进了搜索模式：描边转主题色，告诉用户这一行现在是「在搜」而不是占位 */
+.csearch.is-active .csearch__field {
+  border-color: var(--brand);
+}
+
+.csearch__ic {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+}
+
+.csearch__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  font-size: var(--fs-body);
+  color: var(--fg);
+}
+
+/* 占位文案的类要给 Input 的 placeholderClass（小程序里占位不是 ::placeholder） */
+.csearch__ph {
+  font-size: var(--fs-body);
+  color: var(--muted);
+}
+
+/* 最右的 X：只在搜索模式里出现，点它清空并退出搜索模式 */
+.csearch__close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--border);
+}
+
+.csearch__close-ic {
+  width: 24px;
+  height: 24px;
+}
+
+/* ───────── 搜索结果（三段：联系人 / 商品 / 聊天记录） ───────── */
+
+.csres {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 24px;
+}
+
+.csres__hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 96px 40px 0;
+}
+
+.csres__hint-title {
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.csres__hint-tx {
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+.csres__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px 8px;
+}
+
+.csres__head-tx {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted-2);
+}
+
+.csres__head-n {
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.csres__row {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 22px 16px;
+  border-radius: 32px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+}
+
+.csres__ava {
+  @include avatar(84px);
+}
+
+.csres__corp {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.csres__corp-top {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.csres__nm {
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.csres__sub {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  @include ellipsis;
+}
+
+.csres__price {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.csres__cover {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 84px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* 没有封面时与 .chat__thumb 同一套兜底（浅底 + 灰图） */
+.csres__cover--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.csres__cover-ic {
+  width: 32px;
+  height: 32px;
+}
+
+/* 「在聊 / 全站」来源标：让用户知道点下去是进会话还是进商品详情 */
+.csres__tag {
+  flex: 0 0 auto;
+  font-size: var(--fs-2xs);
+  color: var(--muted-2);
+  padding: 4px 12px;
+  border-radius: var(--r-pill);
+  background: var(--ice);
+}
+
+.csres__msg {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--muted);
+  @include clamp(1);
+}
+
+.csres__tm {
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.csres__arrow {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+}
+
+/* 商品段失败：只提示这一段降级，不挡住上面两段 */
+.csres__warn {
+  padding: 16px 20px;
+  border-radius: 24px;
+  background: var(--ice);
+}
+
+.csres__warn-tx {
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+}
+
+.csres__foot {
+  padding: 20px 16px 0;
+}
+
+.csres__foot-tx {
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
