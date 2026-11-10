@@ -258,7 +258,7 @@
   @include ellipsis;
 }
 
-/* 「我要许愿」（#672 定稿）：保留胶囊按钮形态（深墨底 + 白字），按 Owner 要求去掉左侧白加号；
+/* 「我要许愿」（#672 定稿）：保留胶囊按钮形态，底色用主题蓝（`--grad-brand`），按 Owner 要求去掉左侧白加号；
    二级筛选栏仍是纯文字 + 蓝色描线（见下方 `.wish__sub`）。 */
 .wish__new {
   flex: 0 0 auto;
@@ -267,7 +267,7 @@
   height: var(--btn-h-sm);
   padding: 0 var(--btn-px-sm);
   border-radius: var(--r-pill);
-  background: var(--ink);
+  background: var(--grad-brand);
   color: #fff;
   font-size: var(--fs-xs);
   font-weight: 500;
