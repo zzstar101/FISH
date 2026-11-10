@@ -1,0 +1,143 @@
+/**
+ * 消息页搜索（#669）的**接线层**回归。
+ *
+ * 本仓 `apps/miniapp/tests/` 没有 Taro 组件渲染基建（页面用真 `@tarojs/taro` 加载会抛
+ * `ENABLE_INNER_HTML is not defined`，见 `tests/conversation-unread-count.test.ts` 文件头），
+ * 页面接线只能读源码文本钉住 —— 手法同 `tests/conversation-unread-wiring.test.ts`、
+ * `tests/following-wiring.test.ts`。
+ *
+ * 判据层（匹配 / 去重 / 截断 / 范围文案）由 `tests/chat-search.test.ts` 覆盖，
+ * 本文件钉的是**页面有没有把判据接对**。这里每一条都对应一次独立审查抓到过的缺陷，
+ * 而且都是「实现看着没问题、改一行就静默复发」的地方：
+ *
+ * 1. 搜索读的是**会话快照**，不是 `items` 本身（否则从会话页返回就闪一次「正在搜索…」）；
+ * 2. 进搜索模式时刷新快照（否则「退出 → 再进」拿着一副空列表搜，什么都搜不出来）；
+ * 3. 逐会话失败数进了结果状态（否则「没连上」被说成「没命中」）；
+ * 4. 消息缓存随列表刷新失效，且**推进缓存代次**（否则在途请求把撤回前的旧页写回去）；
+ * 5. 退出搜索推进代次并滚回顶部（否则在途结果落在已退出的界面上、页面停在空白处）；
+ * 6. 列表就绪那一次会补跑搜索（否则加载中打好的关键词永远搜不到本地两段）；
+ * 7. 结果区拿到的是列表**形态**（`listState`），不是一个 `localFailed` 布尔。
+ */
+import { describe, expect, test } from 'bun:test'
+
+/** 页面源码（接线层只读文本，仓库没有 Taro 组件渲染基建） */
+async function source(): Promise<string> {
+  return Bun.file(new URL('../src/pages/chat/index.tsx', import.meta.url)).text()
+}
+
+/** 取 `start` 到其后第一次出现的 `end`（含 `end`）之间的片段 */
+function sliceFrom(code: string, start: string, end: string): string {
+  const from = code.indexOf(start)
+  expect(from, `页面里应出现 ${start}`).toBeGreaterThanOrEqual(0)
+  const to = code.indexOf(end, from)
+  expect(to, `${end} 应出现在 ${start} 之后`).toBeGreaterThanOrEqual(0)
+  return code.slice(from, to + end.length)
+}
+
+/** 断言 `first` 出现在 `second` 之前（两者都必须存在） */
+function expectBefore(block: string, first: string, second: string): void {
+  const i = block.indexOf(first)
+  const j = block.indexOf(second)
+  expect(i, `块里应出现 ${first}`).toBeGreaterThanOrEqual(0)
+  expect(j, `块里应出现 ${second}`).toBeGreaterThanOrEqual(0)
+  expect(i, `${first} 应在 ${second} 之前`).toBeLessThan(j)
+}
+
+const RUN_SEARCH_START = 'const runSearch = useCallback'
+const CLOSE_SEARCH_START = 'const closeSearch = () => {'
+
+/** `runSearch` 的函数体 */
+function runSearchBlock(code: string): string {
+  return sliceFrom(code, RUN_SEARCH_START, '[loadSearchedMessages],')
+}
+
+/** `closeSearch` 的函数体 */
+function closeSearchBlock(code: string): string {
+  return sliceFrom(
+    code,
+    CLOSE_SEARCH_START,
+    'void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })',
+  )
+}
+
+describe('#669 接线：搜索读会话快照，不读 items', () => {
+  test('runSearch 只从快照取会话，直接吃 items 会让返回路径重跑整套搜索', async () => {
+    const block = runSearchBlock(await source())
+    expect(block).toContain('searchItemsRef.current')
+    // 直接依赖 items：`useDidShow` 每次返回都换 items 引用 → 防抖 effect 重跑 →
+    // 用户看到结果闪成「正在搜索…」并重打一次商品接口（审查 #5）
+    expect(block).not.toContain('matchConversations(items')
+    expect(block).not.toContain('items.slice(')
+  })
+
+  test('进搜索模式时刷新快照（退出再进不能拿空数组搜）', async () => {
+    const code = await source()
+    const block = sliceFrom(
+      code,
+      'const activateSearch = () => {',
+      'void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })',
+    )
+    // `searchItemsRef` 的同步 effect 依赖 items：退出搜索时若把快照清空，
+    // items 引用没变、effect 不会重跑 → 第二次进搜索一个人都搜不到
+    expect(block).toContain('searchItemsRef.current = items')
+    expect(closeSearchBlock(code)).not.toContain('searchItemsRef.current = []')
+  })
+})
+
+describe('#669 接线：失败与范围都要如实进状态', () => {
+  test('逐个会话的失败数写进 state，供底注与空态共用', async () => {
+    const block = runSearchBlock(await source())
+    expect(block).toContain('setFailedScans(failed)')
+    // 实际扫了几个会话也要是**事实**（不是常量上限），否则范围文案在撒谎
+    expectBefore(block, 'setScannedConversations(targets.length)', 'setSearching(false)')
+  })
+
+  test('结果区拿到的是列表形态，不是一个布尔', async () => {
+    const code = await source()
+    expect(code).toContain('listState={state}')
+    expect(code).not.toContain('localFailed={')
+  })
+})
+
+describe('#669 接线：消息缓存的两个代次', () => {
+  test('列表刷新时清缓存并推进缓存代次', async () => {
+    const code = await source()
+    const block = sliceFrom(
+      code,
+      'const reloadConversations = useCallback',
+      'searchMessageCache.current.clear()',
+    )
+    // 只 clear 不推进代次：清空之前发出的消息页请求会在 clear 之后返回，
+    // 按「搜索轮次没变」的守卫把撤回前的旧页写回缓存（审查 D）
+    expectBefore(block, 'searchCacheEpoch.current += 1', 'searchMessageCache.current.clear()')
+  })
+
+  test('写缓存前同时比对搜索轮次与缓存代次', async () => {
+    const block = sliceFrom(
+      await source(),
+      'const loadSearchedMessages = useCallback',
+      'return page.items',
+    )
+    expect(block).toContain('epoch === searchEpoch.current')
+    expect(block).toContain('cacheEpoch === searchCacheEpoch.current')
+  })
+})
+
+describe('#669 接线：退出搜索与列表就绪', () => {
+  test('退出搜索推进代次并滚回顶部', async () => {
+    const block = closeSearchBlock(await source())
+    // 不推进代次：退出前发出的搜索会在退出后把结果写回已关闭的结果区
+    expectBefore(block, 'searchEpoch.current += 1', 'setSearchResults(EMPTY_RESULTS)')
+    // 不滚回顶部：结果区比列表短，退出后页面停在列表内容之外的空白处（审查 C）
+    expect(block).toContain('Taro.pageScrollTo')
+  })
+
+  test('列表 loading/error → list/empty 跃迁时补跑一次搜索', async () => {
+    const code = await source()
+    const block = sliceFrom(code, 'const becameReady =', 'void runSearch(query, epoch)')
+    // 加载中打好的关键词：那一刻快照是空的，防抖不会再触发 →
+    // 不补跑就会「列表好了，可结果永远空着、文案还说没搜到」（审查 B）
+    expect(block).toContain("prev === 'loading' || prev === 'error'")
+    expect(block).toContain("state === 'list' || state === 'empty'")
+  })
+})

@@ -15,6 +15,7 @@
 
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCard } from '@fish/contracts/listings/schema'
+import type { ChatListState } from './list-view'
 
 /** 输入防抖：输入即搜，但不为每个按键发一次请求（300ms 内连打不重复搜） */
 export const SEARCH_DEBOUNCE_MS = 300
@@ -30,6 +31,14 @@ export const MAX_MARKET_HITS = 10
 
 /** 联系人结果条数上限（同一个卖家可能挂多个会话，先按人去重再截断） */
 export const MAX_CONTACT_HITS = 10
+
+/**
+ * 「自己会话里的商品」占商品段的上限：给全站结果留两个位。
+ *
+ * 会话内商品最多能有 50 条（每个会话一条），不单独封顶时它会把十条名额吃满，
+ * 全站命中一条都显示不出来 —— 用户会以为「全站没有」，其实是被自己聊过的挤掉了。
+ */
+export const MAX_CONVERSATION_LISTING_HITS = 8
 
 /** 搜索词归一：去首尾空白 + 折叠连续空白 + 小写（英文昵称/型号大小写不敏感） */
 export function normalizeQuery(raw: string): string {
@@ -145,15 +154,17 @@ export function matchConversations(
       }
     }
     if (hit(item.listing.title, query)) {
-      listings.push({
-        kind: 'listing',
-        listingId: item.listing.id,
-        title: item.listing.title,
-        priceCents: item.listing.priceCents,
-        coverUrl: item.listing.coverUrl,
-        source: 'conversation',
-        conversationId: item.id,
-      })
+      if (listings.length < MAX_CONVERSATION_LISTING_HITS) {
+        listings.push({
+          kind: 'listing',
+          listingId: item.listing.id,
+          title: item.listing.title,
+          priceCents: item.listing.priceCents,
+          coverUrl: item.listing.coverUrl,
+          source: 'conversation',
+          conversationId: item.id,
+        })
+      }
     }
   }
   return { contacts, listings }
@@ -243,4 +254,50 @@ export function isEmptyResults(results: ChatSearchResults): boolean {
   return (
     results.contacts.length === 0 && results.listings.length === 0 && results.messages.length === 0
   )
+}
+
+/** 这次搜索实际覆盖到的范围（决定「没命中」该怎么解释） */
+export interface SearchCoverage {
+  /** 会话列表当前形态（与 `list-view.ts` 的 `ChatListState` 同口径） */
+  listState: ChatListState
+  /** 这次实际扫了几个会话的消息（不是常量上限） */
+  scanned: number
+  /** 扫描时没连上服务器的会话数 */
+  failedScans: number
+  /** 全站商品检索是否失败 */
+  marketFailed: boolean
+}
+
+/**
+ * 一句话交代「这次到底搜了什么」—— 空态与结果区底注**共用这一份**。
+ *
+ * 为什么必须共用：这两处各写一份时，空结果路径把「没连上」说成「没有」、
+ * 结果路径说了失败数而空态不提，同一屏里两种口径（审查连抓两轮）。
+ *
+ * 四种「没有结果」的原因要分开说，不能糊成「换个词试试」：
+ * - 会话列表**加载失败** → 本地两段根本没搜（不是没有，是没搜到）；
+ * - 会话列表**还在加载**（`scanned === 0`）→ 只搜了全站商品；
+ * - 列表加载成功但**账号确实没有会话**（`empty`）→ 不是「还没加载出来」；
+ * - 全站商品**请求失败** → 商品段也没搜成。
+ */
+export function describeSearchCoverage(coverage: SearchCoverage): string {
+  if (coverage.listState === 'error') {
+    return coverage.marketFailed
+      ? '会话列表和全站商品都没连上服务器，这次什么都没搜成'
+      : '会话列表没加载出来，联系人和聊天记录都没搜，这次只搜了全站商品'
+  }
+  const local =
+    coverage.scanned > 0
+      ? `只搜了最近 ${coverage.scanned} 个会话${
+          coverage.failedScans > 0 ? `（其中 ${coverage.failedScans} 个没连上）` : ''
+        }`
+      : coverage.listState === 'empty'
+        ? '你还没有任何会话'
+        : '会话列表还没加载完'
+  const market = coverage.marketFailed
+    ? '；全站商品也没连上服务器'
+    : coverage.scanned > 0
+      ? '和全站商品'
+      : '，这次只搜了全站商品'
+  return `${local}${market}`
 }

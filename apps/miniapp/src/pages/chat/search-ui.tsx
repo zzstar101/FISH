@@ -11,12 +11,17 @@
 import { Image, Input, Text, View } from '@tarojs/components'
 import { ICONS } from '@/assets/lib-icons'
 import UserAvatar from '@/components/user-avatar'
+import { MESSAGE_PAGE_LIMIT } from '@/features/chat/api'
 import { formatYuan } from '@/lib/money'
+import type { ChatListState } from './list-view'
 import type { ChatSearchResults, ContactHit, ListingHit, MessageHit } from './search'
-import { hasQuery, isEmptyResults } from './search'
+import { describeSearchCoverage, hasQuery, isEmptyResults } from './search'
 
-/** 每个会话只取最近一页消息（`features/chat/api.ts` 的 `MESSAGE_PAGE_LIMIT`） */
-const MESSAGE_SCAN_DEPTH = 100
+/**
+ * 每个会话只取最近一页消息 —— 直接用取数层的分页大小，不再抄一份常量：
+ * 两处各写一个数字时，改一处漏一处，底注就开始撒谎。
+ */
+const MESSAGE_SCAN_DEPTH = MESSAGE_PAGE_LIMIT
 
 /** 占位文案：三段能力一次说清（#669 验收标准） */
 export const SEARCH_PLACEHOLDER = '搜索记录/联系人/商品'
@@ -70,8 +75,12 @@ interface ResultsProps {
   searching: boolean
   /** 全站商品检索失败：只影响商品段，联系人/聊天记录照常显示 */
   marketFailed: boolean
-  /** 会话列表本身没加载出来：联系人 / 聊天记录两段搜不了，得说清楚，不能当成「没找到」 */
-  localFailed: boolean
+  /**
+   * 会话列表的形态（`chatListState` 的三态 + `list`）。必须整态传进来而不是一个
+   * `localFailed` 布尔：`loading`（还没搜到）与 `empty`（确实没有会话）对用户
+   * 是两件事，用一个布尔会把后者说成前者。
+   */
+  listState: ChatListState
   /** 重拉会话列表（本地失败时的出口） */
   onRetryLocal: () => void
   /** 这次实际扫了几个会话的消息（结果区底注用，**不是**常量上限） */
@@ -123,7 +132,7 @@ export function ChatSearchResultsView({
   results,
   searching,
   marketFailed,
-  localFailed,
+  listState,
   onRetryLocal,
   scannedConversations,
   failedConversations,
@@ -133,12 +142,20 @@ export function ChatSearchResultsView({
 }: ResultsProps) {
   const empty = isEmptyResults(results)
   const typed = hasQuery(query)
-  /** 空态那句范围说明：本地两段搜不了时不能假装搜过 */
-  const emptyHint = localFailed
-    ? '会话列表没加载出来，联系人 / 聊天记录这两段搜不了；全站商品也没有命中'
-    : scannedConversations === 0
-      ? '会话还没加载出来，这次只搜了全站商品，也没有命中'
-      : `只搜你聊过的会话（最近 ${scannedConversations} 个）和全站商品，换个词试试`
+  /** 本地两段这次到底搜没搜得动（`listState === 'error'` 时一段都没搜） */
+  const localFailed = listState === 'error'
+  /**
+   * 空态那句范围说明与结果区底注**共用同一份**（`describeSearchCoverage`）：
+   * 分开写时，空态会把「没连上」说成「没有」、结果区又提失败数，同屏两套口径。
+   */
+  const coverage = describeSearchCoverage({
+    listState,
+    scanned: scannedConversations,
+    failedScans: failedConversations,
+    marketFailed,
+  })
+  /** 只有本地段真的搜过，才谈得上「换个词试试」（失败/加载中时换词也没用） */
+  const canRetype = listState === 'list' || listState === 'empty'
   return (
     <View className="csres">
       {searching ? (
@@ -152,7 +169,7 @@ export function ChatSearchResultsView({
       ) : empty ? (
         <View className="csres__hint">
           <Text className="csres__hint-title">没有找到「{query.trim()}」</Text>
-          <Text className="csres__hint-tx">{emptyHint}</Text>
+          <Text className="csres__hint-tx">{canRetype ? `${coverage}，换个词试试` : coverage}</Text>
         </View>
       ) : null}
 
@@ -239,16 +256,15 @@ export function ChatSearchResultsView({
         </View>
       ) : null}
 
-      {/* 如实交代范围：V1 没有全站消息搜索，不写这句会让用户以为「搜不到」就是没有 */}
+      {/* 如实交代范围：V1 没有全站消息搜索，不写这句会让用户以为「搜不到」就是没有；
+          范围取自 `describeSearchCoverage`（与空态同源），失败数在这里也照样说 */}
       {!searching && !empty && typed ? (
         <View className="csres__foot">
           <Text className="csres__foot-tx">
             {results.messages.length > 0
               ? `聊天记录仅搜索最近 ${scannedConversations} 个会话，点结果进入该会话`
-              : `聊天记录只搜了最近 ${scannedConversations} 个会话，没有命中`}
-            {`（每个会话只取最近 ${MESSAGE_SCAN_DEPTH} 条消息${
-              failedConversations > 0 ? `，其中 ${failedConversations} 个没连上` : ''
-            }）`}
+              : `聊天记录没有命中：${coverage}`}
+            {scannedConversations > 0 ? `（每个会话只取最近 ${MESSAGE_SCAN_DEPTH} 条消息）` : ''}
           </Text>
         </View>
       ) : null}

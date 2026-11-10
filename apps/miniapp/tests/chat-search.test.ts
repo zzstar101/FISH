@@ -3,10 +3,12 @@ import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import {
   type ChatSearchResults,
+  describeSearchCoverage,
   EMPTY_RESULTS,
   hasQuery,
   isEmptyResults,
   MAX_CONTACT_HITS,
+  MAX_CONVERSATION_LISTING_HITS,
   MAX_MESSAGE_HITS,
   matchConversationMessages,
   matchConversations,
@@ -21,7 +23,8 @@ import {
  *
  * 这里锁的是「搜出来的东西与用户要的不是一回事」那一类缺陷：大小写/空白把本该命中的
  * 会话漏掉、把撤回的消息当正文搜出来、同一个商品在三段里重复出现、结果里混进没命中
- * 的条目。组件接线（页面是否调用这些函数、传什么参数）本仓没有组件渲染基建，靠 review。
+ * 的条目、以及「没找到」被解释错原因。组件接线（页面怎么调用这些函数）由
+ * `tests/chat-search-wiring.test.ts` 按源码文本钉住（本仓没有 Taro 组件渲染基建）。
  */
 
 function conversation(overrides: Partial<ConversationDto> = {}): ConversationDto {
@@ -258,5 +261,125 @@ describe('isEmptyResults —— 三段都空才算没找到', () => {
       ],
     }
     expect(isEmptyResults(onlyContact)).toBe(false)
+  })
+})
+
+describe('matchConversations —— 会话内商品不能挤掉全站结果', () => {
+  test('会话内商品封顶 8 条，合并后仍给全站留出名额', () => {
+    // 会话内商品最多会有 50 条（每个会话一条）。不单独封顶时它能把十条名额吃满，
+    // 全站命中一条都显示不出来 —— 用户以为「全站没有」，其实是被自己聊过的挤掉了。
+    const many = Array.from({ length: 20 }, (_, index) =>
+      conversation({
+        id: `c-${index}`,
+        listingId: `l-${index}`,
+        listing: {
+          id: `l-${index}`,
+          title: `K380 键盘 ${index}`,
+          priceCents: 16000,
+          status: 'ACTIVE',
+          coverUrl: null,
+        },
+      }),
+    )
+    const local = matchConversations(many, '键盘').listings
+    expect(local).toHaveLength(MAX_CONVERSATION_LISTING_HITS)
+
+    const market = Array.from({ length: 5 }, (_, index) =>
+      card({ id: `m-${index}`, title: `全站键盘 ${index}` }),
+    )
+    const merged = mergeMarketListings(local, market)
+    expect(merged).toHaveLength(10)
+    expect(merged.filter((item) => item.source === 'market')).toHaveLength(2)
+  })
+})
+
+/**
+ * 范围说明是所有「没找到」解释的唯一来源：空态与结果区底注共用它。
+ * 每条用例对应一种**不同的没找到原因** —— 混成一句「换个词试试」正是在说假话。
+ */
+describe('describeSearchCoverage —— 每种「没找到」都要说清原因', () => {
+  test('会话列表加载失败：本地两段根本没搜', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'error',
+        scanned: 0,
+        failedScans: 0,
+        marketFailed: false,
+      }),
+    ).toBe('会话列表没加载出来，联系人和聊天记录都没搜，这次只搜了全站商品')
+  })
+
+  test('会话列表与全站商品都失败：什么都没搜成', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'error',
+        scanned: 0,
+        failedScans: 0,
+        marketFailed: true,
+      }),
+    ).toBe('会话列表和全站商品都没连上服务器，这次什么都没搜成')
+  })
+
+  test('列表还在加载：不能说成「你还没有会话」', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'loading',
+        scanned: 0,
+        failedScans: 0,
+        marketFailed: false,
+      }),
+    ).toBe('会话列表还没加载完，这次只搜了全站商品')
+  })
+
+  test('列表加载成功但确实没有会话：不能说成「还没加载出来」', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'empty',
+        scanned: 0,
+        failedScans: 0,
+        marketFailed: false,
+      }),
+    ).toBe('你还没有任何会话，这次只搜了全站商品')
+  })
+
+  test('正常扫过 N 个会话：如实给数量', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'list',
+        scanned: 10,
+        failedScans: 0,
+        marketFailed: false,
+      }),
+    ).toBe('只搜了最近 10 个会话和全站商品')
+  })
+
+  test('扫的时候有会话没连上：失败数必须露出来，不能算成没命中', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'list',
+        scanned: 10,
+        failedScans: 3,
+        marketFailed: false,
+      }),
+    ).toBe('只搜了最近 10 个会话（其中 3 个没连上）和全站商品')
+  })
+
+  test('商品段失败：范围里不能说「和全站商品」', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'list',
+        scanned: 10,
+        failedScans: 0,
+        marketFailed: true,
+      }),
+    ).toBe('只搜了最近 10 个会话；全站商品也没连上服务器')
+    expect(
+      describeSearchCoverage({
+        listState: 'empty',
+        scanned: 0,
+        failedScans: 0,
+        marketFailed: true,
+      }),
+    ).toBe('你还没有任何会话；全站商品也没连上服务器')
   })
 })

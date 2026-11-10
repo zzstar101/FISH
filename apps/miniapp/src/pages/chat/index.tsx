@@ -30,6 +30,7 @@ import { fetchAllTransactions } from '@/features/transaction/api'
 import type { TxMessageEvent } from '@/features/transaction/tx-signal'
 import { useTabTransition } from '@/lib/use-tab-transition'
 import type { MockNotification } from '@/mock/types'
+import type { ChatListState } from './list-view'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
 import {
   type ChatSearchResults,
@@ -201,6 +202,17 @@ export default function Chat() {
   }, [items])
   /** 会话 id → 已拉到的消息页：搜索期间复用，别每次输入都重拉同一批会话 */
   const searchMessageCache = useRef(new Map<string, MessageDto[]>())
+  /**
+   * 消息缓存的代次。清空缓存（列表刷新 / 退出搜索 / 换账号）时自增：
+   * 光 `clear()` 挡不住**在途**的消息页请求 —— 它在 clear 之后才返回，会按
+   * 「epoch 没变」的守卫把清空前的旧页写回缓存，撤回的正文又被下一轮搜出来。
+   */
+  const searchCacheEpoch = useRef(0)
+  /**
+   * 会话列表上一次的形态：用来识别「loading/error → list/empty」那一次跃迁
+   * （见后面的补跑 effect）。初值取 `loading`：首帧还不知道列表是什么。
+   */
+  const listStateForSearchRef = useRef<ChatListState>('loading')
 
   /**
    * 身份切换时的**渲染期重置**（adjust-state-during-render，React 官方推荐的
@@ -237,6 +249,7 @@ export default function Chat() {
     // 搜索结果是上一个账号的聊天记录与商品：与列表同一次 commit 内清空，
     // 在途搜索代次自增作废（否则旧账号的命中会在新账号的搜索结果里出现）
     searchEpoch.current += 1
+    searchCacheEpoch.current += 1
     searchMessageCache.current.clear()
     setSearchActive(false)
     setSearchQuery('')
@@ -342,7 +355,9 @@ export default function Chat() {
     /*
      * 消息缓存随列表一起失效：从会话页返回时可能刚发/刚撤回消息，留着旧快照
      * 会把已撤回的正文继续搜出来（与 `matchConversationMessages` 的口径冲突）。
+     * 同时推进缓存代次：在途的消息页请求不会把清空前的旧页写回来。
      */
+    searchCacheEpoch.current += 1
     searchMessageCache.current.clear()
     // 交易快照与会话同一轮刷新（同一代次守卫）：从会话页返回时面交确认可能刚发生，
     // 胶囊必须跟着重算；「加载更多」不重拉（早前会话的交易在首屏快照里已就位）。
@@ -593,7 +608,26 @@ export default function Chat() {
     void Taro.navigateTo({ url: `/pkg-social/pages/conversation/index?id=${id}` })
   }
 
-  /** 退出搜索模式：清关键词与结果，代次自增丢弃在途搜索（X 关闭的唯一入口） */
+  /**
+   * 进搜索模式：刷新会话快照 + 滚回顶部。
+   *
+   * 快照在这里显式取一次：`searchItemsRef` 的同步 effect 依赖 `items`，
+   * 「退出搜索 → 再进」时 `items` 引用没变、effect 不会重跑 —— 只在 `closeSearch`
+   * 里清空快照的话，第二次进搜索会拿着空数组搜，联系人/聊天记录一个都出不来。
+   */
+  const activateSearch = () => {
+    searchItemsRef.current = items
+    setSearchActive(true)
+    // 结果区从顶部开始看（进搜索时页面可能停在会话列表很靠下的位置）
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
+  }
+
+  /**
+   * 退出搜索模式：清关键词与结果，代次自增丢弃在途搜索（X 关闭的唯一入口）。
+   *
+   * 顺手滚回顶部：结果区通常比会话列表短，退出后停在列表内容之外的空白处
+   * （滚动位置被结果区高度夹住过）会让人以为列表只剩这么点。
+   */
   const closeSearch = () => {
     searchEpoch.current += 1
     setSearchActive(false)
@@ -603,16 +637,21 @@ export default function Chat() {
     setMarketSearchFailed(false)
     setScannedConversations(0)
     setFailedScans(0)
-    searchItemsRef.current = []
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
   }
 
   /** 取一个会话的消息页（搜索期间按会话 id 缓存，命中过就不再请求） */
   const loadSearchedMessages = useCallback(async (conversationId: string, epoch: number) => {
     const cached = searchMessageCache.current.get(conversationId)
     if (cached) return cached
+    // 记下请求发出时的缓存代次：期间缓存被清空（列表刷新 / 退出搜索 / 换账号）时，
+    // 这页数据属于清空前的旧世界，不能再写回缓存
+    const cacheEpoch = searchCacheEpoch.current
     const page = await fetchMessagePage(conversationId)
-    // 写缓存前比对代次：换账号 / 退出搜索时缓存刚被清空，迟到响应不该再写回去
-    if (epoch === searchEpoch.current) searchMessageCache.current.set(conversationId, page.items)
+    // 写缓存前比对两个代次：搜索轮次没变 + 缓存没被清过，两次都成立才写
+    if (epoch === searchEpoch.current && cacheEpoch === searchCacheEpoch.current) {
+      searchMessageCache.current.set(conversationId, page.items)
+    }
     return page.items
   }, [])
 
@@ -685,6 +724,29 @@ export default function Chat() {
     const timer = setTimeout(() => void runSearch(query, epoch), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [searchActive, searchQuery, runSearch])
+
+  /**
+   * 会话列表**刚就绪**时补跑一次搜索。
+   *
+   * 用户可能在列表还在加载（或在错误态）时就打好了关键词：那一刻快照是空的，
+   * 联系人/聊天记录必然为空，而防抖 effect 不会再跑（关键词没变）——
+   * 结果是「列表随后加载好了，可结果永远空着、文案还写着没搜到」。
+   * 这里只在 `loading/error → list/empty` 的**那一次跃迁**补跑，其它变化（比如
+   * 从会话页返回重拉列表）不重跑：那会打断用户已经看到的结果（上一轮审查 #5）。
+   */
+  useEffect(() => {
+    const prev = listStateForSearchRef.current
+    listStateForSearchRef.current = state
+    if (!searchActive || prev === state) return
+    const query = normalizeQuery(searchQuery)
+    if (query.length === 0) return
+    const becameReady =
+      (prev === 'loading' || prev === 'error') && (state === 'list' || state === 'empty')
+    if (!becameReady) return
+    const epoch = ++searchEpoch.current
+    setSearching(true)
+    void runSearch(query, epoch)
+  }, [state, searchActive, searchQuery, runSearch])
 
   /** 点搜索结果：有会话的（联系人 / 聊天记录 / 会话内商品）直接进会话 */
   const openSearchContact = (hit: ContactHit) => openConversation(hit.conversationId)
@@ -860,7 +922,7 @@ export default function Chat() {
         value={searchQuery}
         active={searchActive}
         onChange={setSearchQuery}
-        onActivate={() => setSearchActive(true)}
+        onActivate={activateSearch}
         onClose={closeSearch}
       />
 
@@ -877,7 +939,7 @@ export default function Chat() {
             results={searchResults}
             searching={searching}
             marketFailed={marketSearchFailed}
-            localFailed={state === 'error'}
+            listState={state}
             onRetryLocal={reloadConversations}
             scannedConversations={scannedConversations}
             failedConversations={failedScans}

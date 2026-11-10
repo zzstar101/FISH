@@ -700,9 +700,17 @@
   background: var(--ice);
 }
 
-/* 本地那两段搜不了时给一个重试出口（空态会被读成「恰好没有内容」） */
+/* 本地那两段搜不了时给一个重试出口（空态会被读成「恰好没有内容」）。
+   触控热区要 ≥88：文字本身只有 22px 高，用 min-height + 负 margin 把热区撑到 88，
+   视觉位置不变（DESIGN.md §3.1 规则 5：纯文字小开关同样要够 88×88） */
 .csres__warn-btn {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 88px;
+  margin: -22px 0;
+  padding-left: 24px;
   font-size: var(--fs-xs);
   font-weight: 600;
   color: var(--brand);
