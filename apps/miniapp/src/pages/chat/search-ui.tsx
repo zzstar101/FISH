@@ -20,6 +20,9 @@ import {
   describeSearchCoverage,
   hasQuery,
   isEmptyResults,
+  MAX_CONTACT_HITS,
+  MAX_MARKET_HITS,
+  MAX_MESSAGE_HITS,
   SEARCH_MAX_QUERY_LENGTH,
 } from './search'
 
@@ -118,11 +121,23 @@ function hitTimeLabel(iso: string): string {
   return `${then.getFullYear()}/${then.getMonth() + 1}/${then.getDate()}`
 }
 
-function SectionHeader({ label, count }: { label: string; count: number }) {
+function SectionHeader({
+  label,
+  count,
+  truncated,
+}: {
+  label: string
+  count: number
+  /** 本条是否被上限截断（段头显示「10+」）——「就这些」和「还有更多」是两回事 */
+  truncated: boolean
+}) {
   return (
     <View className="csres__head">
       <Text className="csres__head-tx">{label}</Text>
-      <Text className="csres__head-n num">{count}</Text>
+      <Text className="csres__head-n num">
+        {count}
+        {truncated ? '+' : ''}
+      </Text>
     </View>
   )
 }
@@ -165,6 +180,16 @@ export function ChatSearchResultsView({
   })
   /** 只有本地段真的搜过，才谈得上「换个词试试」（失败/加载中时换词也没用） */
   const canRetype = listState === 'list' || listState === 'empty'
+  /**
+   * 三段各自有上限（联系人 `MAX_CONTACT_HITS`、商品 `MAX_MARKET_HITS`、聊天记录
+   * `MAX_MESSAGE_HITS`）。打满时段头那个数字**不是**命中总数 —— 只写「10」会被读成
+   * 「一共就这些」，正是验收 5 要禁的那类误导（把「有更多但没显示」说成「不存在」）。
+   * 所以打满就把段头写成「10+」，并在结果下方交代「+」是什么意思。
+   */
+  const contactsTruncated = results.contacts.length >= MAX_CONTACT_HITS
+  const listingsTruncated = results.listings.length >= MAX_MARKET_HITS
+  const messagesTruncated = results.messages.length >= MAX_MESSAGE_HITS
+  const truncated = contactsTruncated || listingsTruncated || messagesTruncated
   return (
     <View className="csres">
       {searching ? (
@@ -198,7 +223,11 @@ export function ChatSearchResultsView({
 
       {!searching && results.contacts.length > 0 ? (
         <>
-          <SectionHeader label="联系人" count={results.contacts.length} />
+          <SectionHeader
+            label="联系人"
+            count={results.contacts.length}
+            truncated={contactsTruncated}
+          />
           {results.contacts.map((item) => (
             <View
               key={item.conversationId}
@@ -218,7 +247,11 @@ export function ChatSearchResultsView({
 
       {!searching && results.listings.length > 0 ? (
         <>
-          <SectionHeader label="商品" count={results.listings.length} />
+          <SectionHeader
+            label="商品"
+            count={results.listings.length}
+            truncated={listingsTruncated}
+          />
           {results.listings.map((item) => (
             <View
               key={`${item.source}-${item.listingId}`}
@@ -244,7 +277,11 @@ export function ChatSearchResultsView({
 
       {!searching && results.messages.length > 0 ? (
         <>
-          <SectionHeader label="聊天记录" count={results.messages.length} />
+          <SectionHeader
+            label="聊天记录"
+            count={results.messages.length}
+            truncated={messagesTruncated}
+          />
           {results.messages.map((item) => (
             <View
               key={`${item.conversationId}-${item.messageId}`}
@@ -262,6 +299,13 @@ export function ChatSearchResultsView({
             </View>
           ))}
         </>
+      ) : null}
+
+      {/* 段头打满上限时带「+」：说清「还有更多没显示」，别让截断读成「就这些」 */}
+      {!searching && truncated ? (
+        <View className="csres__more">
+          <Text className="csres__more-tx">带「+」的那一段还有更多结果，缩小关键词能看全</Text>
+        </View>
       ) : null}
 
       {!searching && marketFailed ? (

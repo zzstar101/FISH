@@ -507,3 +507,24 @@ describe('describeMessageFooter —— 有命中时也要说清漏搜', () => {
     ).toBe('聊天记录没有搜：会话列表还没加载完，这次只搜了全站商品')
   })
 })
+
+describe('matchConversationMessages —— 命中行要说清是谁说的', () => {
+  test('我自己发的消息用我自己的昵称与头像，不能顶对方的名', () => {
+    const mine = message({
+      id: 'm-9',
+      senderId: 'u-1',
+      sender: { id: 'u-1', nickname: '我', avatarUrl: null },
+      content: '键盘我今晚来拿',
+    })
+    const [hit] = matchConversationMessages(conversation(), [mine], '键盘')
+    // 只取 `counterpart` 时，我这句会显示成「卖家小鱼 · 键盘我今晚来拿」——
+    // 点进会话才发现是自己在说话（审查可留项 3）
+    expect(hit?.nickname).toBe('我')
+    expect(hit?.avatarUrl).toBeNull()
+  })
+
+  test('对方发的消息仍用对方的昵称', () => {
+    const [hit] = matchConversationMessages(conversation(), [message()], '键盘')
+    expect(hit?.nickname).toBe('卖家小鱼')
+  })
+})

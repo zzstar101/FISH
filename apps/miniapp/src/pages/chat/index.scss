@@ -722,6 +722,17 @@
   color: var(--muted-2);
 }
 
+.csres__more {
+  padding: 20px 16px 0;
+}
+
+.csres__more-tx {
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  color: var(--muted-2);
+  text-align: center;
+}
+
 .csres__foot {
   padding: 20px 16px 0;
 }

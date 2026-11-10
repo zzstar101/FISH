@@ -179,3 +179,55 @@ describe('#669 接线：搜索在途时不能露出上一轮结果', () => {
     expect(block).toContain('if (searchActive) return')
   })
 })
+
+describe('#669 接线：被取代的搜索与换账号', () => {
+  test('迟到的搜索结果不许写状态，也不许提前关掉新一轮的「正在搜索…」', async () => {
+    const block = runSearchBlock(await source())
+    // 少了这条：上一轮关键词的命中会覆盖新一轮的结果（用户看到的是「手机的搜索结果」其实是「键盘的」）
+    expect(block).toContain('if (epoch !== searchEpoch.current) return')
+    // 收尾必须跟着代次：放在无条件的 finally 里，旧一轮返回会把新一轮的 loading 关掉
+    expect(block).toContain('if (epoch === searchEpoch.current) setSearching(false)')
+  })
+
+  test('换账号时搜索状态与两个代次一起清（验收 7）', async () => {
+    const block = sliceFrom(
+      await source(),
+      'if (prevIdentity !== identity) {',
+      'searchItemsRef.current = []',
+    )
+    // 不推进请求代次：上一个账号在途的搜索会在新账号界面上把它的聊天记录写回来
+    expect(block).toContain('searchEpoch.current += 1')
+    expect(block).toContain('searchCacheEpoch.current += 1')
+    expect(block).toContain('searchMessageCache.current.clear()')
+    for (const clearing of [
+      'setSearchActive(false)',
+      'setSearchQuery(',
+      'setSearchResults(EMPTY_RESULTS)',
+      'setSearching(false)',
+      'setMarketSearchFailed(false)',
+      'setScannedConversations(0)',
+      'setFailedScans(0)',
+    ]) {
+      expect(block).toContain(clearing)
+    }
+    // 快照也要清：留着上一个账号的会话，新账号第一搜会把上个账号的联系人/商品列出来
+    expect(block).toContain('searchItemsRef.current = []')
+  })
+})
+
+describe('#669 接线：截断要说明，不能把「还有更多」说成「就这些」', () => {
+  test('三段分别按各自上限判断是否截断，且段头带「+」', async () => {
+    const ui = await Bun.file(new URL('../src/pages/chat/search-ui.tsx', import.meta.url)).text()
+    for (const [segment, constant] of [
+      ['contacts', 'MAX_CONTACT_HITS'],
+      ['listings', 'MAX_MARKET_HITS'],
+      ['messages', 'MAX_MESSAGE_HITS'],
+    ] as const) {
+      expect(ui).toContain(`results.${segment}.length >= ${constant}`)
+      expect(ui).toContain(`truncated={${segment}Truncated}`)
+    }
+    // 光打「+」不够：得有一句说明「+」是什么意思，否则用户仍会读成「一共这么多」
+    expect(ui).toContain("truncated ? '+' : ''")
+    expect(ui).toContain('csres__more-tx')
+  })
+})

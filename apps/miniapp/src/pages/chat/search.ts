@@ -199,8 +199,10 @@ export function matchConversationMessages(
       kind: 'message',
       conversationId: conversation.id,
       messageId: message.id,
-      nickname: conversation.counterpart.nickname,
-      avatarUrl: conversation.counterpart.avatarUrl,
+      // 谁说的就用谁的头像：只拿 `counterpart` 会把「我自己发的」显示成对方头像 + 对方昵称，
+      // 用户点进去还以为那句话是对方说的（TEXT 消息必有 `sender`，契约同源收紧）。
+      nickname: message.sender?.nickname ?? conversation.counterpart.nickname,
+      avatarUrl: message.sender?.avatarUrl ?? conversation.counterpart.avatarUrl,
       snippet: snippetOf(message.content, query),
       createdAt: message.createdAt,
     })

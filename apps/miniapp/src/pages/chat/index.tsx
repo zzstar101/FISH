@@ -708,39 +708,46 @@ export default function Chat() {
    */
   const runSearch = useCallback(
     async (query: string, epoch: number) => {
-      const snapshot = searchItemsRef.current
-      const targets = snapshot.slice(0, MAX_MESSAGE_SCAN_CONVERSATIONS)
-      const local = matchConversations(snapshot, query)
-      const marketTask = searchListings(query, 'newest').then(
-        (cards) => ({ ok: true as const, cards }),
-        (error: unknown) => {
-          console.warn('[miniapp] 商品搜索失败，只显示会话内的结果', error)
-          return { ok: false as const, cards: [] as ListingCard[] }
-        },
-      )
-      const pages = await Promise.allSettled(targets.map((item) => loadSearchedMessages(item.id)))
-      const messageHits: MessageHit[] = []
-      let failed = 0
-      pages.forEach((page, index) => {
-        const conversation = targets[index]
-        if (!conversation) return
-        if (page.status !== 'fulfilled') {
-          failed += 1
-          return
-        }
-        messageHits.push(...matchConversationMessages(conversation, page.value, query))
-      })
-      const market = await marketTask
-      if (epoch !== searchEpoch.current) return
-      setSearchResults({
-        contacts: local.contacts,
-        listings: mergeMarketListings(local.listings, market.cards),
-        messages: sortMessageHits(messageHits),
-      })
-      setMarketSearchFailed(!market.ok)
-      setScannedConversations(targets.length)
-      setFailedScans(failed)
-      setSearching(false)
+      try {
+        const snapshot = searchItemsRef.current
+        const targets = snapshot.slice(0, MAX_MESSAGE_SCAN_CONVERSATIONS)
+        const local = matchConversations(snapshot, query)
+        const marketTask = searchListings(query, 'newest').then(
+          (cards) => ({ ok: true as const, cards }),
+          (error: unknown) => {
+            console.warn('[miniapp] 商品搜索失败，只显示会话内的结果', error)
+            return { ok: false as const, cards: [] as ListingCard[] }
+          },
+        )
+        const pages = await Promise.allSettled(targets.map((item) => loadSearchedMessages(item.id)))
+        const messageHits: MessageHit[] = []
+        let failed = 0
+        pages.forEach((page, index) => {
+          const conversation = targets[index]
+          if (!conversation) return
+          if (page.status !== 'fulfilled') {
+            failed += 1
+            return
+          }
+          messageHits.push(...matchConversationMessages(conversation, page.value, query))
+        })
+        const market = await marketTask
+        // 被新一轮取代的搜索到此为止：不许写结果（新一轮的自会覆盖）
+        if (epoch !== searchEpoch.current) return
+        setSearchResults({
+          contacts: local.contacts,
+          listings: mergeMarketListings(local.listings, market.cards),
+          messages: sortMessageHits(messageHits),
+        })
+        setMarketSearchFailed(!market.ok)
+        setScannedConversations(targets.length)
+        setFailedScans(failed)
+      } finally {
+        // 只由「最新那一轮」收尾：复位「正在搜索…」要跟着代次走，
+        // 否则旧一轮返回会把新一轮的 loading 提前关掉。放 `finally` 是为了
+        // 万一日后中间抛错，界面也不会永远停在「正在搜索…」。
+        if (epoch === searchEpoch.current) setSearching(false)
+      }
     },
     [loadSearchedMessages],
   )
