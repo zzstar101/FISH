@@ -258,36 +258,22 @@
   @include ellipsis;
 }
 
-/* 「我要许愿」（#672 去胶囊）：纯文字 + 文字下方蓝色描线，不再画深墨底胶囊。
-   热区高度沿用改前的 `--btn-h-sm`，只把视觉从「胶囊按钮」换成「带下划线的文字入口」；
-   描线口径与同页顶部文字 tab（`.wish__tab::after`）一致，避免同页两套下划线。 */
+/* 「我要许愿」（#672 定稿）：保留胶囊按钮形态（深墨底 + 白字），按 Owner 要求去掉左侧白加号；
+   二级筛选栏仍是纯文字 + 蓝色描线（见下方 `.wish__sub`）。 */
 .wish__new {
-  position: relative;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  /* 热区沿用改前的 `--btn-h-sm` × `--btn-px-sm`，与胶囊时代同尺寸；描线用绝对定位，不占布局高度 */
   height: var(--btn-h-sm);
   padding: 0 var(--btn-px-sm);
-  color: var(--brand);
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  color: #fff;
   font-size: var(--fs-xs);
-  font-weight: 600;
-
-  &::after {
-    content: "";
-    position: absolute;
-    /* 与左右 padding 同值 → 下划线宽度正好等于文字宽度 */
-    left: var(--btn-px-sm);
-    right: var(--btn-px-sm);
-    /* 与 `.wish__tab::after` 同一个 `bottom`，同页只有一套下划线口径 */
-    bottom: 8px;
-    height: 4px;
-    border-radius: 999px;
-    background: var(--grad-brand);
-  }
+  font-weight: 500;
 
   &:active {
-    opacity: 0.72;
+    opacity: 0.86;
   }
 }
 
