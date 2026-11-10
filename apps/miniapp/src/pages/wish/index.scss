@@ -258,32 +258,38 @@
   @include ellipsis;
 }
 
-/* 「我要许愿」：设计稿 `.btn.primary`（深墨底 + 白字 + 白加号） */
+/* 「我要许愿」（#672 去胶囊）：纯文字 + 文字下方蓝色描线，不再画深墨底胶囊。
+   热区高度沿用改前的 `--btn-h-sm`，只把视觉从「胶囊按钮」换成「带下划线的文字入口」；
+   描线口径与同页顶部文字 tab（`.wish__tab::after`）一致，避免同页两套下划线。 */
 .wish__new {
+  position: relative;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  /* 热区先用 `--btn-h-sm`（68px）撑住，文字垂直居中后描线紧贴文字下沿（bottom: 16px） */
   height: var(--btn-h-sm);
-  padding: 0 var(--btn-px-sm);
-  border-radius: var(--r-pill);
-  background: var(--ink);
-  color: #fff;
+  padding: 0 8px;
+  color: var(--brand);
   font-size: var(--fs-xs);
-  font-weight: 500;
+  font-weight: 600;
+
+  &::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 16px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--grad-brand);
+  }
 
   &:active {
-    opacity: 0.86;
+    opacity: 0.72;
   }
 }
 
-/* 深墨底上的反白加号：直接用烘焙好的 `ICONS.plusWhite`，不靠滤镜转色 */
-.wish__new-ic {
-  width: 24px;
-  height: 24px;
-}
-
-/* ────────────────────── 二级筛选：横滑胶囊（状态 / 分类） ────────────────────── */
+/* ────────────────────── 二级筛选：纯文字 tab（状态 / 分类） ────────────────────── */
 
 /* 横滑必须落在**子元素**上（页面根节点不能 overflow），所以 ScrollView 拉满整宽、
    内层用 inline-flex 排布 */
@@ -298,46 +304,58 @@
 .wish__subs-inner {
   display: inline-flex;
   align-items: center;
-  gap: 14px;
-  /* 胶囊按下外扩的点击热区，靠 padding 让左右两端不被裁掉 */
+  gap: 22px;
+  /* 文字 tab 按下外扩的点击热区，靠 padding 让左右两端不被裁掉 */
   padding: 8px 0;
 }
 
-/* 设计稿 `.stab`：白底胶囊 + 计数；选中转深墨（与订单页 `.orders__pill` 同一套写法） */
+/* 设计稿 `.stab`（#672 去胶囊）：纯文字 + 选中态蓝色描线，计数退成小号纯文字。
+   去掉底色 / 边框 / 圆角与胶囊内边距；高度沿用改前的 `--btn-h-sm`，热区不变。
+   选中态与同页顶部文字 tab 同一套下划线（`.wish__tab::after`）。 */
 .wish__sub {
+  position: relative;
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: 12px;
+  gap: 8px;
   height: var(--btn-h-sm);
-  padding: 0 var(--btn-px-sm);
-  border-radius: var(--r-pill);
-  background: var(--surface);
-  border: 2px solid var(--border);
+  padding: 0 4px;
   font-size: 24px;
   color: var(--muted-2);
   white-space: nowrap;
+  transition: color 0.18s;
+
+  &::after {
+    content: "";
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    bottom: 14px;
+    height: 4px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 0.18s;
+  }
 
   &.is-on {
-    background: var(--ink);
-    border-color: var(--ink);
-    color: #fff;
+    color: var(--fg);
     font-weight: 600;
+
+    &::after {
+      background: var(--grad-brand);
+    }
   }
 
   &:active {
-    transform: scale(0.98);
+    opacity: 0.72;
   }
 }
 
-/* 分类图标（PNG）：压在深墨底上会看不见，用滤镜转白 —— 与出物页删图钮同一招 */
+/* 分类图标（PNG）。#672 去胶囊后不再有深墨底，选中态**不需要**反白滤镜 */
 .wish__sub-ic {
+  align-self: center;
   width: 24px;
   height: 24px;
-}
-
-.wish__sub.is-on .wish__sub-ic {
-  filter: brightness(0) invert(1);
 }
 
 .wish__sub-n {
@@ -580,6 +598,7 @@
   border-top: 2px solid var(--border);
 }
 
+/* 「按关键词搜索」（#672）：文字改深墨（黑），不再是品牌蓝；图标与计数气泡保持不变 */
 .mw__act-lk {
   flex: 1 1 auto;
   min-width: 0;
@@ -588,7 +607,7 @@
   gap: 12px;
   font-size: 24px;
   font-weight: 500;
-  color: var(--brand);
+  color: var(--fg);
 
   &:active {
     opacity: 0.72;

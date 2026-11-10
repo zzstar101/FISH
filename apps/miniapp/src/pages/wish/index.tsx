@@ -356,8 +356,7 @@ export default function Wish() {
                     void Taro.navigateTo({ url: '/pkg-social/pages/wish-publish/index' })
                   }
                 >
-                  {/* 按钮是深墨底，加号用反白版 `plusWhite` */}
-                  <Image className="wish__new-ic" src={ICONS.plusWhite} mode="aspectFit" />
+                  {/* #672 去胶囊：纯文字 + 下方蓝色描线，不再挂反白加号图片 */}
                   <Text>我要许愿</Text>
                 </View>
               ) : (
