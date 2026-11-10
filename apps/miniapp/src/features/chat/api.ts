@@ -33,7 +33,8 @@ import { apiRequest, isApiError } from '@/lib/request'
 const CONVERSATION_LIMIT = 50
 
 /** 契约里消息 limit 上限 100：一次拉到上限，再往前靠 `before` 游标翻页 */
-const MESSAGE_PAGE_LIMIT = 100
+/** 每页消息条数（消息页搜索的「每个会话只取最近 N 条」也用它，避免两处数字漂移） */
+export const MESSAGE_PAGE_LIMIT = 100
 
 /**
  * 拉黑守卫（#466）的中性文案：双方同码同文，**不暴露「谁拉黑了谁」**（#466 验收：

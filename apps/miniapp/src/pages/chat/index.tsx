@@ -1,4 +1,5 @@
-import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
@@ -24,11 +25,29 @@ import {
 } from '@/features/chat/capsule'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
+import { searchListings } from '@/features/listing/api'
 import { fetchAllTransactions } from '@/features/transaction/api'
 import type { TxMessageEvent } from '@/features/transaction/tx-signal'
 import { useTabTransition } from '@/lib/use-tab-transition'
 import type { MockNotification } from '@/mock/types'
+import type { ChatListState } from './list-view'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
+import {
+  type ChatSearchResults,
+  type ContactHit,
+  EMPTY_RESULTS,
+  type ListingHit,
+  MAX_MESSAGE_SCAN_CONVERSATIONS,
+  type MessageHit,
+  matchConversationMessages,
+  matchConversations,
+  mergeMarketListings,
+  normalizeQuery,
+  SEARCH_DEBOUNCE_MS,
+  shouldRerunSearch,
+  sortMessageHits,
+} from './search'
+import { ChatSearchBar, ChatSearchResultsView } from './search-ui'
 import './index.scss'
 
 /**
@@ -155,6 +174,56 @@ export default function Chat() {
   const notifReadInFlight = useRef<Set<string>>(new Set())
 
   /**
+   * 消息页搜索（#669 V1）—— **纯端上**，不加后端接口：
+   * 会话 / 买家卖家来自已加载的 `items`，聊天记录懒拉最近
+   * `MAX_MESSAGE_SCAN_CONVERSATIONS` 条会话的消息页（`searchMessageCache` 复用），
+   * 商品走已有的 `GET /listings?q=`。端上目前没有消息搜索、也没有按昵称搜用户的
+   * 接口（见 issue #669 的 V2），所以聊天记录只覆盖最近聊过的会话 —— 结果区如实
+   * 标注扫描范围，不假装全量。
+   */
+  const [searchActive, setSearchActive] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<ChatSearchResults>(EMPTY_RESULTS)
+  const [searching, setSearching] = useState(false)
+  const [marketSearchFailed, setMarketSearchFailed] = useState(false)
+  const [scannedConversations, setScannedConversations] = useState(0)
+  /** 扫描时没连上服务器的会话数：底注要如实说，不能算成「没命中」 */
+  const [failedScans, setFailedScans] = useState(0)
+  /** 搜索代次：退出搜索 / 换关键词 / 换账号时自增，用来丢弃迟到的响应 */
+  const searchEpoch = useRef(0)
+  /**
+   * 搜索用的会话快照。`runSearch` **不能**直接依赖 `items`：`useDidShow` 每次回到
+   * 本页都会重拉列表，`items` 换个引用就会让防抖 effect 重跑一次整套搜索 ——
+   * 用户从搜索结果点进会话再返回，会看到结果闪成「正在搜索…」并重打一次商品接口。
+   * 只在搜索真正开跑的那一刻读一次快照。
+   */
+  const searchItemsRef = useRef<ConversationDto[]>([])
+  useEffect(() => {
+    searchItemsRef.current = items
+  }, [items])
+  /** 会话 id → 已拉到的消息页：搜索期间复用，别每次输入都重拉同一批会话 */
+  const searchMessageCache = useRef(new Map<string, MessageDto[]>())
+  /**
+   * 会话 id → **在途**的消息页请求。只有「完成后」的缓存挡不住并发：
+   * 两轮搜索重叠（补跑 + 挂起的防抖 timer）或慢网下同一批会话被连发两次时，
+   * 没有这张表就是 2×10 个 `limit=100` 请求一起飞，`searching` 被拖到请求超时。
+   */
+  const searchInflight = useRef(new Map<string, Promise<MessageDto[]>>())
+  /** 防抖 timer：补跑时要能把它清掉，否则它会在补跑之后再发起一整轮扫描 */
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 消息缓存的代次。清空缓存（列表刷新 / 退出搜索 / 换账号）时自增：
+   * 光 `clear()` 挡不住**在途**的消息页请求 —— 它在 clear 之后才返回，会按
+   * 「epoch 没变」的守卫把清空前的旧页写回缓存，撤回的正文又被下一轮搜出来。
+   */
+  const searchCacheEpoch = useRef(0)
+  /**
+   * 会话列表上一次的形态：用来识别「loading/error → list/empty」那一次跃迁
+   * （见后面的补跑 effect）。初值取 `loading`：首帧还不知道列表是什么。
+   */
+  const listStateForSearchRef = useRef<ChatListState>('loading')
+
+  /**
    * 身份切换时的**渲染期重置**（adjust-state-during-render，React 官方推荐的
    * 「存上一帧信息」写法）：Tab 页实例跨登录态存活，`filter` / `items` / `notifs`
    * 都是上一个账号的视角，必须在**同一个 commit 内**换成空值。
@@ -186,6 +255,19 @@ export default function Chat() {
     setNotifsFailed(false)
     setTxMap(new Map())
     setTxSignals(new Map())
+    // 搜索结果是上一个账号的聊天记录与商品：与列表同一次 commit 内清空，
+    // 在途搜索代次自增作废（否则旧账号的命中会在新账号的搜索结果里出现）
+    searchEpoch.current += 1
+    searchCacheEpoch.current += 1
+    searchMessageCache.current.clear()
+    setSearchActive(false)
+    setSearchQuery('')
+    setSearchResults(EMPTY_RESULTS)
+    setSearching(false)
+    setMarketSearchFailed(false)
+    setScannedConversations(0)
+    setFailedScans(0)
+    searchItemsRef.current = []
   }
 
   /**
@@ -279,6 +361,13 @@ export default function Chat() {
     // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
     // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
     setLoadMoreFailed(false)
+    /*
+     * 消息缓存随列表一起失效：从会话页返回时可能刚发/刚撤回消息，留着旧快照
+     * 会把已撤回的正文继续搜出来（与 `matchConversationMessages` 的口径冲突）。
+     * 同时推进缓存代次：在途的消息页请求不会把清空前的旧页写回来。
+     */
+    searchCacheEpoch.current += 1
+    searchMessageCache.current.clear()
     // 交易快照与会话同一轮刷新（同一代次守卫）：从会话页返回时面交确认可能刚发生，
     // 胶囊必须跟着重算；「加载更多」不重拉（早前会话的交易在首屏快照里已就位）。
     const txLoaded = Promise.all([fetchAllTransactions('buyer'), fetchAllTransactions('seller')])
@@ -528,6 +617,211 @@ export default function Chat() {
     void Taro.navigateTo({ url: `/pkg-social/pages/conversation/index?id=${id}` })
   }
 
+  /**
+   * 进搜索模式：刷新会话快照 + 滚回顶部。
+   *
+   * 快照在这里显式取一次：`searchItemsRef` 的同步 effect 依赖 `items`，
+   * 「退出搜索 → 再进」时 `items` 引用没变、effect 不会重跑 —— 只在 `closeSearch`
+   * 里清空快照的话，第二次进搜索会拿着空数组搜，联系人/聊天记录一个都出不来。
+   */
+  const activateSearch = () => {
+    searchItemsRef.current = items
+    // 已经在搜索模式里又点了一下输入框：不要再滚回顶部，否则长结果列表被拉回第一行
+    if (searchActive) return
+    setSearchActive(true)
+    // 结果区从顶部开始看（进搜索时页面可能停在会话列表很靠下的位置）
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
+  }
+
+  /**
+   * 退出搜索模式：清关键词与结果，代次自增丢弃在途搜索（X 关闭的唯一入口）。
+   *
+   * 顺手滚回顶部：结果区通常比会话列表短，退出后停在列表内容之外的空白处
+   * （滚动位置被结果区高度夹住过）会让人以为列表只剩这么点。
+   */
+  const closeSearch = () => {
+    searchEpoch.current += 1
+    if (searchTimer.current !== null) {
+      clearTimeout(searchTimer.current)
+      searchTimer.current = null
+    }
+    // 退出搜索就丢缓存：留着没有收益（下次进搜索会重新取快照），
+    // 却让「退出后清缓存」这条注释与实现脱节（审查可留第 6 条）
+    searchCacheEpoch.current += 1
+    searchMessageCache.current.clear()
+    setSearchActive(false)
+    setSearchQuery('')
+    setSearchResults(EMPTY_RESULTS)
+    setSearching(false)
+    setMarketSearchFailed(false)
+    setScannedConversations(0)
+    setFailedScans(0)
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
+  }
+
+  /**
+   * 取一个会话的消息页（搜索期间按会话 id 缓存，命中过就不再请求）。
+   *
+   * 缓存只认**缓存代次**，不认搜索代次：搜索代次在每敲一个字时就前进一次，
+   * 用它守缓存会让「上一轮在途的 10 个消息页」全部丢弃且不写回 —— 连续输入时
+   * 每一轮都要从零重拉 10 个 limit=100 的请求，缓存等于没做。
+   * 数据新鲜度由 `searchCacheEpoch` 独占负责（列表刷新 / 退出搜索 / 换账号时清空）。
+   *
+   * 在途请求也复用（`searchInflight`）：两轮重叠时同一会话只发一次请求。
+   */
+  const loadSearchedMessages = useCallback(async (conversationId: string) => {
+    const cached = searchMessageCache.current.get(conversationId)
+    if (cached) return cached
+    const inflight = searchInflight.current.get(conversationId)
+    if (inflight) return inflight
+    // 记下请求发出时的缓存代次：期间缓存被清空（列表刷新 / 退出搜索 / 换账号）时，
+    // 这页数据属于清空前的旧世界，不能再写回缓存
+    const cacheEpoch = searchCacheEpoch.current
+    const task = fetchMessagePage(conversationId).then((page) => {
+      if (cacheEpoch === searchCacheEpoch.current) {
+        searchMessageCache.current.set(conversationId, page.items)
+      }
+      return page.items
+    })
+    searchInflight.current.set(conversationId, task)
+    // 失败也要从在途表里摘掉：否则该会话这一轮就再也重试不了了
+    void task
+      .catch(() => undefined)
+      .finally(() => {
+        if (searchInflight.current.get(conversationId) === task) {
+          searchInflight.current.delete(conversationId)
+        }
+      })
+    return task
+  }, [])
+
+  /**
+   * 跑一次搜索。商品段是全站接口，它失败只降级提示、不吞掉会话内的结果；
+   * 消息段逐会话并发，单个会话失败**不算命中、但也不假装搜过** —— 失败数进底注。
+   *
+   * 商品请求与消息页并发发出：两段互不依赖，串行会让首屏延迟叠加「最慢的消息页 +
+   * 商品接口」。
+   *
+   * 快照取的是**开跑那一刻**的 `searchItemsRef`（不是 `items`）：一次搜索内的候选会话
+   * 从头到尾是同一批，同一次搜索不会中途换人。搜索期间若后台刷新了列表，只有**下一次**
+   * 击键才会用上新快照。
+   */
+  const runSearch = useCallback(
+    async (query: string, epoch: number) => {
+      try {
+        const snapshot = searchItemsRef.current
+        const targets = snapshot.slice(0, MAX_MESSAGE_SCAN_CONVERSATIONS)
+        const local = matchConversations(snapshot, query)
+        const marketTask = searchListings(query, 'newest').then(
+          (cards) => ({ ok: true as const, cards }),
+          (error: unknown) => {
+            console.warn('[miniapp] 商品搜索失败，只显示会话内的结果', error)
+            return { ok: false as const, cards: [] as ListingCard[] }
+          },
+        )
+        const pages = await Promise.allSettled(targets.map((item) => loadSearchedMessages(item.id)))
+        const messageHits: MessageHit[] = []
+        let failed = 0
+        pages.forEach((page, index) => {
+          const conversation = targets[index]
+          if (!conversation) return
+          if (page.status !== 'fulfilled') {
+            failed += 1
+            return
+          }
+          messageHits.push(...matchConversationMessages(conversation, page.value, query))
+        })
+        const market = await marketTask
+        // 被新一轮取代的搜索到此为止：不许写结果（新一轮的自会覆盖）
+        if (epoch !== searchEpoch.current) return
+        setSearchResults({
+          contacts: local.contacts,
+          listings: mergeMarketListings(local.listings, market.cards),
+          messages: sortMessageHits(messageHits),
+        })
+        setMarketSearchFailed(!market.ok)
+        setScannedConversations(targets.length)
+        setFailedScans(failed)
+      } finally {
+        // 只由「最新那一轮」收尾：复位「正在搜索…」要跟着代次走，
+        // 否则旧一轮返回会把新一轮的 loading 提前关掉。放 `finally` 是为了
+        // 万一日后中间抛错，界面也不会永远停在「正在搜索…」。
+        if (epoch === searchEpoch.current) setSearching(false)
+      }
+    },
+    [loadSearchedMessages],
+  )
+
+  /**
+   * 输入即搜：没有搜索按钮，防抖 `SEARCH_DEBOUNCE_MS` 后跑一次。
+   * 关键词被清空（或只剩空白）时不发请求 —— 退回「未输入」的提示态。
+   */
+  useEffect(() => {
+    if (!searchActive) return
+    const query = normalizeQuery(searchQuery)
+    if (query.length === 0) {
+      searchEpoch.current += 1
+      setSearchResults(EMPTY_RESULTS)
+      setSearching(false)
+      setMarketSearchFailed(false)
+      return
+    }
+    setSearching(true)
+    // 上一轮的商品失败提示不能挂到这一轮的结果上（它会在本轮跑完才被覆盖）
+    setMarketSearchFailed(false)
+    const epoch = ++searchEpoch.current
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null
+      void runSearch(query, epoch)
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      if (searchTimer.current !== null) {
+        clearTimeout(searchTimer.current)
+        searchTimer.current = null
+      }
+    }
+  }, [searchActive, searchQuery, runSearch])
+
+  /**
+   * 会话列表**刚就绪**时补跑一次搜索。
+   *
+   * 用户可能在列表还在加载（或在错误态）时就打好了关键词：那一刻快照是空的，
+   * 联系人/聊天记录必然为空，而防抖 effect 不会再跑（关键词没变）——
+   * 结果是「列表随后加载好了，可结果永远空着、文案还写着没搜到」。
+   * 这里只在 `loading/error → list/empty` 的**那一次跃迁**补跑，其它变化（比如
+   * 从会话页返回重拉列表）不重跑：那会打断用户已经看到的结果（上一轮审查 #5）。
+   */
+  useEffect(() => {
+    const prev = listStateForSearchRef.current
+    listStateForSearchRef.current = state
+    if (!searchActive || !shouldRerunSearch(prev, state, searchQuery)) return
+    // 挂起的防抖 timer 必须清掉：不清就是「补跑一轮 + 300ms 后再整轮重扫」，
+    // 后一轮的结果必然被代次守卫丢弃，但 10 个消息页请求已经发出去了
+    if (searchTimer.current !== null) {
+      clearTimeout(searchTimer.current)
+      searchTimer.current = null
+    }
+    const query = normalizeQuery(searchQuery)
+    const epoch = ++searchEpoch.current
+    setMarketSearchFailed(false)
+    setSearching(true)
+    void runSearch(query, epoch)
+  }, [state, searchActive, searchQuery, runSearch])
+
+  /** 点搜索结果：有会话的（联系人 / 聊天记录 / 会话内商品）直接进会话 */
+  const openSearchContact = (hit: ContactHit) => openConversation(hit.conversationId)
+  const openSearchMessage = (hit: MessageHit) => openConversation(hit.conversationId)
+  /** 全站商品没有会话可进，走商品详情页（与会话里的商品区别就在这） */
+  const openSearchListing = (hit: ListingHit) => {
+    if (hit.conversationId) {
+      openConversation(hit.conversationId)
+      return
+    }
+    void Taro.navigateTo({
+      url: `/pkg-browse/pages/listing-detail/index?id=${encodeURIComponent(hit.listingId)}`,
+    })
+  }
+
   /** tab 切换：#431 任务二起进「通知」tab 不再整表清零 —— 未读逐条点击才消（见 `openNotif`） */
   const chooseFilter = (key: ChatFilter) => {
     setFilter(key)
@@ -681,129 +975,161 @@ export default function Chat() {
       <View className="chat__header-gap" />
 
       {/*
-        会话列表（1版稿 .list）。「通知」tab 不再走会话列表：原独立通知页的列表
-        直接渲染在这里（页面已删）；「全部」tab 渲染真实会话行。
+        搜索栏（#669）：**不吸顶** —— 放在副行占位之后的普通内容流里，跟着列表一起
+        滚走。点搜索框才进搜索模式（抢焦点 + 出最右 X），不点就只是一条占位。
       */}
-      <View className={`chat__list ${tabContentClass}`}>
-        {filter === 'system' ? (
-          <View className="notif__list">
-            {notifs.map((item) => (
-              <View key={item.id} className="notif__item" onClick={() => openNotif(item)}>
-                <View className="notif__ic">
-                  <Image className="notif__ic-img" src={TONE_ICON[item.tone]} mode="aspectFit" />
-                  {/* 未读红点（#431 任务二）：`readAt` 权威，点击条目即消失 */}
-                  {item.readAt === null ? <View className="notif__dot" /> : null}
-                </View>
-                <View className="notif__body">
-                  <Text className="notif__body-title">{item.title}</Text>
-                  <Text className="notif__tm num">{relativeTime(item.createdAt)}</Text>
-                  <Text className="notif__text">{item.description}</Text>
-                </View>
-              </View>
-            ))}
+      <ChatSearchBar
+        value={searchQuery}
+        active={searchActive}
+        onChange={setSearchQuery}
+        onActivate={activateSearch}
+        onClose={closeSearch}
+      />
 
-            {/* 失败态优先于空态：没加载出来不等于没有通知；空态也要等结果，
-                避免请求途中闪过一句「还没有通知」 */}
-            {notifsFailed ? (
-              <LoadError onRetry={loadNotifs} />
-            ) : notifsReady && notifs.length === 0 ? (
-              <EmptyState
-                title="还没有通知"
-                text="愿望匹配上闲置、交易有进展时会出现在这里"
-                icon={ICONS.bellFg}
-              />
-            ) : null}
-          </View>
-        ) : state === 'error' ? (
-          /* 失败态优先于一切：没读到不等于没有会话 */
-          <LoadError onRetry={reloadConversations} />
-        ) : state === 'loading' ? (
-          <View className="chat__empty">
-            <Text className="chat__empty-title">正在加载会话…</Text>
-          </View>
-        ) : state === 'empty' ? (
-          <View className="chat__empty">
-            <Text className="chat__empty-title">这里还没有会话</Text>
-            <Text className="chat__empty-text">在商品详情点「我想要」就能开聊</Text>
-          </View>
-        ) : (
-          <>
-            {items.map((item) => {
-              /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
-              const user = item.counterpart
-              const unread = item.unreadCount
-              /** 交易进度胶囊（#89）：数据源与状态机见 `features/chat/capsule.ts` */
-              const capsule = capsuleFor(item, txMap, txSignals)
-
-              return (
-                <View
-                  key={item.id}
-                  className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
-                  onClick={() => openConversation(item.id)}
-                >
-                  {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
-                  <View className="chat__ava-wrap">
-                    {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）：空就走统一默认头像 */}
-                    <UserAvatar className="chat__ava" src={user.avatarUrl} />
-                    {unread > 0 ? (
-                      // 两位数与 `99+` 要缩字号才不裁字（见 index.scss 的 .is-multi）
-                      <Text className={`chat__bdg num${unread > 9 ? ' is-multi' : ''}`}>
-                        {badgeText(unread)}
-                      </Text>
-                    ) : null}
+      {searchActive ? (
+        /*
+          搜索模式下用结果区**替换**会话列表（不是叠在上面）：两套列表同时存在时，
+          滚动位置、下拉刷新、加载更多都各自为政，用户分不清看到的是哪一份。
+          「通知」Tab 下同样允许进搜索模式 —— 搜索是跨会话的全局动作，与当前 Tab
+          无关；退出搜索后仍回到原来的 Tab，不改变用户所处的视角。
+        */
+        <View className="chat__list">
+          <ChatSearchResultsView
+            query={searchQuery}
+            results={searchResults}
+            searching={searching}
+            marketFailed={marketSearchFailed}
+            listState={state}
+            onRetryLocal={reloadConversations}
+            scannedConversations={scannedConversations}
+            failedConversations={failedScans}
+            onOpenContact={openSearchContact}
+            onOpenListing={openSearchListing}
+            onOpenMessage={openSearchMessage}
+          />
+        </View>
+      ) : (
+        <View className={`chat__list ${tabContentClass}`}>
+          {filter === 'system' ? (
+            <View className="notif__list">
+              {notifs.map((item) => (
+                <View key={item.id} className="notif__item" onClick={() => openNotif(item)}>
+                  <View className="notif__ic">
+                    <Image className="notif__ic-img" src={TONE_ICON[item.tone]} mode="aspectFit" />
+                    {/* 未读红点（#431 任务二）：`readAt` 权威，点击条目即消失 */}
+                    {item.readAt === null ? <View className="notif__dot" /> : null}
                   </View>
+                  <View className="notif__body">
+                    <Text className="notif__body-title">{item.title}</Text>
+                    <Text className="notif__tm num">{relativeTime(item.createdAt)}</Text>
+                    <Text className="notif__text">{item.description}</Text>
+                  </View>
+                </View>
+              ))}
 
-                  <View className="chat__corp">
-                    <View className="chat__corp-top">
-                      <Text className="chat__nm-tx">{user.nickname}</Text>
-                      {capsule ? (
-                        <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
+              {/* 失败态优先于空态：没加载出来不等于没有通知；空态也要等结果，
+                避免请求途中闪过一句「还没有通知」 */}
+              {notifsFailed ? (
+                <LoadError onRetry={loadNotifs} />
+              ) : notifsReady && notifs.length === 0 ? (
+                <EmptyState
+                  title="还没有通知"
+                  text="愿望匹配上闲置、交易有进展时会出现在这里"
+                  icon={ICONS.bellFg}
+                />
+              ) : null}
+            </View>
+          ) : state === 'error' ? (
+            /* 失败态优先于一切：没读到不等于没有会话 */
+            <LoadError onRetry={reloadConversations} />
+          ) : state === 'loading' ? (
+            <View className="chat__empty">
+              <Text className="chat__empty-title">正在加载会话…</Text>
+            </View>
+          ) : state === 'empty' ? (
+            <View className="chat__empty">
+              <Text className="chat__empty-title">这里还没有会话</Text>
+              <Text className="chat__empty-text">在商品详情点「我想要」就能开聊</Text>
+            </View>
+          ) : (
+            <>
+              {items.map((item) => {
+                /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
+                const user = item.counterpart
+                const unread = item.unreadCount
+                /** 交易进度胶囊（#89）：数据源与状态机见 `features/chat/capsule.ts` */
+                const capsule = capsuleFor(item, txMap, txSignals)
+
+                return (
+                  <View
+                    key={item.id}
+                    className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
+                    onClick={() => openConversation(item.id)}
+                  >
+                    {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
+                    <View className="chat__ava-wrap">
+                      {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）：空就走统一默认头像 */}
+                      <UserAvatar className="chat__ava" src={user.avatarUrl} />
+                      {unread > 0 ? (
+                        // 两位数与 `99+` 要缩字号才不裁字（见 index.scss 的 .is-multi）
+                        <Text className={`chat__bdg num${unread > 9 ? ' is-multi' : ''}`}>
+                          {badgeText(unread)}
+                        </Text>
                       ) : null}
                     </View>
-                    <Text className="chat__msg">{previewOf(item, txMap.get(item.id))}</Text>
-                    {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
-                    <Text className="chat__tm num">
-                      {conversationTimeLabel(item.lastMessageAt, now)}
-                    </Text>
-                  </View>
 
-                  {/* 右侧商品缩略图（1版稿 .thumb）：契约 `listing.coverUrl` */}
-                  <View className="chat__thumb">
-                    {item.listing.coverUrl ? (
-                      <Image
-                        className="chat__thumb-img"
-                        src={item.listing.coverUrl}
-                        mode="aspectFill"
-                      />
-                    ) : (
-                      <Image className="chat__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
-                    )}
-                  </View>
-                </View>
-              )
-            })}
+                    <View className="chat__corp">
+                      <View className="chat__corp-top">
+                        <Text className="chat__nm-tx">{user.nickname}</Text>
+                        {capsule ? (
+                          <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
+                        ) : null}
+                      </View>
+                      <Text className="chat__msg">{previewOf(item, txMap.get(item.id))}</Text>
+                      {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
+                      <Text className="chat__tm num">
+                        {conversationTimeLabel(item.lastMessageAt, now)}
+                      </Text>
+                    </View>
 
-            {/*
+                    {/* 右侧商品缩略图（1版稿 .thumb）：契约 `listing.coverUrl` */}
+                    <View className="chat__thumb">
+                      {item.listing.coverUrl ? (
+                        <Image
+                          className="chat__thumb-img"
+                          src={item.listing.coverUrl}
+                          mode="aspectFill"
+                        />
+                      ) : (
+                        <Image className="chat__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
+                      )}
+                    </View>
+                  </View>
+                )
+              })}
+
+              {/*
               更早的会话：契约按 `lastMessageAt` 降序 + 游标分页。没有这个入口，
               会话多于 50 条的用户就只能看到最近 50 条，且没有任何翻页办法。
               失败只在尾部提示重试，不推翻已经看到的列表。
             */}
-            {listNextCursor || loadMoreFailed ? (
-              <View className="chat__more">
-                {loadMoreFailed ? (
-                  <View className="chat__more-btn" onClick={loadMoreConversations}>
-                    <Text>更早的会话没加载出来 · 重试</Text>
-                  </View>
-                ) : (
-                  <View className="chat__more-btn" onClick={loadMoreConversations}>
-                    <Text>{loadingMore ? '正在加载…' : '加载更多会话'}</Text>
-                  </View>
-                )}
-              </View>
-            ) : null}
-          </>
-        )}
-      </View>
+              {listNextCursor || loadMoreFailed ? (
+                <View className="chat__more">
+                  {loadMoreFailed ? (
+                    <View className="chat__more-btn" onClick={loadMoreConversations}>
+                      <Text>更早的会话没加载出来 · 重试</Text>
+                    </View>
+                  ) : (
+                    <View className="chat__more-btn" onClick={loadMoreConversations}>
+                      <Text>{loadingMore ? '正在加载…' : '加载更多会话'}</Text>
+                    </View>
+                  )}
+                </View>
+              ) : null}
+            </>
+          )}
+        </View>
+      )}
 
       {/* 1版稿 .totop：滚过一屏半浮现；Tab 页抬到底栏上方 */}
       <BackTop show={showTop} onTop={backToTop} bottom="170rpx" />
