@@ -617,6 +617,8 @@ export default function Chat() {
    */
   const activateSearch = () => {
     searchItemsRef.current = items
+    // 已经在搜索模式里又点了一下输入框：不要再滚回顶部，否则长结果列表被拉回第一行
+    if (searchActive) return
     setSearchActive(true)
     // 结果区从顶部开始看（进搜索时页面可能停在会话列表很靠下的位置）
     void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
@@ -640,16 +642,22 @@ export default function Chat() {
     void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
   }
 
-  /** 取一个会话的消息页（搜索期间按会话 id 缓存，命中过就不再请求） */
-  const loadSearchedMessages = useCallback(async (conversationId: string, epoch: number) => {
+  /**
+   * 取一个会话的消息页（搜索期间按会话 id 缓存，命中过就不再请求）。
+   *
+   * 缓存只认**缓存代次**，不认搜索代次：搜索代次在每敲一个字时就前进一次，
+   * 用它守缓存会让「上一轮在途的 10 个消息页」全部丢弃且不写回 —— 连续输入时
+   * 每一轮都要从零重拉 10 个 limit=100 的请求，缓存等于没做。
+   * 数据新鲜度由 `searchCacheEpoch` 独占负责（列表刷新 / 退出搜索 / 换账号时清空）。
+   */
+  const loadSearchedMessages = useCallback(async (conversationId: string) => {
     const cached = searchMessageCache.current.get(conversationId)
     if (cached) return cached
     // 记下请求发出时的缓存代次：期间缓存被清空（列表刷新 / 退出搜索 / 换账号）时，
     // 这页数据属于清空前的旧世界，不能再写回缓存
     const cacheEpoch = searchCacheEpoch.current
     const page = await fetchMessagePage(conversationId)
-    // 写缓存前比对两个代次：搜索轮次没变 + 缓存没被清过，两次都成立才写
-    if (epoch === searchEpoch.current && cacheEpoch === searchCacheEpoch.current) {
+    if (cacheEpoch === searchCacheEpoch.current) {
       searchMessageCache.current.set(conversationId, page.items)
     }
     return page.items
@@ -674,9 +682,7 @@ export default function Chat() {
           return { ok: false as const, cards: [] as ListingCard[] }
         },
       )
-      const pages = await Promise.allSettled(
-        targets.map((item) => loadSearchedMessages(item.id, epoch)),
-      )
+      const pages = await Promise.allSettled(targets.map((item) => loadSearchedMessages(item.id)))
       const messageHits: MessageHit[] = []
       let failed = 0
       pages.forEach((page, index) => {

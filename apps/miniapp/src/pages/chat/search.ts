@@ -127,8 +127,10 @@ export const EMPTY_RESULTS: ChatSearchResults = { contacts: [], listings: [], me
  * 联系人按 `counterpart.nickname`（会话另一端）匹配；商品按 `listing.title` 匹配。
  * 两段都按列表原序（最近的在前），不再排序 —— 列表本身就是「最近聊的在前」。
  *
- * 联系人按 `counterpart.id` **去重**：同一个卖家可能同时挂在几个会话上（不同商品），
- * 不去重就会出现几行同名的人，用户分不清点哪个；保留最先出现的（最近的会话）。
+ * 联系人按 `counterpart.id`、商品按 `listing.id` **去重**：同一个卖家可能同时挂在几个
+ * 会话上（不同商品），同一个商品也可能同时被几个买家聊着 —— 不去重就会出现几行同名的人 /
+ * 同款同价的商品，用户分不清点哪个，而行 key 还会撞（`source + listingId`）；
+ * 保留最先出现的（最近的会话）。
  */
 export function matchConversations(
   conversations: readonly ConversationDto[],
@@ -139,6 +141,7 @@ export function matchConversations(
   const listings: ListingHit[] = []
   if (query.length === 0) return { contacts, listings }
   const seenContacts = new Set<string>()
+  const seenListings = new Set<string>()
   for (const item of conversations) {
     if (hit(item.counterpart.nickname, query)) {
       if (!seenContacts.has(item.counterpart.id) && contacts.length < MAX_CONTACT_HITS) {
@@ -154,7 +157,8 @@ export function matchConversations(
       }
     }
     if (hit(item.listing.title, query)) {
-      if (listings.length < MAX_CONVERSATION_LISTING_HITS) {
+      if (!seenListings.has(item.listing.id) && listings.length < MAX_CONVERSATION_LISTING_HITS) {
+        seenListings.add(item.listing.id)
         listings.push({
           kind: 'listing',
           listingId: item.listing.id,
@@ -288,9 +292,7 @@ export function describeSearchCoverage(coverage: SearchCoverage): string {
   }
   const local =
     coverage.scanned > 0
-      ? `只搜了最近 ${coverage.scanned} 个会话${
-          coverage.failedScans > 0 ? `（其中 ${coverage.failedScans} 个没连上）` : ''
-        }`
+      ? `${scopePrefix(coverage.scanned)}${describeScanScope(coverage)}`
       : coverage.listState === 'empty'
         ? '你还没有任何会话'
         : '会话列表还没加载完'
@@ -300,4 +302,41 @@ export function describeSearchCoverage(coverage: SearchCoverage): string {
       ? '和全站商品'
       : '，这次只搜了全站商品'
   return `${local}${market}`
+}
+
+/** 「只」只有在真的被上限截断时才敢说 —— 会话不足 10 个时说「只搜了 2 个」会让人以为被砍过 */
+function scopePrefix(scanned: number): string {
+  return scanned >= MAX_MESSAGE_SCAN_CONVERSATIONS ? '只搜了' : '搜了'
+}
+
+/** 「最近 N 个会话（其中 M 个没连上）」—— 空态与底注共用的同一段范围描述 */
+function describeScanScope(coverage: SearchCoverage): string {
+  return `最近 ${coverage.scanned} 个会话${
+    coverage.failedScans > 0 ? `（其中 ${coverage.failedScans} 个没连上）` : ''
+  }`
+}
+
+/** 结果区底注需要的上下文（比 `SearchCoverage` 多两样：命中有几条、每个会话取多深） */
+export interface MessageFooterInput extends SearchCoverage {
+  /** 聊天记录这次命中几条 */
+  hits: number
+  /** 每个会话只取了最近多少条消息（`MESSAGE_PAGE_LIMIT`） */
+  depth: number
+}
+
+/**
+ * 结果区底注：聊天记录这一段到底盖了多大、有没有漏搜。
+ *
+ * **有命中时也必须说失败数**：10 个会话里 3 个没连上，只写「仅搜索最近 10 个会话」
+ * 会让用户以为「这 10 个里就这些」，实际那 3 个压根没读到 —— 这正是空态那条
+ * 「把没搜成说成没有」在结果路径上的同一形态，所以两者共用 `describeScanScope`。
+ */
+export function describeMessageFooter(input: MessageFooterInput): string {
+  if (input.scanned === 0) return `聊天记录没有搜：${describeSearchCoverage(input)}`
+  const scope = describeScanScope(input)
+  const body =
+    input.hits > 0
+      ? `聊天记录仅搜索${scope}，点结果进入该会话`
+      : `聊天记录没有命中（${scopePrefix(input.scanned)}${scope}）`
+  return `${body}（每个会话只取最近 ${input.depth} 条消息）`
 }

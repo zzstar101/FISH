@@ -112,14 +112,17 @@ describe('#669 接线：消息缓存的两个代次', () => {
     expectBefore(block, 'searchCacheEpoch.current += 1', 'searchMessageCache.current.clear()')
   })
 
-  test('写缓存前同时比对搜索轮次与缓存代次', async () => {
+  test('写缓存只认缓存代次，不认搜索轮次', async () => {
     const block = sliceFrom(
       await source(),
       'const loadSearchedMessages = useCallback',
       'return page.items',
     )
-    expect(block).toContain('epoch === searchEpoch.current')
+    // 只让缓存代次守：搜索代次每敲一个字就前进，用它守会把在途的 10 个消息页
+    // 全部丢弃且不写回 → 连续输入时每轮从零重拉，缓存等于没做（审查第 3 条）
     expect(block).toContain('cacheEpoch === searchCacheEpoch.current')
+    expect(block).not.toContain('epoch === searchEpoch.current')
+    expect(block).not.toContain('epoch: number')
   })
 })
 
@@ -139,5 +142,25 @@ describe('#669 接线：退出搜索与列表就绪', () => {
     // 不补跑就会「列表好了，可结果永远空着、文案还说没搜到」（审查 B）
     expect(block).toContain("prev === 'loading' || prev === 'error'")
     expect(block).toContain("state === 'list' || state === 'empty'")
+  })
+})
+
+describe('#669 接线：搜索在途时不能露出上一轮结果', () => {
+  test('三段结果都被 searching 挡住', async () => {
+    const ui = await Bun.file(new URL('../src/pages/chat/search-ui.tsx', import.meta.url)).text()
+    // 不挡：防抖 + 10 个消息页往返期间，屏上是「正在搜索…」+ 上一轮关键词的命中行，
+    // 而且照常可点 → 用户点进一个与当前输入无关的会话（审查第 4 条）
+    for (const segment of ['contacts', 'listings', 'messages']) {
+      expect(ui).toContain(`{!searching && results.${segment}.length > 0 ? (`)
+    }
+  })
+
+  test('已经在搜索模式里再点输入框不重复滚顶', async () => {
+    const block = sliceFrom(
+      await source(),
+      'const activateSearch = () =>',
+      'void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })',
+    )
+    expect(block).toContain('if (searchActive) return')
   })
 })

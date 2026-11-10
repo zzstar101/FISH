@@ -3,6 +3,7 @@ import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import {
   type ChatSearchResults,
+  describeMessageFooter,
   describeSearchCoverage,
   EMPTY_RESULTS,
   hasQuery,
@@ -264,6 +265,29 @@ describe('isEmptyResults —— 三段都空才算没找到', () => {
   })
 })
 
+describe('matchConversations —— 会话内商品按同一条商品去重', () => {
+  test('同一商品挂在多个买家会话上时只出一行（行 key 撞了会丢行、也没法区分点哪个）', () => {
+    // 卖家侧真实形态：一件商品同时在跟几个买家聊，会话列表里是几条不同会话、同一个 listing.id。
+    // 不去重则商品段出现几行完全相同的标题/价格，React key（source + listingId）也重复。
+    const sameListing = {
+      id: 'l-keyboard',
+      title: 'K380 键盘',
+      priceCents: 16000,
+      status: 'ACTIVE' as const,
+      coverUrl: null,
+    }
+    const rows = [
+      conversation({ id: 'c-buyer-1', listingId: 'l-keyboard', listing: sameListing }),
+      conversation({ id: 'c-buyer-2', listingId: 'l-keyboard', listing: sameListing }),
+      conversation({ id: 'c-buyer-3', listingId: 'l-keyboard', listing: sameListing }),
+    ]
+    const listings = matchConversations(rows, '键盘').listings
+    expect(listings).toHaveLength(1)
+    // 保留最先出现的（最近的会话）
+    expect(listings[0]?.conversationId).toBe('c-buyer-1')
+  })
+})
+
 describe('matchConversations —— 会话内商品不能挤掉全站结果', () => {
   test('会话内商品封顶 8 条，合并后仍给全站留出名额', () => {
     // 会话内商品最多会有 50 条（每个会话一条）。不单独封顶时它能把十条名额吃满，
@@ -381,5 +405,61 @@ describe('describeSearchCoverage —— 每种「没找到」都要说清原因'
         marketFailed: true,
       }),
     ).toBe('你还没有任何会话；全站商品也没连上服务器')
+  })
+
+  test('会话不足上限时不能说「只」：没被截断就没有「只」', () => {
+    expect(
+      describeSearchCoverage({
+        listState: 'list',
+        scanned: 3,
+        failedScans: 0,
+        marketFailed: false,
+      }),
+    ).toBe('搜了最近 3 个会话和全站商品')
+  })
+})
+
+/**
+ * 结果区底注：有命中时也必须交代「有几个会话没读到」，
+ * 否则用户会把「10 个里就这些」当成结论，实际有 3 个压根没搜成。
+ */
+describe('describeMessageFooter —— 有命中时也要说清漏搜', () => {
+  const base = {
+    listState: 'list' as const,
+    scanned: 10,
+    failedScans: 0,
+    marketFailed: false,
+    depth: 100,
+  }
+
+  test('有命中 + 全部会话都读到：说范围与深度', () => {
+    expect(describeMessageFooter({ ...base, hits: 2 })).toBe(
+      '聊天记录仅搜索最近 10 个会话，点结果进入该会话（每个会话只取最近 100 条消息）',
+    )
+  })
+
+  test('有命中 + 有会话没连上：失败数不能被吞掉', () => {
+    expect(describeMessageFooter({ ...base, failedScans: 3, hits: 2 })).toBe(
+      '聊天记录仅搜索最近 10 个会话（其中 3 个没连上），点结果进入该会话（每个会话只取最近 100 条消息）',
+    )
+  })
+
+  test('没有命中：复用空态那套范围说法', () => {
+    expect(describeMessageFooter({ ...base, hits: 0 })).toBe(
+      '聊天记录没有命中（只搜了最近 10 个会话）（每个会话只取最近 100 条消息）',
+    )
+  })
+
+  test('一个会话都没扫（列表没就绪）：说「没有搜」而不是「没有命中」', () => {
+    expect(
+      describeMessageFooter({
+        listState: 'loading',
+        scanned: 0,
+        failedScans: 0,
+        marketFailed: false,
+        hits: 0,
+        depth: 100,
+      }),
+    ).toBe('聊天记录没有搜：会话列表还没加载完，这次只搜了全站商品')
   })
 })

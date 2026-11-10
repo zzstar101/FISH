@@ -15,7 +15,7 @@ import { MESSAGE_PAGE_LIMIT } from '@/features/chat/api'
 import { formatYuan } from '@/lib/money'
 import type { ChatListState } from './list-view'
 import type { ChatSearchResults, ContactHit, ListingHit, MessageHit } from './search'
-import { describeSearchCoverage, hasQuery, isEmptyResults } from './search'
+import { describeMessageFooter, describeSearchCoverage, hasQuery, isEmptyResults } from './search'
 
 /**
  * 每个会话只取最近一页消息 —— 直接用取数层的分页大小，不再抄一份常量：
@@ -182,7 +182,7 @@ export function ChatSearchResultsView({
         </View>
       ) : null}
 
-      {results.contacts.length > 0 ? (
+      {!searching && results.contacts.length > 0 ? (
         <>
           <SectionHeader label="联系人" count={results.contacts.length} />
           {results.contacts.map((item) => (
@@ -202,7 +202,7 @@ export function ChatSearchResultsView({
         </>
       ) : null}
 
-      {results.listings.length > 0 ? (
+      {!searching && results.listings.length > 0 ? (
         <>
           <SectionHeader label="商品" count={results.listings.length} />
           {results.listings.map((item) => (
@@ -228,7 +228,7 @@ export function ChatSearchResultsView({
         </>
       ) : null}
 
-      {results.messages.length > 0 ? (
+      {!searching && results.messages.length > 0 ? (
         <>
           <SectionHeader label="聊天记录" count={results.messages.length} />
           {results.messages.map((item) => (
@@ -257,14 +257,18 @@ export function ChatSearchResultsView({
       ) : null}
 
       {/* 如实交代范围：V1 没有全站消息搜索，不写这句会让用户以为「搜不到」就是没有；
-          范围取自 `describeSearchCoverage`（与空态同源），失败数在这里也照样说 */}
+          文案由 `describeMessageFooter` 统一产出（与空态同源），有命中时也照样说失败数 */}
       {!searching && !empty && typed ? (
         <View className="csres__foot">
           <Text className="csres__foot-tx">
-            {results.messages.length > 0
-              ? `聊天记录仅搜索最近 ${scannedConversations} 个会话，点结果进入该会话`
-              : `聊天记录没有命中：${coverage}`}
-            {scannedConversations > 0 ? `（每个会话只取最近 ${MESSAGE_SCAN_DEPTH} 条消息）` : ''}
+            {describeMessageFooter({
+              listState,
+              scanned: scannedConversations,
+              failedScans: failedConversations,
+              marketFailed,
+              hits: results.messages.length,
+              depth: MESSAGE_SCAN_DEPTH,
+            })}
           </Text>
         </View>
       ) : null}
