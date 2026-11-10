@@ -636,8 +636,11 @@
   border-width: 2px;
 }
 
+/* 时间 / 读位这行（2026-11-10 Owner「感觉这字还是太大了」）：字号令牌阶梯最低只到
+   `--fs-2xs`（20px = 10pt），Owner 要更小，这里按 9pt 写死 18px —— 只此一处用到 9pt，
+   不为一处调用把 `--fs-*` 阶梯再加一档（#628 刚把字号收敛成整 pt 阶梯）。 */
 .conv__time {
-  font-size: 20px;
+  font-size: 18px;
   color: var(--muted-2);
 }
 
@@ -815,19 +818,21 @@
   pointer-events: none;
 }
 
+/* 已读：跟时间同灰（读过的信息就该退到背景里，不再抢视线） */
 .conv__rd {
-  color: var(--ink);
-  font-weight: 600;
+  color: var(--muted-2);
 }
 
-/* 未读红、已读黑（#359 四）：只挂在我发出的气泡的时间后面，判据见 view.ts 的 messageReadLabel */
+/* 未读：**深色 + 加粗**（2026-11-10 Owner：「颜色改成未读黑色切换已读灰色比较好」）——
+   语义从「红字告警」改成「深色提醒、读过就退灰」：
+   · 未读 = `--ink`（#171d2e，压 --bg 15.4:1），加粗 600；
+   · 已读 = `--muted-2` 灰，不加粗（见上面 `.conv__rd`）。
+   历史：上一版未读用过共享令牌 `--danger-ink`（#974457）与手写正红 `#d92b3f`（4.60:1），
+   Owner 否掉了红色方案，改回无需对比度妥协的黑/灰双档 —— 别再改回红色。
+   判据见 view.ts 的 messageReadLabel：只标我发出的消息，判不出来一律算未读。 */
 .conv__rd.is-unread {
-  /*
-    用 `--danger-ink` 而不是 `--danger`（#359 四 审查回合）：这是 20rpx（10pt）的文字，
-    底色是 `--bg`（#f7faff），`--danger`（#ff5f6d）对比度只有 2.82:1，连 AA-large 的
-    3:1 都不到；`--danger-ink`（#974457）是 6.12:1。同文件的 `.conv__retry` 也用的是 ink 版。
-  */
-  color: var(--danger-ink);
+  color: var(--ink);
+  font-weight: 600;
 }
 
 /* 失败重试胶囊：DESIGN.md §3.1 S 档（68 / 26），与媒体的上传失败共用 */

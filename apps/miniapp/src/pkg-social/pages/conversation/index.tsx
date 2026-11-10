@@ -3976,6 +3976,17 @@ export default function Conversation() {
                   const item = entry.media
                   const mine = item.senderId === me?.id
                   /**
+                   * 媒体消息的逐条读位（2026-11-10 Owner：「图片已读也没有信息」）——
+                   * 原先只有文本气泡那条分支渲染 `.conv__rd`，图片 / 语音行只有时间戳，
+                   * 自己发的图是否已被对方读到完全看不出来。判据与文本分支同一个
+                   * `messageReadLabel`（只对我发出的消息判；判不出来算未读）。
+                   */
+                  const mediaReadLabel = messageReadLabel({
+                    mine,
+                    createdAt: item.createdAt,
+                    counterpartLastReadAt: conversation.counterpartLastReadAt,
+                  })
+                  /**
                    * 撤回碑（#359 3c 审查回合二的媒体侧补齐）：服务端撤回后下发的媒体 DTO
                    * `url` 为空、尺寸/时长全 null（`media-service.ts` 的 `dto`），照常渲染会
                    * 画出一张永远转圈的空图 / 时长兜底成 `1″` 的语音气泡。
@@ -4041,7 +4052,16 @@ export default function Conversation() {
                             </View>
                           </View>
                         )}
-                        <Text className="conv__time num">{clockTime(item.createdAt)}</Text>
+                        <Text className="conv__time num">
+                          {clockTime(item.createdAt)}
+                          {mediaReadLabel ? (
+                            <Text
+                              className={`conv__rd${mediaReadLabel === '未读' ? ' is-unread' : ''}`}
+                            >
+                              {` · ${mediaReadLabel}`}
+                            </Text>
+                          ) : null}
+                        </Text>
                       </View>
                     </View>
                   )
