@@ -321,19 +321,25 @@
   height: 48px;
 }
 
-/* ---- 三张独立卡（Owner 修订）：圆角 8pt、无边框描边；只有帮助与设置卡带底部阴影 ---- */
+/* ---- 三张独立卡（Owner 修订 2026-11-10 版式规范）：无边框描边；只有帮助与设置卡带底部阴影。
+   版式口径（最新稿标注，pt = px/2，与字号阶梯同口径）：
+   · 统一圆角 **16pt → 32px**（外层卡片）；
+   · 卡内元素圆角 **10pt → 20px**（见 `.profile__cell` / `.profile__cell-tile` / `.profile__row-disc`）；
+   · 统一页面边距 **16pt → 32px**（在 `.profile__body` 的左右 padding 上，别再往卡里叠）；
+   · 卡内格子间距 **12pt → 24px**（见 `.profile__grid` 的 `gap`，卡片左右 padding 与之相同）。 */
 .profile__panel {
   background: var(--surface);
-  border-radius: var(--r-sm); /* 8pt → 16px */
+  border-radius: 32px; /* 16pt（Owner 2026-11-10 统一圆角规范；原 --r-sm = 8pt） */
 }
 
 .profile__panel--stats,
 .profile__panel--trade {
-  padding: 32px 8px 28px;
+  /* 左右 24px = 12pt，与格间距同值：格子到卡边的留白与格子之间一致 */
+  padding: 32px 24px 28px;
 }
 
 .profile__panel--stats {
-  margin-top: 28px;
+  margin-top: 24px;
 }
 
 .profile__panel--trade {
@@ -349,6 +355,9 @@
 .profile__grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  /* 12pt = 24px：格间距（Owner 2026-11-10 版式规范）。之前没有 gap，四格直接顶满卡宽，
+     格子之间零留白，5 栏更挤 */
+  gap: 24px;
 
   &--5 {
     grid-template-columns: repeat(5, 1fr);
@@ -360,7 +369,7 @@
   flex-direction: column;
   align-items: center;
   gap: 22px;
-  border-radius: 28px;
+  border-radius: 20px; /* 10pt：卡内元素圆角（按压反馈的圆角边界） */
 
   &:active {
     opacity: 0.65;
@@ -386,6 +395,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 20px; /* 10pt：卡内元素圆角（与图标盘同档） */
 }
 
 .profile__cell-ic {
@@ -430,16 +440,13 @@
 }
 
 .profile__row-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 24px;
   min-height: 112px;
   padding: 0 30px;
   box-sizing: border-box;
-
-  & + & {
-    border-top: 2px solid var(--border);
-  }
 
   &:active {
     background: var(--accent-weak);
@@ -450,11 +457,27 @@
   }
 }
 
+/* 行间分隔线**内缩**（Owner 2026-11-10「不要从头连到尾」）：只画在「文字左沿 → 内容右沿」这一段，
+   左右都不贴卡边。左起点 = 行左内距 30 + 图标盘 72 + 间距 24 = 126px（正好对齐主标题左沿）；
+   右端 = 30px 内距。用伪元素画而不是 border-top：border 撑满整行宽度，无法内缩，
+   而且它会被算进行的盒高，把 `min-height: 112px` 的实测高度顶成 114px。
+   第二个选择器管「退出登录」那组：它自己在另一个 `.profile__list` 里，跟上面四行不同组，
+   靠 `+` 选不到 —— 不补这条的话「关于与版本」和「退出登录」之间会少一条线，读起来像同一段。 */
+.profile__row-item + .profile__row-item::before,
+.profile__list + .profile__list > .profile__row-item:first-child::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 126px;
+  right: 30px;
+  border-top: 2px solid var(--border);
+}
+
 .profile__row-disc {
   flex: 0 0 auto;
   width: 72px;
   height: 72px;
-  border-radius: 24px;
+  border-radius: 20px; /* 10pt：卡内元素圆角（原 24px） */
   background: rgba(23, 35, 61, 0.05); /* 稿 .mic：fg 5% + surface，预计算 */
   display: flex;
   align-items: center;
