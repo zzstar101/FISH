@@ -13,7 +13,10 @@ import { ICONS } from '@/assets/lib-icons'
 import UserAvatar from '@/components/user-avatar'
 import { formatYuan } from '@/lib/money'
 import type { ChatSearchResults, ContactHit, ListingHit, MessageHit } from './search'
-import { isEmptyResults } from './search'
+import { hasQuery, isEmptyResults } from './search'
+
+/** 每个会话只取最近一页消息（`features/chat/api.ts` 的 `MESSAGE_PAGE_LIMIT`） */
+const MESSAGE_SCAN_DEPTH = 100
 
 /** 占位文案：三段能力一次说清（#669 验收标准） */
 export const SEARCH_PLACEHOLDER = '搜索记录/联系人/商品'
@@ -67,9 +70,14 @@ interface ResultsProps {
   searching: boolean
   /** 全站商品检索失败：只影响商品段，联系人/聊天记录照常显示 */
   marketFailed: boolean
-  /** 这次实际扫了几个会话的消息（结果区底注用） */
+  /** 会话列表本身没加载出来：联系人 / 聊天记录两段搜不了，得说清楚，不能当成「没找到」 */
+  localFailed: boolean
+  /** 重拉会话列表（本地失败时的出口） */
+  onRetryLocal: () => void
+  /** 这次实际扫了几个会话的消息（结果区底注用，**不是**常量上限） */
   scannedConversations: number
-  scanLimit: number
+  /** 扫描时没连上服务器的会话数：也算「没搜到」会给出静默缺失的结果 */
+  failedConversations: number
   onOpenContact: (hit: ContactHit) => void
   onOpenListing: (hit: ListingHit) => void
   onOpenMessage: (hit: MessageHit) => void
@@ -102,34 +110,57 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
 }
 
 /**
- * 三段结果。空态与失败态的分工：
- * - `searching` 优先（还没结果就别说没有）；
- * - 三段全空 → 一句「没有找到」，并说明搜索范围（不让用户以为能搜全站）；
- * - 商品段失败单独一行提示 + 重试（其余两段仍可用）。
+ * 三段结果。四种状态的分工（顺序即优先级）：
+ * - `searching`：还在搜（防抖等待也算）—— 不能说「没有」；
+ * - **没输入**（`hasQuery` 为假）：只提示能搜什么，绝不出现「没有找到「」」；
+ * - 三段全空 → 一句「没有找到」，并如实说明这次搜了哪些范围；
+ * - 有结果 → 三段 + 底注交代覆盖范围（含失败/没连上的会话数）。
+ *
+ * 「会话列表没加载出来」单独一行提示 + 重试：空态会被读成「恰好没有内容」。
  */
 export function ChatSearchResultsView({
   query,
   results,
   searching,
   marketFailed,
+  localFailed,
+  onRetryLocal,
   scannedConversations,
-  scanLimit,
+  failedConversations,
   onOpenContact,
   onOpenListing,
   onOpenMessage,
 }: ResultsProps) {
   const empty = isEmptyResults(results)
+  const typed = hasQuery(query)
+  /** 空态那句范围说明：本地两段搜不了时不能假装搜过 */
+  const emptyHint = localFailed
+    ? '会话列表没加载出来，联系人 / 聊天记录这两段搜不了；全站商品也没有命中'
+    : scannedConversations === 0
+      ? '会话还没加载出来，这次只搜了全站商品，也没有命中'
+      : `只搜你聊过的会话（最近 ${scannedConversations} 个）和全站商品，换个词试试`
   return (
     <View className="csres">
       {searching ? (
         <View className="csres__hint">
           <Text className="csres__hint-tx">正在搜索…</Text>
         </View>
+      ) : !typed ? (
+        <View className="csres__hint">
+          <Text className="csres__hint-tx">输入关键词，搜聊天记录、联系人和商品</Text>
+        </View>
       ) : empty ? (
         <View className="csres__hint">
           <Text className="csres__hint-title">没有找到「{query.trim()}」</Text>
-          <Text className="csres__hint-tx">
-            只搜你聊过的会话（最近 {scanLimit} 个）和全站商品，换个词试试
+          <Text className="csres__hint-tx">{emptyHint}</Text>
+        </View>
+      ) : null}
+
+      {localFailed && !searching ? (
+        <View className="csres__warn">
+          <Text className="csres__warn-tx">会话列表没加载出来，联系人和聊天记录搜不了</Text>
+          <Text className="csres__warn-btn" onClick={onRetryLocal}>
+            重试
           </Text>
         </View>
       ) : null}
@@ -208,13 +239,16 @@ export function ChatSearchResultsView({
         </View>
       ) : null}
 
-      {/* 如实交代范围：V1 没有全站消息搜索，不写这句会让用户以为「搜不到了」就是没有 */}
-      {!searching && !empty ? (
+      {/* 如实交代范围：V1 没有全站消息搜索，不写这句会让用户以为「搜不到」就是没有 */}
+      {!searching && !empty && typed ? (
         <View className="csres__foot">
           <Text className="csres__foot-tx">
             {results.messages.length > 0
               ? `聊天记录仅搜索最近 ${scannedConversations} 个会话，点结果进入该会话`
               : `聊天记录只搜了最近 ${scannedConversations} 个会话，没有命中`}
+            {`（每个会话只取最近 ${MESSAGE_SCAN_DEPTH} 条消息${
+              failedConversations > 0 ? `，其中 ${failedConversations} 个没连上` : ''
+            }）`}
           </Text>
         </View>
       ) : null}

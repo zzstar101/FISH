@@ -4,7 +4,9 @@ import type { ListingCard } from '@fish/contracts/listings/schema'
 import {
   type ChatSearchResults,
   EMPTY_RESULTS,
+  hasQuery,
   isEmptyResults,
+  MAX_CONTACT_HITS,
   MAX_MESSAGE_HITS,
   matchConversationMessages,
   matchConversations,
@@ -170,24 +172,72 @@ describe('sortMessageHits —— 新的在前并截断', () => {
   })
 })
 
-describe('mergeMarketListings —— 会话优先 + 去重 + 过滤', () => {
-  test('同 id 只留会话那条，其余全站商品按标题命中补齐', () => {
+describe('mergeMarketListings —— 会话优先 + 去重 + 截断', () => {
+  test('同 id 只留会话那条，其余全站商品补齐', () => {
     const inChat = matchConversations([conversation()], 'k380').listings
-    const merged = mergeMarketListings(inChat, [card({ id: 'l-1' }), card({ id: 'l-9' })], 'k380')
+    const merged = mergeMarketListings(inChat, [card({ id: 'l-1' }), card({ id: 'l-9' })])
     // l-1 在会话里已经出现过，不再重复；l-9 补进来且没有会话可进
     expect(merged.map((item) => item.listingId)).toEqual(['l-1', 'l-9'])
     expect(merged[0]?.source).toBe('conversation')
     expect(merged[1]).toMatchObject({ source: 'market', conversationId: null })
   })
 
-  test('标题不命中的全站商品不混进结果，且受上限约束', () => {
-    const merged = mergeMarketListings([], [card({ title: '完全不相关' })], 'k380')
-    expect(merged).toHaveLength(0)
+  /**
+   * 服务端的结果**原样采信**：`GET /listings?q=` 的匹配范围是 title + description
+   * （`apps/api/src/modules/listings/store.ts`，契约 §2.1）。这里若再按标题筛一遍，
+   * 「九成新」「面交」这种只出现在描述里的命中会被客户端整段丢掉，用户看到的是
+   * 「明明有货却说没找到」。
+   */
+  test('标题对不上的全站商品也保留（描述命中由服务端判定）', () => {
+    const merged = mergeMarketListings([], [card({ id: 'l-d', title: '罗技无线键盘' })])
+    expect(merged.map((item) => item.listingId)).toEqual(['l-d'])
+    expect(merged[0]).toMatchObject({ source: 'market', conversationId: null })
+  })
 
+  test('商品段受上限约束', () => {
     const many = Array.from({ length: 30 }, (_, index) =>
       card({ id: `l-m${index}`, title: `K380 键盘 ${index}` }),
     )
-    expect(mergeMarketListings([], many, 'k380')).toHaveLength(10)
+    expect(mergeMarketListings([], many)).toHaveLength(10)
+  })
+})
+
+describe('hasQuery —— 只有空白等于还没输入', () => {
+  test('空串 / 纯空白不是有效查询，有字才是', () => {
+    // 这条守的是「刚点开搜索框就显示『没有找到「」』」那个缺陷：
+    // 空查询必须走「还没输入」的提示态，而不是空结果态。
+    expect(hasQuery('')).toBe(false)
+    expect(hasQuery('   ')).toBe(false)
+    expect(hasQuery('　')).toBe(false)
+    expect(hasQuery(' k ')).toBe(true)
+  })
+})
+
+describe('matchConversations —— 联系人按人去重并封顶', () => {
+  test('同一卖家挂多个会话只出现一次，且联系人段有上限', () => {
+    const sameSeller = [conversation(), conversation({ id: 'c-2', listingId: 'l-2' })]
+    expect(
+      matchConversations(sameSeller, '卖家小鱼').contacts.map((c) => c.conversationId),
+    ).toEqual(['c-1'])
+
+    const many = Array.from({ length: MAX_CONTACT_HITS + 5 }, (_, index) =>
+      conversation({
+        id: `c-${index}`,
+        counterpart: { id: `u-${index}`, nickname: `卖家小鱼 ${index}`, avatarUrl: null },
+      }),
+    )
+    expect(matchConversations(many, '卖家小鱼').contacts).toHaveLength(MAX_CONTACT_HITS)
+  })
+})
+
+describe('matchConversationMessages —— 正文里的连续空白不影响命中', () => {
+  test('消息正文「k380  键盘」能被「k380 键盘」搜到', () => {
+    const hits = matchConversationMessages(
+      conversation(),
+      [message({ content: 'k380　 键盘\n还在' })],
+      'k380 键盘',
+    )
+    expect(hits).toHaveLength(1)
   })
 })
 

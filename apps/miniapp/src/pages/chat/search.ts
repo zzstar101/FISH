@@ -16,7 +16,7 @@
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCard } from '@fish/contracts/listings/schema'
 
-/** 输入防抖：输入即搜，但不为每个按键发一次请求（400ms 内连打不重复搜） */
+/** 输入防抖：输入即搜，但不为每个按键发一次请求（300ms 内连打不重复搜） */
 export const SEARCH_DEBOUNCE_MS = 300
 
 /** 聊天记录扫描的会话上限：取列表里最近的这几个（列表已按 `lastMessageAt` 降序） */
@@ -28,15 +28,29 @@ export const MAX_MESSAGE_HITS = 20
 /** 全站商品结果条数上限 */
 export const MAX_MARKET_HITS = 10
 
+/** 联系人结果条数上限（同一个卖家可能挂多个会话，先按人去重再截断） */
+export const MAX_CONTACT_HITS = 10
+
 /** 搜索词归一：去首尾空白 + 折叠连续空白 + 小写（英文昵称/型号大小写不敏感） */
 export function normalizeQuery(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
-/** 子串包含（大小写不敏感）。空串不算命中 —— 空搜索不该匹配全部。 */
+/**
+ * 子串包含（大小写与空白不敏感）。
+ *
+ * 两侧都折叠空白：`query` 已经过 `normalizeQuery`，但**正文**没有 —— 消息里
+ * 「k380　键盘」这种全角/连续空白很常见，只归一查询侧会出现「明明有这句话却搜不到」。
+ * 空查询不算命中 —— 空搜索不该匹配全部。
+ */
 function hit(haystack: string | null | undefined, query: string): boolean {
   if (query.length === 0) return false
-  return (haystack ?? '').toLowerCase().includes(query)
+  return (haystack ?? '').replace(/\s+/g, ' ').toLowerCase().includes(query)
+}
+
+/** 查询是否有实际内容（只有空白 = 用户还没输入，不能当成「没找到」） */
+export function hasQuery(rawQuery: string): boolean {
+  return normalizeQuery(rawQuery).length > 0
 }
 
 /**
@@ -103,6 +117,9 @@ export const EMPTY_RESULTS: ChatSearchResults = { contacts: [], listings: [], me
  *
  * 联系人按 `counterpart.nickname`（会话另一端）匹配；商品按 `listing.title` 匹配。
  * 两段都按列表原序（最近的在前），不再排序 —— 列表本身就是「最近聊的在前」。
+ *
+ * 联系人按 `counterpart.id` **去重**：同一个卖家可能同时挂在几个会话上（不同商品），
+ * 不去重就会出现几行同名的人，用户分不清点哪个；保留最先出现的（最近的会话）。
  */
 export function matchConversations(
   conversations: readonly ConversationDto[],
@@ -112,16 +129,20 @@ export function matchConversations(
   const contacts: ContactHit[] = []
   const listings: ListingHit[] = []
   if (query.length === 0) return { contacts, listings }
+  const seenContacts = new Set<string>()
   for (const item of conversations) {
     if (hit(item.counterpart.nickname, query)) {
-      contacts.push({
-        kind: 'contact',
-        conversationId: item.id,
-        userId: item.counterpart.id,
-        nickname: item.counterpart.nickname,
-        avatarUrl: item.counterpart.avatarUrl,
-        listingTitle: item.listing.title,
-      })
+      if (!seenContacts.has(item.counterpart.id) && contacts.length < MAX_CONTACT_HITS) {
+        seenContacts.add(item.counterpart.id)
+        contacts.push({
+          kind: 'contact',
+          conversationId: item.id,
+          userId: item.counterpart.id,
+          nickname: item.counterpart.nickname,
+          avatarUrl: item.counterpart.avatarUrl,
+          listingTitle: item.listing.title,
+        })
+      }
     }
     if (hit(item.listing.title, query)) {
       listings.push({
@@ -141,9 +162,11 @@ export function matchConversations(
 /**
  * 一个会话的消息里匹配聊天记录。
  *
- * 只认 `TEXT` 且**未被撤回**的消息：`SYSTEM` 是交易事件文案（不是谁说的话，搜到也没法
- * 定位到「谁说的」），`LISTING` 卡片正文就是商品标题（商品段已经覆盖）。撤回的消息
- * 正文仍是原内容，但用户在会话里已经看不到了，搜出来点不进上下文。
+ * 只认 `TEXT` 且**未被撤回**的消息：
+ * - `SYSTEM` 是交易事件文案，不是谁说的话，搜到也没法定位到「谁说的」；
+ * - `LISTING` 卡片的 `content` 是商品公开 id（`lst_…`，见 `packages/contracts/src/chat/schema.ts`），
+ *   不是标题 —— 搜它没有意义，商品由「商品」段负责；
+ * - 撤回的消息正文仍是原内容，但用户在会话里已经看不到了，搜出来点不进上下文。
  */
 export function matchConversationMessages(
   conversation: ConversationDto,
@@ -185,20 +208,22 @@ export function sortMessageHits(hits: readonly MessageHit[]): MessageHit[] {
  *
  * 去重按 `listingId`：同一条商品既在自己聊过、又出现在全站结果里时只留一条，
  * 且保留 `source: 'conversation'`（点进去落在会话，比落在详情页更贴近用户当前在做的事）。
+ *
+ * **不再按标题重筛服务端结果**：`GET /listings?q=` 的匹配范围是 title + description
+ * （`apps/api/src/modules/listings/store.ts`，契约 §2.1），客户端只看 `title` 会把
+ * 「九成新」「面交」这类只出现在描述里的命中整段丢掉，表现为「明明有货却说没找到」。
+ * 服务端给了什么就信什么，本地只做去重与截断。
  */
 export function mergeMarketListings(
   conversationHits: readonly ListingHit[],
   marketCards: readonly ListingCard[],
-  rawQuery: string,
   limit = MAX_MARKET_HITS,
 ): ListingHit[] {
-  const query = normalizeQuery(rawQuery)
   const merged: ListingHit[] = [...conversationHits]
   const seen = new Set(merged.map((item) => item.listingId))
   for (const card of marketCards) {
     if (merged.length >= limit) break
     if (seen.has(card.id)) continue
-    if (!hit(card.title, query)) continue
     merged.push({
       kind: 'listing',
       listingId: card.id,

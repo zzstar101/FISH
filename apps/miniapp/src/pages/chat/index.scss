@@ -490,8 +490,10 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  height: 76px;
-  padding: 0 26px;
+  /* 64 = 微信原生胶囊高（DESIGN.md §3.1 规则 6：搜索字段固定 64，不套按钮档位表）；
+     左右内边距取 --btn-px-cap(24)，与胶囊内按钮同一口径 */
+  height: 64px;
+  padding: 0 var(--btn-px-cap);
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--border);
@@ -510,6 +512,9 @@
 
 .csearch__input {
   flex: 1 1 auto;
+  /* 小程序 Input 有 UA 默认宽度：必须 width:0 + min-width:0 才能被 flex 压缩，
+     否则 10 个字的占位文案会把胶囊撑爆、整条搜索栏换行（同 pkg-browse/pages/search） */
+  width: 0;
   min-width: 0;
   height: 100%;
   font-size: var(--fs-body);
@@ -528,8 +533,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 64px;
-  height: 64px;
+  /* 56 = 64 高搜索行内按钮（容器高 − 8，DESIGN.md §3.1 规则 6 / --btn-h-cap） */
+  width: var(--btn-h-cap);
+  height: var(--btn-h-cap);
   border-radius: 50%;
   background: var(--surface);
   border: 2px solid var(--border);
@@ -686,12 +692,24 @@
 
 /* 商品段失败：只提示这一段降级，不挡住上面两段 */
 .csres__warn {
+  display: flex;
+  align-items: center;
+  gap: 16px;
   padding: 16px 20px;
   border-radius: 24px;
   background: var(--ice);
 }
 
+/* 本地那两段搜不了时给一个重试出口（空态会被读成「恰好没有内容」） */
+.csres__warn-btn {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--brand);
+}
+
 .csres__warn-tx {
+  flex: 1 1 auto;
   font-size: var(--fs-xs);
   color: var(--muted-2);
 }

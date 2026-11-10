@@ -185,8 +185,20 @@ export default function Chat() {
   const [searching, setSearching] = useState(false)
   const [marketSearchFailed, setMarketSearchFailed] = useState(false)
   const [scannedConversations, setScannedConversations] = useState(0)
+  /** 扫描时没连上服务器的会话数：底注要如实说，不能算成「没命中」 */
+  const [failedScans, setFailedScans] = useState(0)
   /** 搜索代次：退出搜索 / 换关键词 / 换账号时自增，用来丢弃迟到的响应 */
   const searchEpoch = useRef(0)
+  /**
+   * 搜索用的会话快照。`runSearch` **不能**直接依赖 `items`：`useDidShow` 每次回到
+   * 本页都会重拉列表，`items` 换个引用就会让防抖 effect 重跑一次整套搜索 ——
+   * 用户从搜索结果点进会话再返回，会看到结果闪成「正在搜索…」并重打一次商品接口。
+   * 只在搜索真正开跑的那一刻读一次快照。
+   */
+  const searchItemsRef = useRef<ConversationDto[]>([])
+  useEffect(() => {
+    searchItemsRef.current = items
+  }, [items])
   /** 会话 id → 已拉到的消息页：搜索期间复用，别每次输入都重拉同一批会话 */
   const searchMessageCache = useRef(new Map<string, MessageDto[]>())
 
@@ -232,6 +244,8 @@ export default function Chat() {
     setSearching(false)
     setMarketSearchFailed(false)
     setScannedConversations(0)
+    setFailedScans(0)
+    searchItemsRef.current = []
   }
 
   /**
@@ -325,6 +339,11 @@ export default function Chat() {
     // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
     // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
     setLoadMoreFailed(false)
+    /*
+     * 消息缓存随列表一起失效：从会话页返回时可能刚发/刚撤回消息，留着旧快照
+     * 会把已撤回的正文继续搜出来（与 `matchConversationMessages` 的口径冲突）。
+     */
+    searchMessageCache.current.clear()
     // 交易快照与会话同一轮刷新（同一代次守卫）：从会话页返回时面交确认可能刚发生，
     // 胶囊必须跟着重算；「加载更多」不重拉（早前会话的交易在首屏快照里已就位）。
     const txLoaded = Promise.all([fetchAllTransactions('buyer'), fetchAllTransactions('seller')])
@@ -583,51 +602,66 @@ export default function Chat() {
     setSearching(false)
     setMarketSearchFailed(false)
     setScannedConversations(0)
+    setFailedScans(0)
+    searchItemsRef.current = []
   }
 
   /** 取一个会话的消息页（搜索期间按会话 id 缓存，命中过就不再请求） */
-  const loadSearchedMessages = useCallback(async (conversationId: string) => {
+  const loadSearchedMessages = useCallback(async (conversationId: string, epoch: number) => {
     const cached = searchMessageCache.current.get(conversationId)
     if (cached) return cached
     const page = await fetchMessagePage(conversationId)
-    searchMessageCache.current.set(conversationId, page.items)
+    // 写缓存前比对代次：换账号 / 退出搜索时缓存刚被清空，迟到响应不该再写回去
+    if (epoch === searchEpoch.current) searchMessageCache.current.set(conversationId, page.items)
     return page.items
   }, [])
 
   /**
    * 跑一次搜索。商品段是全站接口，它失败只降级提示、不吞掉会话内的结果；
-   * 消息段逐会话并发，单个会话失败按「这个会话没有命中」处理（不报错、不阻塞）。
+   * 消息段逐会话并发，单个会话失败**不算命中、但也不假装搜过** —— 失败数进底注。
+   *
+   * 商品请求与消息页并发发出：两段互不依赖，串行会让首屏延迟叠加「最慢的消息页 +
+   * 商品接口」。
    */
   const runSearch = useCallback(
     async (query: string, epoch: number) => {
-      const targets = items.slice(0, MAX_MESSAGE_SCAN_CONVERSATIONS)
-      const local = matchConversations(items, query)
-      setScannedConversations(targets.length)
-      const pages = await Promise.allSettled(targets.map((item) => loadSearchedMessages(item.id)))
+      const snapshot = searchItemsRef.current
+      const targets = snapshot.slice(0, MAX_MESSAGE_SCAN_CONVERSATIONS)
+      const local = matchConversations(snapshot, query)
+      const marketTask = searchListings(query, 'newest').then(
+        (cards) => ({ ok: true as const, cards }),
+        (error: unknown) => {
+          console.warn('[miniapp] 商品搜索失败，只显示会话内的结果', error)
+          return { ok: false as const, cards: [] as ListingCard[] }
+        },
+      )
+      const pages = await Promise.allSettled(
+        targets.map((item) => loadSearchedMessages(item.id, epoch)),
+      )
       const messageHits: MessageHit[] = []
+      let failed = 0
       pages.forEach((page, index) => {
         const conversation = targets[index]
-        if (!conversation || page.status !== 'fulfilled') return
+        if (!conversation) return
+        if (page.status !== 'fulfilled') {
+          failed += 1
+          return
+        }
         messageHits.push(...matchConversationMessages(conversation, page.value, query))
       })
-      let marketCards: ListingCard[] = []
-      let marketFailed = false
-      try {
-        marketCards = await searchListings(query, 'newest')
-      } catch (error) {
-        console.warn('[miniapp] 商品搜索失败，只显示会话内的结果', error)
-        marketFailed = true
-      }
+      const market = await marketTask
       if (epoch !== searchEpoch.current) return
       setSearchResults({
         contacts: local.contacts,
-        listings: mergeMarketListings(local.listings, marketCards, query),
+        listings: mergeMarketListings(local.listings, market.cards),
         messages: sortMessageHits(messageHits),
       })
-      setMarketSearchFailed(marketFailed)
+      setMarketSearchFailed(!market.ok)
+      setScannedConversations(targets.length)
+      setFailedScans(failed)
       setSearching(false)
     },
-    [items, loadSearchedMessages],
+    [loadSearchedMessages],
   )
 
   /**
@@ -645,6 +679,8 @@ export default function Chat() {
       return
     }
     setSearching(true)
+    // 上一轮的商品失败提示不能挂到这一轮的结果上（它会在本轮跑完才被覆盖）
+    setMarketSearchFailed(false)
     const epoch = ++searchEpoch.current
     const timer = setTimeout(() => void runSearch(query, epoch), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
@@ -832,6 +868,8 @@ export default function Chat() {
         /*
           搜索模式下用结果区**替换**会话列表（不是叠在上面）：两套列表同时存在时，
           滚动位置、下拉刷新、加载更多都各自为政，用户分不清看到的是哪一份。
+          「通知」Tab 下同样允许进搜索模式 —— 搜索是跨会话的全局动作，与当前 Tab
+          无关；退出搜索后仍回到原来的 Tab，不改变用户所处的视角。
         */
         <View className="chat__list">
           <ChatSearchResultsView
@@ -839,8 +877,10 @@ export default function Chat() {
             results={searchResults}
             searching={searching}
             marketFailed={marketSearchFailed}
+            localFailed={state === 'error'}
+            onRetryLocal={reloadConversations}
             scannedConversations={scannedConversations}
-            scanLimit={MAX_MESSAGE_SCAN_CONVERSATIONS}
+            failedConversations={failedScans}
             onOpenContact={openSearchContact}
             onOpenListing={openSearchListing}
             onOpenMessage={openSearchMessage}
