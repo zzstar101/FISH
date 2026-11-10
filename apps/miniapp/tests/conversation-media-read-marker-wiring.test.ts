@@ -51,9 +51,13 @@ describe('媒体消息读位 · 接线', () => {
     expect(media).toContain('const mediaReadLabel = messageReadLabel({')
     // 三个入参一个都不能少：少了 mine 会把对方发来的图也标上读位，
     // 少了 counterpartLastReadAt 则永远算未读（正是这个缺陷的「已读信息缺失」表现）
-    expect(media).toContain('mine,')
-    expect(media).toContain('createdAt: item.createdAt,')
-    expect(media).toContain('counterpartLastReadAt: conversation.counterpartLastReadAt,')
+    // 入参断言必须落在**调用块内部**：媒体切片里别处本来就有裸 `mine,`
+    // （`renderVoiceBubble(item.id, item.durationMs, mine, …)`），只查 `toContain('mine,')`
+    // 是空断言 —— 把 `mine` 从 `messageReadLabel({…})` 删掉照样通过。
+    const call = sliceFrom(media, 'const mediaReadLabel = messageReadLabel({', '})')
+    expect(call).toMatch(/messageReadLabel\(\{\s*mine,/)
+    expect(call).toContain('createdAt: item.createdAt,')
+    expect(call).toContain('counterpartLastReadAt: conversation.counterpartLastReadAt,')
   })
 
   test('读位渲染在媒体行时间后面，只有「未读」挂 is-unread', async () => {
@@ -88,8 +92,18 @@ describe('媒体消息读位 · 接线', () => {
 
   test('文本分支与媒体分支共用同一套读位类名判据', async () => {
     const code = stripComments(await source())
-    // 两处都必须按「未读 → is-unread」这一条映射，任一处自判就成了两套口径
-    const marks = code.match(/conv__rd\$\{[^}]*=== '未读' \? ' is-unread' : ''\}/g) ?? []
-    expect(marks).toHaveLength(2)
+    // 两处都必须按「未读 → is-unread」这一条映射，任一处自判就成了两套口径。
+    // 按 slice 分别断言各 1 处，而不是全文计数：将来出现**合法**的第三处读位
+    // （例如给商品卡补读位）不该无故变红，这里只需钉住两个分支各自沿用同一条映射。
+    const media = sliceFrom(
+      code,
+      "if (entry.kind === 'media') {",
+      "if (entry.kind === 'pending-media')",
+    )
+    const text = sliceFrom(code, 'const readLabel = messageReadLabel({', `\` · \${readLabel}\`}`)
+    const marksIn = (slice: string) =>
+      slice.match(/conv__rd\$\{[^}]*=== '未读' \? ' is-unread' : ''\}/g) ?? []
+    expect(marksIn(media)).toHaveLength(1)
+    expect(marksIn(text)).toHaveLength(1)
   })
 })
