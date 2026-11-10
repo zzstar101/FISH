@@ -253,6 +253,9 @@ export function mergeMarketListings(
   return merged.slice(0, limit)
 }
 
+/** 商品搜索关键词上限，与契约里 `q` 的 `.max(50)` 同源（超了服务端直接 422） */
+export const SEARCH_MAX_QUERY_LENGTH = 50
+
 /** 结果是否为空（三段都没命中） */
 export function isEmptyResults(results: ChatSearchResults): boolean {
   return (
@@ -285,23 +288,38 @@ export interface SearchCoverage {
  * - 全站商品**请求失败** → 商品段也没搜成。
  */
 export function describeSearchCoverage(coverage: SearchCoverage): string {
+  // 事实优先：这一轮到底扫了几个会话，比「列表此刻是什么形态」更能说明搜过什么。
+  // 先判 listState 会把「扫完 10 个会话之后列表刷新失败」说成「联系人和聊天记录都没搜」，
+  // 而屏幕上明明摆着刚搜出来的命中（审查第 1 条）。
+  if (coverage.scanned > 0) {
+    const market = coverage.marketFailed ? '；全站商品也没连上服务器' : '和全站商品'
+    return `${scopePrefix(coverage.scanned)}${describeScanScope(coverage)}${market}`
+  }
   if (coverage.listState === 'error') {
     return coverage.marketFailed
       ? '会话列表和全站商品都没连上服务器，这次什么都没搜成'
       : '会话列表没加载出来，联系人和聊天记录都没搜，这次只搜了全站商品'
   }
-  const local =
-    coverage.scanned > 0
-      ? `${scopePrefix(coverage.scanned)}${describeScanScope(coverage)}`
-      : coverage.listState === 'empty'
-        ? '你还没有任何会话'
-        : '会话列表还没加载完'
-  const market = coverage.marketFailed
-    ? '；全站商品也没连上服务器'
-    : coverage.scanned > 0
-      ? '和全站商品'
-      : '，这次只搜了全站商品'
+  const local = coverage.listState === 'empty' ? '你还没有任何会话' : '会话列表还没加载完'
+  const market = coverage.marketFailed ? '；全站商品也没连上服务器' : '，这次只搜了全站商品'
   return `${local}${market}`
+}
+
+/**
+ * 列表刚就绪时要不要补跑一次搜索（`loading/error → list/empty` 的那一次跃迁）。
+ *
+ * 抽成纯函数是为了能直接测：这是搜索里唯一带时序判断的逻辑，
+ * 用源码文本断言只能证明「这行还在」，证明不了「哪种跃迁该跑、哪种不该跑」。
+ */
+export function shouldRerunSearch(
+  prev: ChatListState,
+  next: ChatListState,
+  rawQuery: string,
+): boolean {
+  if (prev === next) return false
+  const becameReady =
+    (prev === 'loading' || prev === 'error') && (next === 'list' || next === 'empty')
+  return becameReady && hasQuery(rawQuery)
 }
 
 /** 「只」只有在真的被上限截断时才敢说 —— 会话不足 10 个时说「只搜了 2 个」会让人以为被砍过 */

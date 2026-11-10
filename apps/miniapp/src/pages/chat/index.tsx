@@ -44,6 +44,7 @@ import {
   mergeMarketListings,
   normalizeQuery,
   SEARCH_DEBOUNCE_MS,
+  shouldRerunSearch,
   sortMessageHits,
 } from './search'
 import { ChatSearchBar, ChatSearchResultsView } from './search-ui'
@@ -202,6 +203,14 @@ export default function Chat() {
   }, [items])
   /** 会话 id → 已拉到的消息页：搜索期间复用，别每次输入都重拉同一批会话 */
   const searchMessageCache = useRef(new Map<string, MessageDto[]>())
+  /**
+   * 会话 id → **在途**的消息页请求。只有「完成后」的缓存挡不住并发：
+   * 两轮搜索重叠（补跑 + 挂起的防抖 timer）或慢网下同一批会话被连发两次时，
+   * 没有这张表就是 2×10 个 `limit=100` 请求一起飞，`searching` 被拖到请求超时。
+   */
+  const searchInflight = useRef(new Map<string, Promise<MessageDto[]>>())
+  /** 防抖 timer：补跑时要能把它清掉，否则它会在补跑之后再发起一整轮扫描 */
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
    * 消息缓存的代次。清空缓存（列表刷新 / 退出搜索 / 换账号）时自增：
    * 光 `clear()` 挡不住**在途**的消息页请求 —— 它在 clear 之后才返回，会按
@@ -632,6 +641,14 @@ export default function Chat() {
    */
   const closeSearch = () => {
     searchEpoch.current += 1
+    if (searchTimer.current !== null) {
+      clearTimeout(searchTimer.current)
+      searchTimer.current = null
+    }
+    // 退出搜索就丢缓存：留着没有收益（下次进搜索会重新取快照），
+    // 却让「退出后清缓存」这条注释与实现脱节（审查可留第 6 条）
+    searchCacheEpoch.current += 1
+    searchMessageCache.current.clear()
     setSearchActive(false)
     setSearchQuery('')
     setSearchResults(EMPTY_RESULTS)
@@ -649,18 +666,33 @@ export default function Chat() {
    * 用它守缓存会让「上一轮在途的 10 个消息页」全部丢弃且不写回 —— 连续输入时
    * 每一轮都要从零重拉 10 个 limit=100 的请求，缓存等于没做。
    * 数据新鲜度由 `searchCacheEpoch` 独占负责（列表刷新 / 退出搜索 / 换账号时清空）。
+   *
+   * 在途请求也复用（`searchInflight`）：两轮重叠时同一会话只发一次请求。
    */
   const loadSearchedMessages = useCallback(async (conversationId: string) => {
     const cached = searchMessageCache.current.get(conversationId)
     if (cached) return cached
+    const inflight = searchInflight.current.get(conversationId)
+    if (inflight) return inflight
     // 记下请求发出时的缓存代次：期间缓存被清空（列表刷新 / 退出搜索 / 换账号）时，
     // 这页数据属于清空前的旧世界，不能再写回缓存
     const cacheEpoch = searchCacheEpoch.current
-    const page = await fetchMessagePage(conversationId)
-    if (cacheEpoch === searchCacheEpoch.current) {
-      searchMessageCache.current.set(conversationId, page.items)
-    }
-    return page.items
+    const task = fetchMessagePage(conversationId).then((page) => {
+      if (cacheEpoch === searchCacheEpoch.current) {
+        searchMessageCache.current.set(conversationId, page.items)
+      }
+      return page.items
+    })
+    searchInflight.current.set(conversationId, task)
+    // 失败也要从在途表里摘掉：否则该会话这一轮就再也重试不了了
+    void task
+      .catch(() => undefined)
+      .finally(() => {
+        if (searchInflight.current.get(conversationId) === task) {
+          searchInflight.current.delete(conversationId)
+        }
+      })
+    return task
   }, [])
 
   /**
@@ -669,6 +701,10 @@ export default function Chat() {
    *
    * 商品请求与消息页并发发出：两段互不依赖，串行会让首屏延迟叠加「最慢的消息页 +
    * 商品接口」。
+   *
+   * 快照取的是**开跑那一刻**的 `searchItemsRef`（不是 `items`）：一次搜索内的候选会话
+   * 从头到尾是同一批，同一次搜索不会中途换人。搜索期间若后台刷新了列表，只有**下一次**
+   * 击键才会用上新快照。
    */
   const runSearch = useCallback(
     async (query: string, epoch: number) => {
@@ -727,8 +763,16 @@ export default function Chat() {
     // 上一轮的商品失败提示不能挂到这一轮的结果上（它会在本轮跑完才被覆盖）
     setMarketSearchFailed(false)
     const epoch = ++searchEpoch.current
-    const timer = setTimeout(() => void runSearch(query, epoch), SEARCH_DEBOUNCE_MS)
-    return () => clearTimeout(timer)
+    searchTimer.current = setTimeout(() => {
+      searchTimer.current = null
+      void runSearch(query, epoch)
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      if (searchTimer.current !== null) {
+        clearTimeout(searchTimer.current)
+        searchTimer.current = null
+      }
+    }
   }, [searchActive, searchQuery, runSearch])
 
   /**
@@ -743,13 +787,16 @@ export default function Chat() {
   useEffect(() => {
     const prev = listStateForSearchRef.current
     listStateForSearchRef.current = state
-    if (!searchActive || prev === state) return
+    if (!searchActive || !shouldRerunSearch(prev, state, searchQuery)) return
+    // 挂起的防抖 timer 必须清掉：不清就是「补跑一轮 + 300ms 后再整轮重扫」，
+    // 后一轮的结果必然被代次守卫丢弃，但 10 个消息页请求已经发出去了
+    if (searchTimer.current !== null) {
+      clearTimeout(searchTimer.current)
+      searchTimer.current = null
+    }
     const query = normalizeQuery(searchQuery)
-    if (query.length === 0) return
-    const becameReady =
-      (prev === 'loading' || prev === 'error') && (state === 'list' || state === 'empty')
-    if (!becameReady) return
     const epoch = ++searchEpoch.current
+    setMarketSearchFailed(false)
     setSearching(true)
     void runSearch(query, epoch)
   }, [state, searchActive, searchQuery, runSearch])

@@ -137,11 +137,26 @@ describe('#669 接线：退出搜索与列表就绪', () => {
 
   test('列表 loading/error → list/empty 跃迁时补跑一次搜索', async () => {
     const code = await source()
-    const block = sliceFrom(code, 'const becameReady =', 'void runSearch(query, epoch)')
-    // 加载中打好的关键词：那一刻快照是空的，防抖不会再触发 →
-    // 不补跑就会「列表好了，可结果永远空着、文案还说没搜到」（审查 B）
-    expect(block).toContain("prev === 'loading' || prev === 'error'")
-    expect(block).toContain("state === 'list' || state === 'empty'")
+    // 判据本身是纯函数（`shouldRerunSearch`，见 chat-search.test.ts 的跃迁用例），
+    // 这里只钉「页面确实用了它」，并且补跑前把挂起的防抖 timer 清掉 ——
+    // 不清就是「补跑一轮 + 300ms 后整轮重扫」，后一轮必然被代次守卫丢弃，请求白发
+    expect(code).toContain('shouldRerunSearch(prev, state, searchQuery)')
+    const block = sliceFrom(
+      code,
+      'shouldRerunSearch(prev, state, searchQuery)',
+      'void runSearch(query, epoch)',
+    )
+    expect(block).toContain('clearTimeout(searchTimer.current)')
+  })
+
+  test('消息页请求有在途表，两轮重叠时同一会话只发一次', async () => {
+    const block = sliceFrom(
+      await source(),
+      'const loadSearchedMessages = useCallback',
+      'return task',
+    )
+    expect(block).toContain('searchInflight.current.get(conversationId)')
+    expect(block).toContain('searchInflight.current.set(conversationId, task)')
   })
 })
 

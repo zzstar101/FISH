@@ -15,6 +15,7 @@ import {
   matchConversations,
   mergeMarketListings,
   normalizeQuery,
+  shouldRerunSearch,
   snippetOf,
   sortMessageHits,
 } from '../src/pages/chat/search'
@@ -416,6 +417,49 @@ describe('describeSearchCoverage —— 每种「没找到」都要说清原因'
         marketFailed: false,
       }),
     ).toBe('搜了最近 3 个会话和全站商品')
+  })
+
+  test('搜完之后列表刷新失败：事实优先，不能说成「都没搜」', () => {
+    // 真实路径：结果已出 → 点进会话 → 返回时 useDidShow 重拉列表失败 →
+    // listState 变 error，但这一轮确实扫过 10 个会话、屏幕上还摆着命中
+    expect(
+      describeSearchCoverage({
+        listState: 'error',
+        scanned: 10,
+        failedScans: 1,
+        marketFailed: false,
+      }),
+    ).toBe('只搜了最近 10 个会话（其中 1 个没连上）和全站商品')
+  })
+})
+
+/**
+ * 补跑判据是搜索里唯一的时序逻辑：用源码文本断言只能证明「这行还在」，
+ * 证明不了「哪种跃迁该跑、哪种不该跑」。
+ */
+describe('shouldRerunSearch —— 只有「列表刚就绪」那一次才补跑', () => {
+  test('loading → list：补跑', () => {
+    expect(shouldRerunSearch('loading', 'list', '键盘')).toBe(true)
+  })
+
+  test('error → list：补跑（重试成功后也要补）', () => {
+    expect(shouldRerunSearch('error', 'list', '键盘')).toBe(true)
+  })
+
+  test('loading → empty：补跑（账号确实没有会话，也要给一次结论）', () => {
+    expect(shouldRerunSearch('loading', 'empty', '键盘')).toBe(true)
+  })
+
+  test('list → list：不补（从会话页返回重拉列表，不能打断已经看到的结果）', () => {
+    expect(shouldRerunSearch('list', 'list', '键盘')).toBe(false)
+  })
+
+  test('list → error：不补（没有可搜的东西，补跑只会再失败一次）', () => {
+    expect(shouldRerunSearch('list', 'error', '键盘')).toBe(false)
+  })
+
+  test('关键词为空：不补（还没开始搜）', () => {
+    expect(shouldRerunSearch('loading', 'list', '   ')).toBe(false)
   })
 })
 

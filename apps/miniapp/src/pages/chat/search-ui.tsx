@@ -15,7 +15,13 @@ import { MESSAGE_PAGE_LIMIT } from '@/features/chat/api'
 import { formatYuan } from '@/lib/money'
 import type { ChatListState } from './list-view'
 import type { ChatSearchResults, ContactHit, ListingHit, MessageHit } from './search'
-import { describeMessageFooter, describeSearchCoverage, hasQuery, isEmptyResults } from './search'
+import {
+  describeMessageFooter,
+  describeSearchCoverage,
+  hasQuery,
+  isEmptyResults,
+  SEARCH_MAX_QUERY_LENGTH,
+} from './search'
 
 /**
  * 每个会话只取最近一页消息 —— 直接用取数层的分页大小，不再抄一份常量：
@@ -53,6 +59,9 @@ export function ChatSearchBar({ value, active, onChange, onActivate, onClose }: 
           confirmType="search"
           placeholder={SEARCH_PLACEHOLDER}
           placeholderClass="csearch__ph"
+          // 契约里 `q` 上限 50 字（`packages/contracts/src/listings/schema.ts`），
+          // 不挡的话粘贴长文会被服务端 422 拒掉，商品段还会报成「没连上服务器」
+          maxlength={SEARCH_MAX_QUERY_LENGTH}
           // 只有进了搜索模式才抢焦点：不点搜索框时不该一进消息页就弹键盘
           focus={active}
           onInput={(event) => onChange(event.detail.value)}
@@ -175,7 +184,12 @@ export function ChatSearchResultsView({
 
       {localFailed && !searching ? (
         <View className="csres__warn">
-          <Text className="csres__warn-tx">会话列表没加载出来，联系人和聊天记录搜不了</Text>
+          {/* 已经有结果时不能说「搜不了」—— 那批结果就是刚搜出来的，只是列表刷新失败了 */}
+          <Text className="csres__warn-tx">
+            {empty
+              ? '会话列表没加载出来，联系人和聊天记录搜不了'
+              : '会话列表刷新失败，下面是上一次搜索的结果'}
+          </Text>
           <Text className="csres__warn-btn" onClick={onRetryLocal}>
             重试
           </Text>
@@ -250,7 +264,7 @@ export function ChatSearchResultsView({
         </>
       ) : null}
 
-      {marketFailed ? (
+      {!searching && marketFailed ? (
         <View className="csres__warn">
           <Text className="csres__warn-tx">商品搜索没连上服务器，只显示了你聊过的东西</Text>
         </View>
