@@ -1,6 +1,10 @@
 import type { MeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
-import type { MeetupTokenResponse, TransactionDto } from '@fish/contracts/transactions/schema'
+import type {
+  MeetupTokenResponse,
+  MeetupVerificationResponse,
+  TransactionDto,
+} from '@fish/contracts/transactions/schema'
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, useLoad, useRouter } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
@@ -34,6 +38,7 @@ import {
   meetupRedeemFailure,
   normalizeMeetupCode,
 } from '@/features/transaction/meetup-code'
+import { finishMeetupVerification } from '@/features/transaction/meetup-verify'
 import { qrDataUrl } from '@/features/transaction/qr'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -430,14 +435,22 @@ export default function TransactionMeetup() {
   }
 
   /**
-   * 核销统一入口：先消费凭证，成功后按 nextAction 调 confirm（幂等）。
+   * 核销统一入口：先消费凭证，成功后按 nextAction 收尾（幂等）。
    * 双侧确认齐时交易直接 COMPLETED + listing SOLD；confirm 网络失败时保留
    * 「确认完成」重试按钮，不假装已完成。
+   *
+   * `nextAction` 的解释只有一处（`features/transaction/meetup-verify` 的
+   * `finishMeetupVerification`），与相机页浮层的 `consumeMeetupCode` 同源 —— 本页不再自己
+   * 串 `verify → confirmTransaction`（#674 审查 13）。
    *
    * 核验态的时长 = 请求在飞（`submitting`），另配最短展示 `VERIFY_MIN_MS`：
    * 请求秒回时也把转圈留够一瞬，避免闪一下。
    */
-  const verify = async (targetId: string, consume: () => Promise<unknown>, epoch: number) => {
+  const verify = async (
+    targetId: string,
+    consume: () => Promise<MeetupVerificationResponse>,
+    epoch: number,
+  ) => {
     // 同步取锁（#147 P2）：同一个 tick 的第二次点击在这里当场被挡下 ——
     // 此刻 `submitting` 那一帧还没刷过来。
     if (!canAcquire(submitLock.current, epoch)) return
@@ -456,10 +469,10 @@ export default function TransactionMeetup() {
       if (rest > 0) await new Promise((resolve) => setTimeout(resolve, rest))
     }
     try {
-      await consume()
+      const verified = await consume()
       if (isStale(epoch)) return
       try {
-        const dto = await confirmTransaction(targetId)
+        const dto = await finishMeetupVerification(targetId, verified)
         if (isStale(epoch)) return
         await settle()
         if (isStale(epoch)) return

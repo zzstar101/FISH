@@ -91,7 +91,7 @@ import {
 } from './load-failure'
 import { fetchProfile } from './profile/api'
 import { type OrderCardView, toOrderCard, toOrderCardFromMock } from './transaction/adapt'
-import { fetchAllTransactions } from './transaction/api'
+import { type FetchAllTransactionsOptions, fetchAllTransactions } from './transaction/api'
 import {
   fetchPublicUserListings,
   fetchPublicUserProfile,
@@ -750,10 +750,16 @@ export type LoadedOrders = {
  * 本页的计数与「到底了」是派生值，只有完整集合才诚实。
  *
  * 契约的 `TransactionDto` 已经内嵌了商品摘要与对方摘要，所以这里不需要任何回查。
+ *
+ * `options.status`：只取某个状态的交易。相机页的交易码浮层只需要「待面交」，
+ * 带上它才不会被几百笔历史订单挤掉 `MAX_PAGES` 窗口（#674 审查 7）；订单页不传。
  */
-export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
+export async function loadOrders(
+  role: TransactionRole,
+  options: FetchAllTransactionsOptions = {},
+): Promise<LoadedOrders> {
   try {
-    const page = await fetchAllTransactions(role)
+    const page = await fetchAllTransactions(role, options)
     return {
       items: page.items.map((dto) => toOrderCard(dto)),
       snapshot: page,

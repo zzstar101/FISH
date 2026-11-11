@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { buildMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import qrcode from 'qrcode-generator'
-import { scanBlockedBy, scanOutcome } from '../src/pkg-vision/pages/scan/outcome'
+import { scanBlockedBy, scanBlockedLater, scanOutcome } from '../src/pkg-vision/pages/scan/outcome'
 import { decodeCanvasSize, decodeQrPixels } from '../src/pkg-vision/pages/scan/qr-decode'
 
 /**
@@ -96,5 +96,20 @@ describe('扫码闸门（#674 审查 P2）', () => {
     expect(scanBlockedBy({ ...clear, processing: true })).toBe(true)
     expect(scanBlockedBy({ ...clear, busy: true })).toBe(true)
     expect(scanBlockedBy({ ...clear, failureShown: true })).toBe(true)
+  })
+})
+
+describe('相册识码回来的补闸（#674 审查 6）', () => {
+  test('解码回来时浮层已经打开：这条结果丢掉，别把浮层顶掉', () => {
+    // 此刻 busy 一定是相册流程自己置的，所以补闸只看浮层与派发
+    expect(scanBlockedLater({ codeOpen: true, processing: false })).toBe(true)
+  })
+
+  test('解码回来时已经派发了另一条：同样丢掉', () => {
+    expect(scanBlockedLater({ codeOpen: false, processing: true })).toBe(true)
+  })
+
+  test('两个入口都没占住才放行', () => {
+    expect(scanBlockedLater({ codeOpen: false, processing: false })).toBe(false)
   })
 })

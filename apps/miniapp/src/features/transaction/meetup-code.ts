@@ -8,6 +8,8 @@
  * 两处文案一旦分叉，同一笔交易就会出现两种说法。核销链路本身见 `./meetup-verify`。
  */
 
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
+
 /** 交易码位数（与后端 `meetupTokenVerifyCodeInputSchema` 的 6 位一致） */
 export const MEETUP_CODE_LEN = 6
 
@@ -16,10 +18,18 @@ export function normalizeMeetupCode(raw: string): string {
   return raw.replace(/\D/g, '').slice(0, MEETUP_CODE_LEN)
 }
 
+/**
+ * 交易码形状：恰好 6 位数字（与后端 `meetupTokenVerifyCodeInputSchema` 的约束一致）。
+ * 注意这里**不做归一**——「`12345a6` 剥掉字母后变 6 位」是非法输入，不能当合法码提交
+ * （#674 审查 12：早前拿 `normalizeMeetupCode` 的结果判长度，于是混入非数字也能过）。
+ */
+export function isMeetupCodeShaped(raw: string): boolean {
+  return /^\d{6}$/.test(raw)
+}
+
 /** 提交前的格式校验：合法返回 `null`，否则给行内文案（位数不足、混入非数字都算错）。 */
 export function meetupCodeInputError(raw: string): string | null {
-  if (normalizeMeetupCode(raw).length === MEETUP_CODE_LEN) return null
-  return '交易码是 6 位数字，请输满 6 位。'
+  return isMeetupCodeShaped(raw) ? null : '交易码是 6 位数字，请输满 6 位。'
 }
 
 /**
@@ -99,4 +109,35 @@ export type ConfirmOutcome =
 export function nextConfirmPending(outcome: ConfirmOutcome): boolean {
   if (outcome.kind === 'ok') return outcome.status === 'PENDING_MEETUP'
   return outcome.failure === 'retry'
+}
+
+/* ------------------------------------------------------- 「码已被用掉」之后该走到哪一屏
+ * 核销请求发出去了、响应却没回来（断网 / 杀进程 / 切后台）时，用户再输同一枚码只会拿到
+ * 409 `MEETUP_TOKEN_CONSUMED`：码确实用掉了，但页面还停在输码屏，于是除「这个交易码已被
+ * 使用」以外没有别的出路（#674 审查 2）。重读交易就能判断该去哪一屏。
+ */
+
+/** 「码已被用掉」重读交易后的落点。 */
+export type ConsumedCodeVerdict =
+  /** 交易已离开待面交：撤下入口，重读终态 */
+  | 'terminal'
+  /** 本侧已经确认过：核销与确认都完成了 */
+  | 'confirmed'
+  /** 码用掉了、只差「确认面交」这一步：给重试确认的出口 */
+  | 'needs-confirm'
+
+/**
+ * 判据只依赖交易本身，不依赖「谁在核销」：服务端 `consumeMeetup` 的检查顺序是
+ * 参与者 → 终态 → 非消费方 → 核销（`apps/api/src/modules/transactions/service.ts:300-389`），
+ * 所以拿到 `MEETUP_TOKEN_CONSUMED` 时交易**一定还在** `PENDING_MEETUP`；而核销只能由买家发起
+ * （卖家拿 403 `MEETUP_TOKEN_NOT_ALLOWED`）、一笔交易只有一枚码且 `issueMeetupToken` 幂等
+ * 不轮换，因此「这笔单的码已被用掉」只可能是**自己**上一次核销成功了。
+ * 核销那一步盖的是**卖家**的面交确认（`service.ts` 注释：出示码就是他的同意），
+ * 所以买家侧还差没差，只看 `buyerConfirmedAt`。
+ */
+export function consumedCodeVerdict(
+  transaction: Pick<TransactionDto, 'status' | 'buyerConfirmedAt'>,
+): ConsumedCodeVerdict {
+  if (transaction.status !== 'PENDING_MEETUP') return 'terminal'
+  return transaction.buyerConfirmedAt === null ? 'needs-confirm' : 'confirmed'
 }

@@ -29,11 +29,16 @@ import { submitVisualQuery } from '@/features/visual-search/start'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
-import { type ScanFailure, scanBlockedBy, scanOutcome } from './outcome'
+import { type ScanFailure, scanBlockedBy, scanBlockedLater, scanOutcome } from './outcome'
 import { decodeCanvasSize, decodeQrPixels } from './qr-decode'
 import {
+  nextTicket,
+  type OverlayTicket,
+  ordersForViewer,
+  overlayReply,
   redeemableOrders,
   TRADE_CODE_CONFIRM_TERMINAL,
+  TRADE_CODE_NEEDS_CONFIRM,
   TRADE_CODE_STAGE_TEXT,
   tradeCodeDoneText,
   tradeCodeFailureMessage,
@@ -116,11 +121,18 @@ export default function Scan() {
   const [codeOpen, setCodeOpen] = useState(false)
   /** 可选订单（已按 `isRedeemableOrder` 过滤） */
   const [codeOrders, setCodeOrders] = useState<OrderCardView[]>([])
+  /** 这批订单读的是**谁的**：换账号后旧列表不能再显示（审查 1） */
+  const [codeOrdersOwner, setCodeOrdersOwner] = useState<string | null>(null)
   const [codeLoading, setCodeLoading] = useState(false)
   /** 订单读取失败的原因（文案复用 `failureCopy`，不在这里造字面量） */
   const [codeFailed, setCodeFailed] = useState<FailureKind | null>(null)
-  /** 选中的订单 id；`null` = 还在选单屏 */
-  const [pickedId, setPickedId] = useState<string | null>(null)
+  /**
+   * 选中并已（尝试）核销的那笔订单；`null` = 还在选单屏。
+   *
+   * 存整条而不是 id：核销成功后这笔单就离开「待面交」列表了，重读之后按 id 再也找不回来，
+   * 而「待确认 / 已完成」两屏还要靠它说明是哪一单、并向哪个 id 发 confirm（审查 5）。
+   */
+  const [pickedOrder, setPickedOrder] = useState<OrderCardView | null>(null)
   const [codeDigits, setCodeDigits] = useState('')
   /** 行内错误：格式（本地校验）与后端失败都落这一处 */
   const [codeInputError, setCodeInputError] = useState<string | null>(null)
@@ -133,6 +145,10 @@ export default function Scan() {
 
   /** 提交锁：状态更新有延迟，连点用 ref 判（口径同 `busyRef`） */
   const codeLockRef = useRef(false)
+  /** 浮层异步回包的代次（开 / 关、每次读单、账号各换号，见 `./trade-code` 的 `OverlayTicket`） */
+  const codeTicketRef = useRef<OverlayTicket>({ session: 0, load: 0, owner: null })
+  /** 相册识码的回调读不到最新 `codeOpen`（发起时的闭包），晚到的闸门要用 ref */
+  const codeOpenRef = useRef(false)
 
   /** 防重复消费锁：onScanCode 从发起导航 / 弹面板到解锁期间为 true */
   const processingRef = useRef(false)
@@ -268,6 +284,11 @@ export default function Scan() {
         console.warn('[miniapp] 相册识码读图失败', error)
         return null
       })
+      // 选图 / 解码都是异步的：回来时浮层可能已经开了。这时解出来的码不能把浮层顶掉
+      // （审查 6）。不能复用 `scanBlocked()` —— 此刻的 `busy` 必然是这次相册流程自己置的。
+      if (scanBlockedLater({ codeOpen: codeOpenRef.current, processing: processingRef.current })) {
+        return
+      }
       dispatchScan(rawValue)
     } finally {
       busyRef.current = false
@@ -283,36 +304,73 @@ export default function Scan() {
 
   /* -------------------------------------------------- 输入交易码（#674） */
 
+  /** 发起一次浮层操作时记下代次；账号现取，别用渲染时的旧值 */
+  const codeTicket = (): OverlayTicket => ({
+    ...codeTicketRef.current,
+    owner: authSnapshot().user?.id ?? null,
+  })
+
+  /**
+   * 这次回包该不该落地；不该的话顺手把「别人的订单」清掉。
+   * 返回 `true` 表示调用点直接收工（`stale-session` / `superseded` 时状态归新的那一次，
+   * 什么都不动；`stale-owner` 时这批数据属于上一个账号，必须清（审查 1、4、8）。
+   */
+  const codeReplyHandled = (started: OverlayTicket, tracksLoad: boolean): boolean => {
+    const reply = overlayReply(started, codeTicket(), tracksLoad)
+    if (reply === 'stale-owner') {
+      setCodeOrders([])
+      setCodeOrdersOwner(null)
+      setPickedOrder(null)
+      setCodeConfirmPending(false)
+      setCodeLoading(false)
+      return true
+    }
+    return reply !== 'land'
+  }
+
   /**
    * 读本人「待面交」的订单。复用的就是「我买到的」那一条读取链路
    * （`loadOrders` → `fetchAllTransactions('buyer')`），可选性由 `./trade-code` 判定。
-   * 冷启动登录态还没解析完时先等 `bootstrapAuth`，别把「还不知道」当「没登录」。
+   *
+   * 冷启动登录态还没解析完时先等 `bootstrapAuth`，别把「还不知道」当「没登录」；
+   * 解析完才记代次（那之前还不知道是谁）。每次读单换一个 `load` 号：关掉重开、提交后刷新
+   * 造成两次读单重叠时，只有最后发出的那次落地（审查 8）。
    */
   const loadCodeOrders = async () => {
     setCodeLoading(true)
     setCodeFailed(null)
+    const session = codeTicketRef.current.session
     try {
       if (authSnapshot().status === 'unknown') await bootstrapAuth()
-      const loaded = await loadOrders('buyer')
-      setCodeOrders(redeemableOrders(loaded.items))
-      setCodeFailed(loaded.failureKind)
     } catch (error) {
-      setCodeOrders([])
-      setCodeFailed('server')
-      console.warn('[miniapp] 读待面交订单失败', error)
-    } finally {
-      setCodeLoading(false)
+      // 登录态解析失败不挡读单：读单自己会失败并给出分类
+      console.warn('[miniapp] 登录态解析失败', error)
     }
-  }
-
-  /** 清掉这一轮的输入与结果：开浮层与关浮层都要，别让上一笔的码带到下一笔 */
-  const resetCodeState = () => {
-    setPickedId(null)
-    setCodeDigits('')
-    setCodeInputError(null)
-    setCodeError(null)
-    setCodeConfirmPending(false)
-    setCodeDone(null)
+    // 解析期间浮层可能已经关了：这一轮作废，连请求都别发
+    if (codeTicketRef.current.session !== session) return
+    codeTicketRef.current = nextTicket(
+      codeTicketRef.current,
+      'load',
+      authSnapshot().user?.id ?? null,
+    )
+    const started = { ...codeTicketRef.current }
+    try {
+      // 只要「待面交」：不带状态过滤时，几百笔历史订单会把翻页窗口占满，更早的待面交
+      // 订单就选不到了（审查 7）
+      const loaded = await loadOrders('buyer', { status: 'PENDING_MEETUP' })
+      if (codeReplyHandled(started, true)) return
+      setCodeOrders(redeemableOrders(loaded.items))
+      setCodeOrdersOwner(started.owner)
+      setCodeFailed(loaded.failureKind)
+      setCodeLoading(false)
+    } catch (error) {
+      if (codeReplyHandled(started, true)) return
+      setCodeOrders([])
+      setCodeOrdersOwner(started.owner)
+      setCodeFailed('server')
+      setCodeLoading(false)
+      console.warn('[miniapp] 读待面交订单失败', error)
+    }
   }
 
   /**
@@ -324,19 +382,47 @@ export default function Scan() {
       void Taro.navigateBack()
       return
     }
-    resetCodeState()
+    codeTicketRef.current = nextTicket(
+      codeTicketRef.current,
+      'session',
+      authSnapshot().user?.id ?? null,
+    )
+    codeOpenRef.current = true
+    // 只清上一轮的输入与结果；「已核销 · 待确认」留着 —— 关掉再开还得能重试确认（审查 5）
+    setCodeDone(null)
+    setCodeDigits('')
+    setCodeInputError(null)
+    setCodeError(null)
     setCodeOpen(true)
     void loadCodeOrders()
   }
 
-  /** 关浮层：下次进来是干净的选单屏 */
+  /** 关浮层：换 session 号作废在飞的读单 / 提交 / 确认，只清本轮的输入与错误 */
   const closeTradeCode = () => {
+    codeTicketRef.current = nextTicket(
+      codeTicketRef.current,
+      'session',
+      authSnapshot().user?.id ?? null,
+    )
+    codeOpenRef.current = false
     setCodeOpen(false)
-    resetCodeState()
+    setCodeDigits('')
+    setCodeInputError(null)
+    setCodeError(null)
   }
 
-  const pickOrder = (id: string) => {
-    setPickedId(id)
+  const pickOrder = (order: OrderCardView) => {
+    setPickedOrder(order)
+    setCodeConfirmPending(false)
+    setCodeDigits('')
+    setCodeInputError(null)
+    setCodeError(null)
+  }
+
+  /** 输码屏「换一笔订单」：回选单屏（只在输码屏出现，那时没有待确认会丢） */
+  const changeOrder = () => {
+    setPickedOrder(null)
+    setCodeConfirmPending(false)
     setCodeDigits('')
     setCodeInputError(null)
     setCodeError(null)
@@ -363,7 +449,7 @@ export default function Scan() {
     const failure = classifyConfirmFailure(apiCode)
     setCodeConfirmPending(nextConfirmPending({ kind: 'error', failure }))
     if (failure === 'terminal') {
-      setPickedId(null)
+      setPickedOrder(null)
       setCodeError(TRADE_CODE_CONFIRM_TERMINAL)
       void loadCodeOrders()
       return
@@ -376,7 +462,8 @@ export default function Scan() {
    * verify-code → `nextAction` 收尾都在 `consumeMeetupCode` 里，这里只管落 UI。
    */
   const submitCode = async () => {
-    if (pickedOrder === null || codeLockRef.current) return
+    const order = pickedOrder
+    if (order === null || codeLockRef.current) return
     const inputError = meetupCodeInputError(codeDigits)
     if (inputError !== null) {
       setCodeInputError(inputError)
@@ -386,19 +473,30 @@ export default function Scan() {
     setCodeSubmitting(true)
     setCodeInputError(null)
     setCodeError(null)
+    const started = codeTicket()
     try {
-      const result = await consumeMeetupCode(pickedOrder.id, codeDigits)
+      const result = await consumeMeetupCode(order.id, codeDigits)
+      if (codeReplyHandled(started, false)) return
       if (result.kind === 'confirmed') {
+        setCodeConfirmPending(false)
         setCodeDone(result.transaction)
+        return
+      }
+      if (result.kind === 'needs-confirm') {
+        // 码此前已经被自己核销掉了（响应丢了）：再报「已被使用」等于把人堵死在这里，
+        // 直接切到「待确认」屏（审查 2）
+        setCodeConfirmPending(true)
+        setCodeError(TRADE_CODE_NEEDS_CONFIRM)
         return
       }
       // 码已核销，只是 confirm 没成：不能落成核销失败
       applyConfirmFailure(result.apiCode)
     } catch (error) {
+      if (codeReplyHandled(started, false)) return
       // 走到这里是 verify 阶段真的没核销成功（码错 / 已用 / 锁定 / 已在终态）
       const failure = meetupRedeemFailure(isApiError(error) ? error.code : null)
       // 交易已终结：这笔不能再核销，退回选单屏并重读（可能刚被对侧确认 / 取消）
-      if (failure.kind === 'terminal') setPickedId(null)
+      if (failure.kind === 'terminal') setPickedOrder(null)
       setCodeError(tradeCodeFailureMessage(failure))
       if (failure.kind === 'terminal') void loadCodeOrders()
     } finally {
@@ -409,15 +507,19 @@ export default function Scan() {
 
   /** 「已核销 · 待确认」屏的「重试确认」：码不用再输，直接补 confirm（幂等） */
   const retryConfirm = async () => {
-    if (pickedOrder === null || codeLockRef.current) return
+    const order = pickedOrder
+    if (order === null || codeLockRef.current) return
     codeLockRef.current = true
     setCodeSubmitting(true)
     setCodeError(null)
+    const started = codeTicket()
     try {
-      const dto = await confirmTransaction(pickedOrder.id)
+      const dto = await confirmTransaction(order.id)
+      if (codeReplyHandled(started, false)) return
       setCodeConfirmPending(false)
       setCodeDone(dto)
     } catch (error) {
+      if (codeReplyHandled(started, false)) return
       applyConfirmFailure(isApiError(error) ? error.code : null)
     } finally {
       codeLockRef.current = false
@@ -489,17 +591,21 @@ export default function Scan() {
       ? '可以去「设置」允许使用相机，或从相册选一张交易码截图'
       : '可以去「设置」允许使用相机，或改用相册、聊天记录'
 
+  /** 只看属于当前账号的那批订单：换账号后旧列表不能顶上来（审查 1） */
+  const visibleCodeOrders = ordersForViewer(codeOrdersOwner, auth.user?.id ?? null)
+    ? codeOrders
+    : []
+
   /** 浮层当前该显示哪一屏（判断全在 `./trade-code`，这里只做一次求值） */
   const codeStage = tradeCodeStage({
     authStatus: auth.status,
     loading: codeLoading,
-    failed: codeFailed !== null,
-    orders: codeOrders,
-    pickedOrderId: pickedId,
+    failure: codeFailed,
+    orders: visibleCodeOrders,
+    pickedOrderId: pickedOrder?.id ?? null,
     confirmPending: codeConfirmPending,
     done: codeDone !== null,
   })
-  const pickedOrder = codeOrders.find((item) => item.id === pickedId) ?? null
   const codeComplete = meetupCodeInputError(codeDigits) === null
   /** 行内错误只有一个位置：格式/本地校验优先，其次是后端失败 */
   const codeMessage = codeInputError ?? codeError
@@ -647,6 +753,10 @@ export default function Scan() {
             {codeStage === 'empty' ? (
               <>
                 <Text className="scanpage__sheet-sub">{TRADE_CODE_STAGE_TEXT.empty}</Text>
+                {/* 终态冲突后重读、恰好没有可核销订单时，得说明白刚才那笔怎么了（审查 11） */}
+                {codeError !== null ? (
+                  <Text className="scanpage__code-error">{codeError}</Text>
+                ) : null}
                 <View className="scanpage__sheet-btn" onClick={() => void loadCodeOrders()}>
                   <Text>刷新</Text>
                 </View>
@@ -660,11 +770,11 @@ export default function Scan() {
                   <Text className="scanpage__code-error">{codeError}</Text>
                 ) : null}
                 <View className="scanpage__code-list">
-                  {codeOrders.map((item) => (
+                  {visibleCodeOrders.map((item) => (
                     <View
                       key={item.id}
                       className="scanpage__code-row"
-                      onClick={() => pickOrder(item.id)}
+                      onClick={() => pickOrder(item)}
                     >
                       <View className="scanpage__code-row-main">
                         <Text className="scanpage__code-row-title">{item.listing.title}</Text>
@@ -717,7 +827,7 @@ export default function Scan() {
                 >
                   <Text>{codeSubmitting ? '核销中…' : '核销'}</Text>
                 </View>
-                <View className="scanpage__code-alt" onClick={() => setPickedId(null)}>
+                <View className="scanpage__code-alt" onClick={changeOrder}>
                   <Text>换一笔订单</Text>
                 </View>
               </>
@@ -747,17 +857,21 @@ export default function Scan() {
                 {codeError !== null ? (
                   <Text className="scanpage__code-error">{codeError}</Text>
                 ) : null}
-                <View
-                  className={`scanpage__sheet-btn${codeSubmitting ? ' is-disabled' : ''}`}
-                  onClick={() => {
-                    if (!codeSubmitting) void retryConfirm()
-                  }}
-                >
-                  <Text>{codeSubmitting ? '确认中…' : MEETUP_CONFIRM_ACTION}</Text>
-                </View>
-                <View className="scanpage__code-alt" onClick={() => setPickedId(null)}>
-                  <Text>换一笔订单</Text>
-                </View>
+                {/* 确认这一步要登录：会话失效时给登录口，而不是把确认入口藏掉（审查 3、10） */}
+                {auth.status === 'authed' ? (
+                  <View
+                    className={`scanpage__sheet-btn${codeSubmitting ? ' is-disabled' : ''}`}
+                    onClick={() => {
+                      if (!codeSubmitting) void retryConfirm()
+                    }}
+                  >
+                    <Text>{codeSubmitting ? '确认中…' : MEETUP_CONFIRM_ACTION}</Text>
+                  </View>
+                ) : (
+                  <View className="scanpage__sheet-btn" onClick={goLogin}>
+                    <Text>去登录后确认</Text>
+                  </View>
+                )}
               </>
             ) : null}
           </View>

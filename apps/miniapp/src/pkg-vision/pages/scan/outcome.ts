@@ -54,3 +54,14 @@ export function scanBlockedBy(input: {
 }): boolean {
   return input.codeOpen || input.processing || input.busy || input.failureShown
 }
+
+/**
+ * 相册识码**回来之后**再过一次闸（#674 审查 6）。
+ *
+ * 相册这条路要选图 + 解码，中间隔着好几个 await：发起时浮层还没开，回来时可能已经开了。
+ * 这时不能复用 `scanBlockedBy` —— 那一刻的 `busy` 必然是**这次相册流程自己**置上的，
+ * 拿它判就永远为真。所以只问「别的入口有没有占住屏幕」。
+ */
+export function scanBlockedLater(input: { codeOpen: boolean; processing: boolean }): boolean {
+  return input.codeOpen || input.processing
+}

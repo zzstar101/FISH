@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  consumedCodeVerdict,
+  isMeetupCodeShaped,
   MEETUP_REDEEM_FALLBACK,
   meetupCodeInputError,
   meetupRedeemFailure,
@@ -18,6 +20,37 @@ describe('交易码格式', () => {
     expect(meetupCodeInputError('12345')).toBe('交易码是 6 位数字，请输满 6 位。')
     expect(meetupCodeInputError('')).toBe('交易码是 6 位数字，请输满 6 位。')
     expect(meetupCodeInputError('123456')).toBeNull()
+  })
+
+  test('剥掉非数字后正好 6 位仍然非法：混入字母的输入不算交易码（审查 12）', () => {
+    expect(meetupCodeInputError('12345a6')).toBe('交易码是 6 位数字，请输满 6 位。')
+    expect(meetupCodeInputError('12 3456')).toBe('交易码是 6 位数字，请输满 6 位。')
+    expect(isMeetupCodeShaped('123456')).toBe(true)
+    expect(isMeetupCodeShaped('12345a')).toBe(false)
+    expect(isMeetupCodeShaped('1234567')).toBe(false)
+  })
+})
+
+describe('「码已被用掉」重读交易的落点（审查 2）', () => {
+  const tx = (over: {
+    status?: 'PENDING_MEETUP' | 'COMPLETED' | 'CANCELLED'
+    buyer?: boolean
+  }) => ({
+    status: over.status ?? ('PENDING_MEETUP' as const),
+    buyerConfirmedAt: over.buyer === false ? null : '2026-01-01T00:00:00.000Z',
+  })
+
+  test('还在待面交、本侧未确认 → 只差确认这一步', () => {
+    expect(consumedCodeVerdict(tx({ buyer: false }))).toBe('needs-confirm')
+  })
+
+  test('本侧已确认 → 已经完成，别再让人确认一次', () => {
+    expect(consumedCodeVerdict(tx({}))).toBe('confirmed')
+  })
+
+  test('交易已离待面交 → 终态', () => {
+    expect(consumedCodeVerdict(tx({ status: 'COMPLETED' }))).toBe('terminal')
+    expect(consumedCodeVerdict(tx({ status: 'CANCELLED' }))).toBe('terminal')
   })
 })
 
@@ -76,5 +109,19 @@ describe('核销链路只有一份', () => {
     const scan = await read('../src/pkg-vision/pages/scan/index.tsx')
     expect(scan).toContain('consumeMeetupCode(')
     expect(scan).not.toContain('verifyMeetupCode(')
+  })
+
+  // 审查 13：两个核销入口都必须让 `nextAction` 在共享实现里被解释，页面不得自己串 verify→confirm
+  test('nextAction 只在 meetup-verify 里解释，面交页也走它', async () => {
+    const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text()
+
+    const verify = await read('../src/features/transaction/meetup-verify.ts')
+    expect(verify).toContain('finishMeetupVerification')
+    expect(verify).toContain('AFTER_VERIFY[verified.nextAction]')
+
+    const meetup = await read('../src/pkg-trade/pages/transaction-meetup/index.tsx')
+    expect(meetup).toContain('finishMeetupVerification(')
+    // 面交页手里只有核销响应对象，没有「自己决定下一步」的余地
+    expect(meetup).not.toContain('confirmTransaction(targetId)')
   })
 })
