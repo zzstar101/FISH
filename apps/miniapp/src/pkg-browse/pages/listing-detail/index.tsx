@@ -393,6 +393,15 @@ export default function ListingDetail() {
 
   const [slide, setSlide] = useState(0)
   /**
+   * 页内大图预览的当前下标，`null` = 不开预览（#677）。
+   *
+   * 为什么是页内自绘遮罩而不是 `Taro.previewImage`：原生预览底色纯黑且不可改，
+   * Owner 要求半黑透明、能看见后面这一页；而长按菜单（转发给朋友 / 保存图片 / 收藏 /
+   * 翻译图片中的文字 / 提取文字）在 `<Image showMenuByLongpress>` 上同样由微信客户端提供，
+   * 所以换掉原生预览并没有丢功能。
+   */
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  /**
    * 心形的收藏态。契约的 `ListingCardSchema` 与详情投影**都不带**收藏标记，所以只能问
    * `GET /listings/:id/favorite`（见下面的 effect）。
    *
@@ -670,6 +679,11 @@ export default function ListingDetail() {
     void setFavorite(id, !faved)
       .then((state) => {
         setFaved(state.favorited)
+        // 心形只是个图标，点完不给字面反馈（#677 追加）：与卡片长按菜单同一句提示。
+        void Taro.showToast({
+          title: state.favorited ? '已收藏' : '已取消收藏',
+          icon: 'none',
+        })
       })
       .catch((error: unknown) => {
         // 写路径上的 404 只有一个含义：这件东西已经不在货架上了（见 `favorites/api`）
@@ -1417,18 +1431,22 @@ export default function ListingDetail() {
   const images = listing?.images ?? []
 
   /**
-   * 点商品图进**微信原生**大图预览（#677）。
+   * 点商品图进**页内**大图预览（#677）。
    *
-   * 为什么必须是 `previewImage` 而不是自绘遮罩：只有原生预览态的长按菜单才带
-   * 「转发给朋友 / 保存图片 / 收藏 / 翻译图片中的文字 / 提取文字」——那些菜单项由微信客户端
-   * 提供，自绘全屏 <Image> 只有我们自己能画的按钮，保存与转发都做不到。
+   * 底色是半透明黑（`rgba(0, 0, 0, 0.6)`），透出下面这一页 —— 原生 `previewImage` 的纯黑底
+   * 改不了，所以自绘。长按菜单没有丢：每张图都开 `showMenuByLongpress`，微信客户端给的是
+   * 同一套「转发给朋友 / 保存图片 / 收藏 / 翻译图片中的文字 / 提取文字」。
    *
-   * `urls` 给**整组**商品图、`current` 指定点中的那张：预览态里左右滑动就能翻完这一件商品，
-   * 与轮播顺序一致。空数组（详情还没到）直接不弹，避免微信弹一层空白预览。
+   * 参数是**下标**而不是 URL：预览态的 Swiper 要能左右翻完这一组商品图，用下标才跟轮播顺序
+   * 对得上。没有图（详情还没到）不弹，避免开一层空白遮罩。
    */
-  const previewSlide = (current: string) => {
+  const openPreview = (index: number) => {
     if (images.length === 0) return
-    void Taro.previewImage({ urls: images, current })
+    setPreviewIndex(index)
+  }
+
+  const closePreview = () => {
+    setPreviewIndex(null)
   }
 
   const visibleComments = commentsOpen ? comments : comments.slice(0, COMMENT_LIMIT)
@@ -1563,13 +1581,13 @@ export default function ListingDetail() {
                     })
                   }}
                 >
-                  {images.map((url) => (
+                  {images.map((url, index) => (
                     <SwiperItem key={url} className="detail__slide">
                       <Image
                         className="detail__slide-img"
                         src={url}
                         mode="aspectFill"
-                        onClick={() => previewSlide(url)}
+                        onClick={() => openPreview(index)}
                       />
                     </SwiperItem>
                   ))}
@@ -2121,6 +2139,38 @@ export default function ListingDetail() {
             </View>
           </View>
         </>
+      ) : null}
+
+      {/*
+        #677 页内大图预览。点任意处关掉（与微信原生预览同一手感），`catchMove` 挡住底下的页面滚动；
+        图用 `aspectFit` 完整显示、`showMenuByLongpress` 让微信给出「转发给朋友 / 保存图片 /
+        收藏 / 翻译图片中的文字 / 提取文字」。
+      */}
+      {previewIndex !== null ? (
+        <View className="detail__viewer" catchMove onClick={closePreview}>
+          <Swiper
+            className="detail__viewer-swiper"
+            current={previewIndex}
+            circular={images.length > 1}
+            onChange={(event) => setPreviewIndex(event.detail.current)}
+          >
+            {images.map((url) => (
+              <SwiperItem key={url} className="detail__viewer-slide">
+                <Image
+                  className="detail__viewer-img"
+                  src={url}
+                  mode="aspectFit"
+                  showMenuByLongpress
+                />
+              </SwiperItem>
+            ))}
+          </Swiper>
+          <View className="detail__viewer-count">
+            <Text className="detail__viewer-count-text">
+              {`${previewIndex + 1} / ${images.length}`}
+            </Text>
+          </View>
+        </View>
       ) : null}
 
       {/* 回到顶部：抬到底部操作栏上方 */}

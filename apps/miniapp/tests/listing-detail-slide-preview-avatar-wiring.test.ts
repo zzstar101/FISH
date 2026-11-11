@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
 /**
- * #677 商品详情页两处接线的回归。
+ * #677 商品详情页三处接线的回归。
  *
- * 端上行为（点图进原生预览、长按出微信图片菜单、头像显示当前账号）只能在微信开发者工具里验，
- * 这里钉住结构：轮播图真的绑了 `previewImage`（且传整组图片）、留言输入条头像不再写死「我」。
+ * 端上行为（点图进预览、长按出微信图片菜单、头像显示当前账号、收藏弹提示）只能在微信开发者
+ * 工具里验，这里钉住结构：预览层是自绘半透明遮罩 + `showMenuByLongpress`、留言输入条头像不再
+ * 写死「我」、收藏成功后有字面反馈。
  */
 
 async function source(relative: string): Promise<string> {
@@ -24,22 +25,69 @@ function sliceFrom(code: string, start: string, end: string): string {
   return code.slice(from, to + end.length)
 }
 
-describe('商品详情页轮播图进原生大图预览（#677）', () => {
-  test('previewSlide 传整组商品图并指定当前这张', async () => {
-    const code = stripComments(await source('pkg-browse/pages/listing-detail/index.tsx'))
-    const fn = sliceFrom(code, 'const previewSlide = (current: string) =>', '\n  }')
+/** 取一条 SCSS 规则块（从选择器到配对的 `}`）。 */
+function ruleBlock(scss: string, selector: string): string {
+  const from = scss.indexOf(selector)
+  expect(from, `样式里应出现 ${selector}`).toBeGreaterThanOrEqual(0)
+  const to = scss.indexOf('}', from)
+  expect(to, `${selector} 应有闭合的 }`).toBeGreaterThanOrEqual(0)
+  return scss.slice(from, to + 1)
+}
 
-    // 长按菜单（转发 / 保存 / 收藏 / 翻译 / 提取文字）只有微信原生预览态才有，自己拼 urls 单张会丢掉翻页
-    expect(fn).toContain('Taro.previewImage({ urls: images, current })')
-    // 详情还没到时不弹空白预览
-    expect(fn).toContain('if (images.length === 0) return')
+describe('详情页大图预览用页内半透明遮罩（#677）', () => {
+  test('openPreview 收下标、无图不弹；closePreview 复位成 null', async () => {
+    const code = stripComments(await source('pkg-browse/pages/listing-detail/index.tsx'))
+    const open = sliceFrom(code, 'const openPreview = (index: number) =>', '\n  }')
+    expect(open).toContain('if (images.length === 0) return')
+    expect(open).toContain('setPreviewIndex(index)')
+
+    const close = sliceFrom(code, 'const closePreview = () =>', '\n  }')
+    expect(close).toContain('setPreviewIndex(null)')
+
+    // 不开预览时是 null，不是 0 —— 0 会被当成「开在第二张图」渲染出遮罩
+    expect(code).toContain('useState<number | null>(null)')
   })
 
-  test('轮播图每张都绑了 onClick → previewSlide(自己那张)', async () => {
+  test('轮播图每张都绑了 onClick → openPreview(自己那张的下标)', async () => {
     const code = stripComments(await source('pkg-browse/pages/listing-detail/index.tsx'))
-    const slides = sliceFrom(code, '{images.map((url) => (', '))}')
+    const slides = sliceFrom(code, '{images.map((url, index) => (', '))}')
     expect(slides).toContain('className="detail__slide-img"')
-    expect(slides).toContain('onClick={() => previewSlide(url)}')
+    expect(slides).toContain('onClick={() => openPreview(index)}')
+  })
+
+  test('遮罩层带 catchMove、点任意处关闭；图片用 aspectFit + showMenuByLongpress', async () => {
+    const code = stripComments(await source('pkg-browse/pages/listing-detail/index.tsx'))
+    const viewer = sliceFrom(code, 'className="detail__viewer"', 'className="detail__viewer-count"')
+
+    // catchMove（= catchtouchmove）否则手势会穿透到下面的页面滚动
+    expect(viewer).toContain('catchMove')
+    expect(viewer).toContain('onClick={closePreview}')
+    // 长按菜单交给微信客户端：与原生预览同一套转发/保存/收藏/翻译/提取文字
+    expect(viewer).toContain('showMenuByLongpress')
+    // 完整显示整张图（轮播卡片是 aspectFill 裁切）
+    expect(viewer).toContain('mode="aspectFit"')
+    // 只有一张图时不给 circular，免得原地打转
+    expect(viewer).toContain('circular={images.length > 1}')
+    // 不再用原生预览：底色纯黑且不可改
+    expect(code).not.toContain('Taro.previewImage')
+  })
+
+  test('遮罩底色是半透明 rgba，不是纯黑', async () => {
+    const scss = stripComments(await source('pkg-browse/pages/listing-detail/index.scss'))
+    const block = ruleBlock(scss, '.detail__viewer {')
+    expect(block).toContain('background: rgba(0, 0, 0, 0.6)')
+    // 压过底栏（100）与弹层（110/120）
+    expect(block).toContain('z-index: 200')
+  })
+})
+
+describe('详情页收藏后有字面提示（#677）', () => {
+  test('写接口成功后按结果弹「已收藏 / 已取消收藏」', async () => {
+    const code = stripComments(await source('pkg-browse/pages/listing-detail/index.tsx'))
+    const write = sliceFrom(code, 'void setFavorite(id, !faved)', '.catch(')
+    expect(write).toContain('setFaved(state.favorited)')
+    expect(write).toContain("state.favorited ? '已收藏' : '已取消收藏'")
+    expect(write).toContain('Taro.showToast')
   })
 })
 

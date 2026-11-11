@@ -178,6 +178,52 @@
   }
 }
 
+/*
+ * #677 页内大图预览（点轮播图进来）。
+ *
+ * 底色是**半透明**黑而不是原生 `previewImage` 的纯黑：Owner 要求能看见后面这一页。
+ * z-index 压过底栏（100）与下架/购买弹层（110/120）—— 预览是最前面的一层。
+ */
+.detail__viewer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.detail__viewer-swiper,
+.detail__viewer-slide {
+  width: 100%;
+  height: 100%;
+}
+
+.detail__viewer-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* 页码：底部居中，压在自己的小圆角底上，半透明遮罩里也读得清 */
+.detail__viewer-count {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 80px;
+  display: flex;
+  justify-content: center;
+}
+
+.detail__viewer-count-text {
+  padding: 8px 24px;
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-size: var(--fs-sm);
+}
+
 /* ------------------------------------------------------------ 区块通用 */
 
 /* 稿子 `.blk{padding:12px 20px}` = 24rpx 40rpx；卖家区 `.blk[seller]{padding:16px 20px}` = 32rpx 40rpx */
