@@ -2219,7 +2219,9 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const proposalResponse = await postJson(
       base,
       TRANSACTION_ROUTES.proposals,
-      { conversationId, amountCents: 0 },
+      // #676：提案金额必须等于挂价（服务端 422 PROPOSAL_AMOUNT_MISMATCH），
+      // 本脚本主 listing 的挂价在上面的 PATCH 步骤里被改回 16000。
+      { conversationId, amountCents: 16000 },
       buyer,
     )
     assertEqual(proposalResponse.status, 201, '买家提案 → 201')
