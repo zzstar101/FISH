@@ -55,6 +55,8 @@ class MemoryTxStore implements TransactionStore {
           sellerId: seller,
           listingId: listingA,
           listingStatus: 'ACTIVE',
+          // 与 listingBriefs 的摘要同价：提案金额必须等于挂价（#676）
+          listingPriceCents: 16000,
         },
       },
     ],
@@ -326,6 +328,7 @@ async function build(
 }
 
 describe('transaction service: propose / reject / accept', () => {
+  // 金额 == 挂价（16000）→ 通过：这是 #676 之后买家唯一可提的金额
   test('buyer proposes → SYSTEM tx.proposal message written', async () => {
     const { service, messages } = await build()
     const message = await service.propose(buyer, {
@@ -395,11 +398,48 @@ describe('transaction service: propose / reject / accept', () => {
         sellerId: seller,
         listingId: listingA,
         listingStatus: 'RESERVED',
+        listingPriceCents: 16000,
       },
     })
     expect(
       service.propose(buyer, { conversationId: conversationA, amountCents: 1 }),
     ).rejects.toMatchObject({ status: 409, code: 'LISTING_NOT_ACTIVE' })
+  })
+
+  test('#676 提案金额 ≠ 挂价 → 422 PROPOSAL_AMOUNT_MISMATCH（不落消息、不发通知）', async () => {
+    const { service, messages, notifications } = await build()
+    await expect(
+      service.propose(buyer, { conversationId: conversationA, amountCents: 1 }),
+    ).rejects.toMatchObject({ status: 422, code: 'PROPOSAL_AMOUNT_MISMATCH' })
+    // 拦在写 SYSTEM 与发通知之前：卖家看到的金额只能是挂价，不能是客户端随手塞的数
+    expect(messages.messages).toHaveLength(0)
+    expect(notifications).toHaveLength(0)
+  })
+
+  test('#676 免费送（挂价 0）：只接受 0，非 0 一律 422', async () => {
+    const { store, service, messages } = await build()
+    store.conversations.set(conversationA, {
+      kind: 'ok',
+      brief: {
+        id: conversationA,
+        buyerId: buyer,
+        sellerId: seller,
+        listingId: listingA,
+        listingStatus: 'ACTIVE',
+        listingPriceCents: 0,
+      },
+    })
+    await expect(
+      service.propose(buyer, { conversationId: conversationA, amountCents: 500 }),
+    ).rejects.toMatchObject({ status: 422, code: 'PROPOSAL_AMOUNT_MISMATCH' })
+    expect(messages.messages).toHaveLength(0)
+
+    // 0 元送照常可提（金额恒 0）
+    const message = await service.propose(buyer, {
+      conversationId: conversationA,
+      amountCents: 0,
+    })
+    expect(JSON.parse(message.content)).toEqual({ type: 'tx.proposal', amountCents: 0 })
   })
 
   test('seller accepts → transaction created with PENDING_MEETUP + tx.accepted message', async () => {

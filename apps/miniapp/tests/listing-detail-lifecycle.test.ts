@@ -144,8 +144,6 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
       faved: false,
       buyRequested: false,
       buyOpen: false,
-      buyAmount: '',
-      buyAmountError: null,
       buySubmitError: null,
       buyBusy: false,
       offlineConfirmOpen: false,
@@ -162,8 +160,6 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     p.faved = true
     p.buyRequested = true
     p.buyOpen = true
-    p.buyAmount = '99.99'
-    p.buyAmountError = '请填写正确金额（最多两位小数）'
     p.buySubmitError = '发起交易确认失败，请重试'
     p.buyBusy = true
 
@@ -174,8 +170,6 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(p.faved).toBe(false)
     expect(p.buyRequested).toBe(false)
     expect(p.buyOpen).toBe(false)
-    expect(p.buyAmount).toBe('')
-    expect(p.buyAmountError).toBeNull()
     expect(p.buySubmitError).toBeNull()
     expect(p.buyBusy).toBe(false)
   })
@@ -1134,8 +1128,6 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     const switchOnly = block.slice(start, end)
     for (const setter of [
       'setBuyOpen(cleared.buyOpen)',
-      'setBuyAmount(cleared.buyAmount)',
-      'setBuyAmountError(cleared.buyAmountError)',
       'setBuySubmitError(cleared.buySubmitError)',
       'setBuyBusy(cleared.buyBusy)',
     ]) {

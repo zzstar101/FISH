@@ -29,6 +29,11 @@ export interface TxBrief {
   sellerId: string
   listingId: string
   listingStatus: string
+  /**
+   * 会话所属商品的挂价（#676）：提案金额必须与它相等（免费送即 0），
+   * 随 `listingStatus` 在同一次 JOIN 里取回，不额外发一次查询。
+   */
+  listingPriceCents: number
 }
 
 /** 会话定位失败的原因细分：service 据此映射 404 / 403 / 409。 */
@@ -304,7 +309,8 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
   return {
     async findConversation(conversationId, viewerId) {
       const result = await db.execute(sql`
-        SELECT c.id, c.buyer_id, c.seller_id, c.listing_id, l.status::text AS listing_status
+        SELECT c.id, c.buyer_id, c.seller_id, c.listing_id, l.status::text AS listing_status,
+               l.price_cents AS listing_price_cents
         FROM conversations c JOIN listings l ON l.id = c.listing_id
         WHERE c.id = ${conversationId} AND ${viewerId} IN (c.buyer_id, c.seller_id)
       `)
@@ -318,6 +324,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           sellerId: row.seller_id as string,
           listingId: row.listing_id as string,
           listingStatus: row.listing_status as string,
+          listingPriceCents: row.listing_price_cents as number,
         },
       }
     },

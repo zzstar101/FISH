@@ -121,6 +121,30 @@ describe('transactions router', () => {
     expect(response.status).toBe(201)
   })
 
+  test('POST /proposals maps 422 PROPOSAL_AMOUNT_MISMATCH from the service（#676）', async () => {
+    const app = buildApp({
+      propose: async () => {
+        throw new TransactionServiceError(
+          422,
+          'PROPOSAL_AMOUNT_MISMATCH',
+          '交易金额必须与卖家设定的挂价一致',
+        )
+      },
+    })
+    const response = await app.request('/transactions/proposals', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        conversationId: dto.conversationId,
+        amountCents: 1,
+      }),
+    })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({
+      error: { code: 'PROPOSAL_AMOUNT_MISMATCH', message: '交易金额必须与卖家设定的挂价一致' },
+    })
+  })
+
   test('POST /proposals with missing amountCents → 422 envelope with details', async () => {
     const response = await buildApp().request('/transactions/proposals', {
       method: 'POST',

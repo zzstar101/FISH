@@ -1,39 +1,26 @@
 /**
- * 「立即购买」确认弹层的纯逻辑：金额输入 ↔ 整数分。
+ * 「立即购买」确认弹层的金额口径（#676）：**成交价 = 卖家设定的挂价，买家只读**。
  *
- * 口径与 PC 站 `apps/web-pc/src/features/listing-detail/propose-model.ts` 对齐（本 PR 的
- * 对齐对象）：金额输入框默认带挂价、买家可改成与卖家商定的成交价、免费送锁 0。
+ * 改价权归卖家：弹层只展示挂价，没有金额输入框 —— 用户在下单/购买流程里没有任何
+ * 可改价的入口。服务端 `POST /transactions/proposals` 同步强制
+ * `amountCents === listing.priceCents`（不等即 422 `PROPOSAL_AMOUNT_MISMATCH`），
+ * 所以即使有人绕过端上展示直接发请求，也提不出别的金额。
+ *
+ * 免费送的商品金额恒 0：契约 §1 的 `free ⟹ priceCents === 0` 由 DB 约束
+ * `listings_free_price_cents_zero` 保证，这里仍按 `free` 位收口，不依赖上游数据是否干净。
+ *
+ * PC 站 `apps/web-pc/src/features/listing-detail/propose-model.ts` **仍是「买家可改价」
+ * 的旧口径**（本 Issue 只收小程序端），两端在此已不一致，PC 侧跟进另案。
+ *
  * 抽成纯函数与本仓库其余交互一致 —— 判断类逻辑不写在组件里，`bun test` 直接加载本模块。
- *
- * 金额解析与发布 / 编辑商品共用 `parsePriceToCents`（同一条 `PRICE_PATTERN` 边界），
- * 不在这里另写一份正则，避免两处对「最多两位小数」的理解漂移。
  */
-import { parsePriceToCents } from '@/pages/sell/form'
 
-/** 金额输入框初值：免费送恒 `'0'`；其余按挂价，两位小数（PC 同款写法）。 */
-export function initialAmountValue(priceCents: number, free: boolean): string {
-  if (free) return '0'
-  return (priceCents / 100).toFixed(2)
+/** 提案金额（整数分）：挂价本身；免费送恒 0（与服务端校验同一条口径）。 */
+export function proposalAmountCents(priceCents: number, free: boolean): number {
+  return free ? 0 : priceCents
 }
 
-/**
- * 输入框内容 → 提案金额（整数分）。非法返回 `null`。
- *
- * 免费送的商品金额恒为 0（`parsePriceToCents` 同口径）：挂价 0 时买家没有可议的价，
- * 让输入框里的数字决定金额会让「0 元送」被提成任意数。
- *
- * 上限与 PC 同一条：契约 `PriceCentsSchema` 的 ¥100,000（10_000_000 分），超限同样按
- * 非法处理。miniapp 的发布页解析器没有这条本地校验（超限靠服务端 422）—— 本弹层在
- * 自己这一步收口、不动发布页，全端统一另案。
- */
-export function proposalAmountCents(amount: string, free: boolean): number | null {
-  const cents = parsePriceToCents(amount, free)
-  if (cents === null) return null
-  return cents > 10_000_000 ? null : cents
-}
-
-/** 金额字段的错误文案；合法返回 `null`。 */
-export function proposalAmountError(amount: string, free: boolean): string | null {
-  if (free) return null
-  return proposalAmountCents(amount, free) === null ? '请填写正确金额（最多两位小数）' : null
+/** 只读金额的展示文案：两位小数（免费送恒 `0.00`）。 */
+export function proposalAmountText(priceCents: number, free: boolean): string {
+  return (proposalAmountCents(priceCents, free) / 100).toFixed(2)
 }

@@ -91,6 +91,14 @@ describe('describeProposeFailure — 失败映射（口径对齐 PC）', () => {
     expect(view).toEqual({ message: '商品已不在售，可能已被他人拍下', refresh: true })
   })
 
+  test('PROPOSAL_AMOUNT_MISMATCH 也要重取详情（#676：弹层里的挂价已旧）', () => {
+    expect(
+      describeProposeFailure(
+        new FakeApiError(422, 'PROPOSAL_AMOUNT_MISMATCH', '交易金额必须与卖家设定的挂价一致'),
+      ),
+    ).toEqual({ message: '卖家已更新挂价，请按最新挂价重新确认', refresh: true })
+  })
+
   test('身份/归属/校验类错误给安全文案，不触发刷新', () => {
     expect(describeProposeFailure(new FakeApiError(403, 'NOT_CONVERSATION_BUYER', 'x'))).toEqual({
       message: '只有买家可以发起交易确认',

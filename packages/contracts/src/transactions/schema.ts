@@ -239,6 +239,14 @@ export const TransactionErrorCodeSchema = z.enum([
   /** 409：提案或接受时商品非 ACTIVE（RESERVED / SOLD / OFFLINE，含并发输给另一买家）。 */
   'LISTING_NOT_ACTIVE',
   /**
+   * 422：提案金额 ≠ 该商品的挂价（#676）。
+   *
+   * 改价权归卖家：买家在下单流程里只能按挂价成交，免费送只能提 0。提案端点据此拒绝
+   * 任何**不等于挂价**的 `amountCents`（含 0 元送被提成任意数），防止绕过端上只读展示
+   * 直接改价。判据取服务端在同一事务视图里读到的 `listings.price_cents`。
+   */
+  'PROPOSAL_AMOUNT_MISMATCH',
+  /**
    * 409：接受提案时**买家**账号不在可用状态（`DELETION_REQUESTED` 或 `DELETED`）。
    *
    * #464：冷静期内的账号不能再新增交易。买家侧的提案是冷静期之前提的，卖家现在接受就会

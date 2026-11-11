@@ -411,6 +411,20 @@ export function createTransactionService({
       if (brief.listingStatus !== 'ACTIVE') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
+      /*
+       * #676：改价权归卖家 —— 提案金额必须等于**该商品当前的挂价**，免费送即 0
+       * （契约 §1 的 `free ⟹ priceCents === 0` 由 DB 约束 `listings_free_price_cents_zero`
+       * 保证，因此这里一条相等判断同时覆盖「普通商品」与「免费送」两种口径）。
+       * 端上已把金额做成只读展示，但请求体是客户端可控的，金额正确性不能靠前端 ——
+       * 判据取同一次读取拿到的挂价，不信任 `input.amountCents` 的任何其它取值。
+       */
+      if (input.amountCents !== brief.listingPriceCents) {
+        throw new TransactionServiceError(
+          422,
+          'PROPOSAL_AMOUNT_MISMATCH',
+          '交易金额必须与卖家设定的挂价一致',
+        )
+      }
       const message = await writeSystem(
         { buyerId: brief.buyerId, sellerId: brief.sellerId },
         brief.id,
