@@ -10,6 +10,7 @@ import type {
   MeetupVerificationResponse,
   TransactionDto,
 } from '@fish/contracts/transactions/schema'
+import { isApiError } from '@/lib/request'
 import { confirmTransaction, verifyMeetupCode } from './api'
 
 /**
@@ -23,11 +24,34 @@ const AFTER_VERIFY: Record<
   CONFIRM_DELIVERY: (transactionId) => confirmTransaction(transactionId),
 }
 
-/** 核销一枚 6 位交易码，并按 `nextAction` 收尾；返回收尾后的交易（已可判终态）。 */
+/**
+ * 一次核销的分阶段结果。
+ *
+ * 为什么要分阶段：`verify-code` 通过那一刻**码就已经用掉了**（服务端置 CONSUMED），后面
+ * `confirm` 失败再笼统报「核销失败」，用户拿着这枚已失效的码重试只会得到
+ * 「这个交易码已被使用」。所以 confirm 阶段失败必须作为**数据**返回，让调用点给出
+ * 「重试确认」的出口，而不是混进核销错误里（审查 P1）。
+ *
+ * `verify` 阶段的失败仍按原样抛错：那是真的没核销成功，错误码由调用点用
+ * `./meetup-code` 的 `meetupRedeemFailure` 分派。
+ */
+export type MeetupConsumeResult =
+  /** 码被接受且 `nextAction` 已收尾成功：拿到收尾后的交易（已可判终态） */
+  | { kind: 'confirmed'; transaction: TransactionDto }
+  /** 码已核销，但收尾的 confirm 失败：`apiCode` 交给 `classifyConfirmFailure` 分派 */
+  | { kind: 'confirm-failed'; apiCode: string | null }
+
+/** 核销一枚 6 位交易码，并按 `nextAction` 收尾；返回分阶段结果。 */
 export async function consumeMeetupCode(
   transactionId: string,
   code: string,
-): Promise<TransactionDto> {
+): Promise<MeetupConsumeResult> {
   const verified = await verifyMeetupCode(transactionId, code)
-  return AFTER_VERIFY[verified.nextAction](transactionId)
+  try {
+    const transaction = await AFTER_VERIFY[verified.nextAction](transactionId)
+    return { kind: 'confirmed', transaction }
+  } catch (error) {
+    // 走到这里码一定已经 CONSUMED：这是「确认面交」那一步没成，不是核销失败
+    return { kind: 'confirm-failed', apiCode: isApiError(error) ? error.code : null }
+  }
 }

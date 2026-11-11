@@ -27,7 +27,13 @@ import {
   redeemMeetupToken,
   verifyMeetupCode,
 } from '@/features/transaction/api'
-import { meetupRedeemFailure, normalizeMeetupCode } from '@/features/transaction/meetup-code'
+import {
+  MEETUP_CONFIRM_ACTION,
+  MEETUP_CONFIRM_HINT,
+  meetupCodeInputError,
+  meetupRedeemFailure,
+  normalizeMeetupCode,
+} from '@/features/transaction/meetup-code'
 import { qrDataUrl } from '@/features/transaction/qr'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -731,10 +737,20 @@ export default function TransactionMeetup() {
   }
 
   const joined = digits.join('')
-  const canSubmit = joined.length === 6 && !submitting
+  /**
+   * 格式校验与相机页的交易码浮层同源（#674）：位数不足的文案只有 `meetup-code` 一份。
+   * 不足 6 位时按钮仍是「关」的样子，但点下去要给一句为什么（光按钮不响应等于没校验）。
+   */
+  const formatError = meetupCodeInputError(joined)
+  const canSubmit = formatError === null && !submitting
 
   const submit = () => {
-    if (!canSubmit || !tx) return
+    if (!tx) return
+    if (formatError !== null) {
+      setInputError(formatError)
+      return
+    }
+    if (!canSubmit) return
     void consumeCode(tx.id, joined, bootEpoch.current)
   }
 
@@ -1232,9 +1248,7 @@ export default function TransactionMeetup() {
           <>
             {/* 凭证已核销（含跨页面/重启后从服务端状态恢复，审查 P1-2）：
                 一次性 token 已 CONSUMED，再输入只会得到 CONSUMED —— 只给确认出口。 */}
-            <Text className="meetup__hint">
-              交易码已核销成功，面交确认还差最后一步：确认完成本次面交。
-            </Text>
+            <Text className="meetup__hint">{MEETUP_CONFIRM_HINT}</Text>
             <Text className="meetup__flash">等待你确认完成面交。</Text>
             <View className="meetup__bar">
               <View
@@ -1242,7 +1256,7 @@ export default function TransactionMeetup() {
                 onClick={() => void retryConfirm(bootEpoch.current)}
               >
                 {submitting ? <View className="meetup__spin" /> : null}
-                <Text>{submitting ? '确认中…' : '确认完成面交'}</Text>
+                <Text>{submitting ? '确认中…' : MEETUP_CONFIRM_ACTION}</Text>
               </View>
             </View>
           </>

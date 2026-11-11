@@ -62,25 +62,19 @@ describe('核销失败分派', () => {
 })
 
 describe('核销链路只有一份', () => {
-  const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text()
+  // 断言读页面源码而不是行为：这里要证明的是「没有第二份实现」，行为用例证明不了缺席
+  test('面交页与相机页浮层都调共享实现，页面里不再自带错误文案表 / 接口调用', async () => {
+    const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text()
 
-  test('面交页用共享分派，不再自带一份错误文案表', async () => {
-    const code = await read('../src/pkg-trade/pages/transaction-meetup/index.tsx')
-    expect(code).toContain('meetupRedeemFailure(')
-    expect(code).toContain('normalizeMeetupCode(')
-    expect(code).not.toContain('MEETUP_TOKEN_CONSUMED:')
-    expect(code).not.toContain('核销失败，请检查网络后重试。')
-  })
+    const meetup = await read('../src/pkg-trade/pages/transaction-meetup/index.tsx')
+    expect(meetup).toContain('meetupRedeemFailure(')
+    expect(meetup).toContain('normalizeMeetupCode(')
+    expect(meetup).toContain('meetupCodeInputError(')
+    expect(meetup).not.toContain('MEETUP_TOKEN_CONSUMED:')
+    expect(meetup).not.toContain('核销失败，请检查网络后重试。')
 
-  test('相机页浮层走同一个核销函数（不是自己调接口）', async () => {
-    const code = await read('../src/pkg-vision/pages/scan/index.tsx')
-    expect(code).toContain('consumeMeetupCode(')
-    expect(code).not.toContain('verifyMeetupCode(')
-  })
-
-  test('核销链路只有一份实现：verify-code → nextAction 收尾', async () => {
-    const code = await read('../src/features/transaction/meetup-verify.ts')
-    expect(code).toContain('verifyMeetupCode(')
-    expect(code).toContain('AFTER_VERIFY[verified.nextAction]')
+    const scan = await read('../src/pkg-vision/pages/scan/index.tsx')
+    expect(scan).toContain('consumeMeetupCode(')
+    expect(scan).not.toContain('verifyMeetupCode(')
   })
 })

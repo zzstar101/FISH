@@ -53,3 +53,50 @@ export function meetupRedeemFailure(apiCode: string | null): MeetupRedeemFailure
   const message = apiCode === null ? undefined : REDEEM_MESSAGES[apiCode]
   return { kind: 'message', message: message ?? MEETUP_REDEEM_FALLBACK }
 }
+
+/* ------------------------------------------------------------------ 核销之后的「确认面交」
+ * 交易码被接受（`verify-code` 通过、码已 CONSUMED）只是**第一步**：服务端下一步要求
+ * `confirm`（`nextAction: 'CONFIRM_DELIVERY'`）。这一步失败时码已经用掉了，再报
+ * 「核销失败」会让用户拿着**已失效的码**重试（只会得到「这个交易码已被使用」），
+ * 而正确的出路是「重试确认」。面交页与相机页浮层都要走这个口径，所以判据与文案都放这里。
+ */
+
+/** 「码已核销、面交确认还差一步」这句话，两处共用 */
+export const MEETUP_CONFIRM_HINT = '交易码已核销成功，面交确认还差最后一步：确认完成本次面交。'
+
+/** 确认入口的按钮文案，两处共用 */
+export const MEETUP_CONFIRM_ACTION = '确认完成面交'
+
+/** confirm 阶段失败（网络类、可重试）的提示：**不是**核销失败，不得复用核销兜底文案 */
+export const MEETUP_CONFIRM_FAILED = '面交确认没成功，请检查网络后重试。'
+
+/** 核销成功后自动 confirm 失败的处置口径。 */
+export type ConfirmFailure = 'terminal' | 'retry'
+
+/**
+ * 409 `TRANSACTION_NOT_IN_PENDING` = 核销那一瞬交易已到终态（对方取消 / 另一侧已确认）：
+ * 必须重读终态并撤下「还差最后一步确认」（#147 P2）—— 停在待确认会把 CANCELLED 与
+ * COMPLETED 两种结果都说错。其余错误（网络等）才回到可重试的确认入口。
+ *
+ * 只收错误码而不收 `Error`：把 `isApiError` 的判定留在调用点，本模块保持零依赖，
+ * 用例不必为了它去 mock `@tarojs/taro`。
+ */
+export function classifyConfirmFailure(code: string | null): ConfirmFailure {
+  return code === 'TRANSACTION_NOT_IN_PENDING' ? 'terminal' : 'retry'
+}
+
+/** 一次 confirm 请求的落定结果：成功看交易终态，失败看分类。 */
+export type ConfirmOutcome =
+  | { kind: 'ok'; status: string }
+  | { kind: 'error'; failure: ConfirmFailure }
+
+/**
+ * 一次 confirm 落定后，「还差最后一步确认」这个入口的下一帧值（#147 P2）。
+ *
+ * - 成功：只有交易仍是 `PENDING_MEETUP`（还差另一侧）才保留入口；两个终态一律撤下。
+ * - 失败：只有终态冲突才撤下；网络类失败保留入口供重试。
+ */
+export function nextConfirmPending(outcome: ConfirmOutcome): boolean {
+  if (outcome.kind === 'ok') return outcome.status === 'PENDING_MEETUP'
+  return outcome.failure === 'retry'
+}

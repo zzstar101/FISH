@@ -9,7 +9,7 @@
 import type { TransactionStatus } from '@fish/contracts/transactions/schema'
 import type { AuthStatus } from '@/features/auth/store'
 import type { OrderCardView } from '@/features/transaction/adapt'
-import type { MeetupRedeemFailure } from '@/features/transaction/meetup-code'
+import { MEETUP_CONFIRM_HINT, type MeetupRedeemFailure } from '@/features/transaction/meetup-code'
 import { isDemoSource } from '@/features/transaction/order-links'
 
 /**
@@ -28,14 +28,25 @@ export function redeemableOrders(items: OrderCardView[]): OrderCardView[] {
   return items.filter(isRedeemableOrder)
 }
 
-/** 浮层的一屏：未登录 / 读取中 / 读取失败 / 空 / 选单 / 输码 / 成功 */
-export type TradeCodeStage = 'guest' | 'loading' | 'failed' | 'empty' | 'orders' | 'input' | 'done'
+/** 浮层的一屏：未登录 / 读取中 / 读取失败 / 空 / 选单 / 输码 / 待确认 / 成功 */
+export type TradeCodeStage =
+  | 'guest'
+  | 'loading'
+  | 'failed'
+  | 'empty'
+  | 'orders'
+  | 'input'
+  | 'confirm'
+  | 'done'
 
 /**
- * 浮层该显示哪一屏。判定顺序：登录态 → 成功 → 在途 → 失败 → 空 → 选单 / 输码。
+ * 浮层该显示哪一屏。判定顺序：登录态 → 成功 → 待确认 → 在途 → 失败 → 空 → 选单 / 输码。
  *
  * `authStatus === 'unknown'` 只是登录态还没解析完（冷启动 `bootstrapAuth` 在飞），
  * **不能**当成未登录 —— 否则会先闪一句「请先登录」再跳回来。
+ *
+ * `confirmPending` 排在 `loading` 前面：进入「码已核销、待确认」之后会顺手重读订单，
+ * 那一小段 loading 不能把用户手里的确认入口换成转圈。
  */
 export function tradeCodeStage(state: {
   authStatus: AuthStatus
@@ -44,11 +55,14 @@ export function tradeCodeStage(state: {
   /** 已经过滤成可选订单（`redeemableOrders`） */
   orders: OrderCardView[]
   pickedOrderId: string | null
+  /** 码已核销、面交确认还没落定（confirm 失败待重试） */
+  confirmPending: boolean
   done: boolean
 }): TradeCodeStage {
   if (state.authStatus === 'unknown') return 'loading'
   if (state.authStatus === 'anonymous') return 'guest'
   if (state.done) return 'done'
+  if (state.confirmPending) return 'confirm'
   if (state.loading) return 'loading'
   if (state.failed) return 'failed'
   if (state.orders.length === 0) return 'empty'
@@ -64,6 +78,8 @@ export const TRADE_CODE_STAGE_TEXT: Record<Exclude<TradeCodeStage, 'failed' | 'd
   empty: '暂无可核销的订单：只有「待面交」的买入订单能用交易码核销。',
   orders: '选一笔「待面交」的买入订单，再输入对方出示的 6 位交易码。',
   input: '输入对方「交易码」页面上的 6 位数字。',
+  // 「码已核销、确认还差一步」这句与面交页共用同一个常量（`meetup-code`）
+  confirm: MEETUP_CONFIRM_HINT,
 }
 
 /**
@@ -91,3 +107,11 @@ export function tradeCodeFailureMessage(failure: MeetupRedeemFailure): string {
       return failure.message
   }
 }
+
+/**
+ * confirm 阶段撞上终态（对方刚确认 / 刚取消）：确认入口撤下、退回选单屏时的说明。
+ *
+ * 与 `tradeCodeFailureMessage` 的 `terminal` 分开写：那一句说的是「码没能用上、不能再核销」，
+ * 这里码**已经核销成功**，错的只是最后一步确认，说「不能再核销」会让用户以为码白输了。
+ */
+export const TRADE_CODE_CONFIRM_TERMINAL = '这笔交易已经结束（已完成或已取消），确认入口已撤下。'

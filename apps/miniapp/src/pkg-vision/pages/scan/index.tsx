@@ -10,9 +10,14 @@ import { authSnapshot, bootstrapAuth, useAuth } from '@/features/auth/store'
 import { loadOrders } from '@/features/fetchers'
 import { type FailureKind, failureCopy } from '@/features/load-failure'
 import type { OrderCardView } from '@/features/transaction/adapt'
+import { confirmTransaction } from '@/features/transaction/api'
 import {
+  classifyConfirmFailure,
+  MEETUP_CONFIRM_ACTION,
+  MEETUP_CONFIRM_FAILED,
   meetupCodeInputError,
   meetupRedeemFailure,
+  nextConfirmPending,
   normalizeMeetupCode,
 } from '@/features/transaction/meetup-code'
 import { consumeMeetupCode } from '@/features/transaction/meetup-verify'
@@ -24,10 +29,11 @@ import { submitVisualQuery } from '@/features/visual-search/start'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
-import { type ScanFailure, scanOutcome } from './outcome'
+import { type ScanFailure, scanBlockedBy, scanOutcome } from './outcome'
 import { decodeCanvasSize, decodeQrPixels } from './qr-decode'
 import {
   redeemableOrders,
+  TRADE_CODE_CONFIRM_TERMINAL,
   TRADE_CODE_STAGE_TEXT,
   tradeCodeDoneText,
   tradeCodeFailureMessage,
@@ -120,6 +126,8 @@ export default function Scan() {
   const [codeInputError, setCodeInputError] = useState<string | null>(null)
   const [codeError, setCodeError] = useState<string | null>(null)
   const [codeSubmitting, setCodeSubmitting] = useState(false)
+  /** 码已核销、面交确认还没落定（confirm 失败待重试）：浮层切「待确认」屏 */
+  const [codeConfirmPending, setCodeConfirmPending] = useState(false)
   /** 核销成功后的交易（`null` = 没成功）；用来定成功屏文案 */
   const [codeDone, setCodeDone] = useState<TransactionDto | null>(null)
 
@@ -212,9 +220,18 @@ export default function Scan() {
     })
   }
 
+  /** 四条闸的统一判据（浮层开着也在内，见 `scanBlockedBy`） */
+  const scanBlocked = () =>
+    scanBlockedBy({
+      codeOpen,
+      processing: processingRef.current,
+      busy: busyRef.current,
+      failureShown: failure !== null,
+    })
+
   const handleScanCode = (event: { detail?: ScanCodeDetail }) => {
     const rawValue = event.detail?.result ?? ''
-    if (processingRef.current || busyRef.current || failure !== null || !rawValue) return
+    if (scanBlocked() || !rawValue) return
     const failed = failedScanRef.current
     if (failed && failed.value === rawValue && Date.now() - failed.at < SCAN_RETRY_COOLDOWN_MS) {
       return
@@ -224,7 +241,8 @@ export default function Scan() {
 
   /** 相册识码：选一张图 → 端上解码（离屏 Canvas + jsQR）→ 同一个分派。 */
   const scanAlbum = async () => {
-    if (busyRef.current || failure !== null) return
+    // 同上：浮层开着时不进相册识码，免得解出来的码把当前屏换掉
+    if (scanBlocked()) return
     busyRef.current = true
     setBusy(true)
     try {
@@ -293,6 +311,7 @@ export default function Scan() {
     setCodeDigits('')
     setCodeInputError(null)
     setCodeError(null)
+    setCodeConfirmPending(false)
     setCodeDone(null)
   }
 
@@ -331,6 +350,28 @@ export default function Scan() {
   }
 
   /**
+   * 核销后「确认面交」这一步失败的落点（#674 审查 P1）。
+   *
+   * 此刻码已经 CONSUMED，再报「核销失败」会让人拿同一枚死码重试，所以：
+   * - 终态冲突（409 `TRANSACTION_NOT_IN_PENDING`，对方刚确认 / 刚取消）→ 撤下确认入口、
+   *   退回选单屏并重读订单；
+   * - 其余（网络类）→ 留在「已核销 · 待确认」屏，「重试确认」直接再调 `confirmTransaction`。
+   *
+   * 分类与「入口还留不留」都取 `meetup-code` 的同名判据，面交页用的是同一份。
+   */
+  const applyConfirmFailure = (apiCode: string | null) => {
+    const failure = classifyConfirmFailure(apiCode)
+    setCodeConfirmPending(nextConfirmPending({ kind: 'error', failure }))
+    if (failure === 'terminal') {
+      setPickedId(null)
+      setCodeError(TRADE_CODE_CONFIRM_TERMINAL)
+      void loadCodeOrders()
+      return
+    }
+    setCodeError(MEETUP_CONFIRM_FAILED)
+  }
+
+  /**
    * 提交核销。接口与错误分派和面交页同源（`features/transaction/meetup-code`）：
    * verify-code → `nextAction` 收尾都在 `consumeMeetupCode` 里，这里只管落 UI。
    */
@@ -346,9 +387,15 @@ export default function Scan() {
     setCodeInputError(null)
     setCodeError(null)
     try {
-      const tx = await consumeMeetupCode(pickedOrder.id, codeDigits)
-      setCodeDone(tx)
+      const result = await consumeMeetupCode(pickedOrder.id, codeDigits)
+      if (result.kind === 'confirmed') {
+        setCodeDone(result.transaction)
+        return
+      }
+      // 码已核销，只是 confirm 没成：不能落成核销失败
+      applyConfirmFailure(result.apiCode)
     } catch (error) {
+      // 走到这里是 verify 阶段真的没核销成功（码错 / 已用 / 锁定 / 已在终态）
       const failure = meetupRedeemFailure(isApiError(error) ? error.code : null)
       // 交易已终结：这笔不能再核销，退回选单屏并重读（可能刚被对侧确认 / 取消）
       if (failure.kind === 'terminal') setPickedId(null)
@@ -360,9 +407,28 @@ export default function Scan() {
     }
   }
 
+  /** 「已核销 · 待确认」屏的「重试确认」：码不用再输，直接补 confirm（幂等） */
+  const retryConfirm = async () => {
+    if (pickedOrder === null || codeLockRef.current) return
+    codeLockRef.current = true
+    setCodeSubmitting(true)
+    setCodeError(null)
+    try {
+      const dto = await confirmTransaction(pickedOrder.id)
+      setCodeConfirmPending(false)
+      setCodeDone(dto)
+    } catch (error) {
+      applyConfirmFailure(isApiError(error) ? error.code : null)
+    } finally {
+      codeLockRef.current = false
+      setCodeSubmitting(false)
+    }
+  }
+
   const goLogin = () => {
     closeTradeCode()
-    void Taro.navigateTo({ url: LOGIN_PAGE })
+    // 登录页可能在包未就绪 / 栈满时打不开：退化成 relaunch，别让「去登录」点了没反应
+    void Taro.navigateTo({ url: LOGIN_PAGE }).catch(() => Taro.reLaunch({ url: LOGIN_PAGE }))
   }
 
   /* ------------------------------------------------------------ 拍图搜 */
@@ -430,6 +496,7 @@ export default function Scan() {
     failed: codeFailed !== null,
     orders: codeOrders,
     pickedOrderId: pickedId,
+    confirmPending: codeConfirmPending,
     done: codeDone !== null,
   })
   const pickedOrder = codeOrders.find((item) => item.id === pickedId) ?? null
@@ -661,6 +728,35 @@ export default function Scan() {
                 <Text className="scanpage__sheet-sub">{tradeCodeDoneText(codeDone.status)}</Text>
                 <View className="scanpage__sheet-btn" onClick={closeTradeCode}>
                   <Text>完成</Text>
+                </View>
+              </>
+            ) : null}
+
+            {/* 码已核销、只差「确认面交」：与面交页同一句提示、同一个出口（#674 审查 P1） */}
+            {codeStage === 'confirm' && pickedOrder !== null ? (
+              <>
+                <View className="scanpage__code-picked">
+                  <Text className="scanpage__code-picked-title">{pickedOrder.listing.title}</Text>
+                  <Text className="scanpage__code-picked-sub">
+                    {`${pickedOrder.counterpart.nickname} · 待面交 · ${formatAmount(
+                      pickedOrder.amountCents,
+                    )}`}
+                  </Text>
+                </View>
+                <Text className="scanpage__sheet-sub">{TRADE_CODE_STAGE_TEXT.confirm}</Text>
+                {codeError !== null ? (
+                  <Text className="scanpage__code-error">{codeError}</Text>
+                ) : null}
+                <View
+                  className={`scanpage__sheet-btn${codeSubmitting ? ' is-disabled' : ''}`}
+                  onClick={() => {
+                    if (!codeSubmitting) void retryConfirm()
+                  }}
+                >
+                  <Text>{codeSubmitting ? '确认中…' : MEETUP_CONFIRM_ACTION}</Text>
+                </View>
+                <View className="scanpage__code-alt" onClick={() => setPickedId(null)}>
+                  <Text>换一笔订单</Text>
                 </View>
               </>
             ) : null}

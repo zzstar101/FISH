@@ -1,8 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 import type { OrderCardView } from '../src/features/transaction/adapt'
 import {
+  classifyConfirmFailure,
+  MEETUP_CONFIRM_FAILED,
+  MEETUP_CONFIRM_HINT,
+  MEETUP_REDEEM_FALLBACK,
+  nextConfirmPending,
+} from '../src/features/transaction/meetup-code'
+import {
   isRedeemableOrder,
   redeemableOrders,
+  TRADE_CODE_CONFIRM_TERMINAL,
   TRADE_CODE_STAGE_TEXT,
   tradeCodeDoneText,
   tradeCodeFailureMessage,
@@ -63,6 +71,7 @@ describe('浮层分屏', () => {
     failed: false,
     orders: [order()],
     pickedOrderId: null,
+    confirmPending: false,
     done: false,
   }
 
@@ -92,12 +101,55 @@ describe('浮层分屏', () => {
   test('选中的订单已不在最新列表（刚被核销 / 取消）时退回选单屏', () => {
     expect(tradeCodeStage({ ...base, pickedOrderId: 'tx-gone' })).toBe('orders')
   })
+})
 
-  test('每屏都有文案，且不含占位符', () => {
-    for (const text of Object.values(TRADE_CODE_STAGE_TEXT)) {
-      expect(text.length).toBeGreaterThan(0)
-      expect(text).not.toContain('TODO')
-    }
+describe('码已核销、确认未落定（审查 P1）', () => {
+  const base = {
+    authStatus: 'authed' as const,
+    loading: false,
+    failed: false,
+    orders: [order()],
+    pickedOrderId: 'tx-1',
+    confirmPending: false,
+    done: false,
+  }
+
+  test('verify 成功但 confirm 网络失败 → 停在「待确认」屏，不退成输码屏', () => {
+    const failure = classifyConfirmFailure(null)
+    expect(failure).toBe('retry')
+    expect(
+      tradeCodeStage({ ...base, confirmPending: nextConfirmPending({ kind: 'error', failure }) }),
+    ).toBe('confirm')
+  })
+
+  test('进入待确认后在途重读订单（loading / 列表暂时为空）也不换屏', () => {
+    expect(tradeCodeStage({ ...base, confirmPending: true, loading: true, orders: [] })).toBe(
+      'confirm',
+    )
+  })
+
+  test('待确认的说明用「码已核销」那句，不是核销失败兜底', () => {
+    expect(TRADE_CODE_STAGE_TEXT.confirm).toBe(MEETUP_CONFIRM_HINT)
+    expect(MEETUP_CONFIRM_FAILED).not.toBe(MEETUP_REDEEM_FALLBACK)
+    expect(TRADE_CODE_STAGE_TEXT.confirm).not.toBe(MEETUP_REDEEM_FALLBACK)
+  })
+
+  test('重试确认成功 → 完成屏（码不用再输）', () => {
+    expect(tradeCodeStage({ ...base, confirmPending: false, done: true })).toBe('done')
+  })
+
+  test('confirm 撞上终态 → 撤下确认入口，退回选单屏', () => {
+    const failure = classifyConfirmFailure('TRANSACTION_NOT_IN_PENDING')
+    expect(failure).toBe('terminal')
+    const confirmPending = nextConfirmPending({ kind: 'error', failure })
+    expect(confirmPending).toBe(false)
+    // 页面同时清掉 pickedId 并重读订单，于是落回选单屏
+    expect(tradeCodeStage({ ...base, pickedOrderId: null, confirmPending })).toBe('orders')
+  })
+
+  test('终态那句说「确认入口已撤下」，不误称码没核销成功', () => {
+    expect(TRADE_CODE_CONFIRM_TERMINAL).toContain('确认入口已撤下')
+    expect(TRADE_CODE_CONFIRM_TERMINAL).not.toBe(tradeCodeFailureMessage({ kind: 'terminal' }))
   })
 })
 

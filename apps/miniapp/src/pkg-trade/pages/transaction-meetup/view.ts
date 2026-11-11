@@ -35,20 +35,18 @@ export function releaseLock(holder: SubmitLock, epoch: number): SubmitLock {
   return holder === epoch ? null : holder
 }
 
-/** 核销成功后自动 confirm 失败的处置口径。 */
-export type ConfirmFailure = 'terminal' | 'retry'
-
 /**
- * 409 `TRANSACTION_NOT_IN_PENDING` = 核销那一瞬交易已到终态（对方取消 / 另一侧已确认）：
- * 必须重读终态并撤下「还差最后一步确认」（#147 P2）—— 停在待确认会把 CANCELLED 与
- * COMPLETED 两种结果都说错。其余错误（网络等）才回到可重试的确认入口。
- *
- * 只收错误码而不收 `Error`：把 `isApiError` 的判定留在调用点，本模块保持零依赖，
- * 用例不必为了它去 mock `@tarojs/taro`。
+ * 核销之后「确认面交」那一步的判据搬到了 `@/features/transaction/meetup-code`：
+ * 相机页的交易码浮层（#674）在「码已核销、确认失败」时必须和本页走同一口径，
+ * 两份判据一分叉，同一笔交易在两个页面就会给出相反的出路。这里保留同名导出，
+ * 本页与既有用例的引用路径不变。
  */
-export function classifyConfirmFailure(code: string | null): ConfirmFailure {
-  return code === 'TRANSACTION_NOT_IN_PENDING' ? 'terminal' : 'retry'
-}
+export {
+  type ConfirmFailure,
+  type ConfirmOutcome,
+  classifyConfirmFailure,
+  nextConfirmPending,
+} from '@/features/transaction/meetup-code'
 
 /**
  * 从子页（扫码页）返回时的重同步结论（#170 D / #147 返回刷新）。
@@ -73,25 +71,6 @@ export function showSync(input: {
 }
 
 /** 一次 confirm 请求的落定结果：成功看交易终态，失败看分类。 */
-export type ConfirmOutcome =
-  | { kind: 'ok'; status: string }
-  | { kind: 'error'; failure: ConfirmFailure }
-
-/**
- * 一次 confirm 落定后，「还差最后一步确认」这个入口的下一帧值（#147 P2）。
- *
- * - 成功：只有交易仍是 `PENDING_MEETUP`（还差另一侧）才保留入口；两个终态
- *   （`COMPLETED` / `CANCELLED`）一律撤下。
- * - 失败：只有终态冲突才撤下；网络类失败保留入口供重试。
- *
- * 判定留在这里而不是散在组件的两个 catch 里：CANCELLED 不得停在待确认、COMPLETED 不得
- * 停在待确认，这两条正是本 issue 的验收点，抽成纯函数才有能变红的用例（组件里那一行
- * 接线本身测不到，判定可以）。
- */
-export function nextConfirmPending(outcome: ConfirmOutcome): boolean {
-  if (outcome.kind === 'ok') return outcome.status === 'PENDING_MEETUP'
-  return outcome.failure === 'retry'
-}
 
 /**
  * 终态 409 之后重读交易，确认入口该留还是该撤（#147 P2）。
