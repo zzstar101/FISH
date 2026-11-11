@@ -1,17 +1,38 @@
-import { Camera, Image, Text, View } from '@tarojs/components'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import { Camera, Image, Input, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import ScanTabs from '@/components/scan-tabs'
 import { parseScanEntry, type ScanTabKey } from '@/components/scan-tabs/tabs'
+import { LOGIN_PAGE } from '@/features/auth/guard'
+import { authSnapshot, bootstrapAuth, useAuth } from '@/features/auth/store'
+import { loadOrders } from '@/features/fetchers'
+import { type FailureKind, failureCopy } from '@/features/load-failure'
+import type { OrderCardView } from '@/features/transaction/adapt'
+import {
+  meetupCodeInputError,
+  meetupRedeemFailure,
+  normalizeMeetupCode,
+} from '@/features/transaction/meetup-code'
+import { consumeMeetupCode } from '@/features/transaction/meetup-verify'
 import type { PickedPhoto } from '@/features/upload/api'
 import { pickPhotoOfSource, readFileSize } from '@/features/upload/api'
 import { isChooseMediaCancel } from '@/features/upload/choose-error'
 import { visualSearchErrorMessage } from '@/features/visual-search/api'
 import { submitVisualQuery } from '@/features/visual-search/start'
+import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
+import { isApiError } from '@/lib/request'
 import { type ScanFailure, scanOutcome } from './outcome'
 import { decodeCanvasSize, decodeQrPixels } from './qr-decode'
+import {
+  redeemableOrders,
+  TRADE_CODE_STAGE_TEXT,
+  tradeCodeDoneText,
+  tradeCodeFailureMessage,
+  tradeCodeStage,
+} from './trade-code'
 import './index.scss'
 
 /**
@@ -34,8 +55,10 @@ import './index.scss'
  * - 相机不可用（权限被拒 / 无相机 / 被占用）**不弹阻断弹窗**：取景层换成纯黑 + 居中说明 +
  *   「去设置」，底部 tab 与相册等入口照常可用。拒绝的判据优先取 `getSetting` 的确定性结果，
  *   `onError` 只做兜底。
- * - 「输入 6 位交易码」只在**从面交页进来**时出现（入口带 `from=meetup`，见 `scanPageUrl`）：
- *   6 位码只能在具体订单的面交页输入（那里才知道 transactionId），点它直接返回那页。
+ * - 「输入 6 位码」**始终**在扫一扫的操作条里（相机不可用时也在，不依赖 `from=meetup`）。
+ *   6 位码只能在某笔订单的上下文里核销（服务端要 `transactionId`），所以点了先开**页内浮层**：
+ *   列本人「待面交」的买入订单 → 选一笔 → 输 6 位码 → 核销（#674，判断逻辑见 `./trade-code`）。
+ *   从面交页进来（`from=meetup`）保留旧行为：直接返回那页，那里已经知道是哪一单。
  */
 
 /** 「扫码没成功」面板的两种原因（Owner 拍板：只留这两条） */
@@ -56,6 +79,12 @@ type ScanCodeDetail = { result?: string }
 /** 导航失败 / 判无效后，同一枚二维码的自动重试冷却时间 */
 const SCAN_RETRY_COOLDOWN_MS = 5000
 
+/**
+ * 交易码浮层的 6 个输入格子：位置即身份，模块级生成稳定 id
+ * （口径同面交页的 `INPUT_CELLS`，不拿渲染下标当 key）。
+ */
+const CODE_CELLS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `scan-code-cell-${index}`, index }))
+
 export default function Scan() {
   const router = useRouter<Record<string, string | undefined>>()
   /** 进页参数：初始 tab 与「是否从面交页进来」。进页时定下，之后不变 */
@@ -73,6 +102,29 @@ export default function Scan() {
   const [failure, setFailure] = useState<ScanFailure | null>(null)
   /** 相册识码 / 拍图上传在途：底部按钮防连点（原生面板是模态的，后续腿不是） */
   const [busy, setBusy] = useState(false)
+
+  /** 登录态：浮层要区分「还没解析完 / 未登录 / 已登录」，订阅 store 而不是自己查一次 */
+  const auth = useAuth()
+
+  /** 交易码浮层开没开 */
+  const [codeOpen, setCodeOpen] = useState(false)
+  /** 可选订单（已按 `isRedeemableOrder` 过滤） */
+  const [codeOrders, setCodeOrders] = useState<OrderCardView[]>([])
+  const [codeLoading, setCodeLoading] = useState(false)
+  /** 订单读取失败的原因（文案复用 `failureCopy`，不在这里造字面量） */
+  const [codeFailed, setCodeFailed] = useState<FailureKind | null>(null)
+  /** 选中的订单 id；`null` = 还在选单屏 */
+  const [pickedId, setPickedId] = useState<string | null>(null)
+  const [codeDigits, setCodeDigits] = useState('')
+  /** 行内错误：格式（本地校验）与后端失败都落这一处 */
+  const [codeInputError, setCodeInputError] = useState<string | null>(null)
+  const [codeError, setCodeError] = useState<string | null>(null)
+  const [codeSubmitting, setCodeSubmitting] = useState(false)
+  /** 核销成功后的交易（`null` = 没成功）；用来定成功屏文案 */
+  const [codeDone, setCodeDone] = useState<TransactionDto | null>(null)
+
+  /** 提交锁：状态更新有延迟，连点用 ref 判（口径同 `busyRef`） */
+  const codeLockRef = useRef(false)
 
   /** 防重复消费锁：onScanCode 从发起导航 / 弹面板到解锁期间为 true */
   const processingRef = useRef(false)
@@ -205,15 +257,112 @@ export default function Scan() {
     }
   }
 
-  /** 「输入 6 位交易码」：只在从面交页进来时出现，直接返回那页输入。 */
-  const goManualInput = () => {
-    void Taro.navigateBack()
-  }
-
   /** 面板「重新扫」/ 点面板外：回取景，解锁 */
   const dismissFailure = () => {
     processingRef.current = false
     setFailure(null)
+  }
+
+  /* -------------------------------------------------- 输入交易码（#674） */
+
+  /**
+   * 读本人「待面交」的订单。复用的就是「我买到的」那一条读取链路
+   * （`loadOrders` → `fetchAllTransactions('buyer')`），可选性由 `./trade-code` 判定。
+   * 冷启动登录态还没解析完时先等 `bootstrapAuth`，别把「还不知道」当「没登录」。
+   */
+  const loadCodeOrders = async () => {
+    setCodeLoading(true)
+    setCodeFailed(null)
+    try {
+      if (authSnapshot().status === 'unknown') await bootstrapAuth()
+      const loaded = await loadOrders('buyer')
+      setCodeOrders(redeemableOrders(loaded.items))
+      setCodeFailed(loaded.failureKind)
+    } catch (error) {
+      setCodeOrders([])
+      setCodeFailed('server')
+      console.warn('[miniapp] 读待面交订单失败', error)
+    } finally {
+      setCodeLoading(false)
+    }
+  }
+
+  /** 清掉这一轮的输入与结果：开浮层与关浮层都要，别让上一笔的码带到下一笔 */
+  const resetCodeState = () => {
+    setPickedId(null)
+    setCodeDigits('')
+    setCodeInputError(null)
+    setCodeError(null)
+    setCodeDone(null)
+  }
+
+  /**
+   * 点「输入 6 位码」。从面交页进来（`from=meetup`）保留旧行为：那页已经知道是哪一单，
+   * 直接返回更省一步；其余情况就地开浮层（相机不可用时这条钮也在）。
+   */
+  const openTradeCode = () => {
+    if (entry.fromMeetup) {
+      void Taro.navigateBack()
+      return
+    }
+    resetCodeState()
+    setCodeOpen(true)
+    void loadCodeOrders()
+  }
+
+  /** 关浮层：下次进来是干净的选单屏 */
+  const closeTradeCode = () => {
+    setCodeOpen(false)
+    resetCodeState()
+  }
+
+  const pickOrder = (id: string) => {
+    setPickedId(id)
+    setCodeDigits('')
+    setCodeInputError(null)
+    setCodeError(null)
+  }
+
+  /** 6 位格子：整串归一（去非数字、截 6 位），输入即清错 */
+  const onCodeInput = (raw: string) => {
+    setCodeDigits(normalizeMeetupCode(raw))
+    setCodeInputError(null)
+    setCodeError(null)
+  }
+
+  /**
+   * 提交核销。接口与错误分派和面交页同源（`features/transaction/meetup-code`）：
+   * verify-code → `nextAction` 收尾都在 `consumeMeetupCode` 里，这里只管落 UI。
+   */
+  const submitCode = async () => {
+    if (pickedOrder === null || codeLockRef.current) return
+    const inputError = meetupCodeInputError(codeDigits)
+    if (inputError !== null) {
+      setCodeInputError(inputError)
+      return
+    }
+    codeLockRef.current = true
+    setCodeSubmitting(true)
+    setCodeInputError(null)
+    setCodeError(null)
+    try {
+      const tx = await consumeMeetupCode(pickedOrder.id, codeDigits)
+      setCodeDone(tx)
+    } catch (error) {
+      const failure = meetupRedeemFailure(isApiError(error) ? error.code : null)
+      // 交易已终结：这笔不能再核销，退回选单屏并重读（可能刚被对侧确认 / 取消）
+      if (failure.kind === 'terminal') setPickedId(null)
+      setCodeError(tradeCodeFailureMessage(failure))
+      if (failure.kind === 'terminal') void loadCodeOrders()
+    } finally {
+      codeLockRef.current = false
+      setCodeSubmitting(false)
+    }
+  }
+
+  const goLogin = () => {
+    closeTradeCode()
+    void Taro.navigateTo({ url: LOGIN_PAGE })
   }
 
   /* ------------------------------------------------------------ 拍图搜 */
@@ -274,6 +423,21 @@ export default function Scan() {
       ? '可以去「设置」允许使用相机，或从相册选一张交易码截图'
       : '可以去「设置」允许使用相机，或改用相册、聊天记录'
 
+  /** 浮层当前该显示哪一屏（判断全在 `./trade-code`，这里只做一次求值） */
+  const codeStage = tradeCodeStage({
+    authStatus: auth.status,
+    loading: codeLoading,
+    failed: codeFailed !== null,
+    orders: codeOrders,
+    pickedOrderId: pickedId,
+    done: codeDone !== null,
+  })
+  const pickedOrder = codeOrders.find((item) => item.id === pickedId) ?? null
+  const codeComplete = meetupCodeInputError(codeDigits) === null
+  /** 行内错误只有一个位置：格式/本地校验优先，其次是后端失败 */
+  const codeMessage = codeInputError ?? codeError
+  const codeLoadFailure = codeFailed === null ? null : failureCopy(codeFailed)
+
   return (
     <View className="scanpage">
       {/* ---------------- 全屏相机 / 相机不可用（纯黑 + 居中说明） ---------------- */}
@@ -331,14 +495,11 @@ export default function Scan() {
             <Text className="scanpage__act-label">相册</Text>
           </View>
           <View className="scanpage__act-slot" />
-          {entry.fromMeetup ? (
-            <View className="scanpage__act" onClick={goManualInput}>
-              <Image className="scanpage__act-ic" src={ICONS.keyWhite} mode="aspectFit" />
-              <Text className="scanpage__act-label">输入 6 位码</Text>
-            </View>
-          ) : (
-            <View className="scanpage__act-slot" />
-          )}
+          {/* 始终在：相机不可用、没带 from=meetup 时也要能就地输码（#674） */}
+          <View className={`scanpage__act${codeOpen ? ' is-busy' : ''}`} onClick={openTradeCode}>
+            <Image className="scanpage__act-ic" src={ICONS.keyWhite} mode="aspectFit" />
+            <Text className="scanpage__act-label">输入 6 位码</Text>
+          </View>
         </View>
       ) : (
         <View className="scanpage__actions">
@@ -380,6 +541,129 @@ export default function Scan() {
             <View className="scanpage__sheet-btn" onClick={dismissFailure}>
               <Text>重新扫</Text>
             </View>
+          </View>
+        </>
+      ) : null}
+
+      {/* ---------------- 输入交易码浮层（#674）：先选订单再输码 ---------------- */}
+      {codeOpen ? (
+        <>
+          <View className="scanpage__sheet-dismiss" onClick={closeTradeCode} />
+          <View className="scanpage__sheet scanpage__code">
+            <View className="scanpage__grab" />
+            <Text className="scanpage__sheet-title">输入交易码</Text>
+
+            {codeStage === 'guest' ? (
+              <>
+                <Text className="scanpage__sheet-sub">{TRADE_CODE_STAGE_TEXT.guest}</Text>
+                <View className="scanpage__sheet-btn" onClick={goLogin}>
+                  <Text>去登录</Text>
+                </View>
+              </>
+            ) : null}
+
+            {codeStage === 'loading' ? (
+              <Text className="scanpage__sheet-sub">{TRADE_CODE_STAGE_TEXT.loading}</Text>
+            ) : null}
+
+            {codeStage === 'failed' && codeLoadFailure !== null ? (
+              <>
+                <Text className="scanpage__sheet-sub">
+                  {`${codeLoadFailure.title}：${codeLoadFailure.text}`}
+                </Text>
+                <View className="scanpage__sheet-btn" onClick={() => void loadCodeOrders()}>
+                  <Text>重试</Text>
+                </View>
+              </>
+            ) : null}
+
+            {codeStage === 'empty' ? (
+              <>
+                <Text className="scanpage__sheet-sub">{TRADE_CODE_STAGE_TEXT.empty}</Text>
+                <View className="scanpage__sheet-btn" onClick={() => void loadCodeOrders()}>
+                  <Text>刷新</Text>
+                </View>
+              </>
+            ) : null}
+
+            {codeStage === 'orders' ? (
+              <>
+                <Text className="scanpage__sheet-sub">{TRADE_CODE_STAGE_TEXT.orders}</Text>
+                {codeError !== null ? (
+                  <Text className="scanpage__code-error">{codeError}</Text>
+                ) : null}
+                <View className="scanpage__code-list">
+                  {codeOrders.map((item) => (
+                    <View
+                      key={item.id}
+                      className="scanpage__code-row"
+                      onClick={() => pickOrder(item.id)}
+                    >
+                      <View className="scanpage__code-row-main">
+                        <Text className="scanpage__code-row-title">{item.listing.title}</Text>
+                        <Text className="scanpage__code-row-sub">
+                          {`${item.counterpart.nickname} · 待面交 · ${formatAmount(item.amountCents)}`}
+                        </Text>
+                      </View>
+                      <View className="scanpage__code-row-chevron" />
+                    </View>
+                  ))}
+                </View>
+              </>
+            ) : null}
+
+            {codeStage === 'input' && pickedOrder !== null ? (
+              <>
+                <View className="scanpage__code-picked">
+                  <Text className="scanpage__code-picked-title">{pickedOrder.listing.title}</Text>
+                  <Text className="scanpage__code-picked-sub">
+                    {`${pickedOrder.counterpart.nickname} · 待面交 · ${formatAmount(
+                      pickedOrder.amountCents,
+                    )}`}
+                  </Text>
+                </View>
+                <Text className="scanpage__sheet-sub">{TRADE_CODE_STAGE_TEXT.input}</Text>
+                <View className="scanpage__code-cells">
+                  {CODE_CELLS.map((cell) => (
+                    <View key={cell.id} className="scanpage__code-cell">
+                      <Text>{codeDigits[cell.index] ?? ''}</Text>
+                    </View>
+                  ))}
+                  {/* 透明原生输入框压在上面：真键盘、粘贴、整串归一都交给它 */}
+                  <Input
+                    className="scanpage__code-input"
+                    type="number"
+                    maxlength={6}
+                    value={codeDigits}
+                    focus
+                    onInput={(event) => onCodeInput(event.detail.value)}
+                  />
+                </View>
+                {codeMessage !== null ? (
+                  <Text className="scanpage__code-error">{codeMessage}</Text>
+                ) : null}
+                <View
+                  className={`scanpage__sheet-btn${codeComplete && !codeSubmitting ? '' : ' is-disabled'}`}
+                  onClick={() => {
+                    if (codeComplete && !codeSubmitting) void submitCode()
+                  }}
+                >
+                  <Text>{codeSubmitting ? '核销中…' : '核销'}</Text>
+                </View>
+                <View className="scanpage__code-alt" onClick={() => setPickedId(null)}>
+                  <Text>换一笔订单</Text>
+                </View>
+              </>
+            ) : null}
+
+            {codeStage === 'done' && codeDone !== null ? (
+              <>
+                <Text className="scanpage__sheet-sub">{tradeCodeDoneText(codeDone.status)}</Text>
+                <View className="scanpage__sheet-btn" onClick={closeTradeCode}>
+                  <Text>完成</Text>
+                </View>
+              </>
+            ) : null}
           </View>
         </>
       ) : null}

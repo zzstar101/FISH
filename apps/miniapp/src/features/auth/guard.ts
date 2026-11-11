@@ -16,7 +16,8 @@ import Taro from '@tarojs/taro'
 import { useEffect } from 'react'
 import { type AuthStatus, bootstrapAuth, useAuth } from './store'
 
-const LOGIN_PAGE = '/pkg-auth/pages/login/index'
+/** 登录页地址：守卫的缺省落点，也供需要「点一下去登录」的页面复用（#674 相机页浮层） */
+export const LOGIN_PAGE = '/pkg-auth/pages/login/index'
 
 /** 页面在 TabBar 上时必须用 `navigateTo`（见文件头第 2 条） */
 type GuardOptions = {

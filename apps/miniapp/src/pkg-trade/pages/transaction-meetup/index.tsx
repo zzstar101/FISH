@@ -27,6 +27,7 @@ import {
   redeemMeetupToken,
   verifyMeetupCode,
 } from '@/features/transaction/api'
+import { meetupRedeemFailure, normalizeMeetupCode } from '@/features/transaction/meetup-code'
 import { qrDataUrl } from '@/features/transaction/qr'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -496,40 +497,29 @@ export default function TransactionMeetup() {
       if (isStale(epoch)) return
       await settle()
       if (isStale(epoch)) return
-      if (isApiError(error)) {
-        const map: Record<string, string> = {
-          MEETUP_TOKEN_INVALID: '交易码错误，请核对后重新输入。请确认对方展示的是本单的交易码。',
-          MEETUP_TOKEN_CONSUMED: '这个交易码已被使用，不能重复核销。',
-          MEETUP_TOKEN_LOCKED:
-            '错误次数过多，已临时锁定。请让对方重新打开一次「交易码」页面，再试同一枚码。',
-          MEETUP_TOKEN_NOT_FOUND: '对方还没有出示本单的交易码。',
-        }
-        if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
-          // 已取消 / 已完成：刷新交易视图落到对应状态卡，确认入口同样必须撤下
-          // —— 与自动 confirm 那条终态路径同一口径（#147 P2），终态没有「还差一步」。
-          const dto = await fetchTransaction(targetId).catch(() => null)
-          if (isStale(epoch)) return
-          if (dto) setTx(dto)
-          setConfirmPending(false)
-          // 同一口径：在途核销撞上「已经完成」时也补播一次完成动效（CANCELLED 不播）
-          if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
-          return
-        }
-        if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
-          // 只有出示方（卖家）会拿到 403：扫码语义已如实到达后端。
-          // 不顺手自动重取（#176 取码幂等、码值不变，重取不会作废任何东西）——
-          // 静默把一次核销失败变成展示动作会掩盖失败本身；落到「暂不展示」态，
-          // 卖家重新进入本页即可取回同一枚码。
-          setToken({ state: 'unavailable' })
-          return
-        }
-        const message = map[error.code]
-        if (message) {
-          setInputError(message)
-          return
-        }
+      // 错误码 → 落点与文案统一走 `features/transaction/meetup-code`：
+      // 相机页的交易码浮层核销的是同一枚码，两处不再各写一份字面量（#674）。
+      const failure = meetupRedeemFailure(isApiError(error) ? error.code : null)
+      if (failure.kind === 'terminal') {
+        // 已取消 / 已完成：刷新交易视图落到对应状态卡，确认入口同样必须撤下
+        // —— 与自动 confirm 那条终态路径同一口径（#147 P2），终态没有「还差一步」。
+        const dto = await fetchTransaction(targetId).catch(() => null)
+        if (isStale(epoch)) return
+        if (dto) setTx(dto)
+        setConfirmPending(false)
+        // 同一口径：在途核销撞上「已经完成」时也补播一次完成动效（CANCELLED 不播）
+        if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
+        return
       }
-      setInputError('核销失败，请检查网络后重试。')
+      if (failure.kind === 'not-allowed') {
+        // 只有出示方（卖家）会拿到 403：扫码语义已如实到达后端。
+        // 不顺手自动重取（#176 取码幂等、码值不变，重取不会作废任何东西）——
+        // 静默把一次核销失败变成展示动作会掩盖失败本身；落到「暂不展示」态，
+        // 卖家重新进入本页即可取回同一枚码。
+        setToken({ state: 'unavailable' })
+        return
+      }
+      setInputError(failure.message)
     } finally {
       // 换账号后旧链的收尾不能落地：它会把新账号正在进行的核销 loading 关掉
       if (!isStale(epoch)) {
@@ -730,7 +720,8 @@ export default function TransactionMeetup() {
    * 与设计稿「6 个独立格子」的观感一致，又不必依赖六个真实输入框。
    */
   const onDigitsInput = (raw: string) => {
-    const clean = raw.replace(/\D/g, '').slice(0, 6)
+    // 归一规则与相机页浮层同源（去非数字、截 6 位）：见 `normalizeMeetupCode`
+    const clean = normalizeMeetupCode(raw)
     const next = ['', '', '', '', '', '']
     clean.split('').forEach((ch, i) => {
       next[i] = ch
