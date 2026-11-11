@@ -89,7 +89,29 @@ class MemoryTxStore implements TransactionStore {
     if (viewerId !== lookup.brief.buyerId && viewerId !== lookup.brief.sellerId) {
       return { kind: 'not-found' }
     }
+    this.onFindConversation?.()
     return lookup
+  }
+
+  /**
+   * 内存替身也模拟生产的并发语义（#676 审查）：提案写入时**重读挂价**再比对，
+   * 而不是复用 `brief.listingPriceCents`。`listingPrices` 就是「卖家能改的那张表」，
+   * 测试改它即可复现「读完 brief 之后挂价变了」的窗口。
+   */
+  listingPrices = new Map<string, number>([[listingA, 16000]])
+  /** `findConversation` 命中后回调：测试用它模拟「读完 brief 紧接着改价」。 */
+  onFindConversation?: () => void
+
+  async propose(
+    brief: Extract<ConversationLookup, { kind: 'ok' }>['brief'],
+    amountCents: number,
+    content: string,
+  ) {
+    const current = this.listingPrices.get(brief.listingId)
+    if (current === undefined) return { kind: 'listing-gone' as const }
+    if (current !== amountCents) return { kind: 'price-mismatch' as const }
+    const message = await this.messages.insertSystem(brief.id, content)
+    return { kind: 'ok' as const, message }
   }
 
   /**
@@ -429,6 +451,8 @@ describe('transaction service: propose / reject / accept', () => {
         listingPriceCents: 0,
       },
     })
+    // 卖家把挂价改成 0（免费送）：brief 快照与 listing 行两边都是 0
+    store.listingPrices.set(listingA, 0)
     await expect(
       service.propose(buyer, { conversationId: conversationA, amountCents: 500 }),
     ).rejects.toMatchObject({ status: 422, code: 'PROPOSAL_AMOUNT_MISMATCH' })
@@ -440,6 +464,30 @@ describe('transaction service: propose / reject / accept', () => {
       amountCents: 0,
     })
     expect(JSON.parse(message.content)).toEqual({ type: 'tx.proposal', amountCents: 0 })
+  })
+
+  /*
+   * #676 审查（并发改价）：`findConversation` 带回的挂价只是前置快照。卖家在
+   * 「读会话 → 插提案」之间把挂价从 16000 改成 17000 时，只信快照会落一条金额与当前
+   * 挂价不符的提案。判据必须在写入事务内重读 —— 冲突对外仍是同一个 422，且一条消息都不写。
+   */
+  test('#676 读完 brief 后挂价被改：422 PROPOSAL_AMOUNT_MISMATCH，且不写 SYSTEM 消息', async () => {
+    const { store, service, messages, notifications } = await build()
+    let fired = false
+    store.onFindConversation = () => {
+      if (fired) return
+      fired = true
+      store.listingPrices.set(listingA, 17000)
+    }
+
+    await expect(
+      service.propose(buyer, { conversationId: conversationA, amountCents: 16000 }),
+    ).rejects.toMatchObject({ status: 422, code: 'PROPOSAL_AMOUNT_MISMATCH' })
+    // 卖家看到的不能是旧价：既没有消息，也没有「收到一张卡片」的通知
+    expect(messages.messages).toHaveLength(0)
+    expect(notifications).toHaveLength(0)
+    // 确认这次确实走的是「读完 brief 之后才改价」这条路
+    expect(fired).toBe(true)
   })
 
   test('seller accepts → transaction created with PENDING_MEETUP + tx.accepted message', async () => {
