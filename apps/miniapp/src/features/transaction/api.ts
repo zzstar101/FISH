@@ -265,8 +265,9 @@ export async function fetchTransactionReviews(id: string): Promise<TransactionRe
  * 消息（与 `rejectProposal` 同形状）。商品在提案阶段仍是 `ACTIVE` —— 提案**不是商品状态**：
  * 只有卖家接受（`acceptTransaction`）才创建交易行并把商品置 `RESERVED`。
  *
- * `amountCents` 是买家在弹层里填的成交价（默认带挂价、可改）；提案不落库、服务端无处可读，
- * 卖家接受时以**卖家重传的值**为准（契约 `transactionAcceptInputSchema` 注释同源）。
+ * `amountCents` **必须等于该商品的挂价**（#676：改价权归卖家，免费送恒 0）；服务端拿
+ * `listings.price_cents` 比对，不等即 `422 PROPOSAL_AMOUNT_MISMATCH` 拒绝。提案本身不落金额，
+ * 卖家接受时仍以请求体重传的值为准（契约 `transactionAcceptInputSchema` 注释同源）。
  * 服务端允许重复提案（不会为同一会话产生两笔有效交易，只是会话里多一条提案）；
  * 小程序详情页的 `buyRequested` 只是**本页内存标记**（不落库），重进页面即复位、
  * 可再次发起——所以确认一次后进「待店家确认」终态只是**页面跳转后的自然结果**，

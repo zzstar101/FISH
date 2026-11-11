@@ -735,6 +735,9 @@ export default function ListingDetail() {
           setLoadState('notFound')
           setComments([])
           setCommentsCursor(null)
+          // 商品真没了，弹层也得一起收（#676 审查）：留在空态页上会让摘要写出
+          // 「¥0.00」，而确认钮因 `listing === undefined` 静默 return —— 点了没反应。
+          setBuyOpen(false)
         }
         return
       }
@@ -996,7 +999,7 @@ export default function ListingDetail() {
 
   /**
    * 「立即购买」（#11 提案端点落地后的真接线）：打开自绘确认弹层，内容对齐 PC 站
-   * `buy-dialog` —— 商品摘要 + 可改的交易金额 + 语义注释。确认后走真两步写：
+   * `buy-dialog` —— 商品摘要 + 只读的交易金额 + 语义注释。确认后走真两步写：
    * `POST /conversations`（同买家同商品服务端**复用**既有会话，重复发起幂等）→
    * `POST /transactions/proposals`（往会话写一条 `tx.proposal`；商品仍是 `ACTIVE`，
    * 只有卖家接受才创建交易行，见 `features/transaction/api` 的提案注释）。
