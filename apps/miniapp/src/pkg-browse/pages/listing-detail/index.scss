@@ -494,22 +494,15 @@
   border-top: 2px solid var(--border);
 }
 
+/* 输入条头像（#677）：与下方留言头像（`.detail__cav`）同一套容器观感 ——
+   尺寸/圆角/边框/底色在这里，里面那张图由 `UserAvatar` 铺满（`.user-av` 自带 overflow:hidden）。 */
 .detail__cmt-me {
   width: 60px;
   height: 60px;
   flex: 0 0 auto;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--grad-brand);
-}
-
-.detail__cmt-me-text {
-  color: #fff;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 24px;
-  font-weight: 700;
+  background: var(--grad-ph);
+  border: 2px solid var(--border);
 }
 
 .detail__cmt-in {

@@ -1415,6 +1415,22 @@ export default function ListingDetail() {
 
   const listing = data?.listing
   const images = listing?.images ?? []
+
+  /**
+   * 点商品图进**微信原生**大图预览（#677）。
+   *
+   * 为什么必须是 `previewImage` 而不是自绘遮罩：只有原生预览态的长按菜单才带
+   * 「转发给朋友 / 保存图片 / 收藏 / 翻译图片中的文字 / 提取文字」——那些菜单项由微信客户端
+   * 提供，自绘全屏 <Image> 只有我们自己能画的按钮，保存与转发都做不到。
+   *
+   * `urls` 给**整组**商品图、`current` 指定点中的那张：预览态里左右滑动就能翻完这一件商品，
+   * 与轮播顺序一致。空数组（详情还没到）直接不弹，避免微信弹一层空白预览。
+   */
+  const previewSlide = (current: string) => {
+    if (images.length === 0) return
+    void Taro.previewImage({ urls: images, current })
+  }
+
   const visibleComments = commentsOpen ? comments : comments.slice(0, COMMENT_LIMIT)
   const paragraphs = listing ? descriptionLines(listing.description) : []
 
@@ -1549,7 +1565,12 @@ export default function ListingDetail() {
                 >
                   {images.map((url) => (
                     <SwiperItem key={url} className="detail__slide">
-                      <Image className="detail__slide-img" src={url} mode="aspectFill" />
+                      <Image
+                        className="detail__slide-img"
+                        src={url}
+                        mode="aspectFill"
+                        onClick={() => previewSlide(url)}
+                      />
                     </SwiperItem>
                   ))}
                 </Swiper>
@@ -1739,9 +1760,10 @@ export default function ListingDetail() {
             <View className="detail__comments">
               {/* 输入条：稿子画在留言区顶部，负 margin 抵掉区块左右 padding 铺满整宽 */}
               <View className="detail__cmt-bar">
-                <View className="detail__cmt-me">
-                  <Text className="detail__cmt-me-text">我</Text>
-                </View>
+                {/* 输入条头像用**当前登录用户**的真头像（#677）：此前是写死的蓝底「我」字圆点，
+                    与下方留言头像（`CommentAvatar` → `UserAvatar`）不是一回事，看起来像另一个账号。
+                    无头像 / 未登录时由 `UserAvatar` 回落统一默认头像插画，不再自绘占位。 */}
+                <UserAvatar className="detail__cmt-me" src={user?.avatarUrl ?? null} />
                 <Input
                   className="detail__cmt-in"
                   value={commentInput}
