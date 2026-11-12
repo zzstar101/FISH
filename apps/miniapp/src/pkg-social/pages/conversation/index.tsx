@@ -94,8 +94,14 @@ import {
   isLatestPresencePoll,
   isNearBottom,
   isPanelDismissTap,
+  isStaleCloseReport,
   isStaleMediaIdentity,
   isStaleMediaTask,
+  /**
+   * 与 `nextKeyboardInset` 内部同一个尾窗（`view.ts`）：页面用它判「这条回执还在本页刚发起的
+   * 那次转换的尾窗里」（晚到的 `0` 见 `isStaleCloseReport()`，晚到的失焦见 `onBlur`）。
+   */
+  KEYBOARD_TAIL_WINDOW_MS,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
   lastTxAcceptedId,
@@ -330,6 +336,37 @@ export default function Conversation() {
   const [panelOpen, setPanelOpen] = useState(false)
   /** 语音输入态：输入框换成「按住 说话」 */
   const [voiceMode, setVoiceMode] = useState(false)
+  /**
+   * 输入框的聚焦请求（#560 补）：切回键盘态时**显式**把光标叫回输入框。
+   *
+   * 输入框两态常驻（见 `.conv__rowwrap` 里 `<Textarea>` 的注释），语音态由外层类名把它藏起来。
+   * 端上现象是「点键盘图标只把『按住 说话』换回输入框、键盘不出来，得再点一次输入框」，
+   * 微信原生则是点一下就原位切回 —— Owner 说的「不是直接原位置切换」。
+   *
+   * 这里靠的是**属性变化**而不是「平台当前焦点在哪」：小程序没有 `blur()`/`focus()` 这类命令式
+   * 接口，只有 `<Textarea focus>`，而它只在属性变为 true 的那一帧生效。所以只要切回前它是
+   * false、切回那一拍置 true，就一定发生一次 false→true。置真后不收回，第二次切回就没有变化、
+   * 聚焦失效；收回点因此有四处：`collapseKeyboard()`（切语音态、开「+」面板都会走它，等于
+   * 「用户离开输入框」）、`onBlur`、`useDidHide`，以及隐私授权回来直接进语音态的那条旁路
+   * （`handleVoiceFailure`，它不经 `collapseKeyboard()`）。
+   *
+   * 语音态里平台是否仍认为输入框「持焦」（`hideKeyboard()` 不 blur）问不到，所以切回时**不赌**
+   * 「一定发生过一次 false→true」：`requestInputFocus()` 先落一拍 false、下一拍再置真 ——
+   * 无论平台之前收到过哪一次，都必然经过一次真实变化（#560 审查）。
+   */
+  const [inputFocusRequest, setInputFocusRequest] = useState(false)
+  /**
+   * 「本页最近一次要求打开键盘 / 要求聚焦」的时刻（ms，0 = 从没要求过）。
+   *
+   * 小程序没有命令式 focus/blur，平台事件的送达顺序也不保证，两条**晚到的回执**要据此区分：
+   * - 上一次收键盘动画的迟到 `0`（`isStaleCloseReport`）：会把刚落地的新键盘高度抹成 0；
+   * - 进语音态那一拍合成的 `onBlur`：会在用户已经切回键盘态之后撤掉新的聚焦请求。
+   * 判据只用「本页最近一次意图」+ 尾窗（`KEYBOARD_TAIL_WINDOW_MS`）：窗口外的回执一律照收 ——
+   * 用户真的又离开/真的又收了键盘必须跟得上。
+   */
+  const keyboardOpenRequestedAtRef = useRef(0)
+  /** 聚焦请求代次：晚到的 `nextTick` 与失焦回执不许复活或撤掉更新的请求 */
+  const inputFocusSeqRef = useRef(0)
   /**
    * 键盘占据的**设备 px**（0 = 收起），全页唯一的键盘高度真源（#560/#561）：
    * 输入栏的下内边距、消息流还剩多高都从它派生；平台不再按 `adjustPosition` 推页面。
@@ -1066,6 +1103,8 @@ export default function Conversation() {
     keyboardHeightRef.current = 0
     // 页面被盖住，输入框必然失焦；重新武装的预算也一起作废（R2 清理点之三）
     inputFocusedRef.current = false
+    // 聚焦请求同理收回：回来时不能挂着一个 `true` 的 `focus` 把键盘自动叫起来（#560 补）
+    setInputFocusRequest(false)
     keyboardSentinelRearmsRef.current = 0
     // 哨兵也收掉（R2 清理点之三）：页面都被盖住了，500ms 后再跑一次重锚没有意义
     clearKeyboardSentinel()
@@ -1956,7 +1995,16 @@ export default function Conversation() {
     if (failure instanceof VoicePrivacyError) {
       // 平台在录音阶段才报 privacy：先退回键盘态，下一次点话筒会重新走授权闸；
       // 同时给一个「去授权」入口，避免只能看到同一句 toast 反复出现（#526 审查）。
+      // 这一支**故意不恢复焦点**（#560 补）：紧接着要弹 showModal，此刻请求聚焦会把键盘
+      // 叫到弹窗后面；授权成功的那一支会直接回到语音态，也不需要键盘。
       setVoiceMode(false)
+      /**
+       * 收键盘走 `collapseKeyboard()`，不是只改 `voiceMode`（#560 审查）：这是一条**晚到**的
+       * 失败 —— 用户可能早已切回键盘态、`inputFocusRequest` 还是 `true`。只改 `voiceMode`
+       * 等于把一条 `true` 的 `focus` 留在那儿，部分机型据此把键盘叫起来，正好压在隐私弹窗
+       * 后面。它同时清掉「用户在输入框里」的意图（哨兵据此不猜 0）并武装活性哨兵兜底。
+       */
+      collapseKeyboard()
       void Taro.showModal({
         title: '需要隐私授权',
         content: failure.message,
@@ -1974,6 +2022,11 @@ export default function Conversation() {
               return
             }
             if (gateSeq !== voiceGateSeqRef.current || !aliveRef.current) return
+            // 这条是唯一不经 `collapseKeyboard()` 进语音态的旁路，所以聚焦请求得自己收回
+            // （#560 补）：`voiceGateSeqRef` 不因「切回键盘态」自增，一次**晚到**的
+            // `VoicePrivacyError` 可能落在用户已经切回、`inputFocusRequest` 还是 true 的时候 ——
+            // 不收回就变成键盘和「按住 说话」同屏。
+            setInputFocusRequest(false)
             setPanelOpen(false)
             setVoiceMode(true)
             void Taro.showToast({ title: '已授权，请按住说话', icon: 'none' })
@@ -2038,7 +2091,9 @@ export default function Conversation() {
    * `event` 只为取「按下的起点 Y」（#535 上滑取消的基准），不做任何异步阻塞。
    */
   const startVoice = (event?: unknown) => {
-    if (!canSend || recordingRef.current) return
+    // 「按住说话」常驻（见 `.conv__rowwrap` 那段注释），键盘态它只是 `visibility: hidden`：
+    // 样式一旦失效 / 被别的层盖住，起录闸门不能只剩一条 CSS，所以按态再挡一次
+    if (!voiceMode || !canSend || recordingRef.current) return
     try {
       // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
       // 第二个回调管「录音器自己停了」（时长上限）：不接的话面板会继续计时且无提示
@@ -2388,8 +2443,10 @@ export default function Conversation() {
   /**
    * 放弃正在进行的录音（切输入态 / 切面板前必须调）。
    *
-   * 「按住说话」的结束靠那颗按钮的 `onTouchEnd` / `onTouchCancel`，而切语音态 / 开
-   * 「+」面板会把整颗按钮**卸载**掉 —— 手指还按着也不会再触发任何回调。不清的话：
+   * 「按住说话」的结束靠那颗按钮的 `onTouchEnd` / `onTouchCancel`。那颗按钮自 #560 二补
+   * 起**常驻不卸载**，所以切态时手指还按着仍会补发 `onTouchEnd` / `onTouchCancel` —— 靠这里
+   * 把 `recordingRef.current` 置 null，补发的回调在 `finishVoice` 里撞上空 session 直接早退。
+   * 不清的话：
    * 麦克风继续录到时长上限（那一段最终被丢弃），`recording` 常亮「松开 发送」，
    * 且 `startVoice` 的 `recordingRef.current` 判定从此恒真，**本次进页面再也按不下录音**
    * （#359 3b 审查）。切走即放弃，与 `onTouchCancel` 同一语义。
@@ -2537,6 +2594,36 @@ export default function Conversation() {
   }, [clearKeyboardSentinel, keepTailAnchored])
 
   /**
+   * 「用户要键盘了」：把尾巴窗口、意图闩、阶梯账本一律作废，并把哨兵的意图信号置真。
+   *
+   * 两个调用者，语义完全一样：① 用户点输入框（`onFocus`）；② 语音态点键盘图标切回来
+   * （`toggleVoiceMode`）—— 那一拍平台未必合成 `onFocus`（见 `inputFocusRequest`），所以
+   * 不能只靠 ① 兜。
+   *
+   * 作废是有硬理由的：刚收完键盘 400ms 内又点开一把更矮的键盘（切输入法、候选栏收起），
+   * 残值会被当成动画尾巴吞掉，输入栏停在上一次那把键盘的高度、被更矮的新键盘盖住；
+   * 反过来，闩还亮着时平台只报一次新高度，`nextKeyboardInset` 会「两帧才认」把它丢掉，
+   * 那一帧既不落高度也不重锚 —— 输入栏直接盖在键盘下。
+   */
+  const resetKeyboardIntent = useCallback(() => {
+    inputFocusedRef.current = true
+    /**
+     * 记下「刚要求打开键盘」的时刻（#560 审查）：随后 400ms 内若平台把上一次收键盘动画的
+     * `0` 补报上来，`isStaleCloseReport()` 就能认出它不是这一把键盘的结局（见该函数注释）。
+     */
+    keyboardOpenRequestedAtRef.current = Date.now()
+    keyboardClosedAtRef.current = 0
+    keyboardClosingRef.current = false
+    keyboardClosingFromRef.current = 0
+    keyboardAboveFromRef.current = 0
+    keyboardSentinelMaxRef.current = 0
+    keyboardPendingRef.current = 0
+    // 上一次收键盘武装的哨兵一并收掉：上面已把闩清成假，它到点也会因 `plan.releaseLatch`
+    // 为假在哨兵回调里直接早退、什么都不写 —— 收掉只是省一次无意义回调。
+    clearKeyboardSentinel()
+  }, [clearKeyboardSentinel])
+
+  /**
    * 本页主动收键盘（#560）：切语音态、开面板都走这一处。
    *
    * 只叫平台收、**不自己归零高度** —— 自己归零就是拿本页布局去和系统收键盘动画抢时序
@@ -2549,12 +2636,27 @@ export default function Conversation() {
     /**
      * 页面主动收起 = 用户离开输入框：哨兵的**意图信号**跟着置假（重新点输入框时 `onFocus` 会置回真）。
      *
-     * 不置的话这条兜底就是空的 —— 切语音态会把 `Textarea` 卸载，而 React 卸载**不合成 blur**，
-     * 微信的 `hideKeyboard()` 本身也不 blur，`togglePanel` 更是明确「不 blur 输入框」。于是
-     * `inputFocusedRef` 一直停在「真」，哨兵到点按「用户还在编辑、绝不猜 0」把中间值（例如收起
-     * 动画里的 300）当终值落地 —— 输入栏悬在空中，又因为 `closedAt` 为 0 不会被尾巴纠正。
+     * 不置的话这条兜底就是空的 —— 语音态只把输入框藏起来（`opacity: 0`，两态常驻不卸载），
+     * React 不合成 blur，微信的 `hideKeyboard()` 本身也不 blur，`togglePanel` 更是明确「不 blur
+     * 输入框」。于是 `inputFocusedRef` 一直停在「真」，哨兵到点按「用户还在编辑、绝不猜 0」把中间值
+     * （例如收起动画里的 300）当终值落地 —— 输入栏悬在空中，又因为 `closedAt` 为 0 不会被尾巴纠正。
      */
     inputFocusedRef.current = false
+    /**
+     * 聚焦请求同步收回（#560 补）：本页主动收键盘的两个调用点（切语音态、开「+」面板）共用
+     * 这一处，所以收回也放这一处，不散到各个调用点 —— 另三处收回是 `onBlur`、`useDidHide`，
+     * 以及隐私授权回来直接进语音态的那条旁路（`handleVoiceFailure`）。
+     *
+     * 两个理由：① `focus` 属性留着 `true` 不收，下一次切回键盘态就没有属性变化、聚焦发不出去；
+     * ② 若不收回，面板态 / 语音态下就挂着一条 `true` 的 `focus`，部分机型会据此把键盘又叫回来。
+     */
+    setInputFocusRequest(false)
+    /**
+     * 收回聚焦请求的同时作废代次并清掉「要求打开键盘」的时刻（#560 审查）：本页主动收起之后，
+     * 之前排进 `Taro.nextTick` 的那一次置真不许再落地，随后的 `0` 也不该再被当成迟到回执。
+     */
+    inputFocusSeqRef.current += 1
+    keyboardOpenRequestedAtRef.current = 0
     // 页面新发起的一次收起：重新给满重新武装的预算（哨兵自己重发时不走这里，见上）
     keyboardSentinelRearmsRef.current = 0
     const from = keyboardHeightRef.current
@@ -2569,6 +2671,30 @@ export default function Conversation() {
   }, [armKeyboardSentinel])
 
   /**
+   * 要一次**真的**重聚焦（#560 审查）：先落一拍 false、下一拍再置真。
+   *
+   * `focus` 只在属性变为 true 的那一帧生效，而语音态里平台是否仍认为输入框持焦问不到 ——
+   * 若它本来就是 true（上一次切回置的真还没被平台消费、或 `hideKeyboard()` 根本没 blur），
+   * 再置一次 true 不产生任何变化，键盘不出来，端上就是「切回来键盘还是关着」。
+   * 无条件先置假再置真，让这次请求必然经过一次 false→true，不看平台当前状态。
+   *
+   * 三个防护：① 代次——期间发生了 `collapseKeyboard()` / `onBlur` / 卸载，这次置真作废，
+   * 不许把刚收回的请求复活；② 同一拍内先假后真，靠 `Taro.nextTick` 分隔两帧；
+   * ③ 同时盖下「要求打开键盘」的时刻，供 `isStaleCloseReport()` 认迟到回执。
+   */
+  const requestInputFocus = useCallback(() => {
+    const seq = inputFocusSeqRef.current + 1
+    inputFocusSeqRef.current = seq
+    keyboardOpenRequestedAtRef.current = Date.now()
+    setInputFocusRequest(false)
+    void Taro.nextTick(() => {
+      if (seq !== inputFocusSeqRef.current) return
+      if (!aliveRef.current) return
+      setInputFocusRequest(true)
+    })
+  }, [])
+
+  /**
    * 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致）。
    *
    * 隐私授权放在这里而不是 `startVoice`：这是普通点击，可以安全 await；进入语音态时
@@ -2578,6 +2704,23 @@ export default function Conversation() {
     if (voiceMode) {
       abortRecording()
       setVoiceMode(false)
+      /**
+       * 切回键盘态：**同一批**把焦点还给输入框（#560 补）。语音态只是把输入框藏起来
+       * （`opacity: 0`，两态常驻），而进语音态时本页叫过 `hideKeyboard()` —— 之后没有任何
+       * 一处再把焦点还给输入框，端上就是「点键盘图标只把『按住 说话』换回输入框、键盘不出来，
+       * 还得再点一次」，与微信原生的「原位切回」不一致。
+       *
+       * 同时作废意图闩（`resetKeyboardIntent`）：切回来常落在「上一把键盘还没被收到 0」的
+       * 窗口里，闩还亮着、`closingFrom` 还是上一把键盘高，平台只报一次终值就会被
+       * `nextKeyboardInset` 的「两帧才认」丢进 pending、`changed=false` 直接早退 —— 既不落
+       * 高度也不重锚，输入栏盖在键盘下。
+       *
+       * 两者与 `setVoiceMode(false)` 同一批提交，只是为了避免「已切回但焦点还没跟上」的中间帧。
+       * 置真走 `requestInputFocus()` 而不是裸 `setInputFocusRequest(true)`：语音态里平台是否仍
+       * 认为输入框持焦问不到，属性已经是 `true` 时再置 `true` 不产生变化、键盘不出来（#560 审查）。
+       */
+      requestInputFocus()
+      resetKeyboardIntent()
       return
     }
     /**
@@ -3305,6 +3448,25 @@ export default function Conversation() {
     // 基础库 < 2.7.0 没有这个 API（`undefined`）：直接调会在挂载时抛 TypeError，整页白屏
     if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined
     const onHeightChange = (res: { height: number }) => {
+      /**
+       * 上一次收键盘动画的**迟到 `0`**（#560 审查）：切回键盘态时，进语音态那一拍叫过的
+       * `hideKeyboard()` 可能一直在路上，新键盘先报正高度、旧的那个 `0` 随后才到。
+       * `nextKeyboardInset` 的 `next <= 0` 分支必须无条件落地 0（用户真收键盘时要跟得上），
+       * 于是这里先把它挡掉 —— 输入栏否则会被留在已经可见的键盘下面，直到下一次高度事件。
+       *
+       * 判据见 `isStaleCloseReport()`：刚要求过打开键盘（尾窗内）+ 用户仍在输入框里。真收键盘
+       * 那一路 `onBlur` 已把焦点置假，照收不误；尾窗之外也照收。
+       */
+      if (
+        isStaleCloseReport({
+          next: res.height,
+          openRequestedAt: keyboardOpenRequestedAtRef.current,
+          focused: inputFocusedRef.current,
+          now: Date.now(),
+        })
+      ) {
+        return
+      }
       const step = nextKeyboardInset({
         prev: keyboardHeightRef.current,
         next: res.height,
@@ -4374,36 +4536,58 @@ export default function Conversation() {
             输入框决定（语音态也如此，只是把它藏起来）。所以语音态不再需要拿
             `inputRowPx` 去给「按住说话」顶一个 `minHeight` —— 那条桥本身就是对
             「输入行会消失」的补偿。
+
+            与之同源、但触发点不同的一处（#560 二补）：「按住说话」也**常驻不卸载**，语音态
+            只给它加 `is-off`（`visibility: hidden`）。往这个 flex 行里插一个兄弟节点会让原生
+            textarea 重新量一次，按三行默认值报 91px（单行 35px），底栏当场长高 56px、消息区
+            矮 56px，切回后再塌回 —— 端上就是「往上扩展又恢复原状」的抽搐。
+
+            另一条同样能复现它的路（隔离实测：开发者工具、30ms 采样 `.conv__bar`）：给输入框写
+            随态变化的**内联 `style`** 也会被量成三行 —— `hold 常驻 + 内联 style` 时 `52 → 108`
+            （切态后约 0.7s 跳），`hold 常驻 + 外层类名` 时两态恒为 52、一条变化都没记到。
+            受控聚焦的 `focus` 两态也在翻，但实测不触发重算（那组零变化就是在它翻动时采到的）。
+            所以藏的动作只能交给类名。
+
+            这一块有两条不变式，改的时候都要守住：
+            ① 输入框与「按住说话」都常驻，`conv__rowwrap` 的子节点数不随态变化；
+            ② 除受控聚焦 `focus` 外，别再给输入框加随态变化的 props（尤其内联 `style`）——
+               藏起来交给 `.conv__rowwrap.is-voice > .conv__input`。
           */}
-            <View className="conv__rowwrap">
-              {voiceMode ? (
-                /*
+            <View className={`conv__rowwrap${voiceMode ? ' is-voice' : ''}`}>
+              {/*
                 按住说话：`onTouchStart` 起录、`onTouchEnd` 松开就发、`onTouchCancel`
                 手指滑出即放弃。微信的 `RecorderManager` 只有「停」没有「撤销」，
                 取消只能靠不把这段音频交给上传。
 
                 绝对定位盖满整行（`conv__rowwrap` 是它的定位父级）：高度跟着输入行走，
                 多行草稿切到语音态时手势区也是同样的高度。
-              */
-                <View
-                  className={`conv__hold${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
-                  onTouchStart={startVoice}
-                  onTouchMove={moveVoice}
-                  onTouchEnd={endVoice}
-                  onTouchCancel={() => finishVoice(true)}
-                >
-                  <Text className="conv__hold-tx">
-                    {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
-                  </Text>
-                </View>
-              ) : null}
+
+                **常驻不卸载**（#560 二补）：键盘态加 `is-off`，`visibility: hidden` 让它既不可见
+                也不吃触摸。按条件挂载会插一个兄弟节点进 `.conv__rowwrap`，见上面那段注释。
+              */}
+              <View
+                className={`conv__hold${voiceMode ? '' : ' is-off'}${recording ? ' is-on' : ''}${cancelArmed ? ' is-cancel' : ''}`}
+                onTouchStart={startVoice}
+                onTouchMove={moveVoice}
+                onTouchEnd={endVoice}
+                onTouchCancel={() => finishVoice(true)}
+              >
+                <Text className="conv__hold-tx">
+                  {cancelArmed ? '松开 取消' : recording ? '松开 发送' : '按住 说话'}
+                </Text>
+              </View>
               <Textarea
                 className="conv__input"
                 /*
-                语音态只藏不卸载：`opacity: 0` 让它不参与视觉，`pointerEvents: 'none'`
-                把触摸让给上面那层 `conv__hold`。
+                语音态只藏不卸载，但**藏的动作交给外层类名**（`.conv__rowwrap.is-voice >
+                .conv__input`）：这里写随态变化的内联 `style` 会让原生 textarea 被量成三行
+                （实测 `bar` 52 → 108，见上面那段），所以别写回来。
               */
-                style={voiceMode ? { opacity: 0, pointerEvents: 'none' } : undefined}
+                /*
+                受控聚焦（#560 补）：小程序没有命令式的 `focus()`，只有这个属性，而且**只在它
+                变为 true 的那一帧生效** —— 收回点与理由见 `inputFocusRequest`。
+              */
+                focus={inputFocusRequest}
                 value={inputValue}
                 placeholder="发消息…"
                 placeholderClass="conv__input-ph"
@@ -4454,29 +4638,32 @@ export default function Conversation() {
                    * #541 的契约在这条路上彻底失效。那条路上也不存在交接两拍 —— 没有键盘高度
                    * 真源，底座高度在面板开时恒为面板高、关时恒为 0，没有中间态可塌。
                    *
-                   * 用户点输入框 = 明确要键盘（#560）：收尾尾巴窗口、意图闩、哨兵账本立刻作废。
-                   *
-                   * 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」（切输入法、候选栏收起）
-                   * 会被当成动画残值吞掉，输入栏停在上一次那把键盘的高度、被更矮的新键盘盖住。
-                   *
-                   * `inputFocusedRef` 是活性哨兵唯一可信的**意图**信号：还在输入框里就说明键盘
-                   * 大概率真开着，到点绝不猜 0（见 `armKeyboardSentinel`）。
+                   * 用户点输入框 = 明确要键盘（#560）：尾巴窗口、意图闩、哨兵账本一律作废 ——
+                   * 各条理由见 `resetKeyboardIntent()`（切回键盘态走的是同一个）。
                    */
                   if (typeof Taro.onKeyboardHeightChange !== 'function') {
                     keepTailAnchored()
                     setPanelOpen(false)
                   }
-                  inputFocusedRef.current = true
-                  keyboardClosedAtRef.current = 0
-                  keyboardClosingRef.current = false
-                  keyboardClosingFromRef.current = 0
-                  keyboardAboveFromRef.current = 0
-                  keyboardSentinelMaxRef.current = 0
-                  keyboardPendingRef.current = 0
+                  resetKeyboardIntent()
                 }}
                 onBlur={() => {
+                  /**
+                   * **晚到的失焦**（#560 审查）：进语音态那一拍平台可能合成一次 blur，等用户已经
+                   * 切回键盘态、本页刚发过聚焦请求，这条回执才到 —— 无条件收回就把新的请求撤掉，
+                   * 端上是「切回键盘后又自己收回去」。判据只用「本页刚要求过聚焦」+ 尾窗：
+                   * 窗口外的失焦一律照收（用户真的离开了输入框必须跟得上）。
+                   */
+                  if (Date.now() - keyboardOpenRequestedAtRef.current <= KEYBOARD_TAIL_WINDOW_MS) {
+                    return
+                  }
                   // 失焦 = 用户离开输入框 → 键盘该走了，哨兵到点可以放心归零（#560 B1）
                   inputFocusedRef.current = false
+                  // 聚焦请求必须跟着收回：`focus` 属性不收回 false，下一次切回就没有属性变化、
+                  // 聚焦发不出去（见 `inputFocusRequest`）。代次一并作废：晚到的 `nextTick` 不许复活
+                  inputFocusSeqRef.current += 1
+                  keyboardOpenRequestedAtRef.current = 0
+                  setInputFocusRequest(false)
                 }}
                 onInput={(event) => setInputValue(event.detail.value)}
               />

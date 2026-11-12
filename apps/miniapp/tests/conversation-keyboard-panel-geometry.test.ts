@@ -3,6 +3,8 @@ import {
   BOTTOM_SLACK_PX,
   growBottomAllowance,
   isNearBottom,
+  isStaleCloseReport,
+  KEYBOARD_TAIL_WINDOW_MS,
   mergeViewportShrink,
   nextKeyboardInset,
   PANEL_CONTENT_RPX,
@@ -981,6 +983,64 @@ describe('活性哨兵的结论：只看「报过的最高值」与焦点（#560
   })
 })
 
+describe('刚开键盘就报来的 0 是上一次收键盘的迟到回执（#560 审查，纯函数表驱动）', () => {
+  const base = { openRequestedAt: 1_000, focused: true }
+
+  test('刚要求打开键盘、人还在输入框：这条 0 吞掉（旧收起动画的回执）', () => {
+    expect(isStaleCloseReport({ ...base, next: 0, now: 1_050 })).toBe(true)
+    // 「要求」与「报 0」同一毫秒也算：平台完全可能同批送达
+    expect(isStaleCloseReport({ ...base, next: 0, now: 1_000 })).toBe(true)
+  })
+
+  test('窗口边界恰含 400ms，401ms 起照收（用户真收键盘必须跟得上）', () => {
+    expect(isStaleCloseReport({ ...base, next: 0, now: 1_400 })).toBe(true)
+    expect(isStaleCloseReport({ ...base, next: 0, now: 1_401 })).toBe(false)
+  })
+
+  test('人已经离开输入框：照收（真收键盘那一路 onBlur 已把焦点置假）', () => {
+    expect(isStaleCloseReport({ ...base, focused: false, next: 0, now: 1_050 })).toBe(false)
+  })
+
+  test('正高度不是回执，永远照收', () => {
+    expect(isStaleCloseReport({ ...base, next: 300, now: 1_050 })).toBe(false)
+  })
+
+  test('从没要求过打开键盘（0）：没有可比对的意图，照收', () => {
+    expect(isStaleCloseReport({ ...base, openRequestedAt: 0, next: 0, now: 1_050 })).toBe(false)
+  })
+
+  test('窗口可覆盖，默认值与阶梯共用同一个常量', () => {
+    expect(KEYBOARD_TAIL_WINDOW_MS).toBe(400)
+    expect(isStaleCloseReport({ ...base, next: 0, now: 1_100, tailWindowMs: 50 })).toBe(false)
+    expect(isStaleCloseReport({ ...base, next: 0, now: 1_020, tailWindowMs: 50 })).toBe(true)
+  })
+
+  test('页面订阅里先挡掉它、再进阶梯（顺序错了等于没挡）', async () => {
+    const body = slice(
+      squash(await pageSource()),
+      'const onHeightChange =',
+      'const step = nextKeyboardInset({',
+    )
+    expect(body).toContain('isStaleCloseReport({')
+    expect(body).toContain('openRequestedAt: keyboardOpenRequestedAtRef.current')
+    expect(body).toContain('focused: inputFocusedRef.current')
+    expect(body).toContain('if (')
+    expect(body).toContain(') { return }')
+  })
+
+  test('「要求打开键盘」的时刻由两处意图写入，收起与失焦各自作废', async () => {
+    const source = squash(await pageSource())
+    // 点输入框、切回键盘态都经 `resetKeyboardIntent()`：两处都要盖时刻，否则只认一半
+    expect(
+      slice(source, 'const resetKeyboardIntent = useCallback', '}, [clearKeyboardSentinel])'),
+    ).toContain('keyboardOpenRequestedAtRef.current = Date.now()')
+    // 页面主动收键盘 = 用户离开：时刻必须清掉，否则随后的真 0 会被当成迟到回执吞掉
+    expect(
+      slice(source, 'const collapseKeyboard = useCallback', '}, [armKeyboardSentinel])'),
+    ).toContain('keyboardOpenRequestedAtRef.current = 0')
+  })
+})
+
 describe('键盘高度是单一真源（#560）', () => {
   test('页面订阅设备级键盘高度事件，压成阶梯后再写，并在卸载时收回', async () => {
     const source = squash(await pageSource())
@@ -1212,7 +1272,11 @@ describe('键盘高度是单一真源（#560）', () => {
   test('焦点是哨兵唯一可信的意图信号：onFocus 置真、onBlur 置假（B1）', async () => {
     const source = squash(await pageSource())
     const focus = slice(source, 'onFocus={() => {', 'onInput=')
-    expect(focus).toContain('inputFocusedRef.current = true')
+    // 「用户要键盘了」的记账抽在 `resetKeyboardIntent()` 里（语音态切回键盘也走它），onFocus 必须调
+    expect(focus).toContain('resetKeyboardIntent()')
+    expect(
+      slice(source, 'const resetKeyboardIntent = useCallback', '}, [clearKeyboardSentinel])'),
+    ).toContain('inputFocusedRef.current = true')
     expect(focus).toContain('onBlur={() => {')
     expect(focus).toContain('inputFocusedRef.current = false')
   })
@@ -1234,14 +1298,132 @@ describe('键盘高度是单一真源（#560）', () => {
       "if (typeof Taro.onKeyboardHeightChange !== 'function') { keepTailAnchored() setPanelOpen(false) }",
     )
     expect(focus.split('setPanelOpen(false)')).toHaveLength(2)
+    // 账本作废抽在 `resetKeyboardIntent()` 里，onFocus 与「语音态切回键盘」共用一份
+    expect(focus).toContain('resetKeyboardIntent()')
+    const intent = slice(
+      source,
+      'const resetKeyboardIntent = useCallback',
+      '}, [clearKeyboardSentinel])',
+    )
     // 否则「刚收完键盘 400ms 内又点开一把更矮的键盘」会被尾巴判据吞掉，输入栏被新键盘盖住
-    expect(focus).toContain('keyboardClosedAtRef.current = 0')
-    expect(focus).toContain('keyboardClosingRef.current = false')
-    expect(focus).toContain('keyboardClosingFromRef.current = 0')
+    expect(intent).toContain('keyboardClosedAtRef.current = 0')
+    expect(intent).toContain('keyboardClosingRef.current = false')
+    expect(intent).toContain('keyboardClosingFromRef.current = 0')
     // 焦点=true 是哨兵唯一可信的意图信号；账本也要一起清，否则到点按旧账判
-    expect(focus).toContain('inputFocusedRef.current = true')
-    expect(focus).toContain('keyboardSentinelMaxRef.current = 0')
-    expect(focus).toContain('keyboardPendingRef.current = 0')
+    expect(intent).toContain('inputFocusedRef.current = true')
+    expect(intent).toContain('keyboardSentinelMaxRef.current = 0')
+    expect(intent).toContain('keyboardPendingRef.current = 0')
+    // 「用户要键盘了」不是「替页面猜高度」：高度真源仍只由 `onKeyboardHeightChange` 写
+    expect(intent).not.toContain('setKeyboardHeight')
+    expect(intent).not.toContain('keyboardHeightRef')
+  })
+
+  /**
+   * 语音态切回键盘态要把光标叫回输入框（#560 补）。
+   *
+   * 输入框两态常驻（只 `opacity: 0`），「还在文档里」不等于「平台侧焦点还在」：进语音态时本页
+   * 叫过 `hideKeyboard()`，之后没有任何一处会把焦点还回去 —— 端上就是点键盘图标只换了控件、
+   * 键盘不出来，还得再点一次输入框，和微信原生的「原位切回」不一致。
+   *
+   * 小程序没有命令式 `focus()`，只有 `<Textarea focus>`，且它**只在属性变 true 的那一帧生效**：
+   * 接线丢了、或者 true 没有收回点，行为都是「第一次能切回、第二次就不行」，纯函数单测抓不到。
+   */
+  test('语音态切回键盘：同一批请求聚焦并作废意图闩（#560 补）', async () => {
+    const source = squash(await pageSource())
+    // `if (voiceMode) {` 全页唯一，截到它自己的右括号：只断言「函数里某处出现过 true」抓不到
+    // 「把 true 顺手也写进入口支」这种改坏 —— 那会让语音态里 focus 残留 true，第二次切回没有
+    // 属性变化、聚焦彻底失效。
+    const back = slice(source, 'if (voiceMode) {', '}')
+    /**
+     * 走 `requestInputFocus()`，不是裸置真（#560 审查）：语音态里平台是否仍认为输入框持焦
+     * 问不到，属性本来就是 `true` 时再置一次 `true` 不产生任何变化、键盘不出来。
+     */
+    expect(back).toContain('requestInputFocus()')
+    expect(back).not.toContain('setInputFocusRequest(true)')
+    // 闩不清的话，平台只报一次的新高度会被「两帧才认」丢进 pending、`changed=false` 早退
+    expect(back).toContain('resetKeyboardIntent()')
+    // 置真点只许一处：`requestInputFocus()` 内部那一处（「要一次真聚焦」的唯一出口）
+    expect(source.split('setInputFocusRequest(true)')).toHaveLength(2)
+  })
+
+  test('requestInputFocus：先落一拍假再置真，晚到的置真按代次作废（#560 审查）', async () => {
+    const source = squash(await pageSource())
+    const body = slice(source, 'const requestInputFocus = useCallback', '}, [])')
+    // 属性只在变 true 的那一帧生效：先置假，下一次提交再置真 —— 必然经过一次 false→true
+    expect(body).toContain('setInputFocusRequest(false)')
+    expect(body.indexOf('setInputFocusRequest(false)')).toBeLessThan(
+      body.indexOf('setInputFocusRequest(true)'),
+    )
+    // 两帧必须分开：同一批提交里先假后真，平台只看得到最后一个值（等于没变化）
+    expect(body).toContain('Taro.nextTick(')
+    expect(body.indexOf('Taro.nextTick(')).toBeLessThan(body.indexOf('setInputFocusRequest(true)'))
+    // 代次守卫早于置真：期间被 `collapseKeyboard()` / `onBlur` 收回的请求不许复活
+    expect(body).toContain('if (seq !== inputFocusSeqRef.current) return')
+    expect(body.indexOf('if (seq !== inputFocusSeqRef.current) return')).toBeLessThan(
+      body.indexOf('setInputFocusRequest(true)'),
+    )
+    // 覆盖卸载：页面已经走了，晚到的置真不许再写
+    expect(body).toContain('if (!aliveRef.current) return')
+    // 同时盖下「要求打开键盘」的时刻，供 `isStaleCloseReport()` 认迟到回执
+    expect(body).toContain('keyboardOpenRequestedAtRef.current = Date.now()')
+  })
+
+  test('focus 属性只挂在输入框那一处、且接的是同一个 state（#560 补）', async () => {
+    const source = squash(await pageSource())
+    expect(source).toContain('const [inputFocusRequest, setInputFocusRequest] = useState(false)')
+    // 切到 `<Textarea>` 自己那段再查：整份文件的子串命中挡不住「属性挂到了别的 Textarea」
+    expect(slice(source, 'className="conv__input"', 'adjustPosition')).toContain(
+      'focus={inputFocusRequest}',
+    )
+    expect(source.split('focus={inputFocusRequest}')).toHaveLength(2)
+  })
+
+  test('聚焦请求的收回点齐全：漏一处就出现「键盘与按住说话同屏」（#560 补）', async () => {
+    const source = squash(await pageSource())
+    // 声明处写的是 `useState(false)`，不含 `setInputFocusRequest(`；五处收回（含
+    // `requestInputFocus()` 自己的「先落一拍假」）→ 切出六段。用计数而不是逐个点名：将来漏收
+    // 一处、或多写一处，都在这条上现形。
+    expect(source.split('setInputFocusRequest(false)')).toHaveLength(6)
+    expect(
+      slice(source, 'const collapseKeyboard = useCallback', '}, [armKeyboardSentinel])'),
+    ).toContain('setInputFocusRequest(false)')
+    expect(slice(source, 'onBlur={() => {', 'onInput=')).toContain('setInputFocusRequest(false)')
+    // 切后台不清：回到前台会挂着一个 true 的 focus 把键盘自动叫起来
+    const hideAt = source.indexOf('useDidHide(() => {')
+    expect(source.slice(hideAt, hideAt + 1500)).toContain('setInputFocusRequest(false)')
+    // 隐私授权回来直接进语音态是唯一不经 `collapseKeyboard()` 的旁路：晚到的失败能落在
+    // 「用户已切回、focus 还是 true」的时候，不收回就是键盘和「按住 说话」同屏
+    expect(
+      slice(source, 'requestPrivacyAuthorize().then((authorized) => {', 'setVoiceMode(true)'),
+    ).toContain('setInputFocusRequest(false)')
+  })
+
+  test('晚到的隐私失败先收键盘：别让键盘压在隐私弹窗后面（#560 审查）', async () => {
+    const source = squash(await pageSource())
+    const branch = slice(source, 'if (failure instanceof VoicePrivacyError) {', 'confirmText')
+    expect(branch).toContain('setVoiceMode(false)')
+    /**
+     * 只改 `voiceMode` 不收键盘：这是一条**晚到**的失败 —— 用户可能早已切回键盘态、
+     * `inputFocusRequest` 还是 `true`，部分机型据此把键盘叫起来，正好压在 showModal 后面。
+     * `collapseKeyboard()` 同时清掉「人在输入框里」的意图并武装哨兵。
+     */
+    expect(branch).toContain('collapseKeyboard()')
+  })
+
+  test('晚到的失焦不许撤掉刚发出的聚焦请求（尾窗内挡、窗口外照收）', async () => {
+    const blur = slice(squash(await pageSource()), 'onBlur={() => {', 'onInput=')
+    expect(blur).toContain('keyboardOpenRequestedAtRef.current')
+    expect(blur).toContain('KEYBOARD_TAIL_WINDOW_MS')
+    // 守卫必须早于清焦点、清请求：晚了就等于没挡
+    expect(blur.indexOf('KEYBOARD_TAIL_WINDOW_MS')).toBeLessThan(
+      blur.indexOf('inputFocusedRef.current = false'),
+    )
+    expect(blur.indexOf('KEYBOARD_TAIL_WINDOW_MS')).toBeLessThan(
+      blur.indexOf('setInputFocusRequest(false)'),
+    )
+    // 窗口外照收：真失焦必须还能把焦点与请求收回去
+    expect(blur).toContain('inputFocusedRef.current = false')
+    expect(blur).toContain('setInputFocusRequest(false)')
   })
 
   test('重锚的异步回读按序号作废旧结论（收键盘期间会连着换锚，R5）', async () => {
@@ -1399,13 +1581,20 @@ describe('键盘高度是单一真源（#560）', () => {
      * 输入框必须**常驻**：全页只有一个 `<Textarea>`，且它不在任何条件渲染里。
      */
     expect(source.split('<Textarea').length - 1).toBe(1)
-    const rowwrap = slice(source, '<View className="conv__rowwrap">', 'onLineChange=')
+    const rowwrap = slice(source, '<View className={`conv__rowwrap', 'onLineChange=')
     expect(rowwrap).toContain('<Textarea')
-    // 语音态那支在输入框之前就关掉了（`) : null}`）：输入框不在 `voiceMode ?` 的分支里
-    const holdToTextarea = slice(source, 'onTouchCancel={() => finishVoice(true)}', '<Textarea')
-    expect(holdToTextarea).toContain(') : null}')
-    // 语音态只藏不卸载：藏了还要让出手势，否则原生输入框的点击层照样抢焦点
-    expect(rowwrap).toContain('style={voiceMode ? { opacity: 0, pointerEvents: ')
+    /**
+     * 同一行里**也不许按条件挂载兄弟节点**（#560 二补）：往这个 flex 行插一个「按住 说话」，
+     * 原生 textarea 会重新量一次、报出三行默认高度（91px，单行 35px），底栏当场长高 56px、
+     * 消息区矮 56px，切回时再塌回 —— 端上就是「往上扩展又恢复原状」的抽搐。所以：
+     * ① 那一行里没有条件渲染分支；② 键盘态靠 `is-off`（`visibility: hidden`）藏起来；
+     * ③ 输入框不许挂随态变化的内联 `style`（实测它同样会被量成三行）。
+     */
+    expect(rowwrap).not.toContain(') : null}')
+    expect(rowwrap).not.toContain('{voiceMode ? (')
+    expect(rowwrap).toMatch(/conv__hold\$\{voiceMode \? '' : ' is-off'\}/)
+    // 输入框不许有随态变化的内联 style：实测它同样会被量成三行（bar 52 → 108）
+    expect(rowwrap).not.toContain('style={voiceMode')
 
     /**
      * scss 侧同样钉住：`conv__rowwrap` 是「按住说话」的定位父级；`.conv__hold` 改成盖满整行
@@ -1418,7 +1607,25 @@ describe('键盘高度是单一真源（#560）', () => {
     const holdStyle = slice(style, '.conv__hold {', '&:active')
     expect(holdStyle).toContain('position: absolute')
     expect(holdStyle).not.toContain('height: 68px')
+    // 键盘态常驻但不可见、不吃触摸（配上面「不按条件挂载」那条：藏要靠样式，不能靠卸载）
+    expect(holdStyle).toContain('&.is-off')
+    expect(holdStyle).toContain('visibility: hidden')
+    // 第二道闸：藏起来之外还得保证不吃触摸（`visibility` 换成 `opacity` 的那天不会静默变坏）
+    expect(holdStyle).toContain('pointer-events: none')
     expect(slice(style, '.conv__input {', '}')).toContain('min-height: $bar-control-px')
+    // 语音态藏输入框走外层类名：`opacity: 0` 藏视觉、`pointer-events: none` 把触摸让给那一层
+    const voiceInput = slice(style, '.conv__rowwrap.is-voice > .conv__input {', '}')
+    expect(voiceInput).toContain('opacity: 0')
+    expect(voiceInput).toContain('pointer-events: none')
+
+    /**
+     * 常驻的「按住说话」在键盘态只是 `visibility: hidden` —— 起录闸门不能只剩一条 CSS。
+     * 改动前它连节点都没有，`startVoice` 里那句 `canSend` 就够；常驻之后必须自己认状态。
+     */
+    const startVoiceHead = slice(source, 'const startVoice = (event?: unknown) => {', 'try {')
+    // 钉整条早退语句，不是「片段里出现过 `!voiceMode`」：那样把早退改成算完不用、
+    // 或者顺手删掉 `!canSend`，这条都还是绿的（#560 审查）
+    expect(startVoiceHead).toContain('if (!voiceMode || !canSend || recordingRef.current) return')
   })
 
   test('发送清空输入后，输入行高度真源跟着回落（否则下一轮切语音又把消息流顶矮一截）', async () => {

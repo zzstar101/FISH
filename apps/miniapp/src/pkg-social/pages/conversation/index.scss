@@ -1164,6 +1164,18 @@ $bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后�
   min-width: 0;
 }
 
+/*
+ * 语音态：输入框藏起来（#560 二补）。
+ *
+ * 用**外层类名**而不是给 `<Textarea>` 写内联 `style`：实测（开发者工具、30ms 采样 `.conv__bar`）
+ * 「按住说话」常驻、但输入框仍挂随态变化的内联 `style` 时，语音态照样被量成三行
+ * （`bar` 52 → 108、`.conv__bar-row` 35 → 91，切态后约 0.7s 跳）；换成外层类名后两态恒为 52。
+ */
+.conv__rowwrap.is-voice > .conv__input {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* placeholder 走稿子的次级灰（微信默认灰更深） */
 .conv__input-ph {
   color: var(--muted-2);
@@ -1186,6 +1198,15 @@ $bar-input-max-px: 176px; // 多行输入的高度上限（88pt），超出后�
   display: flex;
   align-items: center;
   justify-content: center;
+
+  /* 键盘态：常驻但不可见、不吃触摸。**不能按条件挂载/卸载** —— 往这一行里插兄弟节点会让
+     原生 textarea 重新量一次并报出三行默认高度，正是「往上扩展又恢复原状」的抽搐。 */
+  &.is-off {
+    visibility: hidden;
+    /* 第二道闸：`visibility: hidden` 本来就不参与命中测试，但将来谁把这里换成 `opacity`、
+       或者给 hold 加 `z-index` / 不透明背景，没有这一行就会静默吃掉键盘态的输入框触摸 */
+    pointer-events: none;
+  }
 
   &:active {
     background: var(--accent-weak);

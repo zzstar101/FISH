@@ -103,6 +103,8 @@ console.log('inset-bottom(device px)', Math.max(0, i.screenHeight - i.safeArea.b
 - **S4** 键盘展开（`autoHeight` 单行）
 - **S5** 「+」面板展开（键盘收起后）
 - **S6** 语音态（按住说话，单行草稿）
+- **S7** 语音态 ↔ 键盘往返（S6 → S4 → S6 → S4）：点话筒进语音、再点左侧键盘图标切回，**键盘要自己弹起**、
+  光标落在输入框里；**连切两次都要生效**（第一次靠属性变化聚焦，漏收 false 就只有第一次管用）
 
 | 机型 / 系统 | 构建 | 窗口 h | 安全区 bottom | 场景 | `.conv` bottom | `.conv__bottom` h | `.conv__bar` h | `.conv__bottom` 下内边距 | `.conv__bar-row` h | `.conv__input` h | `.conv__cbtn` h | `.conv__plus` h | `.conv__send` h | 输入行上下间距 |
 | ----------- | ---- | ------ | ------------- | ---- | -------------- | ----------------- | -------------- | ------------------------ | ------------------ | ---------------- | --------------- | --------------- | --------------- | -------------- |
@@ -135,6 +137,13 @@ console.log('inset-bottom(device px)', Math.max(0, i.screenHeight - i.safeArea.b
 6. **键盘跟手**：S4 下 `.conv__bar.bottom` ≈ 键盘上沿（开发者工具里可用「显示键盘」模拟），
    且 `.conv__bottom` 下内边距为 0 —— 键盘上方**没有**额外空白带。
 7. **收起复原**：从 S4 退回 S1，`.conv__bottom` 下内边距回到 `inset-bottom`、`.conv` 底边仍贴窗口底边。
+8. **语音 ↔ 键盘原位切回**（#560 补）：S6 → S4 切回键盘态时键盘**自己弹起**、不必再点一次输入框，光标在输入框内
+   （多行草稿时记一下光标落在首位还是末位）；S6 → S4 → S6 → S4 连切两次都要生效；语音态里**不许**有键盘被叫回来。
+9. **语音 ↔ 键盘等高**（#560 二补）：同一份草稿下 S6 与 S4 的 **`.conv__bar-row`** 高度**完全相等**，且切态瞬间
+   那一行**不得有任何高度变化**（跨态那几帧都得是同一个数）。量 `.conv__bar-row` 而不是 `.conv__bar`：S4 的
+   `.conv__bar` 还要额外背一条 `padding-bottom: 键盘高度 + 16rpx`（规则 4），两个态的盒子高本来就不可能相等。
+   语音态里输入框被藏起来后不许被量成三行：三行 = 91px、单行 = 35px，差 56px 就是「往上扩展又恢复原状」的
+   抽搐；开发者工具里每 30ms 采一次 `.conv__bar-row` 高度即可看到跳变（未接自动化时可 `page.$('.conv__bar-row').size()`）。
 
 ## 5. 已知边界（代码侧已定，端上仍需确认）
 
@@ -142,6 +151,10 @@ console.log('inset-bottom(device px)', Math.max(0, i.screenHeight - i.safeArea.b
   真机上可验（不同基础库版本的原生 textarea 滚动策略不完全一致）。
 - **手势区**：`inset-bottom` 全量保留（34pt on iPhone），没有为「视觉等距」把它清零 —— 这是 #577 的
   明确要求，不属于缺陷。
+- **语音态的输入行高度**（#560 二补）：`.conv__rowwrap` 里两个兄弟节点（「按住 说话」与 `<Textarea>`）都**常驻
+  不卸载**，藏起来交给 `.conv__rowwrap.is-voice > .conv__input` 与 `.conv__hold.is-off`。改成条件挂载会让原生
+  textarea 重新量一次、报出三行默认高度，底栏当场长高 56px —— 这条不变式由 `conversation-keyboard-panel-geometry.test.ts`
+  钉住，别改回去。
 - **键盘时序**仍由 #560 的单一真源（`onKeyboardHeightChange` → `nextKeyboardInset` 单调阶梯）负责，
   本次只改了「谁承担安全区/间距」，没有加第二套补偿、没有 `fixed; bottom: 0`、没有写死负偏移或延时。
 - **依赖关系**：本改动继承 #601（#597）的内容高面板与键盘交接语义；合并前整合当前 main，
