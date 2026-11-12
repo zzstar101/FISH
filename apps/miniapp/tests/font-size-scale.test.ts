@@ -133,7 +133,7 @@ const FROZEN_LITERALS: Record<string, Record<string, number>> = {
     '29px': 2,
     '27px': 4,
     '26px': 5,
-    '24px': 4,
+    '24px': 3,
   },
   'pkg-browse/pages/match/index.scss': {
     '48px': 1,
