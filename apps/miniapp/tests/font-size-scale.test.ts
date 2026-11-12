@@ -173,11 +173,13 @@ const FROZEN_LITERALS: Record<string, Record<string, number>> = {
   'pkg-legal/pages/feedback/index.scss': { '48px': 1, '32px': 1, '26px': 3, '24px': 1, '20px': 1 },
   'pkg-legal/pages/my-feedback/index.scss': { '48px': 1, '20px': 4 },
   // 16px 是 #602 给「在线态文案」写的新值（8pt，比阶梯最小的 10pt 还小一档，属阶梯外尺寸，见 §5.2）
+  // 18px 是时间/读位那行（9pt，2026-11-10 Owner「感觉这字还是太大了」，同样在阶梯之外）
   'pkg-social/pages/conversation/index.scss': {
     '26px': 1,
     '24px': 1,
     '22px': 4,
-    '20px': 3,
+    '20px': 2,
+    '18px': 1,
     '16px': 1,
   },
   'pkg-social/pages/wish-publish/index.scss': { '29px': 2, '24px': 1 },

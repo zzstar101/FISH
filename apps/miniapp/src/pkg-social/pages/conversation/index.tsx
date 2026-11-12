@@ -4180,9 +4180,26 @@ export default function Conversation() {
                   const item = entry.media
                   const mine = item.senderId === me?.id
                   /**
+                   * 媒体消息的逐条读位（2026-11-10 Owner：「图片已读也没有信息」）——
+                   * 原先只有文本气泡那条分支渲染 `.conv__rd`，图片 / 语音行只有时间戳，
+                   * 自己发的图是否已被对方读到完全看不出来。判据与文本分支同一个
+                   * `messageReadLabel`（只对我发出的消息判；判不出来算未读）。
+                   */
+                  const mediaReadLabel = messageReadLabel({
+                    mine,
+                    createdAt: item.createdAt,
+                    counterpartLastReadAt: conversation.counterpartLastReadAt,
+                  })
+                  /**
                    * 撤回碑（#359 3c 审查回合二的媒体侧补齐）：服务端撤回后下发的媒体 DTO
                    * `url` 为空、尺寸/时长全 null（`media-service.ts` 的 `dto`），照常渲染会
                    * 画出一张永远转圈的空图 / 时长兜底成 `1″` 的语音气泡。
+                   *
+                   * 这块**不渲染读位是有意为之**，不是漏接线：撤回碑没有可读性语义 ——
+                   * 正文已由服务端清空，「对方读到没读到」对一条已撤销的碑没有意义。
+                   * 文本分支撤回后仍然渲染读位，那是既有行为，不属于本次读位统一的范围，
+                   * 不要在这里顺手「对齐」成两套一致。判据见
+                   * `tests/conversation-media-read-marker-wiring.test.ts`。
                    */
                   if (item.recalledAt !== null) {
                     return (
@@ -4245,7 +4262,16 @@ export default function Conversation() {
                             </View>
                           </View>
                         )}
-                        <Text className="conv__time num">{clockTime(item.createdAt)}</Text>
+                        <Text className="conv__time num">
+                          {clockTime(item.createdAt)}
+                          {mediaReadLabel ? (
+                            <Text
+                              className={`conv__rd${mediaReadLabel === '未读' ? ' is-unread' : ''}`}
+                            >
+                              {` · ${mediaReadLabel}`}
+                            </Text>
+                          ) : null}
+                        </Text>
                       </View>
                     </View>
                   )
