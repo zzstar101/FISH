@@ -123,8 +123,11 @@ beforeEach(() => {
 })
 
 test('页面传了 hidden：mount 不读本机隐藏名单（一屏几十张就是几十次同 key 读取）', () => {
-  mount(false)
+  const tree = mount(false)
   expect(storageReads.filter((key) => key === HIDDEN_KEY)).toHaveLength(0)
+  // 不读存储还不够：页面说「这张可见」就得真的画出来。
+  // 少了这条，`ownHidden` 误判成 true 让整屏卡片消失也照样绿。
+  expect(tree).not.toBeNull()
 })
 
 test('页面传了 hidden=true 同样不读存储：页面说隐藏就隐藏，不必自己再确认一遍', () => {
@@ -168,4 +171,27 @@ test('多张卡走页面托管时，存储读取次数恒为 0（不随卡片数
     } as never)
   }
   expect(storageReads.filter((key) => key === HIDDEN_KEY)).toHaveLength(0)
+})
+
+type Node = { type: unknown; props: Record<string, unknown> }
+
+/** 在渲染树里按 className 找节点（最小 hook host 下树是普通对象，没有 DOM） */
+function findAll(tree: unknown, className: string, found: Node[] = []): Node[] {
+  if (tree === null || typeof tree !== 'object') return found
+  if (Array.isArray(tree)) {
+    for (const child of tree) findAll(child, className, found)
+    return found
+  }
+  const node = tree as Node
+  if (node.props?.className === className) found.push(node)
+  findAll(node.props?.children, className, found)
+  return found
+}
+
+test('卖家头像真的吃到了 lazyLoad（#595 第三项：封面早就懒加载，头像没有）', () => {
+  const avatars = findAll(mount(false), 'pcard__avatar')
+  expect(avatars).toHaveLength(1)
+  // 只测 UserAvatar 自己能收 lazyLoad 证明不了商品卡传了 —— 少这条，
+  // 把卡片里那个 prop 删掉测试照样绿。
+  expect(avatars[0].props.lazyLoad).toBe(true)
 })

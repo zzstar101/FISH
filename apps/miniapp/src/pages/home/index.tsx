@@ -74,9 +74,18 @@ export default function Home() {
    *
    * 回到初始批量的时机：切分类 / 首次进页 / 身份重置 / 下拉刷新（下拉只能在顶部触发）。
    * 保留下来的时机：同分类原地换数据（`load` 里的 `sameScreen`，例如「再点当前分类重试」），
-   * 以及身份重置时人还滚在深处（否则新列表比原来短，位置会被夹回去）。
+   * 以及身份重置时人还滚在深处（`keepMountCountRef`，否则新列表比原来短，位置会被夹回去）。
    */
   const [mountedCount, setMountedCount] = useState(INITIAL_MOUNT_COUNT)
+  /**
+   * 「身份重置后紧接着的那一次 `load` 要保住已挂出的批量」（#595）。
+   *
+   * 身份变化会把 `lastGoodRef` 清空，于是 `load` 里的 `sameScreen` 必然为 false、把批量
+   * 收回首屏 —— 但那一屏还撑着 `identityScrollHeight`，列表一缩，位置就被夹回第 10 张末尾。
+   * 人在顶部时不需要这个信号（照常收回首屏批量），所以只在深滚动时置位，
+   * 由紧跟着的那次 `load` 读一次即清，不会漏到后面的加载上。
+   */
+  const keepMountCountRef = useRef(false)
   /**
    * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过，或上一次加载失败已作废）。
    *
@@ -263,6 +272,14 @@ export default function Home() {
     const seq = reqSeq.current + 1
     reqSeq.current = seq
     /*
+      身份重置那次重拉要保住已挂出的批量（#595）：`lastGoodRef` 已被清空，下面的
+      `sameScreen` 必然为 false，但这一屏是「人还滚在深处」的重建，批量一缩位置就会被夹回。
+      在**入口**读一次即清 —— 后面两道闸（序号 / 身份）都可能提前返回，放在落屏处读会让
+      标志漏给下一次加载。
+    */
+    const keepMountCount = keepMountCountRef.current
+    keepMountCountRef.current = false
+    /*
       身份指纹在**请求发出时**就捕获（#631）：快照要按身份隔离，而账号可能在这条请求
       在途时被切走。写入时 `write` 会拿它跟当前身份比对，对不上就一个字都不落盘。
     */
@@ -344,8 +361,8 @@ export default function Home() {
     // 恒等于屏幕事实（含「失败清屏」这一种），见 `lastGoodRef` 的注释
     lastGoodRef.current = { items: applied.items, loadedFor: applied.loadedFor }
     setItems(applied.items)
-    // 换了一屏才回初始批量；原地换数据保留已挂出的部分（#595，判据见 sameScreen）
-    if (!sameScreen) setMountedCount(INITIAL_MOUNT_COUNT)
+    // 换了一屏才回初始批量；原地换数据保留已挂出的部分（#595，判据见 sameScreen / keepMountCount）
+    if (!sameScreen && !keepMountCount) setMountedCount(INITIAL_MOUNT_COUNT)
     setFailed(applied.failed)
     setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
@@ -423,8 +440,12 @@ export default function Home() {
       批量（#595）：在顶部就收回首屏批量；已经滚在深处则**保留** —— 下面
       `identityScrollHeight` 正撑着原滚动位置，只挂 10 张的话新列表比原来短，
       位置会被夹到第 10 张末尾（改前全量挂载不会有这个塌缩）。
+      保留不能只靠「不清 state」：`lastGoodRef` 刚被清空，紧接着那次 `load` 的
+      `sameScreen` 必然为 false、会把批量收回首屏，所以还要给它一个信号
+      （`keepMountCountRef`，见 `load` 入口）。
     */
     if (scrollTopRef.current <= 0) setMountedCount(INITIAL_MOUNT_COUNT)
+    else keepMountCountRef.current = true
     setLoadedFor(null)
     void load(categoryRef.current)
   }

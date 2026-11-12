@@ -91,9 +91,21 @@ describe('换一屏回初始批量，原地换数据保留已挂出的部分', (
       sameScreen,
       '缺少 sameScreen 判据（否则同分类刷新会把用户拽回第一屏）',
     ).toBeGreaterThanOrEqual(0)
-    const reset = source.indexOf('if (!sameScreen) setMountedCount(INITIAL_MOUNT_COUNT)')
-    expect(reset).toBeGreaterThanOrEqual(0)
+    const reset = source.indexOf(
+      'if (!sameScreen && !keepMountCount) setMountedCount(INITIAL_MOUNT_COUNT)',
+    )
+    expect(
+      reset,
+      'sameScreen 之外还要认「身份重置时人滚在深处」这个信号（否则刚保留的批量会被这次 load 收回）',
+    ).toBeGreaterThanOrEqual(0)
     expect(sameScreen).toBeLessThan(reset)
+    // 信号必须在 load 入口读一次即清：后面两道闸都可能提前返回，放落屏处会漏给下一次加载
+    const load = source.slice(
+      source.indexOf('const load = async'),
+      source.indexOf('const sameScreen ='),
+    )
+    expect(load).toContain('const keepMountCount = keepMountCountRef.current')
+    expect(load).toContain('keepMountCountRef.current = false')
   })
 
   test('快照上屏是全新一屏：回初始批量（重置必须在函数体内）', async () => {
