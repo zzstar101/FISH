@@ -83,6 +83,7 @@ import {
   canRetry,
   canRetryMedia,
   clearDeferredReload,
+  cursorAfterRefresh,
   type DeferredReload,
   deferReload,
   growBottomAllowance,
@@ -568,6 +569,14 @@ export default function Conversation() {
   const presenceSeq = useRef(0)
   /** 媒体那条流的 id 快照来源（silent 合并要用，同 `messagesRef` 的理由） */
   const mediaRef = useRef<MediaMessageDto[]>([])
+  /**
+   * 已加载的更早页（#610 复审）：`loadEarlier` 落地时**同步**记进来，不等 React commit。
+   * 刷新落地读 `messagesRef` / `mediaRef` 时，上一页的 `setMessages` 可能还在排队没渲染；
+   * 只读渲染期 ref 会误判「没有更早页」，把刚推进的分页游标顶回第一页。游标判据把这份
+   * 快照一起算上。
+   */
+  const loadedEarlierRef = useRef<MessageDto[]>([])
+  const loadedEarlierMediaRef = useRef<MediaMessageDto[]>([])
   /** 在途媒体（`useDidShow` 判「有在途发送」时要把上传中的媒体也算上） */
   const pendingMediaRef = useRef<PendingMedia[]>([])
   /** 当前这次录音的句柄（`null` = 没在录） */
@@ -681,6 +690,8 @@ export default function Conversation() {
     setRecallingId(null)
     setMedia([])
     setMediaCursor(null)
+    loadedEarlierRef.current = []
+    loadedEarlierMediaRef.current = []
     setPendingMedia([])
     setLocalPaths(new Map())
     setPlayingId(null)
@@ -771,8 +782,9 @@ export default function Conversation() {
        * 这条**不再只属于 silent**（#89 实时通道）：推送随时可能落在一次非 silent 重拉的
        * 在途期（最典型的是 `useDidShow` 从子页返回时的重拉），而历史快照可能拍在那条消息
        * commit 之前 —— 整份替换会把它抹掉，且 20s 详情轮询不刷消息流，用户要等到下一次
-       * 重拉才看得见。`mergeRefreshedMessages` 的规则不变：基准集之内的旧条目仍以服务端
-       * 快照为准（翻过的更早一页照旧被丢弃），只有「发起之后才出现」的才补回。
+       * 重拉才看得见。`mergeRefreshedMessages` 的规则：比快照**更早**的已加载条目保留
+       * （翻过的更早页不再被丢弃，#610），窗口内以服务端快照为准，只有「发起之后才出现」
+       * 的才补回。
        */
       const baseIds = new Set(messagesRef.current.map((item) => item.id))
       /** 媒体半边同理（见下）：silent 合并要按**发起时**的媒体 id 集做并集 */
@@ -855,7 +867,22 @@ export default function Conversation() {
             setMessages((prev) =>
               keepRecalledTombstones(prev, mergeRefreshedMessages(prev, page.items, baseIds)),
             )
-            setNextCursor(page.nextCursor)
+            /**
+             * 合并保留了「比快照更早」的已加载页时，**不能**用快照的游标顶掉现有游标
+             * （#610）：快照只含第一页，它的游标指向第一页之前，顶掉就会让下一次上翻
+             * 重拉同一页、出现重复条目。现有游标仍指向我们最旧那条之前，沿用即可。
+             * 例外：快照与已加载窗口**无交集**（积压超过一页）时 `keepsEarlierPages` 返回
+             * false，让快照游标接管 —— 旧游标补不到两段之间的空洞，下次上翻由
+             * `mergeEarlierMessages` 去重补齐（见 `./view`）。
+             */
+            setNextCursor((current) =>
+              cursorAfterRefresh(
+                current,
+                [...loadedEarlierRef.current, ...messagesRef.current],
+                page.items,
+                page.nextCursor,
+              ),
+            )
           }
           /**
            * 消息区的落态**在守卫之外**（#608 审查第 3 条）：守卫只挡「拿失败快照覆盖已经在
@@ -885,7 +912,15 @@ export default function Conversation() {
                 mergeRefreshedMedia(prev, mediaPage.items, mediaBaseIds),
               ),
             )
-            setMediaCursor(mediaPage.nextCursor)
+            /** 与消息流的游标同理（#610）：保留了更早的媒体页就不能被快照游标顶掉 */
+            setMediaCursor((current) =>
+              cursorAfterRefresh(
+                current,
+                [...loadedEarlierMediaRef.current, ...mediaRef.current],
+                mediaPage.items,
+                mediaPage.nextCursor,
+              ),
+            )
           }
 
           /**
@@ -1431,6 +1466,8 @@ export default function Conversation() {
             return
           }
           setMessages((prev) => mergeEarlierMessages(prev, page.items))
+          // 同步记下，供刷新时的游标判据在 commit 之前看到这一页（见 ref 注释）
+          loadedEarlierRef.current = mergeEarlierMessages(loadedEarlierRef.current, page.items)
           setNextCursor(page.nextCursor)
         }),
       )
@@ -1447,6 +1484,11 @@ export default function Conversation() {
             if (!isLatestPageLoad(current, epoch.current)) return
             if (page.failed) return
             setMedia((prev) => mergeRefreshedMedia(prev, page.items, EMPTY_IDS))
+            loadedEarlierMediaRef.current = mergeRefreshedMedia(
+              loadedEarlierMediaRef.current,
+              page.items,
+              EMPTY_IDS,
+            )
             setMediaCursor(page.nextCursor)
           })
           .catch((error) => {

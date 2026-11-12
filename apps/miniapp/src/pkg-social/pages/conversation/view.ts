@@ -1016,13 +1016,106 @@ export function mergeRefreshedMedia(
   baseIds: ReadonlySet<string>,
 ): MediaMessageDto[] {
   const seen = new Set(incoming.map((item) => item.id))
+  const oldest = oldestOf(incoming)
   const carried: MediaMessageDto[] = []
   for (const item of previous) {
-    if (baseIds.has(item.id) || seen.has(item.id)) continue
+    if (seen.has(item.id)) continue
+    if (isBeforeSnapshotWindow(item, oldest)) {
+      seen.add(item.id)
+      carried.push(item)
+      continue
+    }
+    if (baseIds.has(item.id)) continue
     seen.add(item.id)
     carried.push(item)
   }
   return sortMessages([...incoming, ...carried])
+}
+
+/** 与 `sortMessages` 同口径的先后比较：`(createdAt, id)` */
+function isOlderThan(
+  item: { id: string; createdAt: string },
+  other: { id: string; createdAt: string },
+): boolean {
+  const at = Date.parse(item.createdAt)
+  const bt = Date.parse(other.createdAt)
+  if (at !== bt) return at < bt
+  return item.id < other.id
+}
+
+/** 快照里最旧的那一条；空快照返回 `null`（当作「没有窗口」，不据此保留历史） */
+function oldestOf<T extends { id: string; createdAt: string }>(items: readonly T[]): T | null {
+  let oldest: T | null = null
+  for (const item of items) {
+    if (oldest === null || isOlderThan(item, oldest)) oldest = item
+  }
+  return oldest
+}
+
+/**
+ * 条目是否落在快照窗口**之外（更早一侧）**，从而必须在刷新合并时保留（#610）。
+ *
+ * 边界只能用 DTO 的 `createdAt`：服务端按**微秒**排序，序列化成 ISO 字符串后只剩
+ * **毫秒**。快照最旧那条与更早页尾部同毫秒时，客户端只能退化成 id 字典序，而 UUIDv7
+ * 同毫秒尾部是随机的，可能把仍属更早页的条目判进窗口内。**单条消息不做硬删**（服务端
+ * 只更新 `recalled_at`；整会话随商品删除时由 `messages → conversations` 的级联外键物理
+ * 删除，那时页面整体失效），所以「同毫秒但不在快照里」的条目只可能来自更早页 —— 一律
+ * 按保留处理。窗口内被撤回的条目仍会由服务端快照返回，由 `seen` 取快照版本覆盖。
+ *
+ * **保留区不参与后续快照校正**：刷新只拉第一页，保留下来的更早页不会再被 `load()` 校正
+ * —— 其中的「对方撤回」只能靠实时通道（`message.recalled` 走 `applyRecalled`，按 id
+ * 命中、不区分条目来自哪一页）收回来；实时断线期间发生的撤回要等用户离开重进本页才会
+ * 消失。改合并语义前先确认「单条消息不做硬删」这条还成立。
+ */
+function isBeforeSnapshotWindow(
+  item: { id: string; createdAt: string },
+  oldest: { id: string; createdAt: string } | null,
+): boolean {
+  if (oldest === null) return false
+  return Date.parse(item.createdAt) <= Date.parse(oldest.createdAt)
+}
+
+/**
+ * 这次刷新落地后，是否应**沿用现有分页游标**（#610）。
+ *
+ * 组件据此决定能不能用快照的游标顶掉现有游标。返回 `true` 的条件是「快照与已加载窗口
+ * 有交集，且保留了比快照更早的条目」：此时现有游标仍指向「我们最旧那条之前」，顶掉就会
+ * 退回第一页游标、下次上翻重拉同一页。其余情况返回 `false`：
+ * - 空快照（没有窗口，照旧按 `baseIds` 清）；
+ * - 没有更早条目（列表最旧就是快照最旧）；
+ * - 快照与已加载窗口**无交集**（原因见下）。
+ */
+export function keepsEarlierPages(
+  previous: readonly { id: string; createdAt: string }[],
+  incoming: readonly { id: string; createdAt: string }[],
+): boolean {
+  const oldest = oldestOf(incoming)
+  if (oldest === null) return false
+  const incomingIds = new Set(incoming.map((item) => item.id))
+  /**
+   * 快照与已加载窗口**没有交集**：刷新期间新增的消息超过一页（断线重连 / 长时间后台），
+   * 两者之间隔着一段没加载过的空洞。旧游标只能继续往更早翻，补不到空洞；此时必须让
+   * 快照游标接管（它指向快照最旧一条之前），用户下次上翻时由 `mergeEarlierMessages`
+   * 去重后逐页把空洞补齐。
+   */
+  if (!previous.some((item) => incomingIds.has(item.id))) return false
+  return previous.some((item) => !incomingIds.has(item.id) && isBeforeSnapshotWindow(item, oldest))
+}
+
+/**
+ * 刷新落地后要写入的分页游标（#610）。
+ *
+ * 抽成可执行函数而不是在页面里写 `if`：判据层只能证明「该不该守」，这里把**写入的值**
+ * 也钉进单测（沿用现有游标 / 采用快照游标两种结果），避免守卫写在不可达分支里也能
+ * 通过文本断言。
+ */
+export function cursorAfterRefresh(
+  current: string | null,
+  previous: readonly { id: string; createdAt: string }[],
+  incoming: readonly { id: string; createdAt: string }[],
+  snapshot: string | null,
+): string | null {
+  return keepsEarlierPages(previous, incoming) ? current : snapshot
 }
 
 /**
@@ -1035,8 +1128,11 @@ export function mergeRefreshedMedia(
  *
  * 合并规则（`baseIds` = 本次刷新**发起时**消息流里的 id 快照）：
  * - 以服务端快照为准：它可能包含对方刚发来的新消息，也可能修正本地顺序；
+ * - **比快照最旧一条更早**的旧条目一律保留（#610）—— 快照只含第一页，永远不会带回
+ *   用户已经翻过的更早页；同毫秒按保留处理，理由见 `isBeforeSnapshotWindow`；
  * - 额外保留 `baseIds` 之外、且不在快照里的消息 —— 那些是刷新发起**之后**才确认
  *   落地的（本地乐观气泡被服务端返回替换的那一刻）；
+ * - 落在快照窗口内、又在 `baseIds` 里的旧条目仍以快照为准（服务端不再返回 = 已删除）；
  * - 按 id 去重后交给 `sortMessages` 定序，实时推送送来的同一条不会重复。
  */
 export function mergeRefreshedMessages(
@@ -1045,9 +1141,16 @@ export function mergeRefreshedMessages(
   baseIds: ReadonlySet<string>,
 ): MessageDto[] {
   const seen = new Set(incoming.map((item) => item.id))
+  const oldest = oldestOf(incoming)
   const carried: MessageDto[] = []
   for (const item of previous) {
-    if (baseIds.has(item.id) || seen.has(item.id)) continue
+    if (seen.has(item.id)) continue
+    if (isBeforeSnapshotWindow(item, oldest)) {
+      seen.add(item.id)
+      carried.push(item)
+      continue
+    }
+    if (baseIds.has(item.id)) continue
     seen.add(item.id)
     carried.push(item)
   }
