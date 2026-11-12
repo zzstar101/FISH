@@ -63,6 +63,10 @@ beforeEach(() => {
 afterEach(() => unmount())
 
 test('非安卓平台：延迟预热下一次切 Tab，返回本页会补预热（#662）', async () => {
+  // 审查意见「过短的延迟也能通过时序检查」：下面的 sleep 都按常量推算，
+  // 把常量本身改小（例如 200 → 80）时相对时序仍然成立、测试会假绿 ——
+  // 所以这里直接钉住常量的下限，让「延迟被改短」在断言处就红。
+  expect(PRELOAD_DELAY_MS).toBeGreaterThanOrEqual(200)
   show()
   // 让开首屏渲染/取数：不足 200ms 时不应调用
   await Bun.sleep(PRELOAD_DELAY_MS - 50)
