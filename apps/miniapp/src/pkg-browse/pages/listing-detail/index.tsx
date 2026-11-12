@@ -1988,7 +1988,10 @@ export default function ListingDetail() {
               onClick={openBuy}
             >
               {buyRequested ? null : (
-                <Image className="detail__btn-img" src={ICONS.heartFillBrand} mode="aspectFit" />
+                /* #675：购买用购物车语义，heart 只留给左边的收藏钮（`.detail__fav`），
+                   两处不互相借用。本钮是浅底 `--ghost`，所以取 fg 色 `cartFg` —— 只有压在
+                   品牌实底 `.detail__btn--solid` 上的图标才需要反白（如 `chatWhite`）。 */
+                <Image className="detail__btn-img" src={ICONS.cartFg} mode="aspectFit" />
               )}
               <Text>{buyRequested ? '待店家确认' : '立即购买'}</Text>
             </View>
