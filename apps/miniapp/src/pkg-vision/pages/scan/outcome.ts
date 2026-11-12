@@ -34,3 +34,34 @@ export function scanOutcome(rawValue: string | null): ScanOutcome {
   if (!matched) return { kind: 'failure', reason: 'invalid' }
   return { kind: 'meetup', url: `${MEETUP_PAGE}?code=${encodeURIComponent(rawValue)}` }
 }
+
+/**
+ * 现在能不能处理一条新的扫码结果（相机识码与相册识码共用这一个闸门）。
+ *
+ * 四条闸的来由：
+ * - `processing`：上一枚码已经发起导航 / 已弹面板，`onScanCode` 对准期间会连续触发；
+ * - `busy`：相册识码、拍照上传在途；
+ * - `failureShown`：「扫码没成功」面板正显示，用户得先处理它；
+ * - `codeOpen`：「输入交易码」浮层开着。浮层只是**盖在**相机上，`Camera` 仍在识别
+ *   （#674 审查 P2）—— 不挡的话，用户在输码 / 成功屏上顺手把镜头对准对方的码，
+ *   就会被 `navigateTo` 拽到面交页，正在输入的码当场丢了。
+ */
+export function scanBlockedBy(input: {
+  codeOpen: boolean
+  processing: boolean
+  busy: boolean
+  failureShown: boolean
+}): boolean {
+  return input.codeOpen || input.processing || input.busy || input.failureShown
+}
+
+/**
+ * 相册识码**回来之后**再过一次闸（#674 审查 6）。
+ *
+ * 相册这条路要选图 + 解码，中间隔着好几个 await：发起时浮层还没开，回来时可能已经开了。
+ * 这时不能复用 `scanBlockedBy` —— 那一刻的 `busy` 必然是**这次相册流程自己**置上的，
+ * 拿它判就永远为真。所以只问「别的入口有没有占住屏幕」。
+ */
+export function scanBlockedLater(input: { codeOpen: boolean; processing: boolean }): boolean {
+  return input.codeOpen || input.processing
+}

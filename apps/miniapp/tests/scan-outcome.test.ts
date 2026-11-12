@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { buildMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import qrcode from 'qrcode-generator'
-import { scanOutcome } from '../src/pkg-vision/pages/scan/outcome'
+import { scanBlockedBy, scanBlockedLater, scanOutcome } from '../src/pkg-vision/pages/scan/outcome'
 import { decodeCanvasSize, decodeQrPixels } from '../src/pkg-vision/pages/scan/qr-decode'
 
 /**
@@ -78,5 +78,38 @@ describe('相册识码', () => {
       height: 768,
     })
     expect(decodeCanvasSize({ width: 600, height: 800 }, 1024)).toEqual({ width: 600, height: 800 })
+  })
+})
+
+describe('扫码闸门（#674 审查 P2）', () => {
+  const clear = { codeOpen: false, processing: false, busy: false, failureShown: false }
+
+  test('没有任何在途状态时放行', () => {
+    expect(scanBlockedBy(clear)).toBe(false)
+  })
+
+  test('「输入交易码」浮层开着就不接扫码结果：相机还在后面识别，一照就会被拽去面交页', () => {
+    expect(scanBlockedBy({ ...clear, codeOpen: true })).toBe(true)
+  })
+
+  test('已在派发 / 相册识码在途 / 失败面板在场同样挡住', () => {
+    expect(scanBlockedBy({ ...clear, processing: true })).toBe(true)
+    expect(scanBlockedBy({ ...clear, busy: true })).toBe(true)
+    expect(scanBlockedBy({ ...clear, failureShown: true })).toBe(true)
+  })
+})
+
+describe('相册识码回来的补闸（#674 审查 6）', () => {
+  test('解码回来时浮层已经打开：这条结果丢掉，别把浮层顶掉', () => {
+    // 此刻 busy 一定是相册流程自己置的，所以补闸只看浮层与派发
+    expect(scanBlockedLater({ codeOpen: true, processing: false })).toBe(true)
+  })
+
+  test('解码回来时已经派发了另一条：同样丢掉', () => {
+    expect(scanBlockedLater({ codeOpen: false, processing: true })).toBe(true)
+  })
+
+  test('两个入口都没占住才放行', () => {
+    expect(scanBlockedLater({ codeOpen: false, processing: false })).toBe(false)
   })
 })

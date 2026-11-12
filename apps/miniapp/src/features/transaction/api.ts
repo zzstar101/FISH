@@ -33,6 +33,7 @@ import {
   type TransactionDto,
   type TransactionListResponse,
   type TransactionRole,
+  type TransactionStatus,
   transactionDtoSchema,
   transactionListResponseSchema,
 } from '@fish/contracts/transactions/schema'
@@ -60,13 +61,16 @@ export type TransactionListPage = {
 
 /** 取一页交易（游标分页）。`cursor` 是不透明串，只能原样回传上一页的 `nextCursor`。 */
 export async function fetchTransactions(
-  args: { role?: TransactionRole; cursor?: string } = {},
+  args: { role?: TransactionRole; status?: TransactionStatus; cursor?: string } = {},
 ): Promise<TransactionListResponse> {
   const payload = await apiRequest(TRANSACTION_ROUTES.base, {
-    query: { role: args.role, limit: PAGE_SIZE, cursor: args.cursor },
+    query: { role: args.role, status: args.status, limit: PAGE_SIZE, cursor: args.cursor },
   })
   return transactionListResponseSchema.parse(payload)
 }
+
+/** `fetchAllTransactions` 的可选过滤：只取某个状态的交易 */
+export type FetchAllTransactionsOptions = { status?: TransactionStatus }
 
 /**
  * 取完某个视角下的全部交易（游标翻页）。
@@ -74,13 +78,19 @@ export async function fetchTransactions(
  * 为什么一次取完而不是做无限滚动：订单页的统计行、筛选胶囊计数、区块标题与「已经到底了」
  * 全是**派生值**，只有拿到完整集合才诚实。契约没有 `total`，服务端的 `status` 只能单值过滤，
  * 所以「分四次请求去凑计数」反而更糟（四次请求之间还会出现自相矛盾的中间态）。
+ *
+ * `options.status`：相机页浮层只认「待面交」，带上它才不会被前面几百笔已完成挤掉
+ * `MAX_PAGES` 窗口（#674 审查 7）。订单页不传，照旧取全部。
  */
-export async function fetchAllTransactions(role: TransactionRole): Promise<TransactionListPage> {
+export async function fetchAllTransactions(
+  role: TransactionRole,
+  options: FetchAllTransactionsOptions = {},
+): Promise<TransactionListPage> {
   const items: TransactionDto[] = []
   let cursor: string | undefined
 
   for (let page = 0; page < MAX_PAGES; page += 1) {
-    const result = await fetchTransactions({ role, cursor })
+    const result = await fetchTransactions({ role, status: options.status, cursor })
     const next = result.nextCursor
 
     // 游标没前进 = 服务端在重复给同一页。此时**不能收下这一页**：它与上一页是同一批数据，
