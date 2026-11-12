@@ -29,6 +29,7 @@ import type { MediaStorage } from '../uploads/storage'
 import { MeetupTokenCrypto } from './meetup-token'
 import {
   MeetupConsumeRaceError,
+  type ProposalWriteResult,
   type TransactionRow,
   type TransactionStore,
   type TxListingBrief,
@@ -59,6 +60,9 @@ export const MEETUP_TOKEN_LOCK_SECONDS = 10 * 60
 const notFound = () => new TransactionServiceError(404, 'TRANSACTION_NOT_FOUND', '交易不存在')
 const conversationNotFound = () =>
   new TransactionServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
+/** #676：提案金额必须等于挂价 —— 前置快照与事务内重读后的冲突共用这一个对外错误。 */
+const proposalAmountMismatch = () =>
+  new TransactionServiceError(422, 'PROPOSAL_AMOUNT_MISMATCH', '交易金额必须与卖家设定的挂价一致')
 
 /** 交易 id 的形状校验（DB 列是 uuid）：畸形 id 必须报 404 而不是让 PG 报 500。 */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -411,14 +415,39 @@ export function createTransactionService({
       if (brief.listingStatus !== 'ACTIVE') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
-      const message = await writeSystem(
-        { buyerId: brief.buyerId, sellerId: brief.sellerId },
-        brief.id,
-        {
-          type: 'tx.proposal',
-          amountCents: input.amountCents,
-        },
-      )
+      /*
+       * #676：改价权归卖家 —— 提案金额必须等于**该商品当前的挂价**，免费送即 0
+       * （契约 §1 的 `free ⟹ priceCents === 0` 由 DB 约束 `listings_free_price_cents_zero`
+       * 保证，因此这里一条相等判断同时覆盖「普通商品」与「免费送」两种口径）。
+       * 端上已把金额做成只读展示，但请求体是客户端可控的，金额正确性不能靠前端。
+       *
+       * 这里比对的是 `findConversation` 带回的挂价：它只是**前置快照**，先把明显不合法的
+       * 请求挡在写事务外省一次往返；真正的判据在 `store.propose` 的事务内（见下）。
+       */
+      if (input.amountCents !== brief.listingPriceCents) throw proposalAmountMismatch()
+      /*
+       * 事务内重读并锁住 listing 再比对（#676 审查）：卖家在「读会话 → 插提案」之间改价时，
+       * 只信上面那份快照会落一条与当前挂价不符的提案。`store.propose` 用
+       * `SELECT … FOR SHARE` 把校验与插入做成对同一行原子，冲突仍是同一个 422。
+       */
+      let written: ProposalWriteResult
+      try {
+        written = await store.propose(
+          brief,
+          input.amountCents,
+          systemEventContent({ type: 'tx.proposal', amountCents: input.amountCents }),
+        )
+      } catch (error) {
+        // 会话在「读会话 → 写 SYSTEM 消息」之间被删掉：与 `writeSystem` 同一口径（404）
+        if (isForeignKeyViolation(error)) throw conversationNotFound()
+        throw error
+      }
+      if (written.kind === 'price-mismatch') throw proposalAmountMismatch()
+      // 商品在这两步之间被物理删除：已无挂价可校验，与「不在售」同一语义（409，不新增码）
+      if (written.kind === 'listing-gone') {
+        throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
+      }
+      onSystemMessage?.({ buyerId: brief.buyerId, sellerId: brief.sellerId }, written.message)
       // 提案不落表，收件人卖家拿不到「可跳的交易」——通知只带会话/商品。
       notify?.({
         userId: brief.sellerId,
@@ -426,7 +455,7 @@ export function createTransactionService({
         conversationId: brief.id,
         listingId: brief.listingId,
       })
-      return toMessageDto(message)
+      return toMessageDto(written.message)
     },
 
     async reject(userId, input) {

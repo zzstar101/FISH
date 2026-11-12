@@ -1190,35 +1190,16 @@
   margin-top: 28px;
 }
 
-.detail__buy-input {
+/* #676：金额是只读展示（改价权归卖家），不是输入框 —— 底色弱化，与可编辑控件明确区分 */
+.detail__buy-value {
+  display: block;
   margin-top: 14px;
-  height: 88px;
-  padding: 0 24px;
+  padding: 20px 24px;
   border-radius: 24px;
-  background: var(--surface);
-  border: 2px solid var(--line);
+  background: var(--ink-weak);
   box-sizing: border-box;
   font-size: 30px;
   color: var(--fg);
-}
-
-/*
-  禁用态（免费送锁 0 / 提交中）走**包裹层 class**，不用 `.detail__buy-input[disabled]`：
-  Taro 生成的模板把 `disabled` 作为静态属性 + 数据绑定一起下发
-  （产物 `dist/base.wxml` 里是 `disabled="{{…}}"`），`disabled=false` 时属性依然在节点上，
-  属性选择器会把普通商品的金额框也画成灰底弱化态。与发布页同款先例：
-  `pages/sell/index.scss` 的 `.sell__price-row.is-off`。
-*/
-.detail__buy-field.is-off .detail__buy-input {
-  color: var(--muted-2);
-  background: var(--ink-weak);
-}
-
-.detail__buy-err {
-  display: block;
-  margin-top: 12px;
-  font-size: var(--fs-xs);
-  color: var(--danger-ink);
 }
 
 .detail__buy-hint {

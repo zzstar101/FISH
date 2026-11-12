@@ -59,10 +59,6 @@ export type PrivateScope = {
   buyRequested: boolean
   /** 「立即购买」确认弹层是否开着（买家视角；对齐 PC buy-dialog 的内容） */
   buyOpen: boolean
-  /** 弹层金额输入框内容：默认带挂价、可改；免费送锁 `'0'` */
-  buyAmount: string
-  /** 弹层金额字段的本地校验错误文案 */
-  buyAmountError: string | null
   /** 弹层提交失败的展示文案（弹层内展示，不用 toast） */
   buySubmitError: string | null
   /** 弹层提交在飞（确认钮转「正在发起…」，弹层不许关） */
@@ -90,8 +86,6 @@ export function clearedPrivateScope(): PrivateScope {
     faved: false,
     buyRequested: false,
     buyOpen: false,
-    buyAmount: '',
-    buyAmountError: null,
     buySubmitError: null,
     buyBusy: false,
     offlineConfirmOpen: false,

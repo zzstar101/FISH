@@ -29,10 +29,25 @@ export interface TxBrief {
   sellerId: string
   listingId: string
   listingStatus: string
+  /**
+   * 会话所属商品的挂价（#676）：提案金额必须与它相等（免费送即 0），
+   * 随 `listingStatus` 在同一次 JOIN 里取回，不额外发一次查询。
+   */
+  listingPriceCents: number
 }
 
 /** 会话定位失败的原因细分：service 据此映射 404 / 403 / 409。 */
 export type ConversationLookup = { kind: 'not-found' } | { kind: 'ok'; brief: TxBrief }
+
+/**
+ * 提案消息写入的结果细分（#676 并发审查）：`price-mismatch` = 同一事务里**重读到的**
+ * 挂价与 `amountCents` 不等（卖家在两次读取之间改了价），一条消息都没写；
+ * `listing-gone` = 商品在两步之间被物理删除，已无挂价可校验。
+ */
+export type ProposalWriteResult =
+  | { kind: 'ok'; message: MessageRow }
+  | { kind: 'price-mismatch' }
+  | { kind: 'listing-gone' }
 
 /**
  * 接受的结果细分：条件更新失败 = 商品已非 ACTIVE（并发输掉或状态漂移）；
@@ -85,6 +100,16 @@ export type MeetupConsumeResult =
 
 export interface TransactionStore {
   findConversation(conversationId: string, viewerId: string): Promise<ConversationLookup>
+  /**
+   * 写一条提案 SYSTEM 消息，**与挂价校验同一事务**（#676 并发审查）。
+   *
+   * `findConversation` 带回来的 `brief.listingPriceCents` 只是校验的前置快照；
+   * 卖家可能在「读会话 → 插提案」之间改价，只信那份快照会落一条与当前挂价不符的提案。
+   * 因此这里在事务内 `SELECT price_cents … FOR SHARE` 重读并锁住该 listing：并发改价
+   * 要么已经提交（读到新价 → `price-mismatch`，一条都不写），要么阻塞到本事务提交后
+   * 才生效 —— 「校验挂价」与「插提案」对同一行是原子的。
+   */
+  propose(brief: TxBrief, amountCents: number, content: string): Promise<ProposalWriteResult>
   /** 一批交易的 listing 摘要（每个商品取 sort_order = 0 的封面）；查过但无图显式 null。 */
   listingBriefs(listingIds: string[]): Promise<Map<string, TxListingBrief>>
   /** 一批交易对方用户的摘要（uuid 主键查询，结果必在；缺失键 = 查过但不存在）。 */
@@ -304,7 +329,8 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
   return {
     async findConversation(conversationId, viewerId) {
       const result = await db.execute(sql`
-        SELECT c.id, c.buyer_id, c.seller_id, c.listing_id, l.status::text AS listing_status
+        SELECT c.id, c.buyer_id, c.seller_id, c.listing_id, l.status::text AS listing_status,
+               l.price_cents AS listing_price_cents
         FROM conversations c JOIN listings l ON l.id = c.listing_id
         WHERE c.id = ${conversationId} AND ${viewerId} IN (c.buyer_id, c.seller_id)
       `)
@@ -318,8 +344,29 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           sellerId: row.seller_id as string,
           listingId: row.listing_id as string,
           listingStatus: row.listing_status as string,
+          listingPriceCents: row.listing_price_cents as number,
         },
       }
+    },
+
+    async propose(brief, amountCents, content) {
+      return db.transaction(async (tx) => {
+        /*
+         * `FOR SHARE` 给这一行加共享锁：期间并发 `UPDATE listings SET price_cents` 必须等
+         * 本事务提交。所以这次读到的挂价就是提案落地瞬间的挂价 —— 「校验完再被改」的
+         * 窗口不存在，#676 审查留下的过期提案因此不会出现。
+         */
+        const locked = await tx.execute(sql`
+          SELECT price_cents FROM listings WHERE id = ${brief.listingId} FOR SHARE
+        `)
+        const row = rowsOf(locked)[0]
+        // 商品在两步之间被物理删除（#74 的删除路径）：已无挂价可校验，谈不上「等于」。
+        if (!row) return { kind: 'listing-gone' as const }
+        // `Number(...)` 只为兜住驱动把 integer 解成字符串的实现差异，不改变比较口径
+        if (Number(row.price_cents) !== amountCents) return { kind: 'price-mismatch' as const }
+        const message = await insertSystemWithin(tx, brief.id, content)
+        return { kind: 'ok' as const, message }
+      })
     },
 
     async listingBriefs(listingIds) {

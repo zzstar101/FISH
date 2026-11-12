@@ -325,4 +325,16 @@ describe('TransactionErrorCodeSchema', () => {
     const code: TransactionErrorCode = 'CONVERSATION_UNAVAILABLE'
     expect(code).toBe('CONVERSATION_UNAVAILABLE')
   })
+
+  test('登记 #676 的 PROPOSAL_AMOUNT_MISMATCH（提案金额必须等于挂价）', () => {
+    // 提案端点（apps/api/src/modules/transactions/service.ts:421）在 amountCents ≠ 挂价时抛 422，
+    // 端上按码分支（apps/miniapp/src/features/transaction/api.ts:294 describeProposeFailure
+    // 转成「卖家已更新挂价」并静默 refresh）。漏登记则实现抛的码与契约声明的码漂移。
+    expect(TransactionErrorCodeSchema.safeParse('PROPOSAL_AMOUNT_MISMATCH').success).toBe(true)
+    expect(TransactionErrorCodeSchema.options).toContain('PROPOSAL_AMOUNT_MISMATCH')
+
+    // 联合类型也必须含该值：漏登记时这一行过不了 typecheck（`bun test` 不做类型检查）。
+    const code: TransactionErrorCode = 'PROPOSAL_AMOUNT_MISMATCH'
+    expect(code).toBe('PROPOSAL_AMOUNT_MISMATCH')
+  })
 })

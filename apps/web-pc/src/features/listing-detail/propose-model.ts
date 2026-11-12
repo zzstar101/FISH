@@ -1,32 +1,19 @@
 /**
- * 「我想要」（买家发起交易确认）的纯逻辑：金额输入 ↔ 整数分。
+ * 「我想要」（买家发起交易确认）的金额口径（#676）：**成交价 = 卖家设定的挂价，买家只读**。
  *
- * 抽出来的原因与 web-pc 其余交互一致：本端**没有 jsdom**，组件只做
- * `renderToStaticMarkup` 静态渲染，判断类逻辑一律放纯函数里测。
+ * 改价权归卖家：确认弹层只展示挂价，没有金额输入框 —— 买家在下单流程里没有任何可改价的
+ * 入口。服务端 `POST /transactions/proposals` 同步强制
+ * `amountCents === listing.priceCents`（不等即 422 `PROPOSAL_AMOUNT_MISMATCH`），所以即使
+ * 有人绕过端上展示直接发请求，也提不出别的金额。
  *
- * 金额口径与发布 / 编辑商品共用 `parsePriceToCents`（同一条 `PriceCentsSchema` 边界），
- * 不在这里另写一份正则，避免两处对「¥100,000 上限」的理解漂移。
+ * 免费送的商品金额恒 0：契约 §1 的 `free ⟹ priceCents === 0` 由 DB 约束
+ * `listings_free_price_cents_zero` 保证，这里仍按 `free` 位收口，不依赖上游数据是否干净。
+ *
+ * 与小程序端 `apps/miniapp/src/features/transaction/propose-model.ts` 同一口径（#676 之后两端
+ * 一致）。抽成纯函数与本端其余交互一致：本端**没有 jsdom**，判断类逻辑一律放纯函数里测。
  */
-import { parsePriceToCents } from '../publish/form-model'
 
-/** 金额输入框初值：免费送恒 `0`；其余按挂价，两位小数（与编辑弹窗同一写法）。 */
-export function initialAmountValue(priceCents: number, free: boolean): string {
-  if (free) return '0'
-  return (priceCents / 100).toFixed(2)
-}
-
-/**
- * 输入框内容 → 提案金额（整数分）。非法返回 `null`。
- *
- * 免费送的商品金额恒为 0（`parsePriceToCents` 同口径）：挂价 0 时买家没有可议的价，
- * 让输入框里的数字决定金额会让「0 元送」被提成任意数。
- */
-export function proposalAmountCents(amount: string, free: boolean): number | null {
-  return parsePriceToCents(amount, free)
-}
-
-/** 金额字段的错误文案；合法返回 `null`。 */
-export function proposalAmountError(amount: string, free: boolean): string | null {
-  if (free) return null
-  return proposalAmountCents(amount, free) === null ? '请填写正确金额（最多两位小数）' : null
+/** 提案金额（整数分）：挂价本身；免费送恒 0（与服务端校验同一条口径）。 */
+export function proposalAmountCents(priceCents: number, free: boolean): number {
+  return free ? 0 : priceCents
 }

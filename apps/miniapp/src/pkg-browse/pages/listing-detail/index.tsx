@@ -57,11 +57,7 @@ import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
 import { requestSubscribe } from '@/features/subscribe/request'
 import { describeProposeFailure, proposeTransaction } from '@/features/transaction/api'
-import {
-  initialAmountValue,
-  proposalAmountCents,
-  proposalAmountError,
-} from '@/features/transaction/propose-model'
+import { proposalAmountCents, proposalAmountText } from '@/features/transaction/propose-model'
 import { CURRENT_USER_ID } from '@/lib/demo-user-id'
 import { categoryLabel, conditionLabel } from '@/lib/listing-labels'
 import { formatAmount } from '@/lib/money'
@@ -421,13 +417,9 @@ export default function ListingDetail() {
   )
   /** 「立即购买」是否已确认过：确认一次就进入「待店家确认」终态（账号私有，换号清场） */
   const [buyRequested, setBuyRequested] = useState(false)
-  /** 「立即购买」确认弹层（对齐 PC buy-dialog：商品摘要 + 可改金额 + 注释；账号私有，换号清场） */
+  /** 「立即购买」确认弹层（#676：商品摘要 + **只读**金额 + 注释；账号私有，换号清场） */
   const [buyOpen, setBuyOpen] = useState(false)
-  /** 弹层金额输入框：默认带挂价、可改；免费送锁 `'0'`（初值在 `openBuy` 里按商品写入） */
-  const [buyAmount, setBuyAmount] = useState('')
-  /** 弹层金额字段的本地校验错误文案 */
-  const [buyAmountError, setBuyAmountError] = useState<string | null>(null)
-  /** 弹层提交失败的展示文案（弹层内展示，不用 toast —— 失败语境要贴着输入框） */
+  /** 弹层提交失败的展示文案（弹层内展示，不用 toast —— 失败语境要贴着金额） */
   const [buySubmitError, setBuySubmitError] = useState<string | null>(null)
   /** 弹层提交在飞：确认钮转「正在发起…」，两步写没落地前弹层不许关 */
   const [buyBusy, setBuyBusy] = useState(false)
@@ -545,7 +537,7 @@ export default function ListingDetail() {
     // 购买请求是当前账号发出的：换号后「待店家确认」不属于下一个账号
     setBuyRequested(cleared.buyRequested)
     /*
-      购买确认弹层（草稿金额 / 两处错误 / 在飞态）**只在真换号时**复位。
+      购买确认弹层（失败文案 / 在飞态）**只在真换号时**复位。
       冷启动解析身份（`null → id`）走 `ownerChanged` 但不走 `isOwnerSwitch`：那时弹层
       可能已经打开、两步写正在飞（入口刻意放行 `unknown`，`isColdStartIdentityResolution`
       也会让这次飞行继续作数）。放在这里之外复位，会让身份一解析就关层 + `buyBusy` 清零，
@@ -553,8 +545,6 @@ export default function ListingDetail() {
     */
     if (isOwnerSwitch(prevUserId)) {
       setBuyOpen(cleared.buyOpen)
-      setBuyAmount(cleared.buyAmount)
-      setBuyAmountError(cleared.buyAmountError)
       setBuySubmitError(cleared.buySubmitError)
       setBuyBusy(cleared.buyBusy)
     }
@@ -759,6 +749,9 @@ export default function ListingDetail() {
           setLoadState('notFound')
           setComments([])
           setCommentsCursor(null)
+          // 商品真没了，弹层也得一起收（#676 审查）：留在空态页上会让摘要写出
+          // 「¥0.00」，而确认钮因 `listing === undefined` 静默 return —— 点了没反应。
+          setBuyOpen(false)
         }
         return
       }
@@ -1020,7 +1013,7 @@ export default function ListingDetail() {
 
   /**
    * 「立即购买」（#11 提案端点落地后的真接线）：打开自绘确认弹层，内容对齐 PC 站
-   * `buy-dialog` —— 商品摘要 + 可改的交易金额 + 语义注释。确认后走真两步写：
+   * `buy-dialog` —— 商品摘要 + 只读的交易金额 + 语义注释。确认后走真两步写：
    * `POST /conversations`（同买家同商品服务端**复用**既有会话，重复发起幂等）→
    * `POST /transactions/proposals`（往会话写一条 `tx.proposal`；商品仍是 `ACTIVE`，
    * 只有卖家接受才创建交易行，见 `features/transaction/api` 的提案注释）。
@@ -1030,8 +1023,8 @@ export default function ListingDetail() {
    * 任务铸定时已带上当刻登录态，`isTaskLive` 的冷启动豁免会兜住解析前后交错的
    * 迟到回调，把已登录用户拦在门外是误报。
    *
-   * 金额默认带挂价、买家可改：这就是与卖家商定的成交价，卖家接受时以**卖家重传的值**
-   * 为准（提案不落库，服务端无处可读）。免费送金额锁 0（0 元送没有可议的价）。
+   * 金额只读、取卖家设定的挂价（#676）：改价权归卖家，弹层只展示，没有输入口；
+   * 免费送恒 0（0 元送没有可议的价）。服务端同样强制 `amountCents === priceCents`。
    */
   const openBuy = () => {
     if (buyRequested || buyBusy || buyInFlightRef.current !== null) return
@@ -1039,10 +1032,8 @@ export default function ListingDetail() {
       void Taro.showToast({ title: '请先登录后再购买', icon: 'none' })
       return
     }
-    // 详情没就位（骨架屏 / 失败态）不弹层：金额初值拿不到真值，发出去的提案没有依据
+    // 详情没就位（骨架屏 / 失败态）不弹层：金额取不到真值，发出去的提案没有依据
     if (listing === undefined) return
-    setBuyAmount(initialAmountValue(listing.priceCents, listing.free))
-    setBuyAmountError(null)
     setBuySubmitError(null)
     setBuyOpen(true)
   }
@@ -1054,7 +1045,10 @@ export default function ListingDetail() {
   }
 
   /**
-   * 弹层「发起交易确认」：本地校验金额 → 两步写。
+   * 弹层「发起交易确认」：金额取挂价 → 两步写。
+   *
+   * 金额没有本地校验分支了（#676 之后没有可改价的输入口，取值只有挂价一条路）；
+   * 它和服务端校验同一口径，端上算错也过不去 `PROPOSAL_AMOUNT_MISMATCH`。
    *
    * 在飞锁与令牌口径同 `chatWithSeller`（另一把锁）：两步 `await` 的每个边界都先问
    * `isTaskLive`，等待期间换号 / 卸载后，A 的迟到响应不许写进 B 的页面、更不许压出
@@ -1063,13 +1057,7 @@ export default function ListingDetail() {
    */
   const confirmBuy = () => {
     if (buyBusy || buyInFlightRef.current !== null || listing === undefined) return
-    const fieldError = proposalAmountError(buyAmount, listing.free)
-    if (fieldError !== null) {
-      setBuyAmountError(fieldError)
-      return
-    }
-    const cents = proposalAmountCents(buyAmount, listing.free)
-    if (cents === null) return
+    const cents = proposalAmountCents(listing.priceCents, listing.free)
     actionSeqRef.current += 1
     const task = beginActionTask(
       epochRef.current,
@@ -1086,7 +1074,6 @@ export default function ListingDetail() {
     // 不 await：授权被拒或失败都不影响这次「我想要」，后续状态变化照样进站内通知。
     void requestSubscribe(['TX'])
     setBuyBusy(true)
-    setBuyAmountError(null)
     setBuySubmitError(null)
     void (async () => {
       // 两步失败的文案不同源（PC 同款分档）：进到第二步才换映射器
@@ -2087,7 +2074,7 @@ export default function ListingDetail() {
         </>
       ) : null}
 
-      {/* ------- 「立即购买」确认弹层（对齐 PC buy-dialog：商品摘要 + 可改金额 + 注释） ------- */}
+      {/* ------- 「立即购买」确认弹层（#676：商品摘要 + **只读**金额 —— 改价权归卖家） ------- */}
       {buyOpen ? (
         <>
           <View className="detail__scrim" onClick={dismissBuy} />
@@ -2104,27 +2091,14 @@ export default function ListingDetail() {
                 {listing?.free ? ' · 免费送，金额固定为 0' : ''}
               </Text>
             </View>
-            <View
-              className={`detail__buy-field${(listing?.free ?? false) || buyBusy ? ' is-off' : ''}`}
-            >
+            <View className="detail__buy-field">
               <Text className="detail__buy-label">交易金额（元）</Text>
-              <Input
-                className="detail__buy-input"
-                disabled={(listing?.free ?? false) || buyBusy}
-                type="digit"
-                value={buyAmount}
-                onInput={(event) => {
-                  setBuyAmount(event.detail.value)
-                  setBuyAmountError(null)
-                }}
-              />
-              {buyAmountError !== null ? (
-                <Text className="detail__buy-err">{buyAmountError}</Text>
-              ) : (
-                <Text className="detail__buy-hint">
-                  不填挂价也可以改：这就是和卖家商定的成交价，卖家接受时以此为准。
-                </Text>
-              )}
+              <Text className="detail__buy-value">
+                {proposalAmountText(listing?.priceCents ?? 0, listing?.free ?? false)}
+              </Text>
+              <Text className="detail__buy-hint">
+                由卖家设定，不可修改；卖家同意后按此金额成交。
+              </Text>
             </View>
             {buySubmitError !== null ? (
               <View className="detail__dlg-tip">

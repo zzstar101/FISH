@@ -347,6 +347,17 @@ describe('proposeTransaction', () => {
     }
   })
 
+  test('marks a stale asking price as needing a refresh', () => {
+    // #676：买家侧金额只读、恒取挂价，撞上 PROPOSAL_AMOUNT_MISMATCH 只有一个原因 ——
+    // 弹层里那份挂价已经旧了（卖家刚改过价），必须重取详情再确认。
+    expect(
+      describeProposeFailure(new ApiError('PROPOSAL_AMOUNT_MISMATCH', 422, '金额必须等于挂价')),
+    ).toEqual({
+      message: '卖家已更新挂价，请按最新挂价重新确认',
+      refresh: true,
+    })
+  })
+
   test('marks a listing that is no longer active as needing a refresh', () => {
     // 商品被他人拍下是状态漂移：文案之外还必须让页面重新取详情，否则过期页留在原地。
     expect(describeProposeFailure(new ApiError('LISTING_NOT_ACTIVE', 409, '已预定'))).toEqual({

@@ -265,8 +265,9 @@ export async function fetchTransactionReviews(id: string): Promise<TransactionRe
  * 消息（与 `rejectProposal` 同形状）。商品在提案阶段仍是 `ACTIVE` —— 提案**不是商品状态**：
  * 只有卖家接受（`acceptTransaction`）才创建交易行并把商品置 `RESERVED`。
  *
- * `amountCents` 是买家在弹层里填的成交价（默认带挂价、可改）；提案不落库、服务端无处可读，
- * 卖家接受时以**卖家重传的值**为准（契约 `transactionAcceptInputSchema` 注释同源）。
+ * `amountCents` **必须等于该商品的挂价**（#676：改价权归卖家，免费送恒 0）；服务端拿
+ * `listings.price_cents` 比对，不等即 `422 PROPOSAL_AMOUNT_MISMATCH` 拒绝。提案本身不落金额，
+ * 卖家接受时仍以请求体重传的值为准（契约 `transactionAcceptInputSchema` 注释同源）。
  * 服务端允许重复提案（不会为同一会话产生两笔有效交易，只是会话里多一条提案）；
  * 小程序详情页的 `buyRequested` 只是**本页内存标记**（不落库），重进页面即复位、
  * 可再次发起——所以确认一次后进「待店家确认」终态只是**页面跳转后的自然结果**，
@@ -288,13 +289,17 @@ export async function proposeTransaction(
 /**
  * 发起交易确认失败的展示文案（口径与 PC 站 `describeProposeFailure` 一致）。
  *
- * `LISTING_NOT_ACTIVE` 标 `refresh: true`：商品被他人拍下或已下架是**状态漂移**，
- * 页面必须重新取详情，而不是把过期页面留在原地。
+ * 两种**状态漂移**都标 `refresh: true`，页面必须重新取详情，而不是把过期页面留在原地：
+ * `LISTING_NOT_ACTIVE`（被他人拍下或已下架）与 `PROPOSAL_AMOUNT_MISMATCH`
+ * （#676：服务端强制提案金额等于挂价，卖家改过价就会撞上 —— 弹层里展示的挂价已经旧了）。
  */
 export function describeProposeFailure(error: unknown): { message: string; refresh: boolean } {
   if (isApiError(error)) {
     if (error.code === 'LISTING_NOT_ACTIVE') {
       return { message: '商品已不在售，可能已被他人拍下', refresh: true }
+    }
+    if (error.code === 'PROPOSAL_AMOUNT_MISMATCH') {
+      return { message: '卖家已更新挂价，请按最新挂价重新确认', refresh: true }
     }
     if (error.code === 'NOT_CONVERSATION_BUYER') {
       return { message: '只有买家可以发起交易确认', refresh: false }

@@ -174,15 +174,20 @@ async function userIdOf(studentNo: string): Promise<string> {
   return row.id
 }
 
+/**
+ * #676：提案金额必须等于挂价，所以每个场景的商品挂价要跟该场景提案的金额一致 ——
+ * 直接作为参数传进来，避免「种子价」与「提案价」两处各改一半。
+ */
 async function insertListing(
   sellerId: string,
   id = '01990000-0000-7000-8000-0000000000b1',
+  priceCents = 15000,
 ): Promise<string> {
   const listingNo = await reserveTestListingNo(db, id)
   const row = rows(
     await db.execute(sql`
       INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
-      VALUES (${id}, ${listingNo}, ${sellerId}, 'K380 键盘', '验收用商品', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
+      VALUES (${id}, ${listingNo}, ${sellerId}, 'K380 键盘', '验收用商品', ${priceCents}, 'DIGITAL', 'GOOD', 'ACTIVE')
       RETURNING id
     `),
   )[0] as { id: string }
@@ -741,6 +746,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const secondListingId = await insertListing(
       await userIdOf(SELLER_NO),
       '01990000-0000-7000-8000-0000000000b2',
+      9000,
     )
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
@@ -787,6 +793,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const thirdListingId = await insertListing(
       await userIdOf(SELLER_NO),
       '01990000-0000-7000-8000-0000000000b5',
+      12000,
     )
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
@@ -933,6 +940,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const fourthListingId = await insertListing(
       await userIdOf(SELLER_NO),
       '01990000-0000-7000-8000-0000000000b6',
+      8000,
     )
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
@@ -1026,6 +1034,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const fifthListingId = await insertListing(
       await userIdOf(SELLER_NO),
       '01990000-0000-7000-8000-0000000000b7',
+      5000,
     )
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
@@ -1100,6 +1109,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const caseListingId = await insertListing(
       await userIdOf(SELLER_NO),
       '01990000-0000-7000-8000-0000000000b9',
+      6000,
     )
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
@@ -1165,6 +1175,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const rejectedListingId = await insertListing(
       await userIdOf(SELLER_NO),
       '01990000-0000-7000-8000-0000000000b3',
+      12000,
     )
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
@@ -1211,6 +1222,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const raceListingId = await insertListing(
       await userIdOf(SELLER_NO),
       '01990000-0000-7000-8000-0000000000b4',
+      8000,
     )
 
     // 两个不同买家对同一 ACTIVE 商品各建会话并提案

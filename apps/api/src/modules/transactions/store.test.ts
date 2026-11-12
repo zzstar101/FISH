@@ -117,6 +117,10 @@ describe('transactions store (integration)', () => {
   test('double confirm completes the transaction and sells the listing atomically', async () => {
     const brief = await store.findConversation(conversationB, buyer1)
     if (brief.kind !== 'ok') throw new Error('unreachable')
+    // #676：提案金额与挂价的比对就靠这一列。别名拼错或驱动返回字符串，会让
+    // `amountCents !== listingPriceCents` 恒真 ⇒ 线上所有提案恒 422，而内存 store 的
+    // 单测仍全绿 —— 所以这条 SQL 读路径必须用真库钉住（listingB 挂价 16000）。
+    expect(brief.brief.listingPriceCents).toBe(16000)
     const accepted = await store.accept(brief.brief, 9000, acceptSystemContent)
     if (accepted.kind !== 'created') throw new Error('unreachable')
     const txId = accepted.row.id

@@ -7,15 +7,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@fish/ui/dialog'
-import { Field, FieldError, FieldLabel } from '@fish/ui/field'
-import { Input } from '@fish/ui/input'
 import { useNavigate } from '@tanstack/react-router'
 import { HandCoins } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { formatPrice } from '../../lib/format'
 import { describeCreateConversationFailure, describeProposeFailure } from '../chat/api'
 import { useCreateConversation, useProposeTransaction } from '../chat/queries'
-import { initialAmountValue, proposalAmountCents, proposalAmountError } from './propose-model'
+import { proposalAmountCents } from './propose-model'
 
 type BuyDialogProps = {
   listingId: string
@@ -52,8 +50,6 @@ export function BuyDialog({
   const navigate = useNavigate()
   const createConversation = useCreateConversation()
   const propose = useProposeTransaction(ownerId)
-  const [amount, setAmount] = useState(() => initialAmountValue(priceCents, free))
-  const [amountError, setAmountError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const ownerRef = useRef(ownerId)
   ownerRef.current = ownerId
@@ -69,16 +65,9 @@ export function BuyDialog({
   async function submit() {
     if (inFlightRef.current) return
 
-    const fieldError = proposalAmountError(amount, free)
-    if (fieldError !== null) {
-      setAmountError(fieldError)
-      return
-    }
-    const cents = proposalAmountCents(amount, free)
-    if (cents === null) return
+    const cents = proposalAmountCents(priceCents, free)
 
     inFlightRef.current = true
-    setAmountError(null)
     setSubmitError(null)
     const requestedBy = ownerId
 
@@ -120,11 +109,7 @@ export function BuyDialog({
     <Dialog
       onOpenChange={(next) => {
         if (submitting) return
-        if (!next) {
-          setSubmitError(null)
-          setAmountError(null)
-          setAmount(initialAmountValue(priceCents, free))
-        }
+        if (!next) setSubmitError(null)
         onOpenChange(next)
       }}
       open={open}
@@ -147,26 +132,17 @@ export function BuyDialog({
             </span>
           </p>
 
-          <Field data-invalid={amountError !== null}>
-            <FieldLabel htmlFor="propose-amount">交易金额</FieldLabel>
-            <Input
-              aria-invalid={amountError !== null}
-              disabled={free || submitting}
-              id="propose-amount"
-              inputMode="decimal"
-              onChange={(event) => {
-                setAmount(event.target.value)
-                setAmountError(null)
-              }}
-              value={amount}
-            />
-            {amountError !== null ? <FieldError>{amountError}</FieldError> : null}
-            {amountError === null ? (
-              <p className="text-ink-3 text-xs">
-                不填挂价也可以改：这就是和卖家商定的成交价，卖家接受时以此为准。
-              </p>
-            ) : null}
-          </Field>
+          <div>
+            <p className="text-ink-3 text-xs">交易金额</p>
+            {/* #676：金额只读（改价权归卖家），展示的是挂价本身；服务端同样强制
+                `amountCents === listing.priceCents`，不等即 422 PROPOSAL_AMOUNT_MISMATCH。 */}
+            <p className="mt-1 rounded-xl bg-surface-2 px-4 py-3 font-medium">
+              {formatPrice(proposalAmountCents(priceCents, free))}
+            </p>
+            <p className="mt-1 text-ink-3 text-xs">
+              由卖家设定，不可修改；卖家同意后按此金额成交。
+            </p>
+          </div>
 
           {submitError !== null ? (
             <p className="rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn" role="status">

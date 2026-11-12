@@ -144,8 +144,6 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
       faved: false,
       buyRequested: false,
       buyOpen: false,
-      buyAmount: '',
-      buyAmountError: null,
       buySubmitError: null,
       buyBusy: false,
       offlineConfirmOpen: false,
@@ -162,8 +160,6 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     p.faved = true
     p.buyRequested = true
     p.buyOpen = true
-    p.buyAmount = '99.99'
-    p.buyAmountError = '请填写正确金额（最多两位小数）'
     p.buySubmitError = '发起交易确认失败，请重试'
     p.buyBusy = true
 
@@ -174,8 +170,6 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(p.faved).toBe(false)
     expect(p.buyRequested).toBe(false)
     expect(p.buyOpen).toBe(false)
-    expect(p.buyAmount).toBe('')
-    expect(p.buyAmountError).toBeNull()
     expect(p.buySubmitError).toBeNull()
     expect(p.buyBusy).toBe(false)
   })
@@ -923,6 +917,9 @@ describe('详情页接线（#170 判据 C/D）', () => {
     )
     expect(block).toContain('setComments([])')
     expect(block).toContain('setCommentsCursor(null)')
+    // 商品真没了，购买弹层也要一起收（#676 审查）：留着会让摘要写出「¥0.00」，
+    // 而确认钮因 `listing === undefined` 静默 return —— 用户点了没反应
+    expect(inner("if (result.status === 'notFound') {", '}')(block)).toContain('setBuyOpen(false)')
     const guard = 'if (!isLatestLoad(seq, loadSeqRef.current)) return'
     expect(block.split(guard).length - 1).toBe(2)
     expectBefore(block, guard, 'setData(result.view)')
@@ -1086,6 +1083,18 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     expect(dialog).not.toContain('onClick={() => setBuyOpen(false)}')
   })
 
+  test('立即购买：金额是只读展示，弹层里没有可编辑输入口（#676）', async () => {
+    /*
+      改价权归卖家：弹层只展示挂价（`proposalAmountText`），买家侧不许再出现输入框。
+      用源码文本断言是因为它守的是「结构上不存在输入口」—— 纯函数测试覆盖不到 JSX；
+      回归时若有人把 `<Input` 加回金额那一格，金额就又能被改了。
+    */
+    const dialog = await pageSlice('{buyOpen ? (', '<BackTop show={showTop}')
+    expect(dialog).not.toContain('<Input')
+    expect(dialog).toContain('detail__buy-value')
+    expect(dialog).toContain('由卖家设定，不可修改')
+  })
+
   test('立即购买：商品已不在售时走静默 refresh（不能用 load 把详情清空）', async () => {
     const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
     const catchBlock = inner('} catch (error) {', '} finally {')(block)
@@ -1134,8 +1143,6 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     const switchOnly = block.slice(start, end)
     for (const setter of [
       'setBuyOpen(cleared.buyOpen)',
-      'setBuyAmount(cleared.buyAmount)',
-      'setBuyAmountError(cleared.buyAmountError)',
       'setBuySubmitError(cleared.buySubmitError)',
       'setBuyBusy(cleared.buyBusy)',
     ]) {
