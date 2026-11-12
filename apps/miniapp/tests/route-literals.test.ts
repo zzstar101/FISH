@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 
 /**
@@ -486,6 +486,17 @@ describe('路由字面量守卫（分包后）', () => {
       }
     }
     expect(missing).toEqual([])
+  })
+
+  test('tabBar.list 的页面不设 handleWebviewPreload: manual（#662 保留框架默认预热）', () => {
+    const tabPages = [...configSource.matchAll(/pagePath: '(pages\/[^']+)'/g)].map((m) => m[1])
+    expect(tabPages.length).toBeGreaterThanOrEqual(4)
+    const offenders = tabPages.filter((page) =>
+      readFileSync(path.join(miniappRoot.pathname, 'src', `${page}.config.ts`), 'utf8').includes(
+        'handleWebviewPreload',
+      ),
+    )
+    expect(offenders).toEqual([])
   })
 
   test('磁盘上的每个页面目录都在 app.config.ts 声明（孤儿页面目录会在这里失败）', () => {
