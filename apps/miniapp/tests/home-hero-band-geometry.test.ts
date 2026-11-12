@@ -17,15 +17,53 @@ import { describe, expect, test } from 'bun:test'
  * 而静态检查（含类型检查）一条都不会响。
  *
  * 本仓 `tests/` 没有 Taro 组件渲染基建，只能读源码钉住结构（先例
- * `tests/back-top-scroll-source.test.ts`）。
+ * `tests/back-top-scroll-source.test.ts`）。注意断言必须做**配平扫描**而不是比较
+ * `indexOf` 先后关系：「闭合标签提前」这种改法能让先后顺序照样成立，却把金刚区丢到容器外面。
  */
 
 const homePage = new URL('../src/pages/home/index.tsx', import.meta.url)
 const homeStyle = new URL('../src/pages/home/index.scss', import.meta.url)
 
-/** 去掉注释后的源码：注释里正解释着「原来的色块是绝对定位」，拿原文做反面断言会误判 */
+/**
+ * 去掉注释后的源码：注释里正解释着「原来的色块是绝对定位」，拿原文做反面断言会误判。
+ * 按引号状态机走，不认识的 `//` 一律当注释结尾 —— 但要放过 `url(http://…)` 这类
+ * 「冒号后面的 `//`」，否则会把同一行的真代码一起截掉，反面断言就成了假阳。
+ */
 function code(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  let out = ''
+  let i = 0
+  while (i < source.length) {
+    const ch = source[i] ?? ''
+    if (ch === '"' || ch === "'" || ch === '`') {
+      out += ch
+      i += 1
+      while (i < source.length) {
+        const inner = source[i] ?? ''
+        out += inner
+        i += 1
+        if (inner === '\\') {
+          out += source[i] ?? ''
+          i += 1
+          continue
+        }
+        if (inner === ch) break
+      }
+      continue
+    }
+    if (ch === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2)
+      i = end === -1 ? source.length : end + 2
+      continue
+    }
+    if (ch === '/' && source[i + 1] === '/' && source[i - 1] !== ':') {
+      const end = source.indexOf('\n', i)
+      i = end === -1 ? source.length : end
+      continue
+    }
+    out += ch
+    i += 1
+  }
+  return out
 }
 
 async function pageCode(): Promise<string> {
@@ -36,13 +74,61 @@ async function styleCode(): Promise<string> {
   return code(await Bun.file(homeStyle).text())
 }
 
-/** 取某个 scss 规则块（`selector {` 到其后第一个 `}`）的内容 */
+/** 取某个 scss 规则块的**完整**内容：按 `{` / `}` 配平，嵌套规则一并返回 */
 function ruleBlock(style: string, selector: string): string {
-  const start = style.indexOf(`${selector} {`)
-  expect(start, `缺少样式块：${selector}`).toBeGreaterThanOrEqual(0)
-  const end = style.indexOf('}', start)
-  expect(end, `样式块未闭合：${selector}`).toBeGreaterThan(start)
-  return style.slice(start + selector.length, end)
+  const open = style.indexOf(`${selector} {`)
+  expect(open, `缺少样式块：${selector}`).toBeGreaterThanOrEqual(0)
+  const start = style.indexOf('{', open)
+  let depth = 0
+  for (let i = start; i < style.length; i += 1) {
+    if (style[i] === '{') depth += 1
+    else if (style[i] === '}') {
+      depth -= 1
+      if (depth === 0) return style.slice(start + 1, i)
+    }
+  }
+  throw new Error(`样式块未闭合：${selector}`)
+}
+
+/**
+ * 取 JSX 容器（`<View className="…">…</View>`）包住的源码：按标签开闭配平，
+ * 自闭合标签（`<Image />` 之类）不参与配对。用先后顺序断言是拦不住
+ * 「闭合标签提前」的回归的，必须真的算出容器的边界。
+ */
+/** JSX 标签的 `>` 结尾位置：跳过属性里的字符串与 `{…}` 表达式（`onClick={() => …}` 里就有 `>`） */
+function tagEndFrom(page: string, from: number): number {
+  let braces = 0
+  let quote = ''
+  for (let i = from; i < page.length; i += 1) {
+    const ch = page[i] ?? ''
+    if (quote) {
+      if (ch === '\\') i += 1
+      else if (ch === quote) quote = ''
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') quote = ch
+    else if (ch === '{') braces += 1
+    else if (ch === '}') braces -= 1
+    else if (ch === '>' && braces === 0) return i
+  }
+  return -1
+}
+
+function containerBody(page: string, marker: string): string {
+  const anchor = page.indexOf(marker)
+  expect(anchor, `缺少容器：${marker}`).toBeGreaterThanOrEqual(0)
+  const openAt = page.lastIndexOf('<', anchor)
+  const tag = /<\/?[A-Za-z][\w.]*/g
+  tag.lastIndex = openAt
+  let depth = 0
+  for (let match = tag.exec(page); match; match = tag.exec(page)) {
+    const tagEnd = tagEndFrom(page, match.index + match[0].length)
+    if (tagEnd === -1) break
+    if (page[tagEnd - 1] === '/') continue
+    depth += match[0].startsWith('</') ? -1 : 1
+    if (depth === 0) return page.slice(openAt, match.index)
+  }
+  throw new Error(`容器未闭合：${marker}`)
 }
 
 describe('首页页头色块（#682）', () => {
@@ -71,19 +157,17 @@ describe('首页页头色块（#682）', () => {
     expect(page).not.toContain('home__empty')
   })
 
-  test('色块容器确实包住了顶栏占位块与金刚区', async () => {
+  test('色块容器确实包住了顶栏占位块与金刚区，且不含吸顶分类条', async () => {
     const page = await pageCode()
-    const head = page.indexOf('className="home__head"')
-    const topbar = page.indexOf('<TopBar')
-    const cats = page.indexOf('className="home__cats-wrap"')
-    // 金刚区之后的第一条分类导航是 `fixed` 的吸顶条，它必须在色块容器之外
-    const catnav = page.indexOf('className={`home__catnav')
-    expect(head, '缺少 .home__head 容器').toBeGreaterThanOrEqual(0)
-    expect(topbar, '缺少 <TopBar>').toBeGreaterThan(head)
-    expect(cats, '缺少金刚区 .home__cats-wrap').toBeGreaterThan(topbar)
-    expect(catnav, '缺少吸顶分类条 .home__catnav').toBeGreaterThan(cats)
+    const body = containerBody(page, 'className="home__head"')
     // 顶栏是 `fixed`，色块这一层高度只能靠它自己的等高占位块撑起来
-    expect(page.slice(topbar, cats)).toContain('spacer')
+    expect(body).toContain('<TopBar')
+    expect(body).toContain('spacer')
+    expect(body).toContain('className="home__cats-wrap"')
+    // 吸顶分类条是 `fixed`、且要盖在色块之上，它必须在容器之外
+    expect(body).not.toContain('home__catnav')
+    // 商品瀑布流同理：色块高度不该被列表内容反推
+    expect(body).not.toContain('home__grid')
   })
 
   test('缺省页走共享 EmptyState，两处语义的文案不变', async () => {
