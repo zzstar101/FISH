@@ -70,7 +70,8 @@
   white-space: nowrap;
 
   &.is-on {
-    background: var(--ink);
+    /* #658：顶部 tab 高光改蓝（原 var(--ink) 黑底） */
+    background: var(--brand-deep);
     color: #fff;
   }
 }
