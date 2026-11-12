@@ -78,9 +78,12 @@ type ProductCardProps = {
   /** 点开之前的钩子：首页推荐流用它记「这张卡被点开过」（快速划过的判定要求「未点开」） */
   onOpen?: () => void
   /**
-   * 页面按本机隐藏名单判定的「这件已经不想看了」。卡片自己也记一份（长按那一刻 + 进页兜底），
-   * 但**跨页**这件事只有页面做得到：在详情页隐藏了 B、返回首页时首页那份名单已经变了，
-   * 卡片只靠自己 mount 时读一次的话，B 会一直留在首页。页面把判定传下来，卡片就地不渲染。
+   * 页面按本机隐藏名单判定的「这件已经不想看了」。**传了（哪怕是 `false`）= 页面托管**：
+   * 页面在 mount / `useDidShow` / 隐藏回调三处维护这份名单，恒新鲜，卡片直接信它，
+   * 不再在 mount 时各自同步读一遍存储（#595：一屏几十张卡就是几十次同 key 读取）。
+   * **不传 = 没有页面级名单的调用方**（如识图结果页），卡片 mount 时自己读一次兜底。
+   * 跨页同步只有页面做得到：在详情页隐藏了 B、返回首页时页面那份名单已经变了，
+   * 卡片只靠自己 mount 时读一次的话，B 会一直留在首页。
    */
   hidden?: boolean
   /**
@@ -97,7 +100,7 @@ export default function ProductCard({
   imageHeight,
   attribution = null,
   onOpen,
-  hidden = false,
+  hidden,
   onDislike,
 }: ProductCardProps) {
   const verified = seller?.authStatus === 'VERIFIED'
@@ -106,10 +109,13 @@ export default function ProductCard({
   /**
    * 长按「不感兴趣」那一刻自己记下的隐藏态；`hidden` 那份来自页面，两处任一为真就整张不渲染。
    *
-   * 为什么两处都要：页面那份管跨页同步（详情页隐藏的、回到首页也要消失），这一份管
-   * 「没有页面级名单的调用方」与「长按当场」——进页时的兜底也读它，所以两者都不算多余。
+   * 初始值只在**没有页面托管**（`hidden === undefined`）时才读一次存储兜底；页面传了
+   * `hidden`（含 `false`）就信页面的名单，初始为 `false`、mount 不碰存储 —— 否则一屏几十张卡
+   * 会在各自 mount 时把同一份隐藏名单同步读几十遍（#595）。长按当场仍靠 `setOwnHidden` 摘卡。
    */
-  const [ownHidden, setOwnHidden] = useState(() => readHiddenListingIds().includes(listing.id))
+  const [ownHidden, setOwnHidden] = useState(() =>
+    hidden === undefined ? readHiddenListingIds().includes(listing.id) : false,
+  )
 
   /**
    * 这张卡的收藏态。
@@ -298,7 +304,7 @@ export default function ProductCard({
         */}
         {seller ? (
           <View className="pcard__seller" onClick={handleOpenSeller}>
-            <UserAvatar className="pcard__avatar" src={seller.avatarUrl} />
+            <UserAvatar className="pcard__avatar" src={seller.avatarUrl} lazyLoad />
             <Text className="pcard__who">{seller.nickname}</Text>
             {/* 认证徽章（#563）：与商品详情卖家行同一张「认证」3D 徽章，不再用旧的多边形勾 */}
             {verified ? (

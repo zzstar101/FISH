@@ -4,6 +4,7 @@ import Taro, {
   useLoad,
   usePageScroll,
   usePullDownRefresh,
+  useReachBottom,
   useReady,
   useShareAppMessage,
   useUnload,
@@ -32,6 +33,7 @@ import { onSessionChanged } from '@/lib/session'
 import { useTabTransition } from '@/lib/use-tab-transition'
 import type { ListingCategory, MockListing } from '@/mock/types'
 import { applyLoadResult, homeListState } from './list-state'
+import { INITIAL_MOUNT_COUNT, mountPrefix, nextMountCount } from './mount-batch'
 import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
 import './index.scss'
 
@@ -66,6 +68,13 @@ export default function Home() {
     imageUrl: BRAND.share,
   }))
   const [items, setItems] = useState<MockListing[]>([])
+  /**
+   * 分批挂载（#595）：已挂载的**可见卡目标数**。`items` 始终保存整批 feed，
+   * 渲染只取前缀（见 `mountPrefix`），滚动触底时按批上调，全部结果都能滚到。
+   * 换新的一批数据（切分类 / 进页 / 身份重置）时回到初始批量；同分类下拉刷新保留，
+   * 免得用户滚到深处一刷新就被拽回第一屏。
+   */
+  const [mountedCount, setMountedCount] = useState(INITIAL_MOUNT_COUNT)
   /**
    * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过，或上一次加载失败已作废）。
    *
@@ -158,8 +167,18 @@ export default function Home() {
   const feedContextRef = useRef(feedContext)
   feedContextRef.current = feedContext
 
+  /**
+   * 实际挂载的那一段（#595）。曝光观察器只认 observe 时刻已存在的节点，
+   * 所以观察与渲染都吃这份前缀：每挂一批，观察器跟着重建一次，新卡才收得到曝光。
+   * `useMemo` 保住引用稳定 —— 滚动触发的重渲染不该反复重建观察器。
+   */
+  const mountedItems = useMemo(
+    () => mountPrefix(items, hiddenIds, mountedCount),
+    [items, hiddenIds, mountedCount],
+  )
+
   /** 曝光 / 快速划过的判定（观察器、计时、去重都在里面） */
-  const impressions = useFeedImpressions({ items, contextRef: feedContextRef })
+  const impressions = useFeedImpressions({ items: mountedItems, contextRef: feedContextRef })
 
   /** 从推荐流上屏的卡片才有归因；分类列表与退 mock 都是 `null`（详情页照样发 DETAIL_VIEW，只是不带） */
   const attributionOf = (listingId: string): FeedAttribution | null => {
@@ -219,6 +238,9 @@ export default function Home() {
     if (visible.length === 0) return false
     lastGoodRef.current = { items: visible, loadedFor: scope }
     setItems(visible)
+    // 快照是新的一屏：回到初始批量（#595）。随后网络成功若保留这一屏（held），
+    // `load` 里的 sameScreen 会认下它、不再重置，已滚出来的批量得以延续。
+    setMountedCount(INITIAL_MOUNT_COUNT)
     setLoadedFor(scope)
     setFailed(false)
     setStaleAfterFailure(false)
@@ -278,6 +300,14 @@ export default function Home() {
     const hidden = new Set(readHiddenListingIds())
     const visible = result.items.filter((item) => !hidden.has(item.id))
     /*
+      这一屏是不是「原地换数据」（#595）：同一个分类、屏幕上已经有货。
+      是 → 保留已挂出的批量（同分类下拉刷新 / 快照被网络结果接替 / 失败留住旧列表），
+      用户滚到深处刷新不该被拽回第一屏；不是（切分类 / 首次进页 / 失败清屏后）→ 回初始批量。
+      必须在 `lastGoodRef` 被下面覆盖**之前**读，读的就是此刻的屏幕事实。
+    */
+    const sameScreen =
+      lastGoodRef.current.loadedFor === next && lastGoodRef.current.items.length > 0
+    /*
       三件套一次结转（纯函数，`./list-state.ts`）。`loadedFor` 的口径：
       成功 → 置为 `next`；失败 → 看屏幕上有没有**同一分类**的旧数据：
         · 有 → 留着（`previous`），`loadedFor` 保持 `next`、`failed` 压成 false →
@@ -312,6 +342,8 @@ export default function Home() {
     // 恒等于屏幕事实（含「失败清屏」这一种），见 `lastGoodRef` 的注释
     lastGoodRef.current = { items: applied.items, loadedFor: applied.loadedFor }
     setItems(applied.items)
+    // 换了一屏才回初始批量；原地换数据保留已挂出的部分（#595，判据见 sameScreen）
+    if (!sameScreen) setMountedCount(INITIAL_MOUNT_COUNT)
     setFailed(applied.failed)
     setStaleAfterFailure(held)
     setLoadedFor(applied.loadedFor)
@@ -385,6 +417,12 @@ export default function Home() {
     lastGoodRef.current = { items: [], loadedFor: null }
     setFeedContext({ requestId: null, positions: new Map() })
     setItems([])
+    /*
+      批量（#595）：在顶部就收回首屏批量；已经滚在深处则**保留** —— 下面
+      `identityScrollHeight` 正撑着原滚动位置，只挂 10 张的话新列表比原来短，
+      位置会被夹到第 10 张末尾（改前全量挂载不会有这个塌缩）。
+    */
+    if (scrollTopRef.current <= 0) setMountedCount(INITIAL_MOUNT_COUNT)
     setLoadedFor(null)
     void load(categoryRef.current)
   }
@@ -426,6 +464,13 @@ export default function Home() {
     */
     const next = readHiddenListingIds()
     const known = hiddenIdsRef.current
+    /*
+      名单没变就别写 state（#595）：`readHiddenListingIds()` 每次都返回新数组，无条件
+      `setHiddenIds` 会让 `mountedItems` 换引用 → 曝光观察器 disconnect 重建、整屏卡重渲染。
+      回到本页（`navigateBack`、切 Tab）频率很高，这份开销不值得。
+    */
+    const unchanged = next.length === known.length && next.every((id, index) => id === known[index])
+    if (unchanged) return
     for (const id of next) {
       if (!known.includes(id)) impressions.settleListing(id, 'dismissed')
     }
@@ -435,6 +480,12 @@ export default function Home() {
   // 下拉刷新重拉**当前分类**：在「教材书籍」里下拉刷新却跳回「推荐」，
   // 等于把用户刚选好的分类弄丢了。
   usePullDownRefresh(() => {
+    /*
+      下拉刷新只可能在**顶部**触发（微信的手势约束），所以这里没有「用户在深处」这回事：
+      把已挂出的批量收回首屏，正是 #595 要的首屏开销。要保留批量的场景是「再点当前分类
+      重试」——那条走 `load()` 的 sameScreen，不经过这里。
+    */
+    setMountedCount(INITIAL_MOUNT_COUNT)
     void load(category).then((outcome) => {
       Taro.stopPullDownRefresh()
       /*
@@ -446,7 +497,7 @@ export default function Home() {
     })
   })
 
-  const [left, right] = useMemo(() => splitColumns(items), [items])
+  const [left, right] = useMemo(() => splitColumns(mountedItems), [mountedItems])
 
   /**
    * 屏幕上真能看到的件数：`items` 减去本机隐藏的。
@@ -458,6 +509,20 @@ export default function Home() {
     () => items.filter((item) => !hiddenIds.includes(item.id)).length,
     [items, hiddenIds],
   )
+
+  /*
+    滚动触底再挂一批（#595）：首屏只挂 INITIAL_MOUNT_COUNT 张可见卡，滚到底按批增量，
+    直到整批 feed 全部挂出 —— 首页没有翻页入口，全部结果必须滚动可达。
+
+    总数用 `visibleCount` 而不是 `items.length`：隐藏卡不从 `items` 里删（见上），
+    拿原始条数当上限会让 `count` 永远差着隐藏的那几张，每次触底都白跑一次
+    `setState` → 新数组 → 观察器重建 + 整屏重渲染，而画面毫无变化。
+    只增不减；已全挂时 updater 返回原值，React 直接 bail，不产生多余渲染。
+    Taro 生命周期回调每渲染刷新（fnRef），闭包里的 `visibleCount` 恒为最新。
+  */
+  useReachBottom(() => {
+    setMountedCount((count) => nextMountCount(count, visibleCount))
+  })
 
   /**
    * 商品区渲染形态：error / skeleton / empty / list。
