@@ -267,3 +267,37 @@ describe('读单只取待面交（审查 7）', () => {
     expect(api).toContain('fetchTransactions({ role, status: options.status, cursor })')
   })
 })
+
+describe('关掉浮层要把在飞的提交一起作废（审查：已关闭的请求不许影响重开的浮层）', () => {
+  const read = (path: string) => Bun.file(new URL(path, import.meta.url)).text()
+
+  test('closeTradeCode 换 session 号的同时复位提交锁', async () => {
+    const scan = await read('../src/pkg-vision/pages/scan/index.tsx')
+    const from = scan.indexOf('const closeTradeCode = () => {')
+    const to = scan.indexOf('/** 输码屏「换一笔订单」')
+    expect(from).toBeGreaterThan(-1)
+    expect(to).toBeGreaterThan(from)
+    const body = scan.slice(from, to)
+    // 换号只是让回包不落地；锁是 ref + state，不显式复位就会带着上一次的
+    // 「正在核销…」重新进场，新的提交被一把旧锁挡在门外。
+    expect(body).toContain("'session'")
+    expect(body).toContain('codeLockRef.current = false')
+    expect(body).toContain('setCodeSubmitting(false)')
+  })
+
+  test('提交 / 重试确认的 finally 只在 session 没换号时归位锁', async () => {
+    const scan = await read('../src/pkg-vision/pages/scan/index.tsx')
+    const guard = 'if (codeTicketRef.current.session === started.session) {'
+    // 两处（submitCode 与 retryConfirm）都要有闸门：关掉重开后旧回包的 finally
+    // 若照旧清锁，会把新会话里正在飞的那次提交误判成空闲 → 同一枚码被重复消费。
+    expect(scan.split(guard).length - 1).toBe(2)
+    for (const fn of ['const submitCode = async () => {', 'const retryConfirm = async () => {']) {
+      const start = scan.indexOf(fn)
+      expect(start).toBeGreaterThan(-1)
+      const nextFn = scan.indexOf('\n  const ', start + fn.length)
+      const body = scan.slice(start, nextFn)
+      expect(body).toContain(guard)
+      expect(body).toContain('codeLockRef.current = false')
+    }
+  })
+})

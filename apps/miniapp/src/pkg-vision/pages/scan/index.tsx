@@ -397,7 +397,15 @@ export default function Scan() {
     void loadCodeOrders()
   }
 
-  /** 关浮层：换 session 号作废在飞的读单 / 提交 / 确认，只清本轮的输入与错误 */
+  /**
+   * 关浮层：换 session 号作废在飞的读单 / 提交 / 确认，清掉本轮的输入与错误，
+   * 并把提交锁归位。
+   *
+   * 锁是 `codeLockRef`（同步）+ `codeSubmitting`（渲染），换 session 号不会动它们：飞着的那次
+   * 提交的回包已经判成 `stale-session` 不落地了，如果它同时还是唯一会把这些位置复位的人，
+   * 浮层就会带着上一次的「正在核销…」和锁住的手感重新进场（#674 审查：关掉的请求不该影响
+   * 重开的浮层）。所以**关的那一刻**就复位，旧回包的 `finally` 见 session 已换号便不再插手。
+   */
   const closeTradeCode = () => {
     codeTicketRef.current = nextTicket(
       codeTicketRef.current,
@@ -405,6 +413,8 @@ export default function Scan() {
       authSnapshot().user?.id ?? null,
     )
     codeOpenRef.current = false
+    codeLockRef.current = false
+    setCodeSubmitting(false)
     setCodeOpen(false)
     setCodeDigits('')
     setCodeInputError(null)
@@ -500,8 +510,12 @@ export default function Scan() {
       setCodeError(tradeCodeFailureMessage(failure))
       if (failure.kind === 'terminal') void loadCodeOrders()
     } finally {
-      codeLockRef.current = false
-      setCodeSubmitting(false)
+      // 只归位本会话那次提交的锁：关掉重开 / 换账号都已换号，旧回包不许把新会话的
+      // 「正在核销…」和互斥锁清掉，否则新会话的提交会失去互斥（假干净 → 重复消费同一枚码）
+      if (codeTicketRef.current.session === started.session) {
+        codeLockRef.current = false
+        setCodeSubmitting(false)
+      }
     }
   }
 
@@ -522,8 +536,12 @@ export default function Scan() {
       if (codeReplyHandled(started, false)) return
       applyConfirmFailure(isApiError(error) ? error.code : null)
     } finally {
-      codeLockRef.current = false
-      setCodeSubmitting(false)
+      // 只归位本会话那次提交的锁：关掉重开 / 换账号都已换号，旧回包不许把新会话的
+      // 「正在核销…」和互斥锁清掉，否则新会话的提交会失去互斥（假干净 → 重复消费同一枚码）
+      if (codeTicketRef.current.session === started.session) {
+        codeLockRef.current = false
+        setCodeSubmitting(false)
+      }
     }
   }
 
