@@ -240,7 +240,7 @@ export default function Home() {
    * 返回值 = 这次真的把快照画上去了。`load()` 用它判断「这一屏是快照顶上的」——进页失败时
    * 页面不出错误块（旧数据被 `held` 留住），需要据此补一句旧数据提示。
    */
-  const paintSnapshot = (scope: ListingCategory | 'ALL'): boolean => {
+  const paintSnapshot = (scope: ListingCategory | 'ALL', keepMountCount: boolean): boolean => {
     const snapshot = homeFeedCache.read(scope)
     if (!snapshot) return false
     // 本机隐藏名单优先：快照里可能还留着在别的页面被「不感兴趣」的卡片
@@ -249,9 +249,14 @@ export default function Home() {
     if (visible.length === 0) return false
     lastGoodRef.current = { items: visible, loadedFor: scope }
     setItems(visible)
-    // 快照是新的一屏：回到初始批量（#595）。随后网络成功若保留这一屏（held），
-    // `load` 里的 sameScreen 会认下它、不再重置，已滚出来的批量得以延续。
-    setMountedCount(INITIAL_MOUNT_COUNT)
+    /*
+      快照是新的一屏：回到初始批量（#595）。随后网络成功若保留这一屏（held），
+      `load` 里的 sameScreen 会认下它、不再重置，已滚出来的批量得以延续。
+      唯一的例外是身份重置时人还滚在深处 —— 这一屏是原地重建、不是新进页，
+      批量一缩位置就会被 `identityScrollHeight` 夹回去。这个信号必须由 `load`
+      **传进来**：`keepMountCountRef` 在 `load` 入口已经读一次即清了。
+    */
+    if (!keepMountCount) setMountedCount(INITIAL_MOUNT_COUNT)
     setLoadedFor(scope)
     setFailed(false)
     setStaleAfterFailure(false)
@@ -295,7 +300,9 @@ export default function Home() {
       分类里、切回「推荐」时不画，否则会拿 24 条快照去顶刚拉到的 50 条，列表先缩再涨。
     */
     const paintedSnapshot =
-      next === 'ALL' && lastGoodRef.current.items.length === 0 ? paintSnapshot(next) : false
+      next === 'ALL' && lastGoodRef.current.items.length === 0
+        ? paintSnapshot(next, keepMountCount)
+        : false
     // 「真实接口优先、只有演示构建才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
     const result =

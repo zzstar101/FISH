@@ -108,7 +108,7 @@ describe('换一屏回初始批量，原地换数据保留已挂出的部分', (
     expect(load).toContain('keepMountCountRef.current = false')
   })
 
-  test('快照上屏是全新一屏：回初始批量（重置必须在函数体内）', async () => {
+  test('快照上屏是全新一屏：回初始批量（重置必须在函数体内，且受保留信号守卫）', async () => {
     const source = flat(code(await homeSource()))
     const paints = source.split('const paintSnapshot =')
     expect(paints).toHaveLength(2)
@@ -118,11 +118,22 @@ describe('换一屏回初始批量，原地换数据保留已挂出的部分', (
       所以要比对位置：重置必须落在 `paintSnapshot` 的返回之前。
     */
     const body = paints[1]
-    const reset = body.indexOf('setMountedCount(INITIAL_MOUNT_COUNT)')
+    const reset = body.indexOf('if (!keepMountCount) setMountedCount(INITIAL_MOUNT_COUNT)')
     const end = body.indexOf('return true')
-    expect(reset, '快照上屏必须回初始批量，否则冷启动首屏又挂满整批').toBeGreaterThanOrEqual(0)
+    expect(
+      reset,
+      '快照上屏必须回初始批量（身份重置深滚时除外，所以要受 keepMountCount 形参守卫）',
+    ).toBeGreaterThanOrEqual(0)
     expect(end).toBeGreaterThanOrEqual(0)
     expect(reset).toBeLessThan(end)
+    /*
+      守卫的信号只能由 `load` 传进来：`keepMountCountRef` 在 `load` 入口已读一次即清，
+      快照里再读它恒为 false，那条「深滚保留批量」的承诺在 `ALL` + 有快照时就不成立。
+    */
+    expect(source).toContain(
+      "const paintSnapshot = (scope: ListingCategory | 'ALL', keepMountCount: boolean)",
+    )
+    expect(source).toContain('paintSnapshot(next, keepMountCount)')
   })
 
   test('身份重置是全新一屏：在顶部就回初始批量（深处则保留，免得位置塌缩）', async () => {
