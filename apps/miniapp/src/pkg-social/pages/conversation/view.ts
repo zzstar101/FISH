@@ -1873,6 +1873,34 @@ export function mergeViewportShrink(input: {
  */
 export const KEYBOARD_TAIL_WINDOW_MS = 400
 
+/**
+ * 刚要求打开键盘之后报来的 `0`，是上一次收键盘动画的**迟到回执**（#560 审查）。
+ *
+ * 场景：语音态切回键盘态时，进语音态那一拍已经叫过 `hideKeyboard()`，但平台可能一直没把 `0`
+ * 报上来；切回后新键盘先报正高度，旧动画的 `0` 随后才到。`nextKeyboardInset()` 的 `next <= 0`
+ * 分支是无条件落地 0 的（收键盘必须跟得上），于是输入栏被留在已经可见的键盘下面，直到下一次
+ * 高度事件才纠正 —— 端上就是「切回键盘后输入栏不见了」。
+ *
+ * 判据只用三件事实，不猜方向：①这是一条 `0`；②本页**刚**要求过打开键盘（尾窗内）；③用户仍在
+ * 输入框里（`focused`）。用户真的收了键盘时 `onBlur` 已经把焦点置假，所以那一路照收不误；
+ * 尾窗之外一律照收 —— 这条规则只覆盖「刚打开就收到 0」这个不可能的时序，不是永久忽略。
+ */
+export function isStaleCloseReport(input: {
+  next: number
+  /** 本页最近一次要求打开键盘 / 聚焦的时刻（ms，0 = 没要求过） */
+  openRequestedAt: number
+  /** 用户是否仍在输入框里（`inputFocusedRef`） */
+  focused: boolean
+  now: number
+  tailWindowMs?: number
+}): boolean {
+  const { next, openRequestedAt, focused, now } = input
+  if (next > 0) return false
+  if (!focused) return false
+  if (!(openRequestedAt > 0)) return false
+  return now - openRequestedAt <= (input.tailWindowMs ?? KEYBOARD_TAIL_WINDOW_MS)
+}
+
 /** 键盘高度阶梯的完整状态（`nextKeyboardInset` 的输入与输出同构，逐字段回写即可） */
 export type KeyboardInsetState = {
   /** 已经落地的键盘高度（设备 px，0 = 收起） */

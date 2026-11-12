@@ -93,8 +93,14 @@ import {
   isLatestPresencePoll,
   isNearBottom,
   isPanelDismissTap,
+  isStaleCloseReport,
   isStaleMediaIdentity,
   isStaleMediaTask,
+  /**
+   * 与 `nextKeyboardInset` 内部同一个尾窗（`view.ts`）：页面用它判「这条回执还在本页刚发起的
+   * 那次转换的尾窗里」（晚到的 `0` 见 `isStaleCloseReport()`，晚到的失焦见 `onBlur`）。
+   */
+  KEYBOARD_TAIL_WINDOW_MS,
   keepRecalledMediaTombstones,
   keepRecalledTombstones,
   lastTxAcceptedId,
@@ -343,10 +349,23 @@ export default function Conversation() {
    * 「用户离开输入框」）、`onBlur`、`useDidHide`，以及隐私授权回来直接进语音态的那条旁路
    * （`handleVoiceFailure`，它不经 `collapseKeyboard()`）。
    *
-   * 未在端上确认的一点：语音态里平台是否仍认为输入框「持焦」（`hideKeyboard()` 不 blur）。
-   * 若仍持焦，这一次 false→true 未必换来真正的重聚焦 —— 需真机演示确认（见 PR 的演示序列）。
+   * 语音态里平台是否仍认为输入框「持焦」（`hideKeyboard()` 不 blur）问不到，所以切回时**不赌**
+   * 「一定发生过一次 false→true」：`requestInputFocus()` 先落一拍 false、下一拍再置真 ——
+   * 无论平台之前收到过哪一次，都必然经过一次真实变化（#560 审查）。
    */
   const [inputFocusRequest, setInputFocusRequest] = useState(false)
+  /**
+   * 「本页最近一次要求打开键盘 / 要求聚焦」的时刻（ms，0 = 从没要求过）。
+   *
+   * 小程序没有命令式 focus/blur，平台事件的送达顺序也不保证，两条**晚到的回执**要据此区分：
+   * - 上一次收键盘动画的迟到 `0`（`isStaleCloseReport`）：会把刚落地的新键盘高度抹成 0；
+   * - 进语音态那一拍合成的 `onBlur`：会在用户已经切回键盘态之后撤掉新的聚焦请求。
+   * 判据只用「本页最近一次意图」+ 尾窗（`KEYBOARD_TAIL_WINDOW_MS`）：窗口外的回执一律照收 ——
+   * 用户真的又离开/真的又收了键盘必须跟得上。
+   */
+  const keyboardOpenRequestedAtRef = useRef(0)
+  /** 聚焦请求代次：晚到的 `nextTick` 与失焦回执不许复活或撤掉更新的请求 */
+  const inputFocusSeqRef = useRef(0)
   /**
    * 键盘占据的**设备 px**（0 = 收起），全页唯一的键盘高度真源（#560/#561）：
    * 输入栏的下内边距、消息流还剩多高都从它派生；平台不再按 `adjustPosition` 推页面。
@@ -1937,6 +1956,13 @@ export default function Conversation() {
       // 这一支**故意不恢复焦点**（#560 补）：紧接着要弹 showModal，此刻请求聚焦会把键盘
       // 叫到弹窗后面；授权成功的那一支会直接回到语音态，也不需要键盘。
       setVoiceMode(false)
+      /**
+       * 收键盘走 `collapseKeyboard()`，不是只改 `voiceMode`（#560 审查）：这是一条**晚到**的
+       * 失败 —— 用户可能早已切回键盘态、`inputFocusRequest` 还是 `true`。只改 `voiceMode`
+       * 等于把一条 `true` 的 `focus` 留在那儿，部分机型据此把键盘叫起来，正好压在隐私弹窗
+       * 后面。它同时清掉「用户在输入框里」的意图（哨兵据此不猜 0）并武装活性哨兵兜底。
+       */
+      collapseKeyboard()
       void Taro.showModal({
         title: '需要隐私授权',
         content: failure.message,
@@ -2539,6 +2565,11 @@ export default function Conversation() {
    */
   const resetKeyboardIntent = useCallback(() => {
     inputFocusedRef.current = true
+    /**
+     * 记下「刚要求打开键盘」的时刻（#560 审查）：随后 400ms 内若平台把上一次收键盘动画的
+     * `0` 补报上来，`isStaleCloseReport()` 就能认出它不是这一把键盘的结局（见该函数注释）。
+     */
+    keyboardOpenRequestedAtRef.current = Date.now()
     keyboardClosedAtRef.current = 0
     keyboardClosingRef.current = false
     keyboardClosingFromRef.current = 0
@@ -2578,6 +2609,12 @@ export default function Conversation() {
      * ② 若不收回，面板态 / 语音态下就挂着一条 `true` 的 `focus`，部分机型会据此把键盘又叫回来。
      */
     setInputFocusRequest(false)
+    /**
+     * 收回聚焦请求的同时作废代次并清掉「要求打开键盘」的时刻（#560 审查）：本页主动收起之后，
+     * 之前排进 `Taro.nextTick` 的那一次置真不许再落地，随后的 `0` 也不该再被当成迟到回执。
+     */
+    inputFocusSeqRef.current += 1
+    keyboardOpenRequestedAtRef.current = 0
     // 页面新发起的一次收起：重新给满重新武装的预算（哨兵自己重发时不走这里，见上）
     keyboardSentinelRearmsRef.current = 0
     const from = keyboardHeightRef.current
@@ -2590,6 +2627,30 @@ export default function Conversation() {
     keyboardAboveFromRef.current = 0
     armKeyboardSentinel()
   }, [armKeyboardSentinel])
+
+  /**
+   * 要一次**真的**重聚焦（#560 审查）：先落一拍 false、下一拍再置真。
+   *
+   * `focus` 只在属性变为 true 的那一帧生效，而语音态里平台是否仍认为输入框持焦问不到 ——
+   * 若它本来就是 true（上一次切回置的真还没被平台消费、或 `hideKeyboard()` 根本没 blur），
+   * 再置一次 true 不产生任何变化，键盘不出来，端上就是「切回来键盘还是关着」。
+   * 无条件先置假再置真，让这次请求必然经过一次 false→true，不看平台当前状态。
+   *
+   * 三个防护：① 代次——期间发生了 `collapseKeyboard()` / `onBlur` / 卸载，这次置真作废，
+   * 不许把刚收回的请求复活；② 同一拍内先假后真，靠 `Taro.nextTick` 分隔两帧；
+   * ③ 同时盖下「要求打开键盘」的时刻，供 `isStaleCloseReport()` 认迟到回执。
+   */
+  const requestInputFocus = useCallback(() => {
+    const seq = inputFocusSeqRef.current + 1
+    inputFocusSeqRef.current = seq
+    keyboardOpenRequestedAtRef.current = Date.now()
+    setInputFocusRequest(false)
+    void Taro.nextTick(() => {
+      if (seq !== inputFocusSeqRef.current) return
+      if (!aliveRef.current) return
+      setInputFocusRequest(true)
+    })
+  }, [])
 
   /**
    * 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致）。
@@ -2613,8 +2674,10 @@ export default function Conversation() {
        * 高度也不重锚，输入栏盖在键盘下。
        *
        * 两者与 `setVoiceMode(false)` 同一批提交，只是为了避免「已切回但焦点还没跟上」的中间帧。
+       * 置真走 `requestInputFocus()` 而不是裸 `setInputFocusRequest(true)`：语音态里平台是否仍
+       * 认为输入框持焦问不到，属性已经是 `true` 时再置 `true` 不产生变化、键盘不出来（#560 审查）。
        */
-      setInputFocusRequest(true)
+      requestInputFocus()
       resetKeyboardIntent()
       return
     }
@@ -3343,6 +3406,25 @@ export default function Conversation() {
     // 基础库 < 2.7.0 没有这个 API（`undefined`）：直接调会在挂载时抛 TypeError，整页白屏
     if (typeof Taro.onKeyboardHeightChange !== 'function') return undefined
     const onHeightChange = (res: { height: number }) => {
+      /**
+       * 上一次收键盘动画的**迟到 `0`**（#560 审查）：切回键盘态时，进语音态那一拍叫过的
+       * `hideKeyboard()` 可能一直在路上，新键盘先报正高度、旧的那个 `0` 随后才到。
+       * `nextKeyboardInset` 的 `next <= 0` 分支必须无条件落地 0（用户真收键盘时要跟得上），
+       * 于是这里先把它挡掉 —— 输入栏否则会被留在已经可见的键盘下面，直到下一次高度事件。
+       *
+       * 判据见 `isStaleCloseReport()`：刚要求过打开键盘（尾窗内）+ 用户仍在输入框里。真收键盘
+       * 那一路 `onBlur` 已把焦点置假，照收不误；尾窗之外也照收。
+       */
+      if (
+        isStaleCloseReport({
+          next: res.height,
+          openRequestedAt: keyboardOpenRequestedAtRef.current,
+          focused: inputFocusedRef.current,
+          now: Date.now(),
+        })
+      ) {
+        return
+      }
       const step = nextKeyboardInset({
         prev: keyboardHeightRef.current,
         next: res.height,
@@ -4524,10 +4606,21 @@ export default function Conversation() {
                   resetKeyboardIntent()
                 }}
                 onBlur={() => {
+                  /**
+                   * **晚到的失焦**（#560 审查）：进语音态那一拍平台可能合成一次 blur，等用户已经
+                   * 切回键盘态、本页刚发过聚焦请求，这条回执才到 —— 无条件收回就把新的请求撤掉，
+                   * 端上是「切回键盘后又自己收回去」。判据只用「本页刚要求过聚焦」+ 尾窗：
+                   * 窗口外的失焦一律照收（用户真的离开了输入框必须跟得上）。
+                   */
+                  if (Date.now() - keyboardOpenRequestedAtRef.current <= KEYBOARD_TAIL_WINDOW_MS) {
+                    return
+                  }
                   // 失焦 = 用户离开输入框 → 键盘该走了，哨兵到点可以放心归零（#560 B1）
                   inputFocusedRef.current = false
                   // 聚焦请求必须跟着收回：`focus` 属性不收回 false，下一次切回就没有属性变化、
-                  // 聚焦发不出去（见 `inputFocusRequest`）
+                  // 聚焦发不出去（见 `inputFocusRequest`）。代次一并作废：晚到的 `nextTick` 不许复活
+                  inputFocusSeqRef.current += 1
+                  keyboardOpenRequestedAtRef.current = 0
                   setInputFocusRequest(false)
                 }}
                 onInput={(event) => setInputValue(event.detail.value)}
