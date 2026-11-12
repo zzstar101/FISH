@@ -298,7 +298,10 @@ export function describeSendFailure(error: unknown): string {
  * 商品仍是 `ACTIVE` —— 提案**不是商品状态**（契约注释同源）：只有卖家接受
  * （`POST /transactions`）才创建交易行并把商品置 `RESERVED`。
  *
- * `amountCents` 是议价结果，随提案带上；接受时以卖家重传的值为准（提案不落库，服务端无处可读）。
+ * `amountCents` 必须**等于商品的挂价**（#676：改价权归卖家）：契约 `TransactionErrorCodeSchema`
+ * 里 `PROPOSAL_AMOUNT_MISMATCH` 是 422 —— 服务端在写事务内重读并锁住 listing 比对，不等即拒。
+ * 端上金额是只读展示，`proposalAmountCents(priceCents, free)` 的唯一取值路径，所以正常不会撞上；
+ * 撞上只可能是「弹层里的挂价已经旧了」（卖家刚改过价）。
  */
 export async function proposeTransaction(
   conversationId: string,
@@ -317,11 +320,17 @@ export async function proposeTransaction(
  *
  * `LISTING_NOT_ACTIVE` 标 `refresh: true`：商品被他人拍下或已下架是**状态漂移**，
  * 页面必须重新取详情，而不是把过期页面留在原地。
+ *
+ * `PROPOSAL_AMOUNT_MISMATCH`（#676）同样标 `refresh: true`：金额恒取挂价，撞上它只有一个
+ * 原因 —— 弹层里那份挂价已经旧了，重取详情才能拿到卖家的最新价再确认。
  */
 export function describeProposeFailure(error: unknown): { message: string; refresh: boolean } {
   if (error instanceof ApiError) {
     if (error.code === 'LISTING_NOT_ACTIVE') {
       return { message: '商品已不在售，可能已被他人拍下', refresh: true }
+    }
+    if (error.code === 'PROPOSAL_AMOUNT_MISMATCH') {
+      return { message: '卖家已更新挂价，请按最新挂价重新确认', refresh: true }
     }
     if (error.code === 'NOT_CONVERSATION_BUYER') {
       return { message: '只有买家可以发起交易确认', refresh: false }

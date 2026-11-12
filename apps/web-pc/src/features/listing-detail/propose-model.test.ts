@@ -1,51 +1,25 @@
 import { describe, expect, test } from 'bun:test'
-import { initialAmountValue, proposalAmountCents, proposalAmountError } from './propose-model'
+import { proposalAmountCents } from './propose-model'
 
-describe('initialAmountValue', () => {
-  test('prefills the asking price with two decimals', () => {
-    expect(initialAmountValue(2000, false)).toBe('20.00')
-    expect(initialAmountValue(1999, false)).toBe('19.99')
+/**
+ * 「我想要」确认弹层的金额模型（纯逻辑；本端没有 jsdom，判断类逻辑一律放纯函数里测）。
+ *
+ * 锁 #676 的改价口径时最容易做错的两件事：
+ * 1. **金额来自挂价**：买家侧只读，提案金额就是商品的 `priceCents`，与服务端强制
+ *    `amountCents === priceCents`（422 `PROPOSAL_AMOUNT_MISMATCH`）同一条口径。
+ * 2. **免费送恒 0 分**：0 元送没有可议的价，`free` 位与挂价不一致时也必须提交 0，
+ *    不能让脏数据把「0 元送」提成任意数。
+ */
+describe('propose-model —「我想要」金额模型（#676 买家侧只读）', () => {
+  test('proposalAmountCents：取挂价本身', () => {
+    expect(proposalAmountCents(76000, false)).toBe(76000)
+    expect(proposalAmountCents(1999, false)).toBe(1999)
+    expect(proposalAmountCents(0, false)).toBe(0)
+    expect(proposalAmountCents(10_000_000, false)).toBe(10_000_000)
   })
 
-  test('free listings always start at 0', () => {
-    expect(initialAmountValue(0, true)).toBe('0')
-  })
-})
-
-describe('proposalAmountCents', () => {
-  test('accepts integer and two-decimal amounts', () => {
-    expect(proposalAmountCents('20', false)).toBe(2000)
-    expect(proposalAmountCents('20.5', false)).toBe(2050)
-    expect(proposalAmountCents('0', false)).toBe(0)
-  })
-
-  test('rejects malformed input instead of coercing it', () => {
-    expect(proposalAmountCents('', false)).toBeNull()
-    expect(proposalAmountCents('abc', false)).toBeNull()
-    expect(proposalAmountCents('-1', false)).toBeNull()
-    expect(proposalAmountCents('20.555', false)).toBeNull()
-  })
-
-  test('honours the contract price ceiling', () => {
-    expect(proposalAmountCents('100000', false)).toBe(10_000_000)
-    expect(proposalAmountCents('100000.01', false)).toBeNull()
-  })
-
-  test('free listings are pinned to 0 regardless of the input box', () => {
-    expect(proposalAmountCents('999', true)).toBe(0)
-  })
-})
-
-describe('proposalAmountError', () => {
-  test('reports nothing for a usable amount', () => {
-    expect(proposalAmountError('20', false)).toBeNull()
-  })
-
-  test('free listings cannot produce an amount error — the input is disabled', () => {
-    expect(proposalAmountError('garbage', true)).toBeNull()
-  })
-
-  test('reports the field error for malformed input', () => {
-    expect(proposalAmountError('20.555', false)).toBe('请填写正确金额（最多两位小数）')
+  test('proposalAmountCents：免费送恒 0，与挂价无关', () => {
+    expect(proposalAmountCents(0, true)).toBe(0)
+    expect(proposalAmountCents(4500, true)).toBe(0)
   })
 })

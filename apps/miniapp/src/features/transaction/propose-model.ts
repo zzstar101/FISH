@@ -9,8 +9,8 @@
  * 免费送的商品金额恒 0：契约 §1 的 `free ⟹ priceCents === 0` 由 DB 约束
  * `listings_free_price_cents_zero` 保证，这里仍按 `free` 位收口，不依赖上游数据是否干净。
  *
- * PC 站 `apps/web-pc/src/features/listing-detail/propose-model.ts` **仍是「买家可改价」
- * 的旧口径**（本 Issue 只收小程序端），两端在此已不一致，PC 侧跟进另案。
+ * PC 站同一口径：`apps/web-pc/src/features/listing-detail/propose-model.ts` 也只有
+ * `proposalAmountCents(priceCents, free)`，弹层金额同样只读（两端在 #676 之后一致）。
  *
  * 抽成纯函数与本仓库其余交互一致 —— 判断类逻辑不写在组件里，`bun test` 直接加载本模块。
  */
