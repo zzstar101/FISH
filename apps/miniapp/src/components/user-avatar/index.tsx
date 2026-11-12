@@ -25,9 +25,14 @@ type UserAvatarProps = {
   className?: string
   /** 头像本身就是点击区（进 TA 主页、换头像）时直接透传到容器 */
   onClick?: () => void
+  /**
+   * 懒加载（#595）：只在长列表里的头像（首页商品卡的卖家头像）开启，进入视口附近才发请求。
+   * 不传 = 维持原行为（立即加载），其它调用点不受影响。尺寸 / 占位 / 失败回退都不变。
+   */
+  lazyLoad?: boolean
 }
 
-export default function UserAvatar({ src, className = '', onClick }: UserAvatarProps) {
+export default function UserAvatar({ src, className = '', onClick, lazyLoad }: UserAvatarProps) {
   // 图挂了（外链 404 / 签名过期）也回落默认头像：头像位永远是「一张图」，不留空圈。
   // 记的是「哪张 src 失败过」而不是一个 boolean，这样父级换了新地址能自动重试。
   const [failedSrc, setFailedSrc] = useState('')
@@ -41,6 +46,7 @@ export default function UserAvatar({ src, className = '', onClick }: UserAvatarP
           className="user-av__img"
           src={url}
           mode="aspectFill"
+          lazyLoad={lazyLoad}
           onError={() => setFailedSrc(url)}
         />
       ) : (
