@@ -8,6 +8,7 @@ import {
   countBySegment,
   emptyText,
   emptyTitle,
+  initialSegmentOf,
   lockNote,
   pillClassOf,
   SEGMENTS,
@@ -306,5 +307,20 @@ describe('emptyTitle / emptyText —— 空态说明该段会出现什么', () =
 
   test('已下架的空态说清「可以重新上架」', () => {
     expect(emptyText('off')).toContain('重新上架')
+  })
+})
+
+describe('initialSegmentOf —— 路由参数到初始段（#520）', () => {
+  test('合法段名原样采纳：通知带 ?segment=pending 直落「待确认」', () => {
+    expect(initialSegmentOf('pending')).toBe('pending')
+    expect(initialSegmentOf('sale')).toBe('sale')
+    expect(initialSegmentOf('sold')).toBe('sold')
+  })
+
+  test('缺省 / 未知段名一律回落「在售」，不猜', () => {
+    expect(initialSegmentOf(undefined)).toBe('sale')
+    expect(initialSegmentOf('')).toBe('sale')
+    expect(initialSegmentOf('PENDING')).toBe('sale')
+    expect(initialSegmentOf('../escape')).toBe('sale')
   })
 })

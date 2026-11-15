@@ -82,7 +82,18 @@ function decorateNotification(
                     : '',
       tone:
         item.payload.event === 'ACCEPTED' || item.payload.event === 'COMPLETED' ? 'mint' : 'warn',
-      target: conversationId ? { kind: 'conversation', conversationId } : null,
+      /**
+       * #520：`PROPOSED` 是「等你处理」的入口语义 —— 提案不落表（永远没有 transactionId），
+       * 订阅消息/通知落「我的发布」待确认段：那张卡上买家 / 时间 / 金额与「同意 / 拒绝」都在。
+       * 其余事件是交易行状态的进展，仍落会话（会话页顶部状态条与进度气泡按交易行渲染，
+       * #551 / #613）。
+       */
+      target:
+        item.payload.event === 'PROPOSED'
+          ? { kind: 'mylist', segment: 'pending' }
+          : conversationId
+            ? { kind: 'conversation', conversationId }
+            : null,
     }
   }
   if (item.type === 'MODERATION') {

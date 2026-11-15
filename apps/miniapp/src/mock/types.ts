@@ -455,14 +455,15 @@ export type MockNotification = NotificationDto & {
   description: string
   /**
    * 跳转目标；`null` = 这条通知没有可跳的地方（只标记已读）。
-   * `conversation` = 会话详情（TX 进展都在会话里）、`mylist` = 我的发布（审核结果）、
+   * `conversation` = 会话详情（TX 进展都在会话里）、`mylist` = 我的发布（审核结果；
+   * TX `PROPOSED` 带 `segment: 'pending'` 直落待确认段，#520）、
    * `verify` = 校园认证页（认证结果）、`dispute` = 交易争议详情（#497）。
    */
   target:
     | { kind: 'listing'; listingId: string }
     | { kind: 'wish'; wishId: string }
     | { kind: 'conversation'; conversationId: string }
-    | { kind: 'mylist' }
+    | { kind: 'mylist'; segment?: 'pending' }
     | { kind: 'verify' }
     | { kind: 'dispute'; disputeId: string }
     | null

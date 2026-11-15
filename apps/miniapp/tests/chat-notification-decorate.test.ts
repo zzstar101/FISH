@@ -42,10 +42,23 @@ const [decorate] = decorateNotifications(
 )
 
 describe('decorateNotifications —— 任务一的三类通知', () => {
-  test('TX 的文案随事件变化，跳转目标是会话', () => {
+  test('TX PROPOSED 落「我的发布」待确认段（#520：等你处理的入口语义），文案不变', () => {
     expect(decorate?.description).toBe('买家发起了交易确认，等你接受')
-    expect(decorate?.target).toEqual({ kind: 'conversation', conversationId })
+    expect(decorate?.target).toEqual({ kind: 'mylist', segment: 'pending' })
     expect(decorate?.tone).toBe('warn')
+  })
+
+  test('TX 其余事件（ACCEPTED）仍落会话：交易行进展由会话页状态条渲染', () => {
+    const [accepted] = decorateNotifications(
+      [
+        dto({
+          type: 'TX',
+          payload: { event: 'ACCEPTED', conversationId, listingId, transactionId },
+        }),
+      ],
+      null,
+    )
+    expect(accepted?.target).toEqual({ kind: 'conversation', conversationId })
   })
 
   test('TX 只有 conversationId 缺失时才不给跳转（不拿 listingId 凑）', () => {

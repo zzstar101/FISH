@@ -4,7 +4,7 @@ import type {
   ListingModerationStatus,
 } from '@fish/contracts/listings/schema'
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
+import Taro, { useDidShow, usePageScroll, usePullDownRefresh, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -38,6 +38,7 @@ import {
   countBySegment,
   emptyText,
   emptyTitle,
+  initialSegmentOf,
   lockNote,
   type MyListSegment,
   pillClassOf,
@@ -222,6 +223,11 @@ export default function MyList() {
   const auth = useAuth()
   const userId = auth.user?.id ?? null
   /**
+   * 订阅消息 / 通知的入口参数（#520）：TX `PROPOSED` 带 `?segment=pending` 直落待确认段。
+   * 只在首挂载读一次（useState initializer）；参数缺失或非法回落「在售」（`initialSegmentOf`）。
+   */
+  const router = useRouter<{ segment?: string }>()
+  /**
    * 顶栏栅格（状态栏高 / 内容行高）。**必须来自 `lib/nav-metrics` 的运行时反推**，
    * 不能照抄稿里的固定值：稿的胶囊是画出来的假胶囊，真机上那个位置由微信原生绘制，
    * 每台机器都不同。这些值只用于行内 style（见 JSX）。
@@ -255,7 +261,9 @@ export default function MyList() {
    * 避免连点两次往交接位里塞两份草稿（后一份会覆盖前一份，用户看到的是哪一件就说不准了）。
    */
   const [relistBusy, setRelistBusy] = useState<string | null>(null)
-  const [segment, setSegment] = useState<MyListSegment>('sale')
+  const [segment, setSegment] = useState<MyListSegment>(() =>
+    initialSegmentOf(router.params.segment),
+  )
   const [showTop, setShowTop] = useState(false)
   /**
    * 二次确认弹层：null = 关闭；否则是「对哪一行做哪件事」。
