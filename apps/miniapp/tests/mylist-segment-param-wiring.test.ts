@@ -61,6 +61,10 @@ describe('chat 页：通知分派把 segment 翻译成页面查询参数', () =>
     expect(branch).toContain(squash("item.target.segment === 'pending'"))
     expect(branch).toContain('?segment=pending')
     // 不带段的 mylist 目标（审核结果）仍落到页面默认段，不得强制 pending
-    expect(branch).toContain('constsegment=')
+    expect(branch).toContain('consturl=')
+    // 路由守卫不允许动态拼接模板：两条都得是静态字面量
+    expect(branch).toContain(squash("'/pkg-browse/pages/mylist/index?segment=pending'"))
+    expect(branch).toContain(squash("'/pkg-browse/pages/mylist/index'"))
+    expect(branch).not.toContain('${')
   })
 })
