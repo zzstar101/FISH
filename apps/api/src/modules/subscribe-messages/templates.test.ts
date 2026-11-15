@@ -84,6 +84,8 @@ describe('notificationDeliveryContent', () => {
     expect(content?.data.phrase3).toBe(phrase)
     expect(content?.data.time8).toBe('2026-11-01 10:30')
     expect(content?.data.thing6).toBe('九成新自行车')
+    // 非 PROPOSED 的按钮文案维持「交易详情」
+    expect(content?.data.thing5).toBe('点击查看交易详情')
     // 交易详情优先
     expect(content?.page).toBe(
       'pkg-trade/pages/transaction-meetup/index?id=txn_0199a0000000700080000000000a',
@@ -100,6 +102,8 @@ describe('notificationDeliveryContent', () => {
     expect(content?.kind).toBe('TX')
     expect(content?.data.phrase3).toBe('待接受')
     expect(content?.page).toBe('pkg-browse/pages/mylist/index?segment=pending')
+    // 按钮文案跟落点走，不再说「交易详情」
+    expect(content?.data.thing5).toBe('点击查看待确认申请')
 
     // 待确认段是卖家自己的清单位，不依赖会话 id：脏 payload 缺 conversationId 也照发
     const withoutConversation = notificationDeliveryContent({

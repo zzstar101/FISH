@@ -139,7 +139,11 @@ export function notificationDeliveryContent(input: {
         thing6: thingOr(input.listingTitle, '交易商品'),
         phrase3: truncatePhrase(phrase),
         time8: formatTimeCST(input.createdAt),
-        thing5: '点击查看交易详情',
+        /**
+         * 按钮文案跟落点走（#520）：PROPOSED 落「我的发布」待确认段，再说「交易详情」
+         * 就是把卖家往错误预期上带。DISPUTE 的 payload 没有 `event`，走默认文案。
+         */
+        thing5: input.payload.event === 'PROPOSED' ? '点击查看待确认申请' : '点击查看交易详情',
       },
     }
   }

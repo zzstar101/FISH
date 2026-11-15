@@ -322,7 +322,14 @@ export default function MyList() {
     setPendingBusy(null)
     setLoading(true)
     setFailed(false)
-    setSegment('sale')
+    /**
+     * 只有**真换号**才把分段打回「在售」。登录态水合（null → 有值）不是换号：
+     * 订阅消息 / 通知带来的 `?segment=pending` 初值（#520）不能被这次「伪换号」冲掉
+     * —— 水合前一帧它还是 null，路由初值就会被打回「在售」，落点段丢失。
+     * 旧流程里初值恒为「在售」，这一档清场本来就是 no-op，所以加这个守卫对既有行为零变化；
+     * 登出（seller → null）仍走清场，登出后再登录的 null → user 档分段已是「在售」。
+     */
+    if (prevUserId !== null) setSegment('sale')
     setConfirming(null)
     setSubmit('idle')
     /*

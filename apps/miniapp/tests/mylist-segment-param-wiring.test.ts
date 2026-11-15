@@ -52,6 +52,14 @@ describe('mylist 页：路由参数 → 初始分段', () => {
     // 判据必须来自 ./list 的纯函数，不许页面里各写一份白名单
     expect(page).toContain('initialSegmentOf,')
   })
+
+  test('换号清场只在真换号时打回「在售」（登录态水合的 null → user 不许冲掉路由初值）', async () => {
+    const page = await source('../src/pkg-browse/pages/mylist/index.tsx')
+    // 切换重置块（渲染期账号作用域清场）里的那一句：守卫缺了，auth 水合的
+    // 「伪换号」会把 ?segment=pending 的初值打回「在售」（Sourcery High 实证）。
+    const reset = squash(sliceFrom(page, 'if (prevUserId !== userId) {', 'setConfirming(null)'))
+    expect(reset).toContain(squash("if (prevUserId !== null) setSegment('sale')"))
+  })
 })
 
 describe('chat 页：通知分派把 segment 翻译成页面查询参数', () => {
