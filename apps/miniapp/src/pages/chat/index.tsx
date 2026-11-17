@@ -572,7 +572,13 @@ export default function Chat() {
       return
     }
     if (item.target?.kind === 'mylist') {
-      void Taro.navigateTo({ url: '/pkg-browse/pages/mylist/index' })
+      // #520：TX PROPOSED 带 `segment: 'pending'` 直落「待确认」段；其余（审核结果）不带段，落在「在售」。
+      // 两条都写成静态字面量（query 在后缀上）：路由守卫不允许这里出现动态拼接模板。
+      const url =
+        item.target.segment === 'pending'
+          ? '/pkg-browse/pages/mylist/index?segment=pending'
+          : '/pkg-browse/pages/mylist/index'
+      void Taro.navigateTo({ url })
       return
     }
     if (item.target?.kind === 'verify') {

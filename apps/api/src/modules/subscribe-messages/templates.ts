@@ -117,13 +117,20 @@ export function notificationDeliveryContent(input: {
   if (input.type === 'TX' || input.type === 'DISPUTE') {
     const phrase = orderStatusPhrase(input)
     if (phrase === null) return null
-    // 交易详情优先；没有交易（`PROPOSED` 阶段提案不落表）时退到会话页。
+    /**
+     * `PROPOSED`（提案不落表，永远没有交易行）：落「我的发布」待确认段（#520）——
+     * 那张待确认卡上买家 / 时间 / 金额与「同意 / 拒绝」都在，是申请的清单位；
+     * 会话页的就地处理能力由 #551 / #613 承载（顶部状态条 + 进度气泡），不受影响。
+     * 其余事件交易详情优先；没有交易（同样不落表的 `REJECTED`）时退到会话页。
+     */
     const page =
-      input.transactionId !== null
-        ? `pkg-trade/pages/transaction-meetup/index?id=${encodeURIComponent(input.transactionId)}`
-        : input.conversationId !== null
-          ? `pkg-social/pages/conversation/index?id=${encodeURIComponent(input.conversationId)}`
-          : null
+      input.type === 'TX' && input.payload.event === 'PROPOSED'
+        ? 'pkg-browse/pages/mylist/index?segment=pending'
+        : input.transactionId !== null
+          ? `pkg-trade/pages/transaction-meetup/index?id=${encodeURIComponent(input.transactionId)}`
+          : input.conversationId !== null
+            ? `pkg-social/pages/conversation/index?id=${encodeURIComponent(input.conversationId)}`
+            : null
     if (page === null) return null
     return {
       kind: 'TX',
@@ -132,7 +139,11 @@ export function notificationDeliveryContent(input: {
         thing6: thingOr(input.listingTitle, '交易商品'),
         phrase3: truncatePhrase(phrase),
         time8: formatTimeCST(input.createdAt),
-        thing5: '点击查看交易详情',
+        /**
+         * 按钮文案跟落点走（#520）：PROPOSED 落「我的发布」待确认段，再说「交易详情」
+         * 就是把卖家往错误预期上带。DISPUTE 的 payload 没有 `event`，走默认文案。
+         */
+        thing5: input.payload.event === 'PROPOSED' ? '点击查看待确认申请' : '点击查看交易详情',
       },
     }
   }

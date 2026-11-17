@@ -35,6 +35,17 @@ export const SEGMENTS: { key: MyListSegment; label: string }[] = [
   { key: 'off', label: '已下架' },
 ]
 
+/**
+ * 路由参数 → 初始分段（#520）。
+ *
+ * 「我的发布」目前只有一个带段入口：订阅消息 / 通知的 `?segment=pending`
+ * （TX `PROPOSED` 直落待确认段）。路由参数是**外部输入**：缺省、拼错或将来出现
+ * 未知的段名时一律回落「在售」，不猜 —— 宁可少落一段，不渲染一个不存在的段。
+ */
+export function initialSegmentOf(param: string | undefined): MyListSegment {
+  return SEGMENTS.some((seg) => seg.key === param) ? (param as MyListSegment) : 'sale'
+}
+
 type CardLike = {
   id: string
   status: ListingStatus
