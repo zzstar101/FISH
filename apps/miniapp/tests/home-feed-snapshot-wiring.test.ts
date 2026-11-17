@@ -48,10 +48,10 @@ describe('首页进页快照：源码层接线', () => {
       只有「推荐」有快照：切分类照旧骨架屏（Owner 拍板的口径，别悄悄扩成九个分类）。
       判据是「屏幕上现在什么都没有」而不是「当前分类不是推荐」—— 后者会让切回「推荐」时
       拿 24 条快照顶掉刚拉到的 50 条，列表先缩再涨。
+      第二个实参是「保住已挂出的批量」的信号（#595 身份重置深滚），不影响这里的判据。
     */
-    expect(beforeRoundTrip).toContain(
-      "next === 'ALL' && lastGoodRef.current.items.length === 0 ? paintSnapshot(next) : false",
-    )
+    expect(beforeRoundTrip).toContain("next === 'ALL' && lastGoodRef.current.items.length === 0")
+    expect(beforeRoundTrip).toContain('paintSnapshot(next, keepMountCount)')
     // 进页那条入口仍然只是拉「推荐」
     expect(slice(text, 'useLoad(() => {', '})')).toContain("void load('ALL')")
   })

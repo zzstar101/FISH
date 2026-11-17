@@ -501,10 +501,46 @@ export function usePullDownRefresh(callback: () => void) {
   ref.current = callback
 }
 
-/* 触底加载：预览是固定高度的长文档，没有「触底」事件可发，留桩即可
-   （页面只在用户滚到底时才会用到它，不影响首屏评审）。 */
+/** 与小程序 `onReachBottomDistance` 的默认值一致 */
+const REACH_BOTTOM_DISTANCE = 50
+
+/**
+ * 触底加载（`#595` 起首页靠它把商品卡分批挂出来）。
+ *
+ * 预览里没有小程序的 `onReachBottom` 事件，就用滚动位置近似：滚到距底
+ * `onReachBottomDistance`（默认 50px）以内即算触底。另外**每次渲染后都量一次**——
+ * 内容还比视口短时「已经在底部」，需要继续补下一批，否则固定 1624px 的预览帧里
+ * 永远滚不动、后面的卡再也出不来；补到内容超过视口就不再触发，不会自激。
+ */
+/** 当前是否已滚到距底 `REACH_BOTTOM_DISTANCE` 以内（预览帧优先，其次整页） */
+function nearBottom(): boolean {
+  const frame = document.querySelector('.page-frame')
+  if (frame && frame.scrollHeight > frame.clientHeight) {
+    return frame.scrollTop + frame.clientHeight >= frame.scrollHeight - REACH_BOTTOM_DISTANCE
+  }
+  const doc = document.scrollingElement
+  if (!doc) return false
+  return doc.scrollTop + window.innerHeight >= doc.scrollHeight - REACH_BOTTOM_DISTANCE
+}
+
 export function useReachBottom(callback: () => void) {
-  void callback
+  const latest = useRef(callback)
+  latest.current = callback
+  useEffect(() => {
+    if (nearBottom()) latest.current()
+  })
+  useEffect(() => {
+    const onScroll = () => {
+      if (nearBottom()) latest.current()
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    const frame = document.querySelector('.page-frame')
+    frame?.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      frame?.removeEventListener('scroll', onScroll)
+    }
+  }, [])
 }
 
 export function useLaunch(callback: () => void) {

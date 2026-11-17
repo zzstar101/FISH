@@ -128,7 +128,7 @@ describe('「不感兴趣」的通用几步留在卡片里（三页共用同一�
   })
 
   test('隐藏后整张卡不渲染（页面传下来的判定与卡片自己那份任一为真）', async () => {
-    const source = code(await cardSource())
+    const source = flat(code(await cardSource()))
     expect(source).toContain(HIDDEN_GATE)
     /*
       hooks 必须在条件返回之前：隐藏态与收藏态两个 useState 都要先跑。
@@ -138,11 +138,11 @@ describe('「不感兴趣」的通用几步留在卡片里（三页共用同一�
     const gate = source.indexOf(HIDDEN_GATE)
     expect(gate).toBeGreaterThanOrEqual(0)
     const ownHidden = source.indexOf(
-      'const [ownHidden, setOwnHidden] = useState(() => readHiddenListingIds().includes(listing.id))',
+      'const [ownHidden, setOwnHidden] = useState(() => hidden === undefined ? readHiddenListingIds().includes(listing.id) : false',
     )
     expect(
       ownHidden,
-      '卡片自己那份隐藏态必须是 state（否则长按当场摘不掉卡）',
+      '卡片自己那份隐藏态必须是 state，且只在没有页面托管（hidden === undefined）时才读存储（#595）',
     ).toBeGreaterThanOrEqual(0)
     expect(ownHidden).toBeLessThan(gate)
     const faved = source.indexOf('const [faved, setFaved] = useState(false)')
