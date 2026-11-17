@@ -14,10 +14,22 @@
   padding-bottom: 157px;
 }
 
-.home__hero-bg {
-  @include page-hero(504px, 64px);
-  /* 去渐变（2026-11-06 Owner 指定）：首页这块浅蓝页头保留。`page-hero` 已改成透明背板，这里单独补回底色。 */
+/*
+ * 页头色块（浅蓝）：从屏幕顶铺到金刚区下沿。
+ *
+ * **高度由内容决定，不写死**（#682）：这里原本是一块 `position: absolute`、
+ * 固定 504rpx 高的背板（`@include page-hero(504px, 64px)`）。两个问题都出在「写死」上：
+ * ① 金刚区高度随机型/状态栏变化，色块对不上它；
+ * ② 绝对定位元素绘制在静态流内元素之上 —— 有卡片时 `.pcard` 自己是定位元素、
+ *    顺序在后压住了色块，所以看不出问题；缺省页 `.empty` 是静态块，色块下缘直接
+ *    把「这个分类还没有闲置」截成半行。
+ *
+ * 现在色块挂在包住「顶栏占位块 + 金刚区」的容器上：容器高多少、色块就高多少，
+ * 且它是普通流内元素，永远压不住下面的内容。下缘圆角取自设计稿（64rpx = 32pt）。
+ */
+.home__head {
   background: var(--grad-page);
+  border-radius: 0 0 64px 64px;
 }
 
 /*
@@ -272,6 +284,12 @@
   }
 }
 
+/*
+ * 商品区承载四种状态（骨架屏 / 列表 / 加载失败 / 缺省页）。
+ * 缺省页（分类无货 / 全被标「不感兴趣」）走共享组件 `components/empty-state`，
+ * 与消息、收藏、我的发布、搜索等页面同一套图标 + 标题 + 说明（#682），
+ * 这里不再保留首页自制的 `.home__empty`（两行裸文字、没有图标）。
+ */
 .home__grid {
   padding: 44px 28px 0;
 }
@@ -288,26 +306,6 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
-}
-
-.home__empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 84px 44px 12px;
-  color: var(--muted);
-}
-
-.home__empty-title {
-  font-size: var(--fs-title);
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.home__empty-text {
-  font-size: var(--fs-sm);
-  line-height: 1.6;
 }
 
 /*

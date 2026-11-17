@@ -13,6 +13,7 @@ import { BRAND } from '@/assets/brand'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
+import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import { scanPageUrl } from '@/components/scan-tabs/tabs'
@@ -681,59 +682,66 @@ export default function Home() {
       className="home"
       style={identityScrollHeight === null ? undefined : { minHeight: `${identityScrollHeight}px` }}
     >
-      <View className="home__hero-bg" />
-
       {/*
-        固定顶栏：品牌 logo 在左、搜索胶囊居中。设计稿里这一行是 40pt
-        （= 胶囊上留白 4 × 2 + 胶囊高 32），行高由组件按真机胶囊反推，不写死。
+        页头色块（浅蓝）：高度**由内容决定** —— 顶栏的等高占位块 + 金刚区（分类图标条），
+        不再写死 504rpx（#682：写死时色块下缘切进缺省页，把「这个分类还没有闲置」截成半行；
+        金刚区底部约 175 CSS px，色块却铺到 262 CSS px）。顶栏是 `fixed`、脱离文档流，
+        只靠自己的 `.topbar__spacer` 撑起这一层；金刚区高度随机型/状态栏变化，色块跟着它
+        走才不会压到下面的内容。色块本身不是定位元素，也就压不住静态流内的空态文字。
       */}
-      <TopBar
-        variant="glass"
-        spacer
-        left={
-          <View className="home__logo-wrap">
-            <Image className="home__logo" src={BRAND.lockup} mode="aspectFit" />
-          </View>
-        }
-        center={
-          <View className="home__search" onClick={goSearch}>
-            {/*
-              相机图标是胶囊内的**独立命中区**（#324）：点它进识图，点胶囊其余位置
-              （占位文案 / 右侧放大镜）仍走 `goSearch` 进文字搜索。
-            */}
-            <View className="home__search-cam-hit" onClick={onCameraTap}>
-              <Image className="home__search-cam" src={ICONS.cameraMuted} mode="aspectFit" />
+      <View className="home__head">
+        {/*
+          固定顶栏：品牌 logo 在左、搜索胶囊居中。设计稿里这一行是 40pt
+          （= 胶囊上留白 4 × 2 + 胶囊高 32），行高由组件按真机胶囊反推，不写死。
+        */}
+        <TopBar
+          variant="glass"
+          spacer
+          left={
+            <View className="home__logo-wrap">
+              <Image className="home__logo" src={BRAND.lockup} mode="aspectFit" />
             </View>
-            <Text className="home__search-ph">搜「键盘」「考研教材」</Text>
-            <Image className="home__search-icon" src={ICONS.searchMuted} mode="aspectFit" />
-          </View>
-        }
-      />
-
-      <View className="home__cats-wrap">
-        <ScrollView className="home__cats" scrollX enableFlex>
-          <View className="home__cats-inner">
-            {HOME_CATEGORIES.map((item) => (
-              <View
-                key={item.key}
-                // 选中态跟随真实当前分类（此前硬编码「推荐」恒选中）
-                // `--${key}` 修饰类供端上自动化定位（automator 选择器不支持 :nth-child），
-                // 与消息页 tab 的 `chat__tab--${key}` 同一做法
-                className={`home__cat home__cat--${item.key}${item.key === category ? ' is-on' : ''}`}
-                onClick={() => onCategoryTap(item.key)}
-              >
-                <View className="home__cat-ic">
-                  <Image
-                    className="home__cat-img"
-                    src={HOME_CATEGORY_ICONS[item.key]}
-                    mode="aspectFit"
-                  />
-                </View>
-                <Text className="home__cat-label">{item.label}</Text>
+          }
+          center={
+            <View className="home__search" onClick={goSearch}>
+              {/*
+                相机图标是胶囊内的**独立命中区**（#324）：点它进识图，点胶囊其余位置
+                （占位文案 / 右侧放大镜）仍走 `goSearch` 进文字搜索。
+              */}
+              <View className="home__search-cam-hit" onClick={onCameraTap}>
+                <Image className="home__search-cam" src={ICONS.cameraMuted} mode="aspectFit" />
               </View>
-            ))}
-          </View>
-        </ScrollView>
+              <Text className="home__search-ph">搜「键盘」「考研教材」</Text>
+              <Image className="home__search-icon" src={ICONS.searchMuted} mode="aspectFit" />
+            </View>
+          }
+        />
+
+        <View className="home__cats-wrap">
+          <ScrollView className="home__cats" scrollX enableFlex>
+            <View className="home__cats-inner">
+              {HOME_CATEGORIES.map((item) => (
+                <View
+                  key={item.key}
+                  // 选中态跟随真实当前分类（此前硬编码「推荐」恒选中）
+                  // `--${key}` 修饰类供端上自动化定位（automator 选择器不支持 :nth-child），
+                  // 与消息页 tab 的 `chat__tab--${key}` 同一做法
+                  className={`home__cat home__cat--${item.key}${item.key === category ? ' is-on' : ''}`}
+                  onClick={() => onCategoryTap(item.key)}
+                >
+                  <View className="home__cat-ic">
+                    <Image
+                      className="home__cat-img"
+                      src={HOME_CATEGORY_ICONS[item.key]}
+                      mode="aspectFit"
+                    />
+                  </View>
+                  <Text className="home__cat-label">{item.label}</Text>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
       </View>
 
       {/* 图标条滚出顶栏下沿之后，接管分类导航：纯文字 + 当前项下横杠。
@@ -794,16 +802,14 @@ export default function Home() {
             用户自己把它们逐张标了「不感兴趣」。后者说成「这个分类还没有闲置」是把自己的
             操作结果说成事实缺失（搜索页同款处理见 `pages/search`）。
           */
-          <View className="home__empty">
-            <Text className="home__empty-title">
-              {items.length === 0 ? '这个分类还没有闲置' : '这些商品都不感兴趣了'}
-            </Text>
-            <Text className="home__empty-text">
-              {items.length === 0
+          <EmptyState
+            title={items.length === 0 ? '这个分类还没有闲置' : '这些商品都不感兴趣了'}
+            text={
+              items.length === 0
                 ? '换个分类看看，或到许愿墙发一条心愿'
-                : '这个分类的闲置都被你标过「不感兴趣」，换个分类看看'}
-            </Text>
-          </View>
+                : '这个分类的闲置都被你标过「不感兴趣」，换个分类看看'
+            }
+          />
         ) : (
           <View className="waterfall">
             <View className="waterfall__col">
