@@ -56,8 +56,19 @@ export function notificationAppearance(item: MockNotification): Appearance {
     }
   }
   if (item.type === 'MATCH') return { ...base, icon: 'sparkleBrand' }
-  if (item.type === 'MODERATION' || item.type === 'DISPUTE') {
-    return { ...base, icon: 'shieldCheckBrand', variant: 'attention' }
+  if (item.type === 'MODERATION') {
+    return {
+      ...base,
+      icon: 'shieldCheckBrand',
+      variant: item.payload.outcome === 'APPROVED' ? 'success' : 'attention',
+    }
+  }
+  if (item.type === 'DISPUTE') {
+    return {
+      ...base,
+      icon: 'shieldCheckBrand',
+      variant: item.payload.disputeEvent === 'RESOLVED' ? 'success' : 'attention',
+    }
   }
   return base
 }

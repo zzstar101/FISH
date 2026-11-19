@@ -81,5 +81,21 @@ describe('通知动态流', () => {
     )
     expect(account.title).toBe('校园认证有更新')
     expect(account.variant).toBe('attention')
+
+    const moderationApproved = notificationAppearance(
+      notification('moderation-approved', {
+        type: 'MODERATION',
+        payload: { outcome: 'APPROVED' },
+      }),
+    )
+    expect(moderationApproved.variant).toBe('success')
+
+    const disputeResolved = notificationAppearance(
+      notification('dispute-resolved', {
+        type: 'DISPUTE',
+        payload: { disputeEvent: 'RESOLVED' },
+      }),
+    )
+    expect(disputeResolved.variant).toBe('success')
   })
 })

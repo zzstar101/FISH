@@ -37,6 +37,9 @@ describe('首页轮播', () => {
     )
 
     expect(swiper).toContain('current={bannerIndex}')
+    expect(swiper).toContain(
+      'autoplay={canAutoPlayBanner(bannerPageVisible, bannerInView, bannerManuallyChanged)}',
+    )
     expect(swiper).toContain('onChange={({ detail }) => {')
     expect(swiper).toContain('setBannerIndex(detail.current)')
     expect(swiper).toContain("if (detail.source === 'touch') setBannerManuallyChanged(true)")
