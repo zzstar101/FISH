@@ -89,7 +89,7 @@ const FROZEN_LITERALS: Record<string, Record<string, number>> = {
   'custom-tab-bar/index.scss': { '20px': 1 },
   'pages/chat/index.scss': { '29px': 1, '24px': 1, '20px': 2, '19px': 1 },
   'pages/home/index.scss': { '24px': 1 },
-  'pages/profile/index.scss': { '40px': 2, '24px': 1, '22px': 1 },
+  'pages/profile/index.scss': { '24px': 1 },
   'pages/sell/index.scss': {
     '40px': 1,
     '38px': 1,
