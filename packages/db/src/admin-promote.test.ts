@@ -35,6 +35,9 @@ const RACE_B_NO = '202101000907'
 const PHONE_TARGET_NO = '202101000908'
 const ID_TARGET_NO = '202101000909'
 const PHONE_TARGET_PHONE = '13700000001'
+const EDGE_PHONE = '11012345678'
+const EDGE_PHONE_NO = '202101000910'
+const DELETED_NO = '202101000911'
 
 const ids = {
   admin: newId(),
@@ -46,6 +49,8 @@ const ids = {
   raceB: newId(),
   phoneTarget: newId(),
   idTarget: newId(),
+  edgePhone: newId(),
+  deleted: newId(),
 }
 
 /**
@@ -92,6 +97,20 @@ beforeAll(async () => {
       nickname: '手机号目标',
     },
     { id: ids.idTarget, studentNo: ID_TARGET_NO, passwordHash: 'x', nickname: 'ID 目标' },
+    {
+      id: ids.edgePhone,
+      studentNo: EDGE_PHONE_NO,
+      phone: EDGE_PHONE,
+      passwordHash: 'x',
+      nickname: '1xx 号段目标',
+    },
+    {
+      id: ids.deleted,
+      studentNo: DELETED_NO,
+      passwordHash: 'x',
+      nickname: '已注销',
+      accountStatus: 'DELETED',
+    },
   ])
 })
 
@@ -164,6 +183,35 @@ test('按用户 ID 提升，--actor 也接受用户 ID', async () => {
     .where(eq(adminAuditLogs.targetId, ids.idTarget))
   expect(logs).toHaveLength(1)
   expect(logs[0]?.actorUserId).toBe(ids.admin)
+})
+
+test('按手机号提升与绑定端判据一致（1 开头 11 位号也按手机号识别）', async () => {
+  // 绑定端 apps/api/src/modules/auth/router.ts 只校验 /^1\d{10}$/，10/11/12 开头
+  // 的 11 位号也会落库；db:promote 若收口到 1[3-9] 会把这类号码误当学号。
+  const result = await promote([EDGE_PHONE, '--actor', ADMIN_NO])
+
+  expect(result.exitCode).toBe(0)
+  expect(await roleOf(EDGE_PHONE_NO)).toBe('ADMIN')
+  const logs = await scratch
+    .select({ actorUserId: adminAuditLogs.actorUserId })
+    .from(adminAuditLogs)
+    .where(eq(adminAuditLogs.targetId, ids.edgePhone))
+  expect(logs).toHaveLength(1)
+  expect(logs[0]?.actorUserId).toBe(ids.admin)
+})
+
+test('已注销（DELETED）账号不能被提升为 ADMIN，且不写审计', async () => {
+  const result = await promote([DELETED_NO, '--actor', ADMIN_NO])
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toContain('DELETED')
+  expect(await roleOf(DELETED_NO)).toBe('USER')
+  expect(
+    await scratch
+      .select({ id: adminAuditLogs.id })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.targetId, ids.deleted)),
+  ).toHaveLength(0)
 })
 
 test('省略 --actor 且系统尚无 ADMIN 时自举成功，审计 actor 为 NULL（system bootstrap）', async () => {

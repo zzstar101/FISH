@@ -30,7 +30,7 @@
  * （只写脱敏快照，这里 before/after 仅含 role）。
  */
 import { and, eq, ne, sql } from 'drizzle-orm'
-import { drizzle } from 'drizzle-orm/bun-sql'
+import { createDb, type Db } from './client'
 import { newId } from './ids'
 import { jsonParam } from './json'
 import { adminAuditLogs } from './schema/admin'
@@ -38,6 +38,9 @@ import { users } from './schema/users'
 
 /** 事务内可预期的拒绝（并发失败、门卫拦截）：统一走 stderr + exit 1，不当未捕获异常打印。 */
 class PromoteError extends Error {}
+
+/** 已是 ADMIN 的幂等成功路径：事务回滚，但命令以 0 退出。 */
+class AlreadyAdmin extends Error {}
 
 function usage(code: number): never {
   console.error(
@@ -82,7 +85,7 @@ if (!databaseUrl) {
   process.exit(1)
 }
 
-const db = drizzle(databaseUrl)
+const db = createDb(databaseUrl)
 
 interface Identity {
   kind: 'id' | 'phone' | 'studentNo'
@@ -91,7 +94,22 @@ interface Identity {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const PHONE_RE = /^1[3-9]\d{9}$/
+/**
+ * 与绑定端实际落库判据保持一致：apps/api/src/modules/auth/router.ts 只校验
+ * `/^1\d{10}$/`（11 位、以 1 开头），并不收口到 `1[3-9]`。这里若更严，10/11/12
+ * 开头的真实号码会被误当成学号去查。
+ */
+const PHONE_RE = /^1\d{10}$/
+
+type Tx = Parameters<Parameters<Db['transaction']>[0]>[0]
+
+interface PromoteUser {
+  id: string
+  role: string
+  accountStatus: string
+  phone: string | null
+  studentNo: string | null
+}
 
 /**
  * 三种标识形状互不重叠：UUID、11 位手机号，其余按学号处理。不做「手机号查不到就
@@ -104,113 +122,140 @@ function parseIdentity(raw: string): Identity {
   return { kind: 'studentNo', value: raw, label: '学号' }
 }
 
-async function userByIdentity(identity: Identity): Promise<{ id: string; role: string } | null> {
+async function userByIdentity(tx: Tx, identity: Identity): Promise<PromoteUser | null> {
   const where =
     identity.kind === 'id'
       ? eq(users.id, identity.value)
       : identity.kind === 'phone'
         ? eq(users.phone, identity.value)
         : eq(users.studentNo, identity.value)
-  const rows = await db.select({ id: users.id, role: users.role }).from(users).where(where).limit(1)
+  const rows = await tx
+    .select({
+      id: users.id,
+      role: users.role,
+      accountStatus: users.accountStatus,
+      phone: users.phone,
+      studentNo: users.studentNo,
+    })
+    .from(users)
+    .where(where)
+    .limit(1)
   return rows[0] ?? null
 }
 
+/** 行锁之后重新核对标识仍指向同一行：防止解析与加锁之间号码/学号被改绑。 */
+function matchesIdentity(user: PromoteUser, identity: Identity): boolean {
+  if (identity.kind === 'id') return user.id === identity.value
+  if (identity.kind === 'phone') return user.phone === identity.value
+  return user.studentNo === identity.value
+}
+
 const targetIdentity = parseIdentity(target)
-const targetUser = await userByIdentity(targetIdentity)
-if (!targetUser) {
-  console.error(`[db:promote] ${targetIdentity.label}不存在：${target}`)
-  process.exit(1)
-}
-
-if (targetUser.role === 'ADMIN') {
-  console.log(`[db:promote] 已是 ADMIN，无需重复提升：${targetIdentity.label} ${target}`)
-  process.exit(0)
-}
-
-// 自举门卫（评审 P1-2）：系统已存在 ADMIN 时，省略 --actor 不再是合法路径，
-// 否则「首次引导」就变成永久可用的旁路。事务内还会以行锁 + 计数重查兑底并发。
-const adminCount = await db
-  .select({ n: sql<number>`count(*)::int` })
-  .from(users)
-  .where(eq(users.role, 'ADMIN'))
-const hasExistingAdmin = (adminCount[0]?.n ?? 0) > 0
-
-let actorId: string | null = null
-if (actor) {
-  const actorIdentity = parseIdentity(actor)
-  const actorUser = await userByIdentity(actorIdentity)
-  if (!actorUser) {
-    console.error(`[db:promote] --actor ${actorIdentity.label}不存在：${actor}`)
-    process.exit(1)
-  }
-  if (actorUser.role !== 'ADMIN') {
-    console.error(
-      hasExistingAdmin
-        ? `[db:promote] --actor 必须是现有 ADMIN：${actor}`
-        : `[db:promote] 系统尚无 ADMIN，首次引导自举请省略 --actor；非自举提升的 --actor 必须是现有 ADMIN：${actor}`,
-    )
-    process.exit(1)
-  }
-  actorId = actorUser.id
-} else if (hasExistingAdmin) {
-  console.error(
-    `[db:promote] 系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 标识>`,
-  )
-  process.exit(1)
-}
+const actorIdentity = actor === null ? null : parseIdentity(actor)
 
 try {
   await db.transaction(async (tx) => {
-    // 首次自举的并发串行化（评审二轮 blocker）：target 行锁只能串行化「同一目标」的
-    // 并发，两个不同目标的并发自举互不冲突，都会在 READ COMMITTED 下看到 count=0、
-    // 各自成功提交 —— 变成两个首号 ADMIN。自举路径改用**事务级 advisory lock**
-    //（全系统共享的固定 key）把所有 bootstrap 事务全局串行化，锁内重查 count 后
-    // 才允许继续；一旦已有 ADMIN，后来者在锁内直接被拒绝。
-    if (actorId === null) {
+    // 自举路径的全局串行化：target 行锁只串行化「同一目标」的并发，两个不同目标的
+    // 并发自举互不冲突，都会在 READ COMMITTED 下看到 count=0、各自成功提交。固定
+    // key 的事务级 advisory lock 把 bootstrap 路径整体串行化，锁内再查 count。
+    if (actorIdentity === null) {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('fish:admin:bootstrap'))`)
     }
 
-    // 行锁串行化同一目标的并发提升；配合下面的条件 UPDATE 防重复 ADMIN_PROMOTED。
+    // 解析 target / actor 都放进事务内：若在事务外解析，手机号在解析与提升之间被
+    // 改绑，会把旧号主提升（或把审计记到过期 actor 上）。解析后还会在行锁下复查。
+    const actorUser = actorIdentity === null ? null : await userByIdentity(tx, actorIdentity)
+    if (actorIdentity !== null && actorUser === null) {
+      throw new PromoteError(`--actor ${actorIdentity.label}不存在：${actor}`)
+    }
+    if (actorUser !== null) {
+      if (actorUser.role !== 'ADMIN') {
+        throw new PromoteError(`--actor 必须是现有 ADMIN：${actor}`)
+      }
+      if (actorUser.accountStatus !== 'ACTIVE') {
+        throw new PromoteError(`--actor 账号状态不是 ACTIVE：${actor}`)
+      }
+    }
+
+    const targetUser = await userByIdentity(tx, targetIdentity)
+    if (targetUser === null) {
+      throw new PromoteError(`${targetIdentity.label}不存在：${target}`)
+    }
+    if (targetUser.role === 'ADMIN') {
+      throw new AlreadyAdmin(`已是 ADMIN，无需重复提升：${targetIdentity.label} ${target}`)
+    }
+    if (targetUser.accountStatus !== 'ACTIVE') {
+      throw new PromoteError(
+        `目标账号状态为 ${targetUser.accountStatus}，只有 ACTIVE 账号才能提升为 ADMIN`,
+      )
+    }
+
+    // 行锁串行化同一目标的并发提升；锁内重查角色/状态，并核对标识未被改绑。
     await tx.execute(sql`select id from users where id = ${targetUser.id} for update`)
+    const [lockedTarget] = await tx
+      .select({
+        id: users.id,
+        role: users.role,
+        accountStatus: users.accountStatus,
+        phone: users.phone,
+        studentNo: users.studentNo,
+      })
+      .from(users)
+      .where(eq(users.id, targetUser.id))
+      .limit(1)
+    if (lockedTarget === undefined || !matchesIdentity(lockedTarget, targetIdentity)) {
+      throw new PromoteError('目标标识在提升前已变更，请重试')
+    }
+    if (lockedTarget.role !== 'USER') {
+      throw new PromoteError('目标用户已被并发提升为 ADMIN')
+    }
+    if (lockedTarget.accountStatus !== 'ACTIVE') {
+      throw new PromoteError(`目标账号状态已变为 ${lockedTarget.accountStatus}，已拒绝提升`)
+    }
 
     // 锁内重查 ADMIN 数量，封死并发窗口（两个并发自举都看到 count=0 的情况）。
     const lockedAdminCount = await tx
       .select({ n: sql<number>`count(*)::int` })
       .from(users)
       .where(ne(users.role, 'USER'))
-    const bootstrap = actorId === null && (lockedAdminCount[0]?.n ?? 0) === 0
-    if (actorId === null && !bootstrap) {
+    const bootstrap = actorUser === null && (lockedAdminCount[0]?.n ?? 0) === 0
+    if (actorUser === null && !bootstrap) {
       throw new PromoteError(
         '系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 标识>',
       )
     }
 
-    // 条件更新：只有仍然是 USER 才提升；并发下另一个事务先提升成功时这里影响 0 行。
+    // 条件更新：只有仍是 ACTIVE 的 USER 才提升；并发下另一个事务先提升成功时这里影响 0 行。
     const updated = await tx
       .update(users)
       .set({ role: 'ADMIN' })
-      .where(and(eq(users.id, targetUser.id), eq(users.role, 'USER')))
+      .where(
+        and(eq(users.id, targetUser.id), eq(users.role, 'USER'), eq(users.accountStatus, 'ACTIVE')),
+      )
       .returning({ id: users.id })
     if (updated.length === 0) {
-      throw new PromoteError('目标用户已被并发提升为 ADMIN')
+      throw new PromoteError('目标用户状态已变更，提升失败')
     }
 
     await tx.insert(adminAuditLogs).values({
       id: newId(),
       // 首次自举没有真实操作者，记 NULL（system bootstrap）；不伪装成被提升者本人。
-      actorUserId: actorId,
+      actorUserId: actorUser?.id ?? null,
       action: 'ADMIN_PROMOTED',
       targetType: 'USER',
       targetId: targetUser.id,
       // 只写脱敏快照（role），不写任何敏感字段。
-      before: jsonParam({ role: targetUser.role }),
+      before: jsonParam({ role: lockedTarget.role }),
       after: jsonParam({ role: 'ADMIN' }),
       reason,
       requestId: `admin-init-${Date.now()}`,
     })
   })
 } catch (error) {
-  // 并发自举 / 并发提升的预期失败：一条简短拒绝信息，不留半截状态（事务已回滚）。
+  if (error instanceof AlreadyAdmin) {
+    console.log(`[db:promote] ${error.message}`)
+    process.exit(0)
+  }
   if (error instanceof PromoteError) {
     console.error(`[db:promote] ${error.message}`)
     process.exit(1)
