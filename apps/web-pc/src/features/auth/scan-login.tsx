@@ -7,6 +7,7 @@ import { Button } from '@fish/ui/button'
 import { Spinner } from '@fish/ui/spinner'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { useQueryClient } from '@tanstack/react-query'
+import { Link2Off, QrCode } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api-client'
 import { FormAlert } from './form'
@@ -47,6 +48,37 @@ function scanFailureMessage(error: unknown, stage: 'create' | 'status' | 'exchan
   }
   if (stage === 'create') return '二维码生成失败，请检查网络后重试'
   return '网络连接失败，请重试'
+}
+
+/**
+ * 过期态沿用登录页的玻璃材质：去掉白色码卡，把已失效的小程序码压暗、边缘淡出，
+ * 直接叠在卡片背景上；不再用表情符号。`qrCodeDataUrl` 为 null（stub 环境）时
+ * 退化成同色系占位徽标。
+ */
+export function ExpiredQrPreview({ qrCodeDataUrl }: { qrCodeDataUrl: string | null }) {
+  if (qrCodeDataUrl === null) {
+    return (
+      <span className="grid size-16 place-items-center rounded-full bg-[#e9f5f8] text-[#1677a1] ring-1 ring-[#cfe6ee]/70">
+        <QrCode aria-hidden="true" className="size-7" strokeWidth={1.5} />
+      </span>
+    )
+  }
+
+  return (
+    <div className="relative size-56">
+      <img
+        alt=""
+        aria-hidden="true"
+        className="size-full object-contain opacity-50 saturate-0 mix-blend-multiply [mask-image:radial-gradient(circle_closest-side_at_center,black_90%,transparent_100%)]"
+        src={qrCodeDataUrl}
+      />
+      <div aria-hidden="true" className="absolute inset-0 grid place-items-center">
+        <span className="rounded-full bg-white/95 px-3 py-1 font-medium text-[#527281] text-xs tracking-wide shadow-[0_2px_10px_rgba(22,119,161,0.08)] ring-1 ring-[#cfe6ee]/70 backdrop-blur-[2px]">
+          已过期
+        </span>
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -274,8 +306,10 @@ export function ScanLoginPanel({
   if (state.phase === 'invalid') {
     return (
       <div className="flex min-h-64 flex-col items-center justify-center gap-3 text-center">
-        <span className="text-4xl">⌛</span>
-        <p className="text-ink-2 text-sm">登录链接已失效，请重新扫码</p>
+        <span className="grid size-16 place-items-center rounded-full bg-[#e9f5f8] text-[#1677a1] ring-1 ring-[#cfe6ee]/70">
+          <Link2Off aria-hidden="true" className="size-7" strokeWidth={1.5} />
+        </span>
+        <p className="text-[#527281] text-sm">登录链接已失效，请重新扫码</p>
         <Button className="w-full" onClick={startCreate} type="button">
           重新获取
         </Button>
@@ -297,8 +331,8 @@ export function ScanLoginPanel({
   if (state.phase === 'expired') {
     return (
       <div className="flex min-h-64 flex-col items-center justify-center gap-3 text-center">
-        <span className="text-4xl">⌛</span>
-        <p className="text-ink-2 text-sm">二维码已过期</p>
+        <ExpiredQrPreview qrCodeDataUrl={state.ticket.qrCodeDataUrl} />
+        <p className="text-[#527281] text-sm">二维码已过期</p>
         <Button className="w-full" onClick={startCreate} type="button">
           重新获取
         </Button>
