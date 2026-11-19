@@ -41,4 +41,15 @@ describe('custom-tab-bar 胶囊样式契约', () => {
     expect(barBlock).toContain('right: 30px')
     expect(barBlock).toContain('padding: 8px 16px 10px')
   })
+
+  /**
+   * #686：胶囊叠在已经过一次 `glass-bar` 模糊的栏体上，再加一层实时背景模糊意味着
+   * 切 Tab 时每次重绘都要对胶囊区域重新采样合成，模拟器与真机上都能感到切页卡顿。
+   * A/B 只去掉这两条声明即恢复流畅，所以胶囊规则块内**不许再出现**实时背景滤镜。
+   */
+  test('.tabbar__capsule 不得带第二层实时背景模糊（#686 切页卡顿）', async () => {
+    const block = ruleBlock(await tabbarStyle(), '.tabbar__capsule {')
+    expect(block).not.toBe('')
+    expect(block).not.toContain('backdrop-filter')
+  })
 })
