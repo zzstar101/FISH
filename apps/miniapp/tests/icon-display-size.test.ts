@@ -52,8 +52,6 @@ const INDIRECT_ICON_IMAGES = [
     why: '设置行配置的 ICONS.*',
   },
   { file: 'pages/chat/index.tsx', className: 'notif__ic-img', why: 'TONE_ICON 映射到 ICONS.*' },
-  { file: 'pages/profile/index.tsx', className: 'profile__row-ic', why: '功能行配置的 ICONS.*' },
-  { file: 'pages/profile/index.tsx', className: 'profile__cell-ic', why: '宫格配置的 ICONS.*' },
 ] as const
 
 /**

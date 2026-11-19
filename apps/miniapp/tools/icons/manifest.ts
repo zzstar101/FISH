@@ -37,13 +37,6 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   'tab-wish': ['muted', 'brand'],
   'tab-message': ['muted', 'brand'],
   'tab-me': ['muted', 'brand'],
-  /* 「我的」交易入口格：在售 / 卖出 / 买入 / 评价 / 举报，与 TabBar 选中态同一画法 */
-  'entry-onsale': ['brand'],
-  'entry-sold': ['brand'],
-  'entry-bought': ['brand'],
-  'entry-review': ['brand'],
-  'entry-report': ['brand'],
-
   /* 导航与操作 */
   back: ['fg'],
   close: ['fg'],
@@ -90,7 +83,7 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   grid: ['fg'],
   crown: ['brand'],
   sparkle: ['brand'],
-  info: ['fg', 'muted'],
+  info: ['fg'],
   warn: ['fg', 'danger'],
   power: ['danger'],
   settings: ['muted'],
