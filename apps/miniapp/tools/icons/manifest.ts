@@ -83,7 +83,7 @@ export const MANIFEST: Record<string, readonly Tone[]> = {
   grid: ['fg'],
   crown: ['brand'],
   sparkle: ['brand'],
-  info: ['fg'],
+  info: ['fg', 'muted'],
   warn: ['fg', 'danger'],
   power: ['danger'],
   settings: ['muted'],

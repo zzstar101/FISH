@@ -43,6 +43,9 @@ import './index.scss'
 /** 瀑布流列宽（设计值 = 2×pt）：750 - 左右各 28 - 列间距 20，再除以 2 */
 const COLUMN_WIDTH = 337
 
+/** `.home__catnav` 的 96rpx 高度在 750 设计宽度下折合的逻辑 px；量不到时兜底 */
+const HOME_CATNAV_FALLBACK_HEIGHT = 48
+
 /** 设计稿的错落比例 → 图片区高度 */
 const RATIO_HEIGHT: Record<MockListing['ratio'], number> = {
   '1x1': COLUMN_WIDTH,
@@ -762,16 +765,25 @@ export default function Home() {
     Taro.createSelectorQuery()
       .select('.home__cats-wrap')
       .boundingClientRect()
+      .select('.home__catnav')
+      .boundingClientRect()
       .exec((res) => {
         const rect = res?.[0] as { top?: number; height?: number } | undefined
+        const catnavRect = res?.[1] as { height?: number } | undefined
+        const catnavHeight =
+          typeof catnavRect?.height === 'number' && catnavRect.height > 0
+            ? catnavRect.height
+            : HOME_CATNAV_FALLBACK_HEIGHT
         // `boundingClientRect` 给的是视口坐标，加上当时的滚动量才是它在页面里的位置
+        // 顺延一条文字导航的高度再亮起：标题先滚过固定条，既不遮挡正文，
+        // 也不需要为了吸顶态在顶部常驻预留 96rpx 空白。
         const measured =
           typeof rect?.top === 'number' && typeof rect?.height === 'number'
-            ? rect.top + scrollTopRef.current + rect.height - navHeight
+            ? rect.top + scrollTopRef.current + rect.height - navHeight + catnavHeight
             : Number.NaN
         // 偶发量不到分类栏时，优先用量到的轮播下沿，而非在轮播中途就显示吸顶条。
         const bannerBottom = bannerExitAt.current
-        const fallback = Number.isFinite(bannerBottom) ? bannerBottom + 140 : 95
+        const fallback = Number.isFinite(bannerBottom) ? bannerBottom + 140 + catnavHeight : 95
         pinAt.current = Number.isFinite(measured) ? Math.max(0, measured) : fallback
       })
   })

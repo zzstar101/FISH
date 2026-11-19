@@ -522,20 +522,20 @@ export default function Profile() {
     {
       key: 'settings',
       title: '设置',
-      icon: PROFILE_PAGE_ICONS.settings,
+      icon: ICONS.settingsMuted,
       url: '/pkg-auth/pages/settings/index',
     },
     {
       key: 'feedback',
       title: '意见反馈',
-      icon: PROFILE_PAGE_ICONS.feedback,
+      icon: ICONS.feedbackMuted,
       url: '/pkg-legal/pages/feedback/index',
     },
-    { key: 'service', title: '联系客服', icon: PROFILE_PAGE_ICONS.service },
+    { key: 'service', title: '联系客服', icon: ICONS.headsetMuted },
     {
       key: 'about',
       title: '关于与版本',
-      icon: PROFILE_PAGE_ICONS.about,
+      icon: ICONS.infoMuted,
       url: '/pkg-legal/pages/about/index',
     },
   ]

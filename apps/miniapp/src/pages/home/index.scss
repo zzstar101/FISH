@@ -380,9 +380,9 @@ $home-catnav-height: 96px;
  * 这里不再保留首页自制的 `.home__empty`（两行裸文字、没有图标）。
  */
 .home__grid {
-  // 分类归位到吸顶阈值时，商品区标题从固定导航下沿开始。
-  // 留白常驻，滚过阈值时商品区的位置不跳。
-  padding: ($home-catnav-height + 6px) 28px 0;
+  // 图标分类条本身留在文档流里，归位时它的下沿已经等于固定导航下沿；
+  // 这里只留普通区块间距，不再重复预留整条导航高度。
+  padding: 24px 28px 0;
 }
 
 .home__feed-title {

@@ -7,13 +7,21 @@
   display: flex;
   flex-direction: column;
   padding-bottom: 157px;
-  background: #f4faff;
+  background: #f7faff;
 }
 
 .profile__hero-bg {
   @include page-hero(500px, 64px);
   overflow: hidden;
-  background: linear-gradient(180deg, #e8f3fc, rgba(244, 250, 255, 0));
+  -webkit-transform: translateZ(0);
+  /* 旧版六层冰蓝→薄荷 mesh：恢复页头层次，白色资料卡继续叠在上面。 */
+  background:
+    radial-gradient(160% 122% at 6% -10%, #6ca0ff 0%, #a8c7ff 36%, rgba(247, 250, 255, 0) 82%),
+    radial-gradient(145% 115% at 97% -6%, #5ec1ff 0%, #acdfff 42%, rgba(247, 250, 255, 0) 86%),
+    radial-gradient(130% 106% at 33% 31%, #8cf2ff 0%, rgba(247, 250, 255, 0) 76%),
+    radial-gradient(140% 112% at 105% 50%, #b0fae9 0%, rgba(247, 250, 255, 0) 80%),
+    linear-gradient(180deg, rgba(247, 250, 255, 0) 68%, #f7faff 100%),
+    linear-gradient(180deg, #91b8ff 0%, #cfe3ff 100%);
 }
 
 /* 降低页头高光强度，保留离页暂停和系统弱动效行为。 */
@@ -378,7 +386,10 @@
 .profile__list {
   display: flex;
   flex-direction: column;
-  gap: 13px;
+  overflow: hidden;
+  border-radius: 32px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 18px 40px -36px rgba(23, 35, 61, 0.32);
 }
 
 .profile__row-item {
@@ -386,11 +397,13 @@
   align-items: center;
   gap: 20px;
   min-height: var(--btn-h-lg);
-  padding: 0 26px;
+  padding: 0 28px;
   box-sizing: border-box;
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  background: var(--surface);
+  background: transparent;
+
+  & + & {
+    border-top: 1px solid rgba(220, 231, 245, 0.72);
+  }
 
   &:active {
     background: var(--accent-weak);
