@@ -175,7 +175,7 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 历史上有 313 处 `font-size` 写字面量 px（25 种取值，主峰 26px×60、24px×48、20px×46、22px×45），
 与令牌并行成了双轨。守门测试用「字面量债务基线」冻结现状 —— 粒度是**文件 → 取值 → 处数**的多重集，
 与实际情况严格相等才算通过：改值（如把 26px 改成 33px）、跨文件挪动、新增都会报红，
-归位一处就同步下调一处。归位按页面分批推进，基线清零后测试转为硬约束。当前：**261 处 / 46 个文件**。
+归位一处就同步下调一处。归位按页面分批推进，基线清零后测试转为硬约束。当前：**259 处 / 46 个文件**。
 
 比 #628 提交时的 297 处少 6 处，**不是本分支顺带归位了新条目**，而是合并最新 `main` 后 #618 统一默认头像：
 `pkg-auth/pages/settings`、`pkg-auth/pages/verify`、`pkg-browse/pages/user`、`pkg-browse/pages/watchers`、
@@ -196,7 +196,7 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 新增的大图预览页码用的是 `var(--fs-sm)`。
 
 通知列表重做将 `pages/chat/index.scss` 的时间 19px 与正文 24px 改用字号令牌，
-`264 处 / 46 个文件` → `262 处 / 46 个文件`。
+与首页 / 「我的」改版合并后，当前为 `259 处 / 46 个文件`。
 
 债务里还留着 17/18/19/25/27/29px 这些**奇数 px**（不是整 pt，例如 `pages/sell/index.scss` 的 27px、
 `components/review-dialog/index.scss` 的 17px、`pkg-auth/pages/account-deletion/index.scss` 的 25px×3）。
