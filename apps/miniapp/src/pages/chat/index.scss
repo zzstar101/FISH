@@ -379,47 +379,165 @@
 
 /* ------------------------------------------------------ 通知列表（「通知」tab 直显） */
 
-/**
- * 原 `pages/notifications` 的列表样式随页面并入这里（页面已删除）。页外壳 / 页头 /
- * 「全部已读」钮不再需要。#431 任务二起未读态回归：未读条目图标右上挂红点
- * （`.notif__dot`，点击条目才消）。
- * 类名保持 `notif__` 前缀：weapp 页面样式按页隔离，与 chat 自身的类不冲突。
- * 尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
- */
+/* 近期动态：未读邀请突出展示，历史记录按日合并成紧凑列表。 */
 .notif__list {
   display: flex;
   flex-direction: column;
+  gap: 28px;
+}
+
+.notif__heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 16px 12px 0;
+}
+
+.notif__heading-title {
+  color: var(--fg);
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+
+.notif__unread {
+  color: var(--brand-deep);
+  font-size: var(--fs-sm);
+
+  &.is-clear {
+    color: var(--muted);
+  }
+}
+
+.notif__featured {
+  position: relative;
+  overflow: hidden;
+  padding: 28px;
+  border: 2px solid var(--surface);
+  border-radius: var(--r-card);
+  background: var(--accent-weak);
+  box-shadow: var(--shadow-soft);
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 6px;
+    background: var(--brand);
+  }
+}
+
+.notif__featured-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.notif__featured-top {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.notif__featured-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 16px;
-  /* 横向留白与顶部间隙由 `.chat__list` 提供，这里不再叠一层 */
+  margin-top: 20px;
+  padding-left: 92px;
+}
+
+.notif__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  border-radius: var(--r-pill);
+  background: var(--brand-deep);
+  color: var(--surface);
+  font-size: var(--fs-body);
+  white-space: nowrap;
+}
+
+.notif__cta-arrow {
+  font-size: var(--fs-title);
+}
+
+.notif__group {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.notif__date {
+  padding-left: 12px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.notif__group-card {
+  overflow: hidden;
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
 }
 
 .notif__item {
   position: relative;
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 24px 16px 24px 20px;
-  border-radius: 36px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-  box-shadow: var(--shadow-card);
+  align-items: center;
+  gap: 16px;
+  min-height: 88px;
+  padding: 20px 24px;
 
-  &:active {
-    border-color: var(--line);
+  & + &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 24px;
+    right: 24px;
+    height: 1px;
+    background: var(--border);
   }
+}
+
+.notif__item--pressed {
+  background: var(--accent-weak);
+}
+
+.notif__featured--pressed {
+  background: var(--accent-faint);
 }
 
 .notif__ic {
   position: relative;
   flex: 0 0 auto;
-  width: 68px;
-  height: 68px;
-  border-radius: 20px;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--grad-icon);
-  border: 2px solid var(--border);
+  background: var(--accent-faint);
+
+  &.is-success {
+    background: var(--ok-weak);
+  }
+
+  &.is-attention {
+    background: var(--warn-weak);
+  }
+}
+
+.notif__featured .notif__ic {
+  background: var(--accent-faint);
 }
 
 .notif__ic-img {
@@ -427,17 +545,17 @@
   height: 40px;
 }
 
-/* 未读红点（#431 任务二）：未读通知挂在图标右上，点击条目即消失（服务端 readAt 权威） */
+/* readAt 仍是未读的唯一来源，点击与回写失败回滚沿用 openNotif。 */
 .notif__dot {
   position: absolute;
-  top: -6px;
-  right: -6px;
+  top: 0;
+  right: 0;
   box-sizing: border-box;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--danger);
-  border: 3px solid var(--bg);
+  border: 3px solid var(--surface);
 }
 
 .notif__body {
@@ -448,28 +566,53 @@
   gap: 6px;
 }
 
-/* 标题独占一行（相对时间放到下面一行），否则 750rpx 宽里标题会被截到只剩四五个字 */
 .notif__body-title {
-  font-size: var(--fs-sm);
-  font-weight: 400;
   color: var(--fg);
-  @include ellipsis;
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: break-word;
 }
 
-/* 时间：等宽小字 */
 .notif__tm {
-  font-size: 19px;
   color: var(--muted);
-  @include ellipsis;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
 }
 
-/* 正文最多 2 行（超出省略号） */
 .notif__text {
   display: block;
-  font-size: 24px;
+  color: var(--muted-2);
+  font-size: var(--fs-sm);
   line-height: 1.5;
-  color: var(--muted);
-  @include clamp(2);
+  overflow-wrap: break-word;
+}
+
+.notif__status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+
+  &.is-success {
+    color: var(--ok-ink);
+    background: var(--ok-weak);
+  }
+
+  &.is-attention {
+    color: var(--warn-ink);
+    background: var(--warn-weak);
+  }
+}
+
+.notif__chevron {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
 }
 
 /* ───────── 搜索栏（#669）：不吸顶，跟列表一起滚走 ───────── */

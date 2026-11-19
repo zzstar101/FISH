@@ -195,6 +195,9 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 `.detail__cmt-me-text`（带走 `pkg-browse/pages/listing-detail/index.scss` 的 24px×1），不新增字面量：
 新增的大图预览页码用的是 `var(--fs-sm)`。
 
+通知列表重做将 `pages/chat/index.scss` 的时间 19px 与正文 24px 改用字号令牌，
+`264 处 / 46 个文件` → `262 处 / 46 个文件`。
+
 债务里还留着 17/18/19/25/27/29px 这些**奇数 px**（不是整 pt，例如 `pages/sell/index.scss` 的 27px、
 `components/review-dialog/index.scss` 的 17px、`pkg-auth/pages/account-deletion/index.scss` 的 25px×3）。
 阶梯全是偶数 px，所以这些处归位时**必然要动像素（允许 ±1px 的视觉微调）**，不算改字号决策；
