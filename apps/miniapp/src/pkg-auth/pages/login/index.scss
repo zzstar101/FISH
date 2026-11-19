@@ -113,7 +113,8 @@
   background: var(--border);
 }
 
-/* 勾上时：品牌色实底 + 白勾（稿子默认就是这个状态） */
+/* 勾上时：品牌色实底 + 白勾。**默认不勾选**（未勾选是灰空框，见 .login__checkbox 的
+   background: var(--border)）—— 微信审核要求同意必须由用户主动作出 */
 .login__agree.is-on .login__checkbox {
   background: var(--brand);
 }
