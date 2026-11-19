@@ -72,8 +72,8 @@ function ExpiredQrPreview({ qrCodeDataUrl }: { qrCodeDataUrl: string | null }) {
         className="size-full object-contain opacity-50 saturate-0 mix-blend-multiply [mask-image:radial-gradient(circle_closest-side_at_center,black_90%,transparent_100%)]"
         src={qrCodeDataUrl}
       />
-      <div className="absolute inset-0 grid place-items-center">
-        <span className="rounded-full bg-white/80 px-3 py-1 font-medium text-[#527281] text-xs tracking-wide shadow-[0_2px_10px_rgba(22,119,161,0.08)] ring-1 ring-[#cfe6ee]/70 backdrop-blur-[2px]">
+      <div aria-hidden="true" className="absolute inset-0 grid place-items-center">
+        <span className="rounded-full bg-white/95 px-3 py-1 font-medium text-[#527281] text-xs tracking-wide shadow-[0_2px_10px_rgba(22,119,161,0.08)] ring-1 ring-[#cfe6ee]/70 backdrop-blur-[2px]">
           已过期
         </span>
       </div>
