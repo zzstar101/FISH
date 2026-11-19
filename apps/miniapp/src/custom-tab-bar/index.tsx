@@ -326,8 +326,9 @@ export default function CustomTabBar() {
   return (
     <View className="tabbar">
       {/*
-        选中胶囊：纯透明液体玻璃高光，位置由 `active`（当前页面路径）直接派生，
-        无有效意图时直接落位；仅装饰层按意图重播，不重建页面或列表。坐标保持显式 rpx。
+        选中胶囊：半透明高光层（#686 起不再带实时背景模糊，原因见 index.scss 该规则块注释），
+        位置由 `active`（当前页面路径）直接派生，无有效意图时直接落位；
+        仅装饰层按意图重播，不重建页面或列表。坐标保持显式 rpx。
         是 .tabbar 的第一个子元素 → 图标/文字（后面的兄弟）天然盖在它上面；
         `pointer-events: none` 让点击穿透到 tab。
       */}
