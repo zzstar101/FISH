@@ -128,10 +128,19 @@ function pngSize(bytes: Uint8Array): { width: number; height: number } {
 }
 
 const BADGE_ASSET = 'assets/badge/verified-badge@3x.png'
-/** 设计稿原图字节的 sha256：换图必须走设计稿重出，不允许随手缩图覆盖 */
-const BADGE_SHA256 = 'f81ba845185f89d17894cadaf2e699e26697493cfa4131d373e9913c8c50b031'
-/** 设计稿徽章画布：2172×724（比例 3），横向成品图，**不是**图标正方形四档 */
-const BADGE_DESIGN = { width: 2172, height: 724 }
+/**
+ * 产物字节的 sha256：产物由 `tools/artwork/build.ts` 从 `tools/artwork/badge-master.png`
+ * 派生，重跑必须字节不变。手改这张 png（而不是改母版重出）会让 CI 的 `artwork` 重跑
+ * 对不上，这里同步转红。
+ */
+const BADGE_SHA256 = 'f655afe6f32022ace04be040e1549224f306fc15b8e0d3747741980330908d6f'
+/**
+ * 产物画布：153×51（比例 3）= 显示 102×34rpx × 1.5，横向成品图，**不是**图标正方形四档。
+ *
+ * 不再是设计稿的 2172×724：那样是 42 倍超采样，单张 1016 KB 会把小程序主包（上限 2MB）
+ * 顶穿。153×51 在 @3x 屏上按 51×17pt 显示正好 1:1，视觉无损。
+ */
+const BADGE_DESIGN = { width: 153, height: 51 }
 
 /**
  * 大徽章的消费点：容器 scss 类名 → 设计尺寸（高度压在昵称字号之下）；新增必须登记。

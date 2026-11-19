@@ -166,7 +166,7 @@ describe('图标契约', () => {
    *
    * 字形现在按 `GLYPH_ZOOM` 放大（显示尺寸四档不变，见 `tools/icons/build.ts`），
    * 所以断言先把 bbox 换算回 1.0 倍口径再比 [48,56]，改 zoom 不用动这条；
-   * 留白下限随之收紧到 2px（实测 +20% 后 2–5px，最小的是 `entry-onsale-brand`）。
+   * 留白下限随之收紧到 2px（实测 +20% 后 3–5px，最紧的是 tab-*-brand 与 tag-muted）。
    */
   test('24pt 网格：字形最长边 48–56px（含 GLYPH_ZOOM 换算）、四周留白 ≥ 2px、最深处不发虚（alpha ≥ 200）', () => {
     for (const icon of icons) {
