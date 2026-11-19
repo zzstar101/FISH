@@ -1,12 +1,14 @@
 /**
  * 受控 Admin 初始化脚本（#73）。
  *
- * 用途：按**显式学号**把一名用户提升为 `ADMIN`，并把提升写入 `admin_audit_logs`。
+ * 用途：按**显式学号 / 手机号 / 用户 ID** 把一名用户提升为 `ADMIN`，并把提升写入
+ * `admin_audit_logs`。`#180` 之后微信注册的用户没有学号，生产只能按手机号或用户 ID 提升。
  *
  * 自举规则（评审 P1 修复）：
  * - 系统**尚无任何 ADMIN** 时才允许省略 `--actor`（首次引导自举），审计 `actor_user_id`
  *   记 `NULL`（system bootstrap，不伪装成任何真实用户）；
- * - 系统已有 ADMIN 后必须显式传 `--actor <学号>`，且执行者必须是现有 ADMIN，否则拒绝；
+ * - 系统已有 ADMIN 后必须显式传 `--actor <学号|手机号|用户 ID>`，且执行者必须是现有
+ *   ADMIN，否则拒绝；
  * - 「计数检查 → 行锁 → 条件更新 → 审计写入」全部在同一个事务里完成，并发自举
  *   也只会成功一个（行锁串行化 + `WHERE role = 'USER'` 条件更新）。
  *
@@ -17,7 +19,8 @@
  * 用法（仓库根目录）：
  * ```bash
  * bun run db:promote -- 202101000001          # 仅限系统尚无 ADMIN 时（首次引导自举）
- * bun run db:promote -- 202101000001 --actor 202012345678 --reason "运营开通"
+ * bun run db:promote -- 13798764006 --actor 202012345678 --reason "运营开通"
+ * bun run db:promote -- 01a19715-23cd-7269-b5c2-f29353dc0ea5 --actor 13700000000
  * ```
  *
  * 提升与审计日志在同**一个数据库事务**里完成：任何一步失败整体回滚，不留
@@ -39,9 +42,9 @@ class PromoteError extends Error {}
 function usage(code: number): never {
   console.error(
     [
-      '用法：bun run db:promote -- <学号> [--actor <学号>] [--reason <原因>]',
-      '  <学号>     被提升为 ADMIN 的学号（必填）',
-      '  --actor    执行提升操作的 Admin 学号；系统已存在 ADMIN 时必填，且必须是现有 ADMIN',
+      '用法：bun run db:promote -- <学号|手机号|用户 ID> [--actor <学号|手机号|用户 ID>] [--reason <原因>]',
+      '  <标识>     被提升为 ADMIN 的用户：学号、11 位手机号或用户 UUID（必填）',
+      '  --actor    执行提升操作的 Admin 的用户标识；系统已存在 ADMIN 时必填，且必须是现有 ADMIN',
       '             （仅系统尚无任何 ADMIN 时可省略，即首次引导自举）',
       '  --reason   审计原因（缺省：“管理后台初始化”）',
     ].join('\n'),
@@ -81,23 +84,46 @@ if (!databaseUrl) {
 
 const db = drizzle(databaseUrl)
 
-async function roleByStudentNo(studentNo: string): Promise<{ id: string; role: string } | null> {
-  const rows = await db
-    .select({ id: users.id, role: users.role })
-    .from(users)
-    .where(eq(users.studentNo, studentNo))
-    .limit(1)
+interface Identity {
+  kind: 'id' | 'phone' | 'studentNo'
+  value: string
+  label: string
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const PHONE_RE = /^1[3-9]\d{9}$/
+
+/**
+ * 三种标识形状互不重叠：UUID、11 位手机号，其余按学号处理。不做「手机号查不到就
+ * 回退学号」的猜测——`#180` 后生产用户没有学号，回退只会把输错手机号的人引到
+ * 另一列上。
+ */
+function parseIdentity(raw: string): Identity {
+  if (UUID_RE.test(raw)) return { kind: 'id', value: raw.toLowerCase(), label: '用户 ID' }
+  if (PHONE_RE.test(raw)) return { kind: 'phone', value: raw, label: '手机号' }
+  return { kind: 'studentNo', value: raw, label: '学号' }
+}
+
+async function userByIdentity(identity: Identity): Promise<{ id: string; role: string } | null> {
+  const where =
+    identity.kind === 'id'
+      ? eq(users.id, identity.value)
+      : identity.kind === 'phone'
+        ? eq(users.phone, identity.value)
+        : eq(users.studentNo, identity.value)
+  const rows = await db.select({ id: users.id, role: users.role }).from(users).where(where).limit(1)
   return rows[0] ?? null
 }
 
-const targetUser = await roleByStudentNo(target)
+const targetIdentity = parseIdentity(target)
+const targetUser = await userByIdentity(targetIdentity)
 if (!targetUser) {
-  console.error(`[db:promote] 学号不存在：${target}`)
+  console.error(`[db:promote] ${targetIdentity.label}不存在：${target}`)
   process.exit(1)
 }
 
 if (targetUser.role === 'ADMIN') {
-  console.log(`[db:promote] 已是 ADMIN，无需重复提升：${target}`)
+  console.log(`[db:promote] 已是 ADMIN，无需重复提升：${targetIdentity.label} ${target}`)
   process.exit(0)
 }
 
@@ -111,9 +137,10 @@ const hasExistingAdmin = (adminCount[0]?.n ?? 0) > 0
 
 let actorId: string | null = null
 if (actor) {
-  const actorUser = await roleByStudentNo(actor)
+  const actorIdentity = parseIdentity(actor)
+  const actorUser = await userByIdentity(actorIdentity)
   if (!actorUser) {
-    console.error(`[db:promote] --actor 学号不存在：${actor}`)
+    console.error(`[db:promote] --actor ${actorIdentity.label}不存在：${actor}`)
     process.exit(1)
   }
   if (actorUser.role !== 'ADMIN') {
@@ -127,7 +154,7 @@ if (actor) {
   actorId = actorUser.id
 } else if (hasExistingAdmin) {
   console.error(
-    `[db:promote] 系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 学号>`,
+    `[db:promote] 系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 标识>`,
   )
   process.exit(1)
 }
@@ -154,7 +181,7 @@ try {
     const bootstrap = actorId === null && (lockedAdminCount[0]?.n ?? 0) === 0
     if (actorId === null && !bootstrap) {
       throw new PromoteError(
-        '系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 学号>',
+        '系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 标识>',
       )
     }
 
@@ -191,4 +218,4 @@ try {
   throw error
 }
 
-console.log(`[db:promote] ok — 已将学号 ${target} 提升为 ADMIN（${reason}）`)
+console.log(`[db:promote] ok — 已将${targetIdentity.label} ${target} 提升为 ADMIN（${reason}）`)

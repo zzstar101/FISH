@@ -170,7 +170,7 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 | `bun run rank:compare`                                          | 推荐排序离线对比脚本（#322 M3：v1 / semantic-only / hybrid 权重组评估，不改生产行为）                                      |
 | `bun run db:up` / `db:down`                                     | 启动 / 停止本地依赖                                                                                                        |
 | `bun run db:generate` / `db:migrate` / `db:studio`              | Drizzle 迁移与调试                                                                                                         |
-| `bun run db:promote`                                            | 受控管理员提升（按显式学号提升为 `ADMIN` 并写审计；#73）                                                                   |
+| `bun run db:promote`                                            | 受控管理员提升（按学号 / 手机号 / 用户 ID 提升为 `ADMIN` 并写审计；#73）                                                   |
 | `bun run db:seed`                                               | 写入演示数据（**会先清空业务表**，仅允许本地数据库）                                                                       |
 
 ### 端口
