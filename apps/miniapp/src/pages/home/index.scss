@@ -2,6 +2,7 @@
 
 $home-head-inset: 20px;
 $home-head-content-width: 750px - 2 * $home-head-inset;
+$home-catnav-height: 96px;
 
 /**
  * 首页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
@@ -163,7 +164,7 @@ $home-head-content-width: 750px - 2 * $home-head-inset;
   align-items: flex-end;
   justify-content: center;
   box-sizing: border-box;
-  width: 56px;
+  width: 88px;
   min-height: 88px;
   pointer-events: auto;
   margin: 0;
@@ -202,11 +203,11 @@ $home-head-content-width: 750px - 2 * $home-head-inset;
 
 // 收拢图形间距，同时给三个按钮各留一块独立的命中区。
 .home__banner-dot-hit:first-child .home__banner-dot {
-  transform: translateX(16px);
+  transform: translateX(30px);
 }
 
 .home__banner-dot-hit:last-child .home__banner-dot {
-  transform: translateX(-16px);
+  transform: translateX(-30px);
 }
 
 /*
@@ -297,6 +298,8 @@ $home-head-content-width: 750px - 2 * $home-head-inset;
  */
 .home__catnav {
   position: fixed;
+  box-sizing: border-box;
+  height: $home-catnav-height;
   left: 0;
   right: 0;
   z-index: 30;
@@ -377,7 +380,9 @@ $home-head-content-width: 750px - 2 * $home-head-inset;
  * 这里不再保留首页自制的 `.home__empty`（两行裸文字、没有图标）。
  */
 .home__grid {
-  padding: 30px 28px 0;
+  // 分类归位到吸顶阈值时，商品区标题从固定导航下沿开始。
+  // 留白常驻，滚过阈值时商品区的位置不跳。
+  padding: ($home-catnav-height + 6px) 28px 0;
 }
 
 .home__feed-title {
