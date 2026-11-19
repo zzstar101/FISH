@@ -55,7 +55,7 @@ function scanFailureMessage(error: unknown, stage: 'create' | 'status' | 'exchan
  * 直接叠在卡片背景上；不再用表情符号。`qrCodeDataUrl` 为 null（stub 环境）时
  * 退化成同色系占位徽标。
  */
-function ExpiredQrPreview({ qrCodeDataUrl }: { qrCodeDataUrl: string | null }) {
+export function ExpiredQrPreview({ qrCodeDataUrl }: { qrCodeDataUrl: string | null }) {
   if (qrCodeDataUrl === null) {
     return (
       <span className="grid size-16 place-items-center rounded-full bg-[#e9f5f8] text-[#1677a1] ring-1 ring-[#cfe6ee]/70">
