@@ -127,19 +127,9 @@ describe('图标契约', () => {
    * brand tone，期望集就跟着一起变大，断言恒绿（等于只验证「渲染 == 声明」这条恒等式，
    * 没验证「哪些字形允许这么画」）。这里写死，新增必须显式登记。
    */
-  const ACCENT_GLYPHS = [
-    'entry-bought',
-    'entry-onsale',
-    'entry-report',
-    'entry-review',
-    'entry-sold',
-    'tab-home',
-    'tab-me',
-    'tab-message',
-    'tab-wish',
-  ] as const
+  const ACCENT_GLYPHS = ['tab-home', 'tab-me', 'tab-message', 'tab-wish'] as const
 
-  test('只有带填充块的字形（TabBar / 「我的」交易入口）在 brand 下出半透明错位填充', () => {
+  test('只有底栏选中字形在 brand 下出半透明错位填充', () => {
     const fillAlpha = Math.round(ACCENT_OPACITY * 255)
     const withFill = icons
       .filter((icon) => {

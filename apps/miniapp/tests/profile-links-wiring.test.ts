@@ -129,7 +129,7 @@ describe('「我的」页：主页钮进自己的公开主页（#578）', () => 
     expect(code).toContain(
       "const openEditProfile = () => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })",
     )
-    expect(code).toContain(
+    expect(code.replace(/\s+/g, ' ')).toContain(
       '<UserAvatar className="profile__avatar" src={user.avatarUrl} onClick={openEditProfile} />',
     )
     expect(code).toContain('<Text className="profile__name" onClick={openEditProfile}>')

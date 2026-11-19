@@ -1,5 +1,6 @@
-import { Image, ScrollView, Text, View } from '@tarojs/components'
+import { Button, Image, ScrollView, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, {
+  useDidHide,
   useDidShow,
   useLoad,
   usePageScroll,
@@ -11,8 +12,8 @@ import Taro, {
 } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
 import { BRAND } from '@/assets/brand'
-import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
+import { HOME_PAGE_ICONS } from '@/assets/page-illustrations/home'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
@@ -33,6 +34,7 @@ import { readNavMetrics } from '@/lib/nav-metrics'
 import { onSessionChanged } from '@/lib/session'
 import { useTabTransition } from '@/lib/use-tab-transition'
 import type { ListingCategory, MockListing } from '@/mock/types'
+import { BANNERS, canAutoPlayBanner } from './banners'
 import { applyLoadResult, homeListState } from './list-state'
 import { INITIAL_MOUNT_COUNT, mountPrefix, nextMountCount } from './mount-batch'
 import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
@@ -644,6 +646,16 @@ export default function Home() {
    * 下面那条固定分类导航要落在它**下方**，所以用同一个来源，而不是写死一个数字。
    */
   const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
+  const [bannerIndex, setBannerIndex] = useState(0)
+  const [bannerPageVisible, setBannerPageVisible] = useState(false)
+  const [bannerInView, setBannerInView] = useState(true)
+  const [bannerManuallyChanged, setBannerManuallyChanged] = useState(false)
+  const bannerExitAt = useRef(Number.POSITIVE_INFINITY)
+  useDidShow(() => {
+    setBannerPageVisible(true)
+    setBannerManuallyChanged(false)
+  })
+  useDidHide(() => setBannerPageVisible(false))
 
   /**
    * 纯文字分类导航（`home__catnav`）的显隐。
@@ -738,6 +750,16 @@ export default function Home() {
 
   useReady(() => {
     Taro.createSelectorQuery()
+      .select('.home__banner-swiper')
+      .boundingClientRect()
+      .exec((res) => {
+        const rect = res?.[0] as { bottom?: number } | undefined
+        if (typeof rect?.bottom !== 'number') return
+        bannerExitAt.current = rect.bottom + scrollTopRef.current - navHeight
+        setBannerInView(scrollTopRef.current < bannerExitAt.current)
+      })
+
+    Taro.createSelectorQuery()
       .select('.home__cats-wrap')
       .boundingClientRect()
       .exec((res) => {
@@ -747,12 +769,10 @@ export default function Home() {
           typeof rect?.top === 'number' && typeof rect?.height === 'number'
             ? rect.top + scrollTopRef.current + rect.height - navHeight
             : Number.NaN
-        /**
-         * 量不到（节点还没上屏）时的兜底。**单位是设备 px** —— 它要和 `usePageScroll`
-         * 给的 `scrollTop` 比，别照设计稿的 rpx 写：rpx 在 750 宽的 H5 预览里 ≈ 1px，
-         * 在 390pt 真机上 ≈ 0.52px。约 95px 是本机（图标条 ≈ 93px 高、距顶栏 4px）的实测位置。
-         */
-        pinAt.current = Number.isFinite(measured) ? Math.max(0, measured) : 95
+        // 偶发量不到分类栏时，优先用量到的轮播下沿，而非在轮播中途就显示吸顶条。
+        const bannerBottom = bannerExitAt.current
+        const fallback = Number.isFinite(bannerBottom) ? bannerBottom + 140 : 95
+        pinAt.current = Number.isFinite(measured) ? Math.max(0, measured) : fallback
       })
   })
 
@@ -760,6 +780,7 @@ export default function Home() {
   const tabContentClass = useTabTransition()
   usePageScroll(({ scrollTop }) => {
     scrollTopRef.current = scrollTop
+    setBannerInView(scrollTop < bannerExitAt.current)
     // 分类归位动画期间吸顶判定锁定在当前值（防阈值边界抖动，见 onCategoryTap）
     const next = navSettleRef.current ? catsPinned : scrollTop >= pinAt.current
     // 滚动事件很密：值没变就把同一个值还回去，React 会跳过这轮渲染
@@ -778,7 +799,7 @@ export default function Home() {
       style={identityScrollHeight === null ? undefined : { minHeight: `${identityScrollHeight}px` }}
     >
       {/*
-        页头色块（浅蓝）：高度**由内容决定** —— 顶栏的等高占位块 + 金刚区（分类图标条），
+        页头色块（浅蓝）：高度**由内容决定** —— 顶栏占位 + 轮播 + 金刚区（分类图标条），
         不再写死 504rpx（#682：写死时色块下缘切进缺省页，把「这个分类还没有闲置」截成半行；
         金刚区底部约 175 CSS px，色块却铺到 262 CSS px）。顶栏是 `fixed`、脱离文档流，
         只靠自己的 `.topbar__spacer` 撑起这一层；金刚区高度随机型/状态栏变化，色块跟着它
@@ -812,6 +833,47 @@ export default function Home() {
           }
         />
 
+        <View className="home__banner">
+          <Swiper
+            className="home__banner-swiper"
+            circular
+            current={bannerIndex}
+            autoplay={canAutoPlayBanner(bannerPageVisible, bannerInView, bannerManuallyChanged)}
+            interval={5000}
+            duration={340}
+            nextMargin="46rpx"
+            onChange={({ detail }) => {
+              setBannerIndex(detail.current)
+              if (detail.source === 'touch') setBannerManuallyChanged(true)
+            }}
+          >
+            {BANNERS.map((banner) => (
+              <SwiperItem key={banner.title} className="home__banner-slide">
+                <Image className="home__banner-image" src={banner.image} mode="aspectFill" />
+                <Text className="home__banner-accessible">{banner.title}</Text>
+              </SwiperItem>
+            ))}
+          </Swiper>
+          <View className="home__banner-dots">
+            {BANNERS.map((banner, index) => (
+              <Button
+                key={banner.title}
+                className="home__banner-dot-hit"
+                hoverClass="none"
+                onClick={() => {
+                  setBannerManuallyChanged(true)
+                  setBannerIndex(index)
+                }}
+              >
+                <Text className="home__banner-accessible">
+                  {`第${index + 1}张：${banner.title}${index === bannerIndex ? '，当前图片' : ''}`}
+                </Text>
+                <View className={`home__banner-dot${index === bannerIndex ? ' is-on' : ''}`} />
+              </Button>
+            ))}
+          </View>
+        </View>
+
         <View className="home__cats-wrap">
           <ScrollView className="home__cats" scrollX enableFlex>
             <View className="home__cats-inner">
@@ -824,10 +886,10 @@ export default function Home() {
                   className={`home__cat home__cat--${item.key}${item.key === category ? ' is-on' : ''}`}
                   onClick={() => onCategoryTap(item.key)}
                 >
-                  <View className="home__cat-ic">
+                  <View className={`home__cat-ic home__cat-ic--${item.key.toLowerCase()}`}>
                     <Image
                       className="home__cat-img"
-                      src={HOME_CATEGORY_ICONS[item.key]}
+                      src={HOME_PAGE_ICONS[item.key]}
                       mode="aspectFit"
                     />
                   </View>
@@ -864,6 +926,11 @@ export default function Home() {
       </View>
 
       <View className={`home__grid ${tabContentClass}`}>
+        <Text className="home__feed-title">
+          {category === 'ALL'
+            ? '附近好物'
+            : HOME_CATEGORIES.find((item) => item.key === category)?.label}
+        </Text>
         {listState === 'error' ? (
           <LoadError onRetry={() => void load(category)} />
         ) : listState === 'skeleton' ? (
