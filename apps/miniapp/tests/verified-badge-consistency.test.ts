@@ -19,7 +19,7 @@ import { MANIFEST } from '../tools/icons/manifest'
  *
  * 大徽章为什么不进 `ICONS`：`ICONS` 是 `tools/icons` 生成的**单色语义图标**（字形 × 语义色，
  * 显示尺寸只走 24/32/40/48 正方形四档，清单外的文件生成时会删掉）。这张是设计稿的多色
- * **横向**成品图（275×108，非正方形），登记进去会被当成新字形重建、或被生成器按清单删除。
+ * **横向**成品图（2172×724，非正方形），登记进去会被当成新字形重建、或被生成器按清单删除。
  * 所以它走独立目录 + 独立出口，本文件同时钉住「它不许回流进 ICONS」、原图字节、按比例
  * 的显示尺寸 —— 独立出口不是为了让通用图标断言放过它。
  *
@@ -129,9 +129,9 @@ function pngSize(bytes: Uint8Array): { width: number; height: number } {
 
 const BADGE_ASSET = 'assets/badge/verified-badge@3x.png'
 /** 设计稿原图字节的 sha256：换图必须走设计稿重出，不允许随手缩图覆盖 */
-const BADGE_SHA256 = '7cb679e483804ecd7a53779b04ffee6d9310fed053c885771f92441bbe1601fc'
-/** 设计稿徽章画布：275×108（比例 2.546），横向成品图，**不是**图标正方形四档 */
-const BADGE_DESIGN = { width: 275, height: 108 }
+const BADGE_SHA256 = 'f81ba845185f89d17894cadaf2e699e26697493cfa4131d373e9913c8c50b031'
+/** 设计稿徽章画布：2172×724（比例 3），横向成品图，**不是**图标正方形四档 */
+const BADGE_DESIGN = { width: 2172, height: 724 }
 
 /**
  * 大徽章的消费点：容器 scss 类名 → 设计尺寸（高度压在昵称字号之下）；新增必须登记。
@@ -145,7 +145,7 @@ const BADGE_DISPLAY = [
     tsx: 'pages/profile/index.tsx',
     scss: 'pages/profile/index.scss',
     cls: 'profile__auth-badge',
-    width: 87,
+    width: 102,
     height: 34,
     places: 1,
   },
@@ -153,7 +153,7 @@ const BADGE_DISPLAY = [
     tsx: 'components/order-list/index.tsx',
     scss: 'components/order-list/index.scss',
     cls: 'orders__vbadge',
-    width: 61,
+    width: 72,
     height: 24,
     places: 1,
   },
@@ -161,7 +161,7 @@ const BADGE_DISPLAY = [
     tsx: 'pkg-browse/pages/listing-detail/index.tsx',
     scss: 'pkg-browse/pages/listing-detail/index.scss',
     cls: 'detail__stick',
-    width: 61,
+    width: 72,
     height: 24,
     places: 1,
   },
@@ -170,7 +170,7 @@ const BADGE_DISPLAY = [
     tsx: 'pkg-auth/pages/verify/index.tsx',
     scss: 'pkg-auth/pages/verify/index.scss',
     cls: 'verify__badge',
-    width: 87,
+    width: 102,
     height: 34,
     places: 1,
   },
@@ -178,7 +178,7 @@ const BADGE_DISPLAY = [
     tsx: 'pkg-auth/pages/verify/index.tsx',
     scss: 'pkg-auth/pages/verify/index.scss',
     cls: 'verify__badge-inline',
-    width: 61,
+    width: 72,
     height: 24,
     places: 1,
   },
@@ -187,7 +187,7 @@ const BADGE_DISPLAY = [
     tsx: 'components/product-card/index.tsx',
     scss: 'components/product-card/index.scss',
     cls: 'pcard__tick',
-    width: 61,
+    width: 72,
     height: 24,
     places: 1,
   },
@@ -195,7 +195,7 @@ const BADGE_DISPLAY = [
     tsx: 'pkg-browse/pages/favorites/index.tsx',
     scss: 'pkg-browse/pages/favorites/index.scss',
     cls: 'fav__tick',
-    width: 61,
+    width: 72,
     height: 24,
     places: 1,
   },
@@ -203,7 +203,7 @@ const BADGE_DISPLAY = [
     tsx: 'pkg-browse/pages/following/index.tsx',
     scss: 'pkg-browse/pages/following/index.scss',
     cls: 'fw__tick',
-    width: 61,
+    width: 72,
     height: 24,
     places: 1,
   },
@@ -212,7 +212,7 @@ const BADGE_DISPLAY = [
     tsx: 'pkg-browse/pages/user/index.tsx',
     scss: 'pkg-browse/pages/user/index.scss',
     cls: 'uhome__badge-ic',
-    width: 61,
+    width: 72,
     height: 24,
     places: 2,
   },
@@ -220,7 +220,7 @@ const BADGE_DISPLAY = [
     tsx: 'pkg-browse/pages/watchers/index.tsx',
     scss: 'pkg-browse/pages/watchers/index.scss',
     cls: 'wt__badge-ic',
-    width: 61,
+    width: 72,
     height: 24,
     places: 1,
   },

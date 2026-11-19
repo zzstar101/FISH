@@ -388,7 +388,7 @@ export default function Verify() {
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
                   <Text className="verify__name">{nickname}</Text>
-                  {/* 卖家页的实际渲染：徽章内联在昵称右侧（61×24） */}
+                  {/* 卖家页的实际渲染：徽章内联在昵称右侧（72×24） */}
                   <Image className="verify__badge-inline" src={BADGE.verified} mode="aspectFit" />
                 </View>
                 <Text className="verify__badge-sub">商品详情 · 卖家页</Text>
