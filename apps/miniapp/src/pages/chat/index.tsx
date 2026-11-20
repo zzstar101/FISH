@@ -32,6 +32,7 @@ import { useTabTransition } from '@/lib/use-tab-transition'
 import type { MockNotification } from '@/mock/types'
 import type { ChatListState } from './list-view'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
+import { NotificationList } from './notification-list'
 import {
   type ChatSearchResults,
   type ContactHit,
@@ -80,31 +81,6 @@ const FILTERS: { key: ChatFilter; label: string }[] = [
  * （不显示胶囊）。与「我的发布」的 `MAX_PROPOSAL_SCANS` 同一量级。
  */
 const MAX_PROPOSAL_SCANS = 12
-
-/**
- * 通知的语气 → 图标（原 `pages/notifications` 的映射随页面并入）。文案与跳转目标
- * 不在页面里拼：契约只存 `type` + `payload`，组装在数据层（`mock/api.ts` 的
- * `decorateNotification`，与 web 端同口径），这里只负责「把 tone 映射成一张图」。
- */
-const TONE_ICON: Record<MockNotification['tone'], string> = {
-  mint: ICONS.heartFillBrand,
-  warn: ICONS.shieldCheckBrand,
-}
-
-/**
- * 通知条目的相对时间。fixture 的 `createdAt` 固定在 2026-09-14，因此以「现在」
- * 为基准算差值，而不是渲染 mock 里的绝对时间。
- */
-function relativeTime(iso: string): string {
-  const then = Date.parse(iso)
-  if (Number.isNaN(then)) return ''
-  const hours = Math.max(0, (Date.now() - then) / 3600000)
-  if (hours < 1 / 60) return '刚刚'
-  if (hours < 1) return `${Math.max(1, Math.floor(hours * 60))} 分钟前`
-  if (hours < 24) return `${Math.floor(hours)} 小时前`
-  const days = Math.floor(hours / 24)
-  return days === 1 ? '昨天' : `${days} 天前`
-}
 
 export default function Chat() {
   // 消息列表需要登录（GET /conversations）；Tab 页只能用 navigateTo 跳登录页
@@ -1018,20 +994,19 @@ export default function Chat() {
         <View className={`chat__list ${tabContentClass}`}>
           {filter === 'system' ? (
             <View className="notif__list">
-              {notifs.map((item) => (
-                <View key={item.id} className="notif__item" onClick={() => openNotif(item)}>
-                  <View className="notif__ic">
-                    <Image className="notif__ic-img" src={TONE_ICON[item.tone]} mode="aspectFit" />
-                    {/* 未读红点（#431 任务二）：`readAt` 权威，点击条目即消失 */}
-                    {item.readAt === null ? <View className="notif__dot" /> : null}
-                  </View>
-                  <View className="notif__body">
-                    <Text className="notif__body-title">{item.title}</Text>
-                    <Text className="notif__tm num">{relativeTime(item.createdAt)}</Text>
-                    <Text className="notif__text">{item.description}</Text>
-                  </View>
+              {notifsReady && !notifsFailed && notifs.length > 0 ? (
+                <NotificationList
+                  items={notifs}
+                  unreadCount={unreadNotifications}
+                  now={now}
+                  onOpen={openNotif}
+                />
+              ) : null}
+              {!notifsReady && !notifsFailed ? (
+                <View className="chat__empty">
+                  <Text className="chat__empty-title">正在加载通知…</Text>
                 </View>
-              ))}
+              ) : null}
 
               {/* 失败态优先于空态：没加载出来不等于没有通知；空态也要等结果，
                 避免请求途中闪过一句「还没有通知」 */}

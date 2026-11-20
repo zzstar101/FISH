@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { BADGE } from '@/assets/badge'
 import { BRAND } from '@/assets/brand'
 import { ICONS } from '@/assets/lib-icons'
+import { PROFILE_PAGE_ICONS } from '@/assets/page-illustrations/profile'
 import { scanPageUrl } from '@/components/scan-tabs/tabs'
 import UserAvatar from '@/components/user-avatar'
 import {
@@ -26,14 +27,12 @@ import './index.scss'
 
 /**
  * 「我的」页，按 3版稿（`小程序3版profile.html`）+ Owner 的口头修订落地：
- * 个人头部（头像 / 昵称 + 认证胶囊 / 签名行 / 扫码）→ 三张**独立卡片**
- * （数字栏 4 格 → 图标栏 5 格 → 帮助与设置）→ 版权行。
+ * 个人资料与四项数字同卡 → 五格交易卡 → 四条帮助与设置胶囊 → 版权行。
  *
  * - **本页没有任何吸顶元素**：不挂 `top-bar`，顶部只按胶囊栅格留出初始空档；
  * - **点头像 / 昵称进「编辑资料」页**（#86 B）：微信不开放读取头像与昵称，只能由用户
  *   在编辑页用 `chooseAvatar` / `type="nickname"` 主动选；本页自己不摆「编辑」行，
  *   扫码钮与头像同一行对齐；
- * - 三张卡圆角 8pt、无边框描边，只有「帮助与设置」卡带底部阴影（Owner 指定）；
  * - 数字栏（收藏 / 历史浏览 / 关注 / 愿望）只摆数字不摆图标；
  *   图标栏改为**右上角红色小圆点、圆点内显数量**（纯 --danger，不要压棕的红）。
  *
@@ -106,7 +105,6 @@ function showEditableModal(option: EditableModalOption): Promise<EditableModalRe
 type Row = {
   key: string
   title: string
-  sub: string
   icon: string
   url?: string
 }
@@ -116,12 +114,20 @@ export default function Profile() {
   /** 退出登录 in-flight 守卫：确认弹窗出现前快速双击，只允许走一轮注销 */
   const [loggingOut, setLoggingOut] = useState(false)
 
-  /**
-   * 顶部留白。3版稿的导航行只有原生胶囊（标题是 `sr-only`），没有可视顶栏 UI，
-   * 所以不挂 `top-bar`，只按同一套胶囊栅格把内容顶下去，否则个人头部会压到
-   * 刘海与原生胶囊上。数值来源与 `top-bar` 一致（`@/lib/nav-metrics`）。
-   */
-  const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
+  // 标题本身随页面滚动，按同一原生胶囊栅格对齐，不新增吸顶层。
+  const nav = useMemo(() => readNavMetrics(), [])
+  const navHeight = nav.totalHeight
+  const profileTitle = (
+    <Text
+      className="profile__page-title"
+      style={{
+        top: `${nav.statusBarHeight + nav.capsuleGap}px`,
+        lineHeight: `${nav.capsuleHeight}px`,
+      }}
+    >
+      我的
+    </Text>
+  )
 
   /**
    * 切走时暂停页头动效。tab 页常驻不销毁 —— `useDidShow`/`useDidHide` 只是切显隐，
@@ -469,7 +475,7 @@ export default function Profile() {
     {
       key: 'onsale',
       label: '在售',
-      icon: ICONS.entryOnsaleBrand,
+      icon: PROFILE_PAGE_ICONS.onsale,
       url: '/pkg-browse/pages/mylist/index',
       count: counts.activeListings ?? undefined,
     },
@@ -478,14 +484,14 @@ export default function Profile() {
     {
       key: 'sold',
       label: '卖出',
-      icon: ICONS.entrySoldBrand,
+      icon: PROFILE_PAGE_ICONS.sold,
       url: '/pkg-trade/pages/orders-sell/index',
       count: counts.pendingMeetupSell ?? undefined,
     },
     {
       key: 'bought',
       label: '买入',
-      icon: ICONS.entryBoughtBrand,
+      icon: PROFILE_PAGE_ICONS.bought,
       url: '/pkg-trade/pages/orders-buy/index',
       count: counts.pendingMeetupBuy ?? undefined,
     },
@@ -494,7 +500,7 @@ export default function Profile() {
     {
       key: 'review',
       label: '评价',
-      icon: ICONS.entryReviewBrand,
+      icon: PROFILE_PAGE_ICONS.review,
       url: '/pkg-browse/pages/comments/index',
     },
     // #252：举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标；
@@ -503,7 +509,7 @@ export default function Profile() {
     {
       key: 'reports',
       label: '举报',
-      icon: ICONS.entryReportBrand,
+      icon: PROFILE_PAGE_ICONS.reports,
       url: '/pkg-trade/pages/my-reports/index',
     },
   ]
@@ -516,60 +522,40 @@ export default function Profile() {
     {
       key: 'settings',
       title: '设置',
-      sub: '通知提醒与账号安全',
       icon: ICONS.settingsMuted,
       url: '/pkg-auth/pages/settings/index',
     },
     {
       key: 'feedback',
       title: '意见反馈',
-      sub: '提交建议与问题反馈',
       icon: ICONS.feedbackMuted,
       url: '/pkg-legal/pages/feedback/index',
     },
-    { key: 'service', title: '联系客服', sub: '在线客服与常见问题', icon: ICONS.headsetMuted },
+    { key: 'service', title: '联系客服', icon: ICONS.headsetMuted },
     {
       key: 'about',
       title: '关于与版本',
-      sub: '版本信息与用户协议',
       icon: ICONS.infoMuted,
       url: '/pkg-legal/pages/about/index',
     },
   ]
 
-  /**
-   * 「帮助与设置」卡（Owner 修订后唯一带底部阴影的卡）：登录 / 未登录两种形态共用；
-   * 退出登录行只在登录态出现（3版稿的「清除演示数据」不渲染，无可清的本地数据）。
-   */
+  /** 帮助入口按原顺序保留；退出登录只在登录态出现。 */
   const settingsPanel = (withLogout: boolean) => (
-    <View className="profile__panel profile__panel--settings">
+    <View className="profile__settings">
       <View className="profile__sec-label">帮助与设置</View>
       <View className="profile__list">
         {SETTING_ROWS.map((row) => (
           <View key={row.key} className="profile__row-item" onClick={() => go(row.title, row.url)}>
-            <View className="profile__row-disc">
-              <Image className="profile__row-ic" src={row.icon} mode="aspectFit" />
-            </View>
-            <View className="profile__row-main">
-              <Text className="profile__row-title">{row.title}</Text>
-              <Text className="profile__row-sub">{row.sub}</Text>
-            </View>
+            <Image className="profile__row-ic" src={row.icon} mode="aspectFit" />
+            <Text className="profile__row-title">{row.title}</Text>
             <Image className="profile__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
           </View>
         ))}
       </View>
       {withLogout ? (
-        <View className="profile__list">
-          <View className="profile__row-item is-danger" onClick={onLogout}>
-            <View className="profile__row-disc is-danger">
-              <Image className="profile__row-ic" src={ICONS.powerDanger} mode="aspectFit" />
-            </View>
-            <View className="profile__row-main">
-              <Text className="profile__row-title">退出登录</Text>
-              <Text className="profile__row-sub">退出后需要重新登录才能继续使用</Text>
-            </View>
-            <Image className="profile__row-chev" src={ICONS.chevronRightMuted} mode="aspectFit" />
-          </View>
+        <View className="profile__logout" onClick={onLogout}>
+          <Text>退出登录</Text>
         </View>
       ) : null}
     </View>
@@ -591,6 +577,7 @@ export default function Profile() {
     return (
       <View className={pageClass}>
         <View className="profile__hero-bg" />
+        {profileTitle}
         <View
           className={`profile__body ${tabContentClass}`}
           style={{ paddingTop: `${navHeight + 8}px` }}
@@ -628,6 +615,7 @@ export default function Profile() {
     return (
       <View className={pageClass}>
         <View className="profile__hero-bg" />
+        {profileTitle}
         <View
           className={`profile__body ${tabContentClass}`}
           style={{ paddingTop: `${navHeight + 8}px` }}
@@ -681,6 +669,7 @@ export default function Profile() {
   return (
     <View className={pageClass}>
       <View className="profile__hero-bg" />
+      {profileTitle}
 
       <View
         className={`profile__body ${tabContentClass}`}
@@ -689,79 +678,86 @@ export default function Profile() {
         {/* 个人头部：头像 / 昵称 + 认证胶囊 / 签名 / 扫码（与头像同行对齐）。
             头像与昵称都是「编辑资料」入口（#86 B）：微信不开放读取头像昵称，
             只能由用户在编辑页主动选，所以这里既没有单独的「编辑」行也不显示假头像 */}
-        <View className="profile__head">
-          {/* 契约 `MeSchema.avatarUrl` 可为 null：空就画统一默认头像，不拿别人的头像顶上 */}
-          <UserAvatar className="profile__avatar" src={user.avatarUrl} onClick={openEditProfile} />
-          <View className="profile__info">
-            <View className="profile__name-row">
-              <Text className="profile__name" onClick={openEditProfile}>
-                {user.nickname}
-              </Text>
-              {/* 昵称可点的提示：与头像同一个入口 */}
-              <Image
-                className="profile__name-chev"
-                src={ICONS.chevronRightMuted}
-                mode="aspectFit"
-                onClick={openEditProfile}
-              />
-            </View>
-            {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证（#534）。
+        <View className="profile__panel profile__identity">
+          <View className="profile__head">
+            {/* 契约 `MeSchema.avatarUrl` 可为 null：空就画统一默认头像，不拿别人的头像顶上 */}
+            <UserAvatar
+              className="profile__avatar"
+              src={user.avatarUrl}
+              onClick={openEditProfile}
+            />
+            <View className="profile__info">
+              <View className="profile__name-row">
+                <Text className="profile__name" onClick={openEditProfile}>
+                  {user.nickname}
+                </Text>
+                {/* 昵称可点的提示：与头像同一个入口 */}
+                <Image
+                  className="profile__name-chev"
+                  src={ICONS.chevronRightMuted}
+                  mode="aspectFit"
+                  onClick={openEditProfile}
+                />
+              </View>
+              {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证（#534）。
                 Owner 选型：已认证用设计稿的「认证」3D 徽章整图，**放在昵称下方单独一行**
                 （`profile__info` 是纵向块布局，所以这里不放进 `profile__name-row`）；
                 未认证仍是文字胶囊引导。 */}
-            {verified ? (
-              <Image
-                className="profile__auth-badge"
-                src={BADGE.verified}
-                mode="aspectFit"
-                onClick={openVerify}
-              />
-            ) : (
-              <View className="profile__auth" onClick={openVerify}>
-                <Text className="profile__auth-txt">未认证，前往认证</Text>
+              {verified ? (
                 <Image
-                  className="profile__auth-arrow"
-                  src={ICONS.chevronRightMuted}
+                  className="profile__auth-badge"
+                  src={BADGE.verified}
                   mode="aspectFit"
+                  onClick={openVerify}
                 />
-              </View>
-            )}
-            {/* 签名行（3版稿 .psig）：**点击可编辑**，真值在服务端（`PATCH /profile` 的
+              ) : (
+                <View className="profile__auth" onClick={openVerify}>
+                  <Text className="profile__auth-txt">未认证，前往认证</Text>
+                  <Image
+                    className="profile__auth-arrow"
+                    src={ICONS.chevronRightMuted}
+                    mode="aspectFit"
+                  />
+                </View>
+              )}
+              {/* 签名行（3版稿 .psig）：**点击可编辑**，真值在服务端（`PATCH /profile` 的
                 `signature` 字段），本页弹窗保存成功后即时回显。
                 只展示**首行** —— 多行输入的其余行不显示，过长由 CSS 省略号收尾；
                 没设置过渲染占位文案（`.is-ph`）。
                 ⚠️ 他人视角的用户主页（页面尚未落地）要按同一口径只显首行，并额外给一个
                 「点击展开全部」的入口；该页后续再改，这里先留提示 —— 本页**不加**展开 */}
-            <View className="profile__sig" onClick={editSignature}>
-              <Image className="profile__sig-ic" src={ICONS.editBrand} mode="aspectFit" />
-              <Text className={`profile__sig-txt${sigText ? '' : ' is-ph'}`}>
-                {sigText || '设置个性签名'}
-              </Text>
+              <View className="profile__sig" onClick={editSignature}>
+                <Image className="profile__sig-ic" src={ICONS.editBrand} mode="aspectFit" />
+                <Text className={`profile__sig-txt${sigText ? '' : ' is-ph'}`}>
+                  {sigText || '设置个性签名'}
+                </Text>
+              </View>
             </View>
-          </View>
-          {/* 主页（#578）：进自己的公开主页（`pkg-browse/pages/user?id=<自己>`）。
+            {/* 主页（#578）：进自己的公开主页（`pkg-browse/pages/user?id=<自己>`）。
               与头像 / 昵称的「编辑资料」语义不重叠（那两处仍是 #86 B 的编辑入口），
               所以这里是**并列的一枚独立按钮**；图标用 `userFg`（人形 = 个人主页），
               刻意不用 house 字形 —— TabBar 的「首页」就是这个字形，摆在头部会被读成
               「回首页」。 */}
-          <View className="profile__homebtn" onClick={openMyProfile}>
-            <Image className="profile__homebtn-ic" src={ICONS.userFg} mode="aspectFit" />
+            <View className="profile__homebtn" onClick={openMyProfile}>
+              <Image className="profile__homebtn-ic" src={ICONS.userFg} mode="aspectFit" />
+              <Text>主页</Text>
+            </View>
+            {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}
+            <View
+              className="profile__scanbtn"
+              onClick={() => void Taro.navigateTo({ url: scanPageUrl('scan') })}
+            >
+              <Image className="profile__scanbtn-ic" src={ICONS.scanBrand} mode="aspectFit" />
+              <Text>扫码</Text>
+            </View>
           </View>
-          {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}
-          <View
-            className="profile__scanbtn"
-            onClick={() => void Taro.navigateTo({ url: scanPageUrl('scan') })}
-          >
-            <Image className="profile__scanbtn-ic" src={ICONS.scanBrand} mode="aspectFit" />
+          {/* 资料与四项数字同卡；保留原有真实数据和跳转。 */}
+          <View className="profile__panel--stats">
+            <View className="profile__grid profile__grid--4">{STAT_CELLS.map(renderStatCell)}</View>
           </View>
         </View>
 
-        {/* 数字栏卡：只摆数字不摆图标 */}
-        <View className="profile__panel profile__panel--stats">
-          <View className="profile__grid profile__grid--4">{STAT_CELLS.map(renderStatCell)}</View>
-        </View>
-
-        {/* 图标栏卡：右上角红点代替原数字角标 */}
+        <View className="profile__sec-label">我的交易</View>
         <View className="profile__panel profile__panel--trade">
           <View className="profile__grid profile__grid--5">{TRADE_CELLS.map(renderIconCell)}</View>
         </View>

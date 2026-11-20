@@ -22,7 +22,7 @@ export const ICON_PX = 72
  * 字形放大系数：显示尺寸四档（24/32/40/48rpx）一个都不动，只把字形在 24×24 网格里的
  * 占比放大 —— 等效于把 `viewBox` 从 `0 0 24 24` 收成居中的 `24/GLYPH_ZOOM` 方窗。
  * 1.2 与 40→48rpx 那一档的体量相当；实测重出图后字形最长边 60–67px（占画布 83%–93%），
- * 四周最小留白 2–5px（最紧的是 `entry-onsale-brand`），0 张切边。
+ * 四周最小留白 3–5px（最紧的是 tab-*-brand 与 tag-muted），0 张切边。
  */
 export const GLYPH_ZOOM = 1.2
 

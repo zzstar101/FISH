@@ -6,11 +6,13 @@
   "description": "FISH 微信小程序客户端（Taro 4 + React + TypeScript）",
   "scripts": {
     "dev:weapp": "taro build --type weapp --watch",
-    "build:weapp": "taro build --type weapp && bun run check:es5",
+    "build:weapp": "taro build --type weapp && bun run check:es5 && bun run check:size",
     "check:es5": "bun scripts/check-es5.ts",
     "typecheck": "bun check --no-script -p tsconfig.json",
     "icons": "bun tools/icons/build.ts",
-    "brand": "bun tools/brand/build.ts"
+    "brand": "bun tools/brand/build.ts",
+    "artwork": "bun tools/artwork/build.ts",
+    "check:size": "bun scripts/check-package-size.ts"
   },
   "browserslist": [
     "defaults and fully supports es6-module",

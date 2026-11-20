@@ -926,7 +926,7 @@ export default function UserHome() {
                     <View className="uhome__nameRow">
                       <Text className="uhome__pname">{profile.nickname}</Text>
                       {/* 徽章只在 VERIFIED 时渲染：未认证不占位、不留白。
-                          #563 起这里只放横向整图（BADGE.verified，61×24）—— 原先的「浅强调胶囊 +
+                          #563 起这里只放横向整图（BADGE.verified，72×24）—— 原先的「浅强调胶囊 +
                           小勾 + 「已认证」文案」外壳撤掉了，因为整图自带「认证」字样，再套胶囊底
                           与描边就是两层装饰。别补回外壳类名或文案（契约测试有否定断言）。 */}
                       {verified ? (

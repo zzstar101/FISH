@@ -135,7 +135,7 @@ describe('首页页头色块（#682）', () => {
   test('色块挂在流内容器 `.home__head` 上，不再写死高度、也不是定位元素', async () => {
     const head = ruleBlock(await styleCode(), '.home__head')
     // 底色留在页头（2026-11-06 Owner 指定的浅蓝页头）
-    expect(head).toContain('background: var(--grad-page)')
+    expect(head).toContain('background: linear-gradient(180deg, #eaf1fc, #f2f6fc)')
     // 下缘 64rpx 圆角是设计稿的形状，容器替掉背板后仍要保留
     expect(head).toContain('border-radius: 0 0 64px 64px')
     // 两条回归线：写死高度 → 又会对不上金刚区；定位 → 又可能压住静态内容

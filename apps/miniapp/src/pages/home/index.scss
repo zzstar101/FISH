@@ -1,21 +1,30 @@
 @use "@/styles/mixins" as *;
 
+$home-head-inset: 20px;
+$home-head-content-width: 750px - 2 * $home-head-inset;
+$home-catnav-height: 96px;
+
 /**
  * 首页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
- * 固定顶栏（品牌 logo + 搜索胶囊）→ 分类横滑条 → 两列瀑布流。
+ * 固定顶栏（品牌 logo + 搜索胶囊）→ 插画轮播 → 分类横滑条 → 两列瀑布流。
  *
  * 顶栏由 `components/top-bar` 提供（`fixed` + 自带等高占位块），
  * 所以这里不再需要 `padding-top` 去让出状态栏那一段。
  */
 .home {
+  --home-sky: #e8f5ff;
+  --home-page: #fcfeff;
+  --home-category-accent: #a67536;
+  --home-coral: #ce3b50;
   position: relative;
   min-height: 100vh;
+  background: var(--home-page);
   /* 底部留白：让出悬浮 TabBar 的顶边（53 + 101 = 154rpx，取 157），见 DESIGN.md 第 9 节 */
   padding-bottom: 157px;
 }
 
 /*
- * 页头色块（浅蓝）：从屏幕顶铺到金刚区下沿。
+ * 页头色块（雾蓝）：从屏幕顶铺到金刚区下沿。
  *
  * **高度由内容决定，不写死**（#682）：这里原本是一块 `position: absolute`、
  * 固定 504rpx 高的背板（`@include page-hero(504px, 64px)`）。两个问题都出在「写死」上：
@@ -28,7 +37,7 @@
  * 且它是普通流内元素，永远压不住下面的内容。下缘圆角取自设计稿（64rpx = 32pt）。
  */
 .home__head {
-  background: var(--grad-page);
+  background: linear-gradient(180deg, #eaf1fc, #f2f6fc);
   border-radius: 0 0 64px 64px;
 }
 
@@ -119,6 +128,88 @@
   flex: 0 0 auto;
 }
 
+.home__banner {
+  position: relative;
+  margin: 16px $home-head-inset 0;
+}
+
+.home__banner-swiper {
+  // 三张插画均为 2:1，轮播高度按内容宽度换算。
+  height: $home-head-content-width * 0.5;
+}
+
+.home__banner-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 34px;
+  background: var(--home-sky);
+}
+
+.home__banner-dots {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.home__banner-dot-hit {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 88px;
+  min-height: 88px;
+  pointer-events: auto;
+  margin: 0;
+  padding: 0 0 20px;
+  background: rgba(255, 255, 255, 0);
+
+  &::after {
+    border: 0;
+  }
+}
+
+/* 微信视图层保留原生 Button 和真实文本，不能只传未下发到 WXML 的 aria 属性。 */
+.home__banner-accessible {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.home__banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: #d4e7f5;
+  box-shadow: 0 1px 3px rgba(21, 51, 75, 0.65);
+
+  &.is-on {
+    width: 24px;
+    background: #fff5e5;
+  }
+}
+
+// 收拢图形间距，同时给三个按钮各留一块独立的命中区。
+.home__banner-dot-hit:first-child .home__banner-dot {
+  transform: translateX(30px);
+}
+
+.home__banner-dot-hit:last-child .home__banner-dot {
+  transform: translateX(-30px);
+}
+
 /*
  * 分类横滑条（图标 + 文字）。
  *
@@ -127,8 +218,7 @@
  * （设计稿是「同一个元素吸顶后把图标高度收成 0」，那会让下面的内容跳一下。）
  */
 .home__cats-wrap {
-  margin-top: 8px;
-  padding: 0 24px;
+  margin: 10px $home-head-inset 0;
 }
 
 .home__cats {
@@ -139,16 +229,16 @@
 .home__cats-inner {
   display: inline-flex;
   align-items: flex-end;
-  gap: 8px;
-  padding: 6px 16px 12px;
+  padding: 6px 0 12px;
 }
 
 .home__cat {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
-  width: 124px;
+  gap: 12px;
+  // 710rpx 视口容纳六个完整入口，向下取整吸收设备像素舍入。
+  flex: 0 0 118px;
   padding: 6px 0 20px;
   position: relative;
 
@@ -158,19 +248,16 @@
 }
 
 .home__cat-ic {
-  width: 96px;
-  height: 96px;
-  border-radius: 50%;
+  width: 108px;
+  height: 108px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--grad-icon);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.9), 0 12px 28px -24px rgba(66, 133, 255, 0.7);
 }
 
 .home__cat-img {
-  width: 48px;
-  height: 48px;
+  width: 100px;
+  height: 100px;
 }
 
 .home__cat-label {
@@ -180,7 +267,7 @@
   white-space: nowrap;
 }
 
-/* 选中态：底部短渐变条 + 加粗 */
+/* 选中态：琥珀金短线 + 加粗 */
 .home__cat.is-on {
   .home__cat-label {
     font-weight: 600;
@@ -195,7 +282,7 @@
     width: 36px;
     height: 6px;
     border-radius: var(--r-pill);
-    background: var(--grad-brand);
+    background: var(--home-category-accent);
   }
 }
 
@@ -211,6 +298,8 @@
  */
 .home__catnav {
   position: fixed;
+  box-sizing: border-box;
+  height: $home-catnav-height;
   left: 0;
   right: 0;
   z-index: 30;
@@ -280,7 +369,7 @@
     width: 36px;
     height: 6px;
     border-radius: var(--r-pill);
-    background: var(--grad-brand);
+    background: var(--home-category-accent);
   }
 }
 
@@ -291,7 +380,41 @@
  * 这里不再保留首页自制的 `.home__empty`（两行裸文字、没有图标）。
  */
 .home__grid {
-  padding: 44px 28px 0;
+  // 图标分类条本身留在文档流里，归位时它的下沿已经等于固定导航下沿；
+  // 这里只留普通区块间距，不再重复预留整条导航高度。
+  padding: 24px 28px 0;
+}
+
+.home__feed-title {
+  display: block;
+  margin: 0 0 18px;
+  font-size: var(--fs-h3);
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1.2;
+}
+
+/* 仅首页收紧商品信息，图片和其它页面共用卡的样式不变。 */
+.home__grid .pcard__body {
+  padding: 12px 16px 14px;
+  gap: 8px;
+}
+
+.home__grid .pcard__title {
+  min-height: 0;
+}
+
+.home__grid .pcard:not(.pcard--out) .pcard__cond {
+  background: var(--home-sky);
+}
+
+.home__grid .pcard:not(.pcard--out) .pcard__price {
+  color: var(--home-coral);
+}
+
+.home__grid .pcard__seller {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
 }
 
 .waterfall {

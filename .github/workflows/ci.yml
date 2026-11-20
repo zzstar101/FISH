@@ -382,14 +382,17 @@ jobs:
         run: bun install --frozen-lockfile
 
       # #513：图标 / 品牌图由仓内真源生成（resvg-wasm，跨平台逐字节一致）。
-      # 重出一遍后工作区必须干净 —— 改了 svg 却没提交新 png（或手改了 png）都会在这里红。
+      # #695：页面成品图（认证徽章 / 交易入口图）同理 —— 母版在 `tools/artwork/`，
+      # 产物按显示尺寸出图，防止再把设计稿分辨率整张打进主包顶穿 2MB 上限。
+      # 重出一遍后工作区必须干净 —— 改了母版却没提交新 png（或手改了 png）都会在这里红。
       - name: Assets Up To Date
         run: |
           bun run --filter @fish/miniapp icons
           bun run --filter @fish/miniapp brand
+          bun run --filter @fish/miniapp artwork
           test -z "$(git status --porcelain apps/miniapp/src/assets)" || {
             git status --porcelain apps/miniapp/src/assets
-            echo "::error::apps/miniapp/src/assets 与生成器产物不一致，请运行 icons / brand 脚本并提交结果"
+            echo "::error::apps/miniapp/src/assets 与生成器产物不一致，请运行 icons / brand / artwork 脚本并提交结果"
             exit 1
           }
 

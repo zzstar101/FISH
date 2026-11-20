@@ -41,11 +41,6 @@ import crownBrand from '@/assets/lib-icons/crown-brand@3x.png'
 import docFg from '@/assets/lib-icons/doc-fg@3x.png'
 import docMuted from '@/assets/lib-icons/doc-muted@3x.png'
 import editBrand from '@/assets/lib-icons/edit-brand@3x.png'
-import entryBoughtBrand from '@/assets/lib-icons/entry-bought-brand@3x.png'
-import entryOnsaleBrand from '@/assets/lib-icons/entry-onsale-brand@3x.png'
-import entryReportBrand from '@/assets/lib-icons/entry-report-brand@3x.png'
-import entryReviewBrand from '@/assets/lib-icons/entry-review-brand@3x.png'
-import entrySoldBrand from '@/assets/lib-icons/entry-sold-brand@3x.png'
 import feedbackFg from '@/assets/lib-icons/feedback-fg@3x.png'
 import feedbackMuted from '@/assets/lib-icons/feedback-muted@3x.png'
 import fileFg from '@/assets/lib-icons/file-fg@3x.png'
@@ -108,11 +103,6 @@ export const ICONS = {
   tabMessageBrand,
   tabMeMuted,
   tabMeBrand,
-  entryOnsaleBrand,
-  entrySoldBrand,
-  entryBoughtBrand,
-  entryReviewBrand,
-  entryReportBrand,
   backFg,
   closeFg,
   searchMuted,
