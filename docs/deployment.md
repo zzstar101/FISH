@@ -894,7 +894,8 @@ sudo -u fish -H /usr/local/bin/bun --env-file=.env \
   apps/api/scripts/backfill-listing-thumbnails.ts --check
 ```
 
-代价是第 3–7 步之间数十秒停机：API 的 WebSocket 连接由进程内 hub 维护
+代价是第 3–7 步之间数十秒停机：回填按缺失的图片逐张 GET + PUT，历史图片很多时会线性变长；
+API 的 WebSocket 连接由进程内 hub 维护
 （`apps/api/src/modules/realtime/hub.ts`），重启即断；worker 也只能单实例，做不了滚动发布。
 当前阶段接受这个停机；要做零停机得先改代码，不在部署范畴内。
 
