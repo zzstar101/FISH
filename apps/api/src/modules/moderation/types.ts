@@ -2,10 +2,20 @@ export const MODERATION_DECISIONS = ['ALLOW', 'BLOCK', 'REVIEW'] as const
 export type ModerationDecision = (typeof MODERATION_DECISIONS)[number]
 
 /**
- * 可送审的字段。商品是 title/description（#228），聊天正文是 content（#694 M1）——
+ * 可送审的字段。商品是 title/description（#228），聊天正文是 content（#694 M1），
+ * 公开 UGC 正文是 publicContent，用户昵称 / 个性签名是 nickname/signature（#694 M5）——
  * provider 不关心字段的业务含义，只按字段逐个回带结论。
+ *
+ * 昵称与签名**必须是两个不同的字段名**：local provider 会把 `fields` 收成
+ * `Object.fromEntries`，同名字段互相覆盖，被覆盖的那个字段等于没审。
  */
-export type ModerationField = 'title' | 'description' | 'content' | 'publicContent'
+export type ModerationField =
+  | 'title'
+  | 'description'
+  | 'content'
+  | 'publicContent'
+  | 'nickname'
+  | 'signature'
 
 export type ModerationMatch = {
   field: ModerationField

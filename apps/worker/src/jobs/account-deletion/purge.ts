@@ -36,6 +36,7 @@ import { follows } from '@fish/db/schema/follows'
 import { listings } from '@fish/db/schema/listings'
 import { loginTickets } from '@fish/db/schema/login-tickets'
 import { notifications } from '@fish/db/schema/notifications'
+import { profileModerationRecords } from '@fish/db/schema/profile-moderation'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
 import { sessions } from '@fish/db/schema/sessions'
@@ -269,6 +270,10 @@ async function purgeOne(db: Db, userId: string, now: Date): Promise<AccountDelet
           .returning({ id: feedback.id })
       ).length,
     }
+
+    // ⑥'' 待审资料引用的是注销前的昵称/签名/头像，去标识化后必须一并删除，
+    //    否则管理员放行旧记录会把已注销账号的资料重新变公开。
+    await tx.delete(profileModerationRecords).where(eq(profileModerationRecords.userId, userId))
 
     // ⑦ 原地去标识化 users 行。这是「历史引用统一显示『已注销用户』」的实现：所有读模型
     //    （商品卡 / 留言 / 聊天 / 评价 / 主页）都只读 nickname，改这里就全覆盖了。

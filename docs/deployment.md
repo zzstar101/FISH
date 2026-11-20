@@ -543,6 +543,22 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
   各一），会作为审核结果的 `policyVersion` 记录，便于事后按策略回溯。
 - **公开 UGC 必须使用独立策略号（#694 M5）**：许愿墙 `keyword`/`description` 与商品、聊天策略号都不同；`CONTENT_MODERATION_TRANSPORT=local` 时走本地词表，仅是开发兜底。商品留言、回复与交易评价正文（#694 M6）同样走该策略号，审核字段为 `publicContent`：联系方式类灰区规则使用公开场景专配的 `PUBLIC_EXTERNAL_CONTACT`（REVIEW），不复用商品 `EXTERNAL_CONTACT`，也不是私聊的 `content` 判定；BLOCK/REVIEW 都在落库前拒绝（`COMMENT_CONTENT_*` / `REVIEW_CONTENT_*` 错误码区分违规与待人工确认），上游故障 503 且可原样重试。无正文评价目前只校验图片结构与归属，图片内容审核见评价图片批次。许愿墙 BLOCK 直接 422 `WISH_CONTENT_BLOCKED`，REVIEW 落 `PENDING_REVIEW` 不进需求池、不投递匹配，由 `/admin/wishes/moderation` 人工放行/拒绝；编辑命中 REVIEW 只写 pending 字段，公开内容保持不变；上游故障 503 `CONTENT_MODERATION_UNAVAILABLE`（fail-closed，不落库）。
 
+- **昵称 / 个性签名同样走公开 UGC 策略号（#694 M5）**：`PATCH /profile` 在写库**之前**把变化的文本字段送
+  `TENCENT_TMS_UGC_BIZ_TYPE`（字段名 `nickname` / `signature`，命中 `PUBLIC_EXTERNAL_CONTACT` 即为
+  REVIEW）。结论语义：
+  - **ALLOW**：昵称、签名、头像在**一次 UPDATE** 里一起生效；同一提交里只要有一个字段非 ALLOW，整次提交都不写公开值。
+  - **BLOCK**：返回 **422 `PROFILE_CONTENT_BLOCKED`**（`details` 指明是 `nickname` 还是 `signature`），
+    `users` 的任何公开列都不改，端上提示修改后重试。
+  - **REVIEW**：新值写入 `profile_moderation_records`（payload 只含本次变化的列），返回 200 且 `pending`
+    给出待审快照；`user` 仍是**旧的已审公开值**。旧值继续对外可见，待审值只有本人（`pending` 字段）与
+    管理员（`/admin/profile/moderation`）可见，**不进入任何公开投射**（列表、商品卡、聊天、评价、通知）。
+  - **上游不可用**：**503 `CONTENT_MODERATION_UNAVAILABLE`**，整次提交不落库、不切换头像（fail-closed，
+    不静默降级为 ALLOW）。
+  - 管理员放行在一次事务里原子切换 payload 涉及的公开列（未提交的列不动），并写
+    `admin_audit_logs`（action `PROFILE_MODERATION_DECISION`、target `PROFILE_MODERATION_RECORD`）；
+    记录带乐观版本，重复放行不会二次切换公开值，版本过期返回 **409 `PROFILE_MODERATION_CONFLICT`**。
+    头像只在 IMS 判定 ALLOW 时才会进入待审 payload 或直接生效，文字与头像不会出现「文字失败但头像换了」的部分提交。
+
 - **聊天必须使用独立策略号（#694 M1）**：文本 `TENCENT_TMS_CHAT_BIZ_TYPE`、图片
   `TENCENT_IMS_CHAT_BIZ_TYPE`。聊天正文/图片是私聊内容，不能套商品策略（商品策略会把「加微信」这类
   正常商品描述话术判成引流）。任一缺失、或与 `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 相同

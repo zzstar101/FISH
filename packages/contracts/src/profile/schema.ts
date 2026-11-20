@@ -74,6 +74,49 @@ export const profileStatsSchema = z.object({
 })
 export type ProfileStats = z.infer<typeof profileStatsSchema>
 
+/**
+ * 待人工复审的资料变更（#694 M5）。
+ *
+ * 昵称 / 签名 / 头像在写入公开列**之前**要过公开 UGC 审核：机审 `REVIEW` 时新值不落
+ * `users`（旧公开值继续对外可见、所有投射口径不变），只在这条待审记录里留给本人与管理员看。
+ * 管理员放行后才一次性切换公开值。
+ *
+ * `fields` 列出本次提交涉及的字段，用来区分「没提交签名」与「提交了清空签名」——
+ * 后者 `signature` 同样是 `null`，只看值分不出来。
+ *
+ * **只有本人和管理员**能读到它：`GET /profile` 是本人视角；管理端另有待审队列端点。
+ */
+export const profilePendingChangeSchema = z.object({
+  nickname: z.string().nullable(),
+  signature: z.string().nullable(),
+  avatarUrl: z.url().nullable(),
+  fields: z.array(z.enum(['nickname', 'signature', 'avatarUrl'])),
+  /** 提交时刻（服务端时钟）。 */
+  submittedAt: z.iso.datetime(),
+})
+export type ProfilePendingChange = z.infer<typeof profilePendingChangeSchema>
+
+/**
+ * 资料写入的错误码（`PATCH /profile`）。
+ *
+ * - `PROFILE_CONTENT_BLOCKED`（422）：昵称 / 签名被公开 UGC 策略判为阻断，**任何公开值都没变**，
+ *   用户改文案后可重试；
+ * - `CONTENT_MODERATION_UNAVAILABLE`（503）：审核服务不可用（超时 / 网络 / 上游错误），
+ *   按 fail-closed 处理：本次提交不落库，可稍后重试。**不会降级为「先放行」**；
+ * - `IMAGE_CONTENT_BLOCKED` / `IMAGE_REFERENCE_INVALID` / `UPLOAD_OBJECT_MISSING`（422）：
+ *   沿用上传域的头像错误码（见 `ListingErrorCodeSchema`）；
+ * - `VALIDATION_FAILED`（422）：请求体本身不合法，带字段级 `details`。
+ */
+export const PROFILE_ERROR_CODES = [
+  'PROFILE_CONTENT_BLOCKED',
+  'CONTENT_MODERATION_UNAVAILABLE',
+  'IMAGE_CONTENT_BLOCKED',
+  'IMAGE_REFERENCE_INVALID',
+  'UPLOAD_OBJECT_MISSING',
+  'VALIDATION_FAILED',
+] as const
+export type ProfileErrorCode = (typeof PROFILE_ERROR_CODES)[number]
+
 export const profileResponseSchema = z.object({
   /** 认证域的 Me（requireAuth 产出）：头像、昵称、认证状态都在这里。 */
   user: MeSchema,
@@ -87,6 +130,14 @@ export const profileResponseSchema = z.object({
   wishes: z.array(wishDtoSchema),
   /** 我的买入 / 卖出交易（合并返回，按 role 分组；时间倒序）。 */
   transactions: z.array(profileTransactionSchema),
+  /**
+   * 待人工复审的资料变更（#694 M5）：没有待审变更时为 `null`。
+   * 只有本人能读到——待审新值不进任何公开投射（列表 / 商品卡 / 聊天 sender / 评价作者）。
+   *
+   * `.default(null)` 让「老端 / 老 API 不含该字段」仍可解析：小程序端与本接口独立发版，
+   * 缺字段时退化成「没有待审」，不要因为多了一个字段就把整份资料读不出来。
+   */
+  pending: profilePendingChangeSchema.nullable().default(null),
 })
 export type ProfileResponse = z.infer<typeof profileResponseSchema>
 
@@ -134,7 +185,14 @@ export type ProfileUpdateRequest = z.infer<typeof profileUpdateRequestSchema>
 /**
  * 写接口只回更新后的 `Me`，不回整个聚合视图：端上拿到就覆盖全局 store
  * （头像 / 昵称在「我的」页与商品卡卖家位都要立刻变），页面不必再补一次 `GET /profile`。
+ *
+ * `pending` 是每次写之后的待审状态（#694 M5）：机审判 `REVIEW` 时 `user` 仍是**旧公开值**，
+ * 新值只在 `pending` 里；端上据此提示「审核中」，而不是把未生效的值当成已保存。
  */
-export const profileUpdateResponseSchema = z.object({ user: MeSchema })
+export const profileUpdateResponseSchema = z.object({
+  user: MeSchema,
+  /** 同上：老 API 不回 `pending` 时按「没有待审」解析，端上不会因此写失败。 */
+  pending: profilePendingChangeSchema.nullable().default(null),
+})
 
 export type ProfileUpdateResponse = z.infer<typeof profileUpdateResponseSchema>

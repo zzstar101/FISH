@@ -15,6 +15,7 @@ import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { messages } from './schema/messages'
 import { notifications } from './schema/notifications'
+import { profileModerationRecords } from './schema/profile-moderation'
 import { rateLimitEvents } from './schema/rate-limits'
 import { subscribeMessageDeliveries, subscribeMessageGrants } from './schema/subscribe-messages'
 import { transactions } from './schema/transactions'
@@ -86,6 +87,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       chatModerationRecords,
       rateLimitEvents,
       wishModerationRecords,
+      profileModerationRecords,
       transactions,
       disputes,
       disputeAttachments,
@@ -110,8 +112,9 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // 它无外键，但仍一并清空，免得上一轮的待删键在下一轮 worker 回收时被顺带删掉）。
       listingImageDeletions: 0,
       wishes: 2,
-      // #694 M5：许愿审核记录由真实提交产生，seed 不预置。
+      // #694 M5：许愿 / 资料审核记录由真实提交产生，seed 不预置。
       wishModerationRecords: 0,
+      profileModerationRecords: 0,
       // #322 M1：向量由 worker 的 EMBED_* job 生成，seed 不预置（假向量落进 seed 库比空表更误导）。
       embeddings: 0,
       // `matches` / `notifications` 由 worker 用真实打分产出（#43）：seed 只投一条
@@ -133,8 +136,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // 它们**测不到 TRUNCATE 清单漏列**：清单漏掉任何一张被引用的表时，seed() 自身的
       // TRUNCATE 会先抛 0A000（实测 detail: Table "dispute_attachments" references
       // "users"），根本走不到下面的 counts —— 换成父提交 d170f609 的旧 counts 在同一处
-      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 43 张业务表，本 counts
-      // 只覆盖其中 19 张，其余 24 张靠 seed() 抛出的 0A000 把关。
+      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 44 张业务表，本 counts
+      // 只覆盖其中 20 张，其余 24 张靠 seed() 抛出的 0A000 把关。
       disputes: 0,
       disputeAttachments: 0,
       disputeEvidenceMessages: 0,

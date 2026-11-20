@@ -5,7 +5,7 @@ import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import { UploadServiceError } from '../uploads/service'
 import { createProfileRouter } from './router'
-import type { ProfileService } from './service'
+import { type ProfileService, ProfileServiceError } from './service'
 
 const profile = {
   user: {
@@ -24,6 +24,8 @@ const profile = {
   listings: [],
   wishes: [],
   transactions: [],
+  // #694 M5：聚合视图新增待审块（没有待审记录时是 null）。
+  pending: null,
 } as unknown as ProfileResponse
 
 const me = profile.user
@@ -35,7 +37,7 @@ const me = profile.user
 function fakeService(overrides: Partial<ProfileService> = {}): ProfileService {
   return {
     getProfile: async () => profile,
-    updateProfile: async () => me,
+    updateProfile: async () => ({ user: me, pending: null }),
     ...overrides,
   }
 }
@@ -95,12 +97,12 @@ describe('profile router', () => {
 })
 
 describe('PATCH /profile（#86 B：编辑资料）', () => {
-  test('昵称与头像 objectKey 解析后原样交给 service，回包是 { user }', async () => {
+  test('昵称与头像 objectKey 解析后原样交给 service，回包是 { user, pending }', async () => {
     let received: unknown
     const service = fakeService({
       updateProfile: async (_me, input) => {
         received = input
-        return { ...me, nickname: '新名字' }
+        return { user: { ...me, nickname: '新名字' }, pending: null }
       },
     })
 
@@ -110,7 +112,7 @@ describe('PATCH /profile（#86 B：编辑资料）', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ user: { ...me, nickname: '新名字' } })
+    expect(await response.json()).toEqual({ user: { ...me, nickname: '新名字' }, pending: null })
     expect(received).toEqual({ nickname: '新名字', avatarObjectKey: 'listings/u1/a.jpg' })
   })
 
@@ -119,7 +121,7 @@ describe('PATCH /profile（#86 B：编辑资料）', () => {
     const service = fakeService({
       updateProfile: async () => {
         called += 1
-        return me
+        return { user: me, pending: null }
       },
     })
 
@@ -151,5 +153,68 @@ describe('PATCH /profile（#86 B：编辑资料）', () => {
     expect(await response.json()).toEqual({
       error: { code: 'IMAGE_REFERENCE_INVALID', message: '图片不属于当前用户' },
     })
+  })
+
+  // #694 M5：内容被公开 UGC 策略阻断时同样是字段级 422（端上据此把提示挂到输入框）。
+  test('文本审核 BLOCK 原样冒泡：422 PROFILE_CONTENT_BLOCKED + details', async () => {
+    const service = fakeService({
+      updateProfile: async () => {
+        throw new ProfileServiceError(422, 'PROFILE_CONTENT_BLOCKED', '昵称或个性签名未通过审核', [
+          { field: 'signature', message: '个性签名包含平台禁止发布的内容' },
+        ])
+      },
+    })
+
+    const response = await patch(buildRoot(service), { signature: '加微信 123' })
+
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'PROFILE_CONTENT_BLOCKED',
+        message: '昵称或个性签名未通过审核',
+        details: [{ field: 'signature', message: '个性签名包含平台禁止发布的内容' }],
+      },
+    })
+  })
+
+  test('审核上游不可用：503 CONTENT_MODERATION_UNAVAILABLE（不降级放行）', async () => {
+    const service = fakeService({
+      updateProfile: async () => {
+        throw new ProfileServiceError(
+          503,
+          'CONTENT_MODERATION_UNAVAILABLE',
+          '内容审核暂时不可用，请稍后重试',
+        )
+      },
+    })
+
+    const response = await patch(buildRoot(service), { nickname: '新名字' })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'CONTENT_MODERATION_UNAVAILABLE',
+        message: '内容审核暂时不可用，请稍后重试',
+      },
+    })
+  })
+
+  // 机审 REVIEW 也是 200：新值挂起，端上按 `pending` 显示「审核中」。
+  test('REVIEW 时回包带 pending，user 仍是旧公开值', async () => {
+    const pending = {
+      nickname: '待审昵称',
+      signature: null,
+      avatarUrl: null,
+      fields: ['nickname'] as ('nickname' | 'signature' | 'avatarUrl')[],
+      submittedAt: '2026-09-12T04:00:00.000Z',
+    }
+    const service = fakeService({
+      updateProfile: async () => ({ user: me, pending }),
+    })
+
+    const response = await patch(buildRoot(service), { nickname: '待审昵称' })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ user: me, pending })
   })
 })

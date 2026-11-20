@@ -22,6 +22,10 @@ const targets = {
     prefix: PUBLIC_ID_PREFIX.wishModerationRecord,
     table: 'wish_moderation_records',
   },
+  PROFILE_MODERATION_RECORD: {
+    prefix: PUBLIC_ID_PREFIX.profileModerationRecord,
+    table: 'profile_moderation_records',
+  },
   REPORT: { prefix: PUBLIC_ID_PREFIX.report, table: 'reports' },
   USER_RESTRICTION: { prefix: PUBLIC_ID_PREFIX.userRestriction, table: 'user_restrictions' },
   DISPUTE: { prefix: PUBLIC_ID_PREFIX.dispute, table: 'disputes' },

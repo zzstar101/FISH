@@ -1017,6 +1017,9 @@ const MODERATION_FIELD_LABEL: Record<ModerationField, string> = {
   // 这里只为满足 `Record<ModerationField, string>` 的穷尽性。
   content: '内容',
   publicContent: '公开内容',
+  // 同理：昵称 / 签名走 ProfileModerationPolicy（#694 M5），商品链路的 BLOCK 明细不会出现它们。
+  nickname: '昵称',
+  signature: '个性签名',
 }
 
 function moderationBlockDetailsOf(result: TextModerationResult): ApiErrorDetail[] | undefined {

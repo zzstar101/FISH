@@ -62,6 +62,13 @@ import {
 } from '@fish/contracts/moderation/chat-schema'
 import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
 import {
+  PROFILE_MODERATION_ROUTES,
+  type ProfileModerationDecisionInput,
+  type ProfileModerationQueueResponse,
+  profileModerationDecisionResponseSchema,
+  profileModerationQueueResponseSchema,
+} from '@fish/contracts/profile/moderation'
+import {
   type AdminReportDetail,
   AdminReportDetailSchema,
   type AdminReportHandleInput,
@@ -314,6 +321,35 @@ export async function submitWishModerationDecision(
 ): Promise<void> {
   wishModerationDecisionResponseSchema.parse(
     await apiRequest(WISH_MODERATION_ROUTES.decision(recordId), {
+      body: JSON.stringify(input),
+      method: 'POST',
+    }),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 资料待审（#694 M5）
+// ---------------------------------------------------------------------------
+
+export async function fetchProfileModerationQueue(
+  cursor?: string,
+): Promise<ProfileModerationQueueResponse> {
+  return profileModerationQueueResponseSchema.parse(
+    await apiRequest(
+      adminQueryPath(PROFILE_MODERATION_ROUTES.queue, {
+        ...(cursor ? { cursor } : {}),
+        limit: ADMIN_PAGE_LIMIT,
+      }),
+    ),
+  )
+}
+
+export async function submitProfileModerationDecision(
+  recordId: string,
+  input: ProfileModerationDecisionInput,
+): Promise<void> {
+  profileModerationDecisionResponseSchema.parse(
+    await apiRequest(PROFILE_MODERATION_ROUTES.decision(recordId), {
       body: JSON.stringify(input),
       method: 'POST',
     }),

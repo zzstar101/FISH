@@ -393,6 +393,13 @@
       "when": 1795184171175,
       "tag": "20261120221611_futuristic_mandarin",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1795188137038,
+      "tag": "20261120232217_empty_hemingway",
+      "breakpoints": true
     }
   ]
 }

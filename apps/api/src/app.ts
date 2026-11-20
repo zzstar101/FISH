@@ -99,6 +99,9 @@ import { createNotificationService } from './modules/notifications/service'
 import { createSqlNotificationStore } from './modules/notifications/store'
 import { writeNotification } from './modules/notifications/writer'
 import { createPresenceRegistry } from './modules/presence/presence'
+import { createProfileModerationPolicy } from './modules/profile/moderation-policy'
+import { createProfileModerationService } from './modules/profile/moderation-service'
+import { createSqlProfileModerationStore } from './modules/profile/moderation-store'
 import { createProfileRouter } from './modules/profile/router'
 import { createProfileService } from './modules/profile/service'
 import { createSqlProfileStore } from './modules/profile/store'
@@ -748,6 +751,9 @@ export function createApp(
         store: createSqlProfileStore(db),
         storage,
         uploads: uploadService,
+        // #694 M5：昵称 / 签名按公开 UGC 策略送审（与留言 / 评价同一个 provider 与策略号），
+        // 只是替换了 provider 的 BizType，不复制腾讯 SDK。
+        moderation: createProfileModerationPolicy(publicUgcModerationProvider),
       }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
@@ -1064,11 +1070,17 @@ export function createApp(
     store: createSqlWishModerationStore(db),
     matchQueue: createDbWishMatchQueue(db),
   })
+  // 用户资料待审（#694 M5）：与个人中心共用 `users` 里的公开值，队列只读待审快照；
+  // 放行在同一事务里切公开列，因此这里不需要额外的通知/索引更新钩子。
+  const profileModerationService = createProfileModerationService({
+    store: createSqlProfileModerationStore(db),
+  })
   const admin = createAdminModule({
     db,
     storage,
     chatModeration: chatModerationService,
     wishModeration: wishModerationService,
+    profileModeration: profileModerationService,
     requireAuth: auth.requireAuth,
     governance: governanceService,
     guard: restrictionGuard,
