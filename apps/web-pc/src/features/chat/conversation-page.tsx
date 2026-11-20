@@ -1,6 +1,7 @@
 import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { MEDIA_MAX_VOICE_DURATION_MS, MESSAGE_RECALL_WINDOW_MS } from '@fish/contracts/chat/schema'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
+import type { MessageId } from '@fish/contracts/system/public-id'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
@@ -13,6 +14,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { useAuth } from '../auth/auth-provider'
+import { ReportDialog } from '../reports/report-dialog'
 import { ReportEntry } from '../reports/report-entry'
 import { describeRecallFailure, presignMediaUpload } from './api'
 import {
@@ -120,6 +122,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const [recording, setRecording] = useState(false)
   const [voiceStarting, setVoiceStarting] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
+  const [reportTarget, setReportTarget] = useState<{ id: MessageId; label: string } | null>(null)
   const [localMessages, setLocalMessages] = useState<MessageDto[]>([])
   const [localMedia, setLocalMedia] = useState<MediaMessageDto[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -664,6 +667,12 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                       key={`message-${entry.id}`}
                       message={entry.message}
                       onRecall={() => recall(entry.message.id)}
+                      onReport={() =>
+                        setReportTarget({
+                          id: entry.message.id,
+                          label: `来自 ${entry.message.sender?.nickname ?? '对方'} 的消息`,
+                        })
+                      }
                     />
                   ) : (
                     <MediaBubble
@@ -680,6 +689,12 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                       key={`media-${entry.id}`}
                       media={entry.media}
                       onRecall={() => recall(entry.media.id)}
+                      onReport={() =>
+                        setReportTarget({
+                          id: entry.media.id,
+                          label: '来自对方的消息（媒体）',
+                        })
+                      }
                     />
                   ),
                 )}
@@ -812,6 +827,16 @@ export function ConversationPage({ conversationId }: { conversationId: string })
           </Card>
         </aside>
       </div>
+      {reportTarget ? (
+        <ReportDialog
+          key={reportTarget.id}
+          open
+          target={{ type: 'MESSAGE', id: reportTarget.id, label: reportTarget.label }}
+          onOpenChange={(open) => {
+            if (!open) setReportTarget(null)
+          }}
+        />
+      ) : null}
     </div>
   )
 }

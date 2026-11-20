@@ -53,6 +53,13 @@ import {
   type GovernanceResult,
   GovernanceResultSchema,
 } from '@fish/contracts/governance/schema'
+import {
+  CHAT_MODERATION_ROUTES,
+  type ChatModerationDecisionInput,
+  ChatModerationDecisionResponseSchema,
+  type ChatModerationQueueResponse,
+  ChatModerationQueueResponseSchema,
+} from '@fish/contracts/moderation/chat-schema'
 import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
 import {
   type AdminReportDetail,
@@ -240,6 +247,40 @@ export async function submitModerationDecision(
       method: 'POST',
     }),
   )
+}
+
+// ---------------------------------------------------------------------------
+// 聊天待审（#694 M2）
+// ---------------------------------------------------------------------------
+
+export async function fetchChatModerationQueue(
+  cursor?: string,
+): Promise<ChatModerationQueueResponse> {
+  return ChatModerationQueueResponseSchema.parse(
+    await apiRequest(
+      adminQueryPath(CHAT_MODERATION_ROUTES.queue, {
+        ...(cursor ? { cursor } : {}),
+        limit: ADMIN_PAGE_LIMIT,
+      }),
+    ),
+  )
+}
+
+export async function submitChatModerationDecision(
+  recordId: string,
+  input: ChatModerationDecisionInput,
+): Promise<void> {
+  ChatModerationDecisionResponseSchema.parse(
+    await apiRequest(CHAT_MODERATION_ROUTES.decision(recordId), {
+      body: JSON.stringify(input),
+      method: 'POST',
+    }),
+  )
+}
+
+/** 媒体快照只在管理员会话下可读；页面用 <img src> 直取，不在前端缓存 base64。 */
+export function adminChatModerationMediaPath(recordId: string): string {
+  return CHAT_MODERATION_ROUTES.media(recordId)
 }
 
 // ---------------------------------------------------------------------------

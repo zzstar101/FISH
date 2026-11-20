@@ -90,3 +90,11 @@ describe('说明长度上限与契约一致', () => {
     ).toBe(false)
   })
 })
+
+describe('消息举报原因（#694 M2）', () => {
+  test('只提供消息可用原因，并为每条原因提供文案', () => {
+    const keys = reasonsOf('MESSAGE').map((option) => option.key)
+    expect(keys).toEqual(['SPAM', 'FRAUD', 'HARASSMENT', 'PROHIBITED', 'OTHER'])
+    for (const option of reasonsOf('MESSAGE')) expect(option.label.length).toBeGreaterThan(0)
+  })
+})

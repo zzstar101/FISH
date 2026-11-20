@@ -85,6 +85,18 @@ function ListingBubble({ listing }: { listing: ConversationListing | null | unde
  * 用 opacity 而不是 `hidden`：控件始终留在可聚焦序列里，键盘用户 tab 得到，
  * 屏幕阅读器也照常读到（纯 `hidden` 会把这条路一起关掉）。
  */
+function ReportButton({ onReport }: { onReport: () => void }) {
+  return (
+    <button
+      className="opacity-0 transition-opacity hover:text-danger hover:underline focus-visible:opacity-100 group-hover:opacity-100"
+      onClick={onReport}
+      type="button"
+    >
+      举报
+    </button>
+  )
+}
+
 function RecallButton({ onRecall }: { onRecall: () => void }) {
   return (
     <button
@@ -103,12 +115,15 @@ export function MessageBubble({
   isRead,
   canRecall,
   onRecall,
+  onReport,
 }: {
   message: MessageDto
   isMine: boolean
   isRead: boolean
   canRecall: boolean
   onRecall: () => void
+  /** 接收方才能举报这条消息；自己发的消息不渲染入口（服务端也会 422 拒绝）。 */
+  onReport?: () => void
 }) {
   if (message.type === 'SYSTEM') {
     return (
@@ -157,6 +172,7 @@ export function MessageBubble({
           <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
           {isMine && isRead ? <span>已读</span> : null}
           {canRecall ? <RecallButton onRecall={onRecall} /> : null}
+          {!isMine && onReport ? <ReportButton onReport={onReport} /> : null}
         </div>
       </div>
     </div>
@@ -174,12 +190,14 @@ export function MediaBubble({
   isRead,
   canRecall,
   onRecall,
+  onReport,
 }: {
   media: MediaMessageDto
   isMine: boolean
   isRead: boolean
   canRecall: boolean
   onRecall: () => void
+  onReport?: () => void
 }) {
   /*
     媒体撤回碑：服务端撤回媒体后 `url` 是**空串**（`media-service.ts` 对 recalled 行清空
@@ -202,6 +220,7 @@ export function MediaBubble({
           <time dateTime={media.createdAt}>{formatMessageTime(media.createdAt)}</time>
           {isMine && isRead ? <span>已读</span> : null}
           {canRecall ? <RecallButton onRecall={onRecall} /> : null}
+          {!isMine && onReport ? <ReportButton onReport={onReport} /> : null}
         </div>
       </div>
     </div>

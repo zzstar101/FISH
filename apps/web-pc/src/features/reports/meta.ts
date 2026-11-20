@@ -1,7 +1,9 @@
 import {
   LISTING_REPORT_REASONS as CONTRACT_LISTING_REASONS,
+  MESSAGE_REPORT_REASONS as CONTRACT_MESSAGE_REASONS,
   USER_REPORT_REASONS as CONTRACT_USER_REASONS,
   type ListingReportReason,
+  type MessageReportReason,
   type ReportReason,
   type ReportStatus,
   type ReportTargetType,
@@ -85,8 +87,35 @@ export const REPORT_DESC_PLACEHOLDER = '选填：补充时间、对方言行等�
 /** 契约 `ReportCreateInputSchema.detailText` 的上限（`z.string().trim().max(200)`）。 */
 export const REPORT_DETAIL_MAX_LENGTH = 200
 
+const MESSAGE_REASON_COPY: Record<MessageReportReason, { label: string; hint: string }> = {
+  SPAM: {
+    label: '垃圾广告或引流',
+    hint: '请说明对方在私聊里发的内容（如二维码 / 加微信 / 外链）与大致时间',
+  },
+  FRAUD: {
+    label: '涉嫌欺诈',
+    hint: '请提供对方要求转账 / 付款的具体说法与大致时间，便于核对该条消息',
+  },
+  HARASSMENT: {
+    label: '骚扰',
+    hint: '请说明对方骚扰的方式与大致时间，便于核对会话记录',
+  },
+  PROHIBITED: {
+    label: '违禁或违法内容',
+    hint: '请说明这条消息涉及的违禁内容，服务端会保留该条消息的取证快照',
+  },
+  OTHER: { label: '其他', hint: '请描述这条消息的违规情形，便于人工复核' },
+}
+
+const MESSAGE_REASON_OPTIONS: ReportReasonOption[] = CONTRACT_MESSAGE_REASONS.map((key) => ({
+  key,
+  ...MESSAGE_REASON_COPY[key],
+}))
+
 export function reasonsOf(target: ReportTargetType): ReportReasonOption[] {
-  return target === 'LISTING' ? LISTING_REASON_OPTIONS : USER_REASON_OPTIONS
+  if (target === 'LISTING') return LISTING_REASON_OPTIONS
+  if (target === 'MESSAGE') return MESSAGE_REASON_OPTIONS
+  return USER_REASON_OPTIONS
 }
 
 export function reasonLabel(target: ReportTargetType, key: string): string {

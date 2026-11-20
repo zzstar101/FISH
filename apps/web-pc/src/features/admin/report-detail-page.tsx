@@ -141,6 +141,26 @@ function ReportDetailView({
           ) : null}
         </Card>
 
+        {item.messageEvidence ? (
+          <Card className="gap-3 border border-line p-5">
+            <h2 className="font-semibold">消息证据（服务端快照）</h2>
+            <p className="text-sm">
+              {item.messageEvidence.kind === 'TEXT'
+                ? item.messageEvidence.content
+                : `${item.messageEvidence.kind === 'IMAGE' ? '图片' : '语音'}消息（${
+                    item.messageEvidence.mimeType ?? '未知类型'
+                  }，${item.messageEvidence.sizeBytes ?? 0} 字节）`}
+            </p>
+            <p className="text-ink-3 text-xs">
+              发送者 {item.messageEvidence.senderNickname} · 发送于{' '}
+              {formatAdminDateTime(item.messageEvidence.createdAt)}
+              {item.messageEvidence.recalledAt !== null
+                ? ` · 举报后已撤回（${formatAdminDateTime(item.messageEvidence.recalledAt)}），快照保留`
+                : ''}
+            </p>
+          </Card>
+        ) : null}
+
         <Card className="gap-3 border border-line p-5">
           <h2 className="font-semibold">被举报目标</h2>
           <p className="text-sm">
