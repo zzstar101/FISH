@@ -75,7 +75,12 @@ beforeEach(() => {
     headers: {},
     expiresAt: '2026-01-01T00:00:00.000Z',
   }
-  confirmResponse = { objectKey: FINAL_KEY, url: 'https://api.example.com/api/uploads/media/tok' }
+  confirmResponse = {
+    objectKey: FINAL_KEY,
+    url: 'https://api.example.com/api/uploads/media/tok',
+    // #694 M5c 起 confirm 响应必带机器结论（BLOCK 不会走到这里）。
+    moderationDecision: 'ALLOW',
+  }
 })
 
 describe('uploadReviewImage —— 三步编排（#475）', () => {

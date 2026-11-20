@@ -262,9 +262,17 @@ export function createTransactionReviewService(deps: {
    * 生产装配在 `app.ts`，使用独立的 `TENCENT_IMS_UGC_BIZ_TYPE`。
    */
   reviewImageModeration?: ReviewImageModerationConfig
+  /**
+   * #694 M8：存量评价图的补审结论。只影响没有 `review_moderation_records` 的旧键；
+   * 有台账记录时以台账为准。缺省时维持 #475 的 `reviews/*` ALLOW 兼容。
+   */
+  legacyMediaDecisions?: (
+    objectKeys: readonly string[],
+  ) => Promise<ReadonlyMap<string, ModerationDecision>>
 }): TransactionReviewService {
   const { store, storage, moderationStore } = deps
   const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
+  const legacyMediaDecisions = deps.legacyMediaDecisions ?? (async () => new Map())
 
   /**
    * 评价边的所有方法都先过这一道：交易存在且我是参与者，否则 404
@@ -294,6 +302,19 @@ export function createTransactionReviewService(deps: {
     }
     for (const record of records) {
       decisions.set(record.finalKey, effectiveReviewModerationDecision(record))
+    }
+    // #694 M8：补审结论覆盖 #475 的「无记录即 ALLOW」。未审/PENDING/FAILED 返回 REVIEW，
+    // BLOCK 返回 BLOCK，因此旧评价图在补审前不会继续以 ALLOW 展示。
+    let legacyDecisions: ReadonlyMap<string, ModerationDecision>
+    try {
+      legacyDecisions = await legacyMediaDecisions(keys)
+    } catch (error) {
+      console.error('[transaction-reviews] 读取存量图补审记录失败，按 503 服务故障处理', error)
+      throw reviewMediaUnavailable()
+    }
+    for (const key of keys) {
+      const decision = legacyDecisions.get(key)
+      if (!decisions.has(key) && decision) decisions.set(key, decision)
     }
     // #475 遗留公开键：审核台账上线前固化的 `reviews/` 对象没有记录。它们本来就已公开，
     // 展示按 ALLOW 兼容；**新写入**不受影响——`resolveReviewImages` 仍要求台账存在。

@@ -349,6 +349,19 @@ describe('评价边（favorites 同款单资源三方法）', () => {
     ])
   })
 
+  // #694 M8：盘点后补审为 BLOCK 的 legacy 图覆盖 #475 的 ALLOW 兼容。
+  test('legacy 补审 BLOCK 后不再按 ALLOW 显示图片', async () => {
+    const legacyKey = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, BUYER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, uuid(0xd3))}.png`
+    const service = createTransactionReviewService({
+      store: fakeStore({ existing: reviewRow({ imageKeys: [legacyKey] }) }),
+      storage,
+      moderationStore: fakeModerationStore(),
+      legacyMediaDecisions: async () => new Map([[legacyKey, 'BLOCK']]),
+    })
+    const dto = await service.getMyReview(BUYER_ID, TXN_ID)
+    expect(dto.images).toEqual([])
+  })
+
   test('DELETE 幂等：store 的删除行数原样回传（0 = 本来就没有）', async () => {
     const service = createTransactionReviewService({
       store: fakeStore({ deleted: 0 }),

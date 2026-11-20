@@ -8,6 +8,7 @@ import { conversations } from './schema/conversations'
 import { disputeAttachments, disputeEvidenceMessages, disputes } from './schema/disputes'
 import { embeddings } from './schema/embeddings'
 import { jobs } from './schema/jobs'
+import { legacyMediaAuditItems } from './schema/legacy-media-audit'
 import { listingImageDeletions } from './schema/listing-image-deletions'
 import { listingMediaObjects } from './schema/listing-media'
 import { listingNumbers } from './schema/listing-numbers'
@@ -79,6 +80,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       listings,
       listingImages,
       listingMediaObjects,
+      legacyMediaAuditItems,
       listingImageDeletions,
       wishes,
       embeddings,
@@ -110,6 +112,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // #286：审核台账由 confirm 写入，seed 不预置（本地 transport 恒 REVIEW，预置反而会造出
       // "已确认"的假象）。它引用 users，因此必须一起 TRUNCATE，否则 seed 会撞外键。
       listingMediaObjects: 0,
+      // #694 M8：存量图盘点由 inventory 扫描生成，seed 不预置；它引用 users，必须一起 TRUNCATE。
+      legacyMediaAuditItems: 0,
       // #476：待删图片键由换图写路径登记，seed 不预置（同 listingMediaObjects 的取舍；
       // 它无外键，但仍一并清空，免得上一轮的待删键在下一轮 worker 回收时被顺带删掉）。
       listingImageDeletions: 0,
@@ -140,8 +144,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // 它们**测不到 TRUNCATE 清单漏列**：清单漏掉任何一张被引用的表时，seed() 自身的
       // TRUNCATE 会先抛 0A000（实测 detail: Table "dispute_attachments" references
       // "users"），根本走不到下面的 counts —— 换成父提交 d170f609 的旧 counts 在同一处
-      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 44 张业务表，本 counts
-      // 只覆盖其中 20 张，其余 24 张靠 seed() 抛出的 0A000 把关。
+      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 45 张业务表，本 counts
+      // 只覆盖其中 21 张，其余 24 张靠 seed() 抛出的 0A000 把关。
       disputes: 0,
       disputeAttachments: 0,
       disputeEvidenceMessages: 0,

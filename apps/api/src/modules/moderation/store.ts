@@ -47,8 +47,21 @@ export type SettleListingMediaHook = (
   input: { listingId: string; decision: 'ALLOW' | 'BLOCK' },
 ) => Promise<void>
 
+/**
+ * 存量图片补审结算钩子（#694 审查 P1-3）：商品从 REVIEW 被人工批准 / 拒绝后，引用该商品的
+ * 补审记录必须同步改判，否则读侧继续按机器结论把图片挡在 404。实现见
+ * `modules/moderation/legacy-media-settlement.ts`。
+ *
+ * 只认 `AUDITED + REVIEW` 的行：机器 BLOCK 是上游明确结论，不能借商品放行洗白。
+ */
+export type SettleLegacyMediaAuditHook = (
+  tx: ModerationDbTransaction,
+  input: { listingId: string; decision: 'ALLOW' | 'BLOCK' },
+) => Promise<void>
+
 export interface ModerationStoreOptions {
   settleListingMedia?: SettleListingMediaHook
+  settleLegacyMediaAudit?: SettleLegacyMediaAuditHook
 }
 
 export interface ModerationStore {
@@ -73,7 +86,7 @@ export function createSqlModerationStore(
   db: Db,
   options: ModerationStoreOptions = {},
 ): ModerationStore {
-  const { settleListingMedia } = options
+  const { settleListingMedia, settleLegacyMediaAudit } = options
   return {
     async listByListing(listingId, limit = 50) {
       return db
@@ -146,6 +159,13 @@ export function createSqlModerationStore(
       // 会从 `listing_images` 重新读到机器 `REVIEW`，把刚放行的商品压回人工队列。
       if (settleListingMedia) {
         await settleListingMedia(tx, {
+          listingId: String(record.listing_id),
+          decision: input.decision,
+        })
+      }
+      // #694 审查 P1-3：补审结论与商品人工结论同事务同步，避免「商品已批准、图还 404」。
+      if (settleLegacyMediaAudit) {
+        await settleLegacyMediaAudit(tx, {
           listingId: String(record.listing_id),
           decision: input.decision,
         })

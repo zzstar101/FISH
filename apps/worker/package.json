@@ -13,6 +13,7 @@
     "@fish/db": "workspace:*",
     "@fish/shared": "workspace:*",
     "@fish/visual-embedding": "workspace:*",
-    "drizzle-orm": "^0.45.2"
+    "drizzle-orm": "^0.45.2",
+    "tencentcloud-sdk-nodejs-ims": "^4.1.311"
   }
 }

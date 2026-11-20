@@ -1,7 +1,14 @@
+import { LEGACY_MEDIA_AUDIT_JOB_TYPE } from '@fish/contracts/legacy-media/jobs'
 import { RANKING_VERSION } from '@fish/contracts/matching/schema'
 import { RECOMMENDATION_CLEANUP_INTERVAL_MS } from '@fish/contracts/recommendation/observability'
 import { createDb } from '@fish/db/client'
-import { loadEmbeddingEnv, loadServerEnv, loadVisualEmbeddingEnv } from '@fish/shared/env'
+import {
+  loadContentModerationEnv,
+  loadEmbeddingEnv,
+  loadServerEnv,
+  loadVisualEmbeddingEnv,
+} from '@fish/shared/env'
+import { loadLegacyMediaAuditEnv } from '@fish/shared/legacy-media-audit-env'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
 import { sql } from 'drizzle-orm'
 import { purgeDueAccountDeletions } from './jobs/account-deletion/purge'
@@ -10,6 +17,9 @@ import { createEmbeddingProvider } from './jobs/embedding/providers'
 import { scheduleFailedEmbedRetry } from './jobs/embedding/requeue'
 import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
+import { runLegacyMediaAudit } from './jobs/legacy-media-audit/handlers'
+import { createLegacyMediaAuditModerator } from './jobs/legacy-media-audit/moderator'
+import { createLegacyMediaAuditBatchRunner } from './jobs/legacy-media-audit/scheduler'
 import { cleanupRemovedListingImages } from './jobs/listing-image-cleanup'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
@@ -93,6 +103,26 @@ const visualEmbeddingEnv = loadVisualEmbeddingEnv()
 const visualEmbeddingProvider = createVisualEmbeddingProvider(visualEmbeddingEnv)
 
 /**
+ * #694 M8：存量图补审的批次/速率配置（全部有默认值）。
+ *
+ * 审核出口是 IMS，配置与 API 共用 `CONTENT_MODERATION_*`；`local` transport 下图片一律
+ * REVIEW，补审不会放行任何存量图。缺少 chat/UGC 策略号时**不阻断 worker 启动**：补审整体
+ * 跳过并打一条告警，其它 job 照常跑 —— 这属于本地 env 未配全，不应拖垮匹配/向量链路。
+ */
+const legacyMediaAuditEnv = loadLegacyMediaAuditEnv()
+const legacyMediaAuditModerator = legacyMediaAuditEnv.enabled
+  ? (() => {
+      try {
+        return createLegacyMediaAuditModerator(loadContentModerationEnv())
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        console.error(`[worker] 存量图补审已启用但审核配置不可用，本轮跳过：${detail}`)
+        return null
+      }
+    })()
+  : null
+
+/**
  * 视觉回填要读封面字节、查询图清理要删对象，所以 worker 也持有一个 S3 客户端。
  *
  * 只做两件事（见 `media-storage.ts`）：不签名、不拼公开 URL、不碰审核图代理——那些是 API 的职责。
@@ -140,6 +170,24 @@ const queue = createJobQueue(db, {
     // 长期兴趣画像（#323 R2）同样要显式拿到模型：聚合只吃当前模型的向量，换模型后由 backfill 重建。
     ...createInterestJobHandlers(db, { embeddingModel: embeddingProvider.model }),
     ...createVisualEmbedJobHandlers(db, visualEmbeddingProvider, mediaStorage),
+    // #694 M8：存量图补审。配置不可用时不注册 handler，scheduler 也不会投递；
+    // 已在队列里的 job 会因缺少 handler 失败并留在队列里，等配置修好后重新投递。
+    ...(legacyMediaAuditModerator
+      ? {
+          [LEGACY_MEDIA_AUDIT_JOB_TYPE]: (payload: unknown) =>
+            runLegacyMediaAudit(
+              {
+                db,
+                storage: mediaStorage,
+                moderator: legacyMediaAuditModerator,
+                maxImageBytes: legacyMediaAuditEnv.maxImageBytes,
+                maxAttempts: legacyMediaAuditEnv.maxAttempts,
+                retryDelayMs: legacyMediaAuditEnv.retryDelayMs,
+              },
+              payload,
+            ),
+        }
+      : {}),
   },
   isFatalError: (error) =>
     // 源封面确定性不可用（超限、魔术字节不符）重发不会变好 ⇒ 立即 FAILED，
@@ -151,6 +199,14 @@ const queue = createJobQueue(db, {
 const visualBackfill = createVisualBackfillRunner({
   db,
   model: visualEmbeddingProvider.model,
+})
+
+/** #694 M8：周期性把 inventory 中到点的对象投成补审 job（只投递，不在调度线程里调 IMS）。 */
+const runLegacyMediaAuditBatch = createLegacyMediaAuditBatchRunner({
+  db,
+  enabled: legacyMediaAuditEnv.enabled && legacyMediaAuditModerator !== null,
+  batchSize: legacyMediaAuditEnv.batchSize,
+  maxAttempts: legacyMediaAuditEnv.maxAttempts,
 })
 
 /** 周期性清理 30 天前的浏览足迹（#415 M1）。失败只记日志，不影响主循环。 */
@@ -244,6 +300,12 @@ type MaintenanceSchedule = {
 
 const SCHEDULES: MaintenanceSchedule[] = [
   { intervalMs: VISUAL_MAINTENANCE_INTERVAL_MS, lastRunAt: 0, run: runVisualMaintenance },
+  // #694 M8：存量图补审投递。间隔/批大小由 LEGACY_MEDIA_AUDIT_* 控制。
+  {
+    intervalMs: legacyMediaAuditEnv.intervalMs,
+    lastRunAt: 0,
+    run: runLegacyMediaAuditBatch,
+  },
   { intervalMs: RECOMMENDATION_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runRecommendationCleanup },
   { intervalMs: VIEW_HISTORY_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runViewHistoryCleanup },
   // #476：回收被替换掉的公开商品图对象（24 小时保留期，小时级）。

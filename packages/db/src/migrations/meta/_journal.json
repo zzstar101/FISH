@@ -414,6 +414,20 @@
       "when": 1795194845146,
       "tag": "20261121011405_oval_nightcrawler",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1795198818891,
+      "tag": "20261121022018_careful_omega_sentinel",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1795201996421,
+      "tag": "20261121031316_breezy_warbound",
+      "breakpoints": true
     }
   ]
 }
