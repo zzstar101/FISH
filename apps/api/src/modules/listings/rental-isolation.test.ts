@@ -10,8 +10,8 @@ import { users } from '@fish/db/schema/users'
 import { listingViewHistory } from '@fish/db/schema/view-history'
 import { wishes } from '@fish/db/schema/wishes'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
-import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { and, eq, inArray, sql } from 'drizzle-orm'
+import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlCommentStore } from '../comments/store'
 import { createSqlConversationStore } from '../conversations/store'
 import { createFavoriteService } from '../favorites/service'
@@ -80,9 +80,6 @@ let saleId = ''
 let rentalId = ''
 let wishId = ''
 
-let seq = 0
-const uniqueStudentNo = () => `rental-isolation-${Date.now()}-${seq++}`
-
 async function insertListing(input: {
   sellerId: string
   title: string
@@ -115,16 +112,12 @@ beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
 
+  // #715 起 `uid` 由 DB 默认值生成（10 位数字），不再有 `student_no` / `password_hash`。
   for (const [id, nickname] of [
     [sellerId, '出租卖家'],
     [buyerId, '买家'],
   ] as const) {
-    await db.insert(users).values({
-      id,
-      studentNo: uniqueStudentNo(),
-      passwordHash: 'test-not-a-real-hash',
-      nickname,
-    })
+    await db.insert(users).values({ id, nickname })
   }
 
   saleId = await insertListing({ sellerId, title: '出售商品', listingType: 'SALE' })
