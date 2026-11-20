@@ -83,7 +83,10 @@ async function resize(path: string, width: number, height: number): Promise<Uint
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" ` +
     `viewBox="0 0 ${width} ${height}">` +
     `<image href="${href}" width="${width}" height="${height}"/></svg>`
-  const resvg = new Resvg(svg, { fitTo: { mode: 'width', value: width }, font: { loadSystemFonts: false } })
+  const resvg = new Resvg(svg, {
+    fitTo: { mode: 'width', value: width },
+    font: { loadSystemFonts: false },
+  })
   const image = resvg.render()
   const png = image.asPng()
   image.free()

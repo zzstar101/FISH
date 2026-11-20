@@ -31,7 +31,9 @@ if (total > LIMIT_BYTES) {
     .slice(0, 10)
     .map((entry) => `  ${kb(entry.size).padStart(8)}  ${entry.file}`)
     .join('\n')
-  console.error(`主包 ${kb(total)} 超过门禁 ${kb(LIMIT_BYTES)}（微信上限 2048 KB）\n最大的前 10 个文件：\n${biggest}`)
+  console.error(
+    `主包 ${kb(total)} 超过门禁 ${kb(LIMIT_BYTES)}（微信上限 2048 KB）\n最大的前 10 个文件：\n${biggest}`,
+  )
   console.error(
     '\n新增图片请走 tools/artwork/build.ts 按**显示尺寸**出图（出图宽 = 显示 rpx × 1.5），' +
       '不要把设计稿母版分辨率整张放进 src/assets。',
