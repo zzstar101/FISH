@@ -26,6 +26,7 @@ import {
 import type { BlockRelationCheck } from '../blocks/store'
 import type { ChatImageModerationResult, ChatModerationPolicy } from '../moderation/chat'
 import { ContentModerationError } from '../moderation/providers/types'
+import type { ChatRateLimiter } from '../rate-limit/service'
 import { CHAT_MEDIA_PREFIX, isSafeObjectKey, type MediaStorage } from '../uploads/storage'
 import { MessageIdempotencyConflictError, mediaRequestHash, messageSendKey } from './idempotency'
 import { probeImage } from './media-probe'
@@ -35,9 +36,11 @@ import type { ChatModerationRecordInput } from './store'
 
 export class MediaMessageServiceError extends Error {
   constructor(
-    readonly status: 403 | 404 | 409 | 422 | 503,
+    readonly status: 403 | 404 | 409 | 422 | 429 | 503,
     readonly code: string,
     message: string,
+    /** 429 时的建议等待秒数（router 会写 `Retry-After`）。 */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message)
     this.name = 'MediaMessageServiceError'
@@ -53,6 +56,15 @@ const voiceDisabled = () =>
     'VOICE_SEND_DISABLED',
     '语音消息暂不支持发送：音频审核尚未接入，历史语音仍可正常播放',
   )
+/** #694 M3：限流拒绝，携带服务端窗口算出的等待秒数。 */
+const rateLimited = (retryAfterSeconds: number) =>
+  new MediaMessageServiceError(
+    429,
+    'MEDIA_RATE_LIMITED',
+    '媒体操作过于频繁，请稍后再试',
+    retryAfterSeconds,
+  )
+
 const contentBlocked = () =>
   new MediaMessageServiceError(422, 'MESSAGE_CONTENT_BLOCKED', '媒体内容未通过安全审核')
 const moderationUnavailable = () =>
@@ -214,12 +226,15 @@ export function createMediaMessageService({
   mediaUrl,
   blocks,
   chatModeration,
+  rateLimit,
   onMediaCreated,
 }: {
   store: MediaMessageStore
   storage: MediaStorage
   /** #694 M1：聊天图片在快照固化后送审；语音上游未接入，发送被显式关闭。 */
   chatModeration: ChatModerationPolicy
+  /** #694 M3：预签名 / 落库分别计数（重放路径在计数之前返回）。 */
+  rateLimit: ChatRateLimiter
   mediaUrl: (conversationId: string, mediaId: string) => string
   /** #466 拉黑守卫：**必填**（与文本/商品卡同一谓词、同一中性码）。 */
   blocks: BlockRelationCheck
@@ -253,6 +268,9 @@ export function createMediaMessageService({
       ) {
         throw invalid('MEDIA_OBJECT_INVALID', '图片格式或大小不符合要求')
       }
+      // #694 M3：预签名单独计数（与文本额度互不挤占），被拒时不发上传地址。
+      const rate = await rateLimit.takeMediaPresign(userId, conversationId)
+      if (!rate.allowed) throw rateLimited(rate.retryAfterSeconds)
       const extension = input.contentType.split('/')[1] ?? 'bin'
       const key = `chat-media/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId)}/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${extension}`
       const signed = storage.presignPut({ key, contentType: input.contentType })
@@ -291,6 +309,9 @@ export function createMediaMessageService({
        * 后的重试」判成本次发送失败。
        */
       await assertNotBlocked(participant, userId)
+      // #694 M3：真实新请求才计数；幂等重放与拉黑/封禁拒绝都不消耗额度。
+      const rate = await rateLimit.takeMediaCreate(userId, conversationId)
+      if (!rate.allowed) throw rateLimited(rate.retryAfterSeconds)
       // 引用目标校验（#359 3c）：与 TEXT 路径同序，排在幂等重放与拉黑守卫**之后** ——
       // 否则「首发已落库、响应丢了」之后引用目标才被撤回的重试会撞 422，客户端把一条早已
       // 送达的消息当成发送失败。不可用直接 422，不做 stat / probe / 快照写入。

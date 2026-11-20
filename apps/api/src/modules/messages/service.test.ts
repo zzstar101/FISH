@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { ChatModerationResult, ChatTextModerationPolicy } from '../moderation/chat'
 import { ContentModerationError } from '../moderation/providers/types'
+import type { ChatRateLimiter } from '../rate-limit/service'
 import type { MediaStorage } from '../uploads/storage'
 import { messageSendKey, textRequestHash } from './idempotency'
 import {
@@ -50,6 +51,13 @@ const neverBlocked = { existsBlockBetween: async () => false }
  * 默认放行的聊天审核：既有用例都在验证发送/幂等/推送语义，不该被词表命中干扰。
  * 审核分支由本文件末尾的专门用例注入自定义 policy 覆盖。
  */
+const allowAllRateLimit: ChatRateLimiter = {
+  takeTextSend: async () => ({ allowed: true }),
+  takeMediaPresign: async () => ({ allowed: true }),
+  takeMediaCreate: async () => ({ allowed: true }),
+  takeNewSellerContact: async () => ({ allowed: true }),
+}
+
 const allowAllChatModeration: ChatTextModerationPolicy = {
   moderateText: async () => ({
     decision: 'ALLOW',
@@ -66,7 +74,13 @@ const allowAllChatModeration: ChatTextModerationPolicy = {
   }),
 }
 const serviceOf = (store: MemoryMessageStore, blocks = neverBlocked) =>
-  createMessageService({ store, storage, blocks, chatModeration: allowAllChatModeration })
+  createMessageService({
+    rateLimit: allowAllRateLimit,
+    store,
+    storage,
+    blocks,
+    chatModeration: allowAllChatModeration,
+  })
 
 describe('message service: listMessages', () => {
   test('returns ascending messages with sender info', async () => {
@@ -148,6 +162,7 @@ describe('message service: sendTextMessage', () => {
    */
   test('拉黑守卫：对方拉黑了我（反向边）→ 403 CONVERSATION_UNAVAILABLE', async () => {
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store: new MemoryMessageStore(),
       storage,
       chatModeration: allowAllChatModeration,
@@ -163,6 +178,7 @@ describe('message service: sendTextMessage', () => {
 
   test('拉黑守卫：我拉黑了对方（正向边）同样被拦（双向拦截）', async () => {
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store: new MemoryMessageStore(),
       storage,
       chatModeration: allowAllChatModeration,
@@ -357,6 +373,7 @@ describe('message service: sendListingMessage（#359 商品卡）', () => {
     store.listings.set(LISTING_ID, listingBrief())
     const pushed: string[] = []
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       chatModeration: allowAllChatModeration,
       store,
@@ -685,6 +702,7 @@ describe('message service: 撤回（#359 3c）', () => {
     const store = new MemoryMessageStore()
     const events: Array<Record<string, string>> = []
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       chatModeration: allowAllChatModeration,
       store,
@@ -703,6 +721,7 @@ describe('message service: 撤回（#359 3c）', () => {
     const store = new MemoryMessageStore()
     const recipients: Array<{ buyerId: string; sellerId: string }> = []
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       chatModeration: allowAllChatModeration,
       store,
@@ -867,6 +886,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
     const calls = { count: 0 }
     const pushed: string[] = []
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -890,6 +910,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
     const store = new MemoryMessageStore()
     const pushed: string[] = []
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -917,6 +938,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
     const store = new MemoryMessageStore()
     const pushed: string[] = []
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -934,6 +956,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
   test('上游故障：503 CONTENT_MODERATION_UNAVAILABLE，不落消息行', async () => {
     const store = new MemoryMessageStore()
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -954,6 +977,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
     const calls = { count: 0 }
     const pushed: string[] = []
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -991,6 +1015,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
       },
     }
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks,
@@ -1009,6 +1034,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
     const content = '违禁品'
     const key = messageSendKey(clientRequestId, textRequestHash(content))
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -1028,6 +1054,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
   test('未包装的审核异常也按 503 fail-closed，不漏成 500（review #716-11）', async () => {
     const store = new MemoryMessageStore()
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -1048,6 +1075,7 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
     store.listings.set(LISTING_ID, listingBrief())
     const calls = { count: 0 }
     const service = createMessageService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       blocks: neverBlocked,
@@ -1058,5 +1086,43 @@ describe('message service: 聊天文字审核（#694 M1）', () => {
       listingId: LISTING_PUBLIC_ID,
     })
     expect(calls.count).toBe(0)
+  })
+})
+
+describe('message service: 发送限流（#694 M3）', () => {
+  test('限流拒绝：429 MESSAGE_RATE_LIMITED，不送审、不落库、不推送', async () => {
+    const store = new MemoryMessageStore()
+    let moderated = 0
+    const pushed: string[] = []
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      rateLimit: {
+        ...allowAllRateLimit,
+        takeTextSend: async () => ({
+          allowed: false,
+          retryAfterSeconds: 7,
+          bucket: 'chat:send:account',
+        }),
+      },
+      chatModeration: {
+        moderateText: async () => {
+          moderated += 1
+          return chatVerdict({})
+        },
+      },
+      onMessageCreated: (_participants, message) => pushed.push(message.id),
+    })
+    await expect(
+      service.sendTextMessage(buyer, conversationA, { content: '在吗' }),
+    ).rejects.toMatchObject({
+      status: 429,
+      code: 'MESSAGE_RATE_LIMITED',
+      retryAfterSeconds: 7,
+    })
+    expect(moderated).toBe(0)
+    expect(store.messages).toHaveLength(0)
+    expect(pushed).toHaveLength(0)
   })
 })

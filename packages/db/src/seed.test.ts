@@ -15,6 +15,7 @@ import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { messages } from './schema/messages'
 import { notifications } from './schema/notifications'
+import { rateLimitEvents } from './schema/rate-limits'
 import { subscribeMessageDeliveries, subscribeMessageGrants } from './schema/subscribe-messages'
 import { transactions } from './schema/transactions'
 import { userInterestProfiles } from './schema/user-interest-profiles'
@@ -82,6 +83,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       conversations,
       messages,
       chatModerationRecords,
+      rateLimitEvents,
       transactions,
       disputes,
       disputeAttachments,
@@ -117,6 +119,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       messages: 4,
       // #694 M1：聊天审核记录由真实发送产生，seed 不预置。
       chatModerationRecords: 0,
+      rateLimitEvents: 0,
       transactions: 2,
       // #465：争议与证据由用户真实发起产生，seed 不预置（同 matches / embeddings 的取舍：
       // 假争议落进 seed 库比空表更误导，它还会伪造一条不存在的处理进度）。

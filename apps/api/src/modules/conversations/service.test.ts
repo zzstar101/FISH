@@ -7,6 +7,7 @@ import { ConversationServiceError, createConversationService } from './service'
 
 const neverBlocked = { existsBlockBetween: async () => false }
 
+import type { ChatRateLimiter } from '../rate-limit/service'
 import type { ConversationDetailRow, ConversationStore, ListingBrief } from './store'
 
 const buyer = '01930000-0000-7000-8000-0000000000a1'
@@ -162,10 +163,18 @@ class MemoryConversationStore implements ConversationStore {
   }
 }
 
+const allowAllRateLimit: ChatRateLimiter = {
+  takeTextSend: async () => ({ allowed: true }),
+  takeMediaPresign: async () => ({ allowed: true }),
+  takeMediaCreate: async () => ({ allowed: true }),
+  takeNewSellerContact: async () => ({ allowed: true }),
+}
+
 describe('conversation service: createOrGetConversation', () => {
   test('creates a conversation and reports created=true', async () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -186,6 +195,7 @@ describe('conversation service: createOrGetConversation', () => {
     const store = new MemoryConversationStore()
     const asked: string[] = []
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       store,
       storage,
@@ -215,6 +225,7 @@ describe('conversation service: createOrGetConversation', () => {
     const reviewKey = `listing-review-media/${encodePublicId(PUBLIC_ID_PREFIX.user, seller)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000d1')}.jpg`
     store.coverObjectKeys = async (listingIds) => new Map(listingIds.map((id) => [id, reviewKey]))
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -240,6 +251,7 @@ describe('conversation service: createOrGetConversation', () => {
    */
   test('拉黑守卫：拉黑边存在 → 403 CONVERSATION_UNAVAILABLE（双方同码）', async () => {
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: { existsBlockBetween: async () => true },
       presence,
       store: new MemoryConversationStore(),
@@ -252,6 +264,7 @@ describe('conversation service: createOrGetConversation', () => {
 
   test('守卫不误伤：无拉黑边时照常建会话', async () => {
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       presence,
       store: new MemoryConversationStore(),
@@ -263,6 +276,7 @@ describe('conversation service: createOrGetConversation', () => {
 
   test('reuses the existing conversation for the same (listing, buyer)', async () => {
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
@@ -291,6 +305,7 @@ describe('conversation service: createOrGetConversation', () => {
       })
     }
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -305,6 +320,7 @@ describe('conversation service: createOrGetConversation', () => {
 
   test('404 LISTING_NOT_FOUND for an unknown listing', async () => {
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
@@ -319,6 +335,7 @@ describe('conversation service: createOrGetConversation', () => {
 
   test('409 CANNOT_CHAT_WITH_SELF when the caller is the seller', async () => {
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
@@ -335,6 +352,7 @@ describe('conversation service: listConversations', () => {
   test('sellers see the same conversation with role=seller', async () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -349,6 +367,7 @@ describe('conversation service: listConversations', () => {
 
   test('422 on an undecodable cursor', async () => {
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
@@ -368,6 +387,7 @@ describe('conversation service: listConversations', () => {
       detailRow({ conversation: { ...detailRow().conversation, id: secondId } }),
     )
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -390,6 +410,7 @@ describe('conversation service: listConversations', () => {
     const store = new MemoryConversationStore()
     await store.insertIfAbsent(listingA, buyer, seller)
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -404,6 +425,7 @@ describe('conversation service: markRead', () => {
   test('resets unreadCount for the viewer', async () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -425,6 +447,7 @@ describe('conversation service: markRead', () => {
     }
     const pushed: ReadPush[] = []
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       store,
       storage,
@@ -457,6 +480,7 @@ describe('conversation service: markRead', () => {
   test('counterpartLastReadAt is the other side, depending on who is viewing', async () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -481,6 +505,7 @@ describe('conversation service: markRead', () => {
     const store = new MemoryConversationStore()
     const pushed: unknown[] = []
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       blocks: neverBlocked,
       store,
       storage,
@@ -502,6 +527,7 @@ describe('conversation service: getUnreadCount', () => {
   test('returns the store aggregate for the viewer, not the first page', async () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({
+      rateLimit: allowAllRateLimit,
       store,
       storage,
       presence,
@@ -525,5 +551,58 @@ describe('ConversationServiceError', () => {
     const error = new ConversationServiceError(404, 'CONVERSATION_NOT_FOUND', 'x')
     expect(error.status).toBe(404)
     expect(error.code).toBe('CONVERSATION_NOT_FOUND')
+  })
+})
+
+describe('conversation service: 新卖家限流（#694 M3）', () => {
+  test('同一买家联系第 11 个新卖家时 429，且不建会话', async () => {
+    const store = new MemoryConversationStore()
+    const service = createConversationService({
+      rateLimit: {
+        ...allowAllRateLimit,
+        takeNewSellerContact: async () => ({
+          allowed: false,
+          retryAfterSeconds: 42,
+          bucket: 'chat:new-seller-contact',
+        }),
+      },
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
+    await expect(
+      service.createOrGetConversation(buyer, { listingId: listingA }),
+    ).rejects.toMatchObject({
+      status: 429,
+      code: 'CONVERSATION_RATE_LIMITED',
+      retryAfterSeconds: 42,
+    })
+    expect(await store.findIdByListingAndBuyer(listingA, buyer)).toBeNull()
+  })
+
+  test('复用既有会话不消耗新卖家额度', async () => {
+    const store = new MemoryConversationStore()
+    let contacts = 0
+    const service = createConversationService({
+      rateLimit: {
+        ...allowAllRateLimit,
+        takeNewSellerContact: async () => {
+          contacts += 1
+          return { allowed: true }
+        },
+      },
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
+    const first = await service.createOrGetConversation(buyer, { listingId: listingA })
+    expect(first.created).toBe(true)
+    expect(contacts).toBe(1)
+    const second = await service.createOrGetConversation(buyer, { listingId: listingA })
+    expect(second.created).toBe(false)
+    expect(second.conversation.id).toBe(first.conversation.id)
+    expect(contacts).toBe(1)
   })
 })

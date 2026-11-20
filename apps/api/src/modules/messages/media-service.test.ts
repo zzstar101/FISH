@@ -7,6 +7,7 @@ import type {
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { ChatModerationPolicy } from '../moderation/chat'
 import { ContentModerationError } from '../moderation/providers/types'
+import type { ChatRateLimiter } from '../rate-limit/service'
 import type { MediaStorage } from '../uploads/storage'
 import {
   MessageIdempotencyConflictError,
@@ -50,6 +51,13 @@ function row(input: MediaMessageInput): MediaRow {
   }
 }
 
+const allowAllRateLimit: ChatRateLimiter = {
+  takeTextSend: async () => ({ allowed: true }),
+  takeMediaPresign: async () => ({ allowed: true }),
+  takeMediaCreate: async () => ({ allowed: true }),
+  takeNewSellerContact: async () => ({ allowed: true }),
+}
+
 function setup(
   overrides: Partial<MediaMessageStore> = {},
   storageOverrides: Partial<MediaStorage> = {},
@@ -59,6 +67,7 @@ function setup(
     participants: { buyerId: string; sellerId: string },
     media: MediaMessageDto,
   ) => void,
+  rateLimit: ChatRateLimiter = allowAllRateLimit,
 ) {
   const store: MediaMessageStore = {
     legacyIds: async () => [],
@@ -91,6 +100,7 @@ function setup(
     store,
     storage,
     chatModeration: policy,
+    rateLimit,
     mediaUrl: (conversation, media) =>
       `https://api.test/conversations/${conversation}/media/${media}`,
     onMediaCreated,
@@ -1023,5 +1033,39 @@ describe('media message service: send idempotency (#67)', () => {
       expect(createdDto.visibility).toBe('DELIVERED')
       expect(created).toBe(0)
     })
+  })
+})
+
+describe('聊天媒体限流（#694 M3）', () => {
+  test('预签名被限流：429 MEDIA_RATE_LIMITED，且不发上传地址', async () => {
+    let presigned = 0
+    const service = setup(
+      {},
+      {
+        presignPut: () => {
+          presigned += 1
+          return { url: 'https://upload.test/media', headers: {}, expiresAt: '' }
+        },
+      },
+      {},
+      allowAllChatModeration,
+      undefined,
+      {
+        ...allowAllRateLimit,
+        takeMediaPresign: async () => ({
+          allowed: false,
+          retryAfterSeconds: 9,
+          bucket: 'chat:media:presign:account',
+        }),
+      },
+    )
+    await expect(
+      service.presign(userId, conversationId, {
+        kind: 'IMAGE',
+        contentType: 'image/webp',
+        sizeBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ status: 429, code: 'MEDIA_RATE_LIMITED', retryAfterSeconds: 9 })
+    expect(presigned).toBe(0)
   })
 })

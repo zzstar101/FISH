@@ -28,7 +28,13 @@ export type ConversationsRouterOptions = {
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 app.onError（与 matching router 同构）。 */
 function toErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof ConversationServiceError) {
-    return c.json(errorBody(error.code, error.message), error.status)
+    if (error.retryAfterSeconds !== undefined) {
+      c.header('Retry-After', String(error.retryAfterSeconds))
+    }
+    return c.json(
+      errorBody(error.code, error.message, undefined, error.retryAfterSeconds),
+      error.status,
+    )
   }
   throw error
 }

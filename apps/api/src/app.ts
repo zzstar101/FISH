@@ -102,6 +102,8 @@ import { createPresenceRegistry } from './modules/presence/presence'
 import { createProfileRouter } from './modules/profile/router'
 import { createProfileService } from './modules/profile/service'
 import { createSqlProfileStore } from './modules/profile/store'
+import { createChatRateLimiter } from './modules/rate-limit/service'
+import { createSqlRateLimitStore } from './modules/rate-limit/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
@@ -389,6 +391,7 @@ export function createApp(
 
   // #694 M1：聊天文本/图片各用**独立**的腾讯 BizType（禁止复用商品策略号）；
   // 语音在音频审核接入前显式关闭发送。
+  const chatRateLimiter = createChatRateLimiter({ store: createSqlRateLimitStore(db) })
   const chatModeration = createChatModerationPolicy(
     createContentModerationProvider(
       moderationEnv.transport === 'tencent'
@@ -792,6 +795,7 @@ export function createApp(
         store: conversationStore,
         storage,
         blocks: blockStore,
+        rateLimit: chatRateLimiter,
         // 对方的在线态由进程内登记表直接读（#359 第五点），与公开资料的 presence 同源。
         presence,
         projectContent: projectSystemContent,
@@ -826,6 +830,7 @@ export function createApp(
         storage,
         blocks: blockStore,
         chatModeration,
+        rateLimit: chatRateLimiter,
         mediaUrl: (conversationId, mediaId) =>
           `/api/conversations/${conversationId}/media/${mediaId}`,
         onMediaCreated: (participants, media) => {
@@ -848,6 +853,7 @@ export function createApp(
         store: createSqlMessageStore(db),
         blocks: blockStore,
         chatModeration,
+        rateLimit: chatRateLimiter,
         // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
         storage,
         projectContent: projectSystemContent,

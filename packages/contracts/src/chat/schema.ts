@@ -555,5 +555,8 @@ export const ChatErrorCodeSchema = z.enum([
   'CONVERSATION_UNAVAILABLE',
   /** 409：超出撤回窗口（`MESSAGE_RECALL_WINDOW_MS`）。 */
   'MESSAGE_RECALL_WINDOW_EXCEEDED',
+  'MESSAGE_RATE_LIMITED',
+  'MEDIA_RATE_LIMITED',
+  'CONVERSATION_RATE_LIMITED',
 ])
 export type ChatErrorCode = z.infer<typeof ChatErrorCodeSchema>

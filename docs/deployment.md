@@ -553,6 +553,13 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
   `bun --env-file=.env apps/api/scripts/moderation-live-probe.ts --chat <样例图路径>`，确认输出的
   `contentDigest` 为 32 位 MD5；若上游不回该字段，所有聊天图片都会 503（不泄漏，但功能不可用）。语音：在接入可验证的音频审核前**显式关闭发送**，`POST /conversations/:id/media/presign` 与
   `POST …/media` 对 `VOICE` 返回 **422 `VOICE_SEND_DISABLED`**；历史语音仍可正常读取。
+- **聊天限流（#694 M3）**：服务端用 `rate_limit_events` 单表做滑动窗口，跨实例共享、不依赖单进程
+  内存（也未引入 Redis）。初始策略冻结在 `apps/api/src/modules/rate-limit/limits.ts`：
+  单会话文本 **30 条/60 秒**、单账号全站文本 **120 条/60 秒**、单账号媒体预签名 **30 次/60 秒**、
+  单账号媒体落库 **30 次/60 秒**、同一买家 **10 分钟内最多主动联系 10 个新卖家**（已有会话复用不消耗）。
+  幂等重放、封禁/拉黑守卫拒绝的请求都不计数；任一桶超限整单拒绝且不写任何计数行。命中返回
+  **429**（`MESSAGE_RATE_LIMITED` / `MEDIA_RATE_LIMITED` / `CONVERSATION_RATE_LIMITED`）+ `Retry-After`
+  与 `error.retryAfterSeconds`，端上据此倒计时。改策略必须同时改常量、测试与本节。
 - 日志只允许出现腾讯 `RequestId`：Secret 与完整私密文本（含图片字节）都不进日志。密钥随 §10 备份
   的 `config-*.tar.gz` 进备份，泄漏处置与其它 API 密钥同口径。
 - **接线面（#228）**：商品**文本**（title / description）在 `POST /listings` 与 `PATCH /listings/:id`
