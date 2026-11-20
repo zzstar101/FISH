@@ -324,11 +324,11 @@ async function wechatSignIn(base: string, code: string): Promise<WechatSignIn> {
 async function seedDemoUserId(db: Db, code: string): Promise<string> {
   const { openid } = await stubWechat.exchange(code)
   const rows = await db
-    .select({ id: users.id })
+    .select({ userId: wechatIdentities.userId })
     .from(wechatIdentities)
     .where(eq(wechatIdentities.openid, openid))
     .limit(1)
-  const userId = rows[0]?.id
+  const userId = rows[0]?.userId
   if (!userId) throw new Error(`seed 里没有绑定 stub code「${code}」的演示账号`)
   return userId
 }
@@ -876,7 +876,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // demo 账号同样只能走微信登录：能登进 seed 里那一个用户，就证明 seed 与 stub 的 openid
     // 算法一致（#703 前这里验证的是 seed 写进去的 argon2id 哈希）。
     const demoSession = await wechatSignIn(base, DEMO_WECHAT_CODES.buyerB)
-    assertEqual(demoSession.userId, demoBuyer.id, 'demo 买家能用固定 stub code 登录')
+    assertEqual(
+      decodePublicId(PUBLIC_ID_PREFIX.user, demoSession.userId),
+      demoBuyer.id,
+      'demo 买家能用固定 stub code 登录',
+    )
     const demoCookie = demoSession.cookie
     const demoWishSide = await readJson(
       await get(
