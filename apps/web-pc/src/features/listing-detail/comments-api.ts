@@ -72,6 +72,9 @@ export async function deleteComment(commentId: string): Promise<CommentDeleteRes
 export function describeCommentFailure(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'COMMENT_CONTENT_BLOCKED') return '留言内容未通过审核，请修改后重试'
+    if (error.code === 'COMMENT_CONTENT_REVIEW_REQUIRED')
+      return '留言内容需要人工复核，暂时无法发布，请修改后重试'
+    if (error.code === 'CONTENT_MODERATION_UNAVAILABLE') return '内容审核暂不可用，请稍后重试'
     if (error.code === 'COMMENT_NOT_FOUND') return '留言不存在或已失效'
     if (error.code === 'LISTING_NOT_FOUND') return '商品不存在或已下架'
     if (error.code === 'VALIDATION_FAILED') return '留言内容不合法'

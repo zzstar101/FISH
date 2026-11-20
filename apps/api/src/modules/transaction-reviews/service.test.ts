@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import {
+  ContentModerationError,
+  type ContentModerationProvider,
+  type ModerationSuggestion,
+  type ModerationTransport,
+} from '../moderation/providers/types'
+import type { ModerationDecision, ModerationField } from '../moderation/types'
 import type { MediaStorage } from '../uploads/storage'
 import { createTransactionReviewService, TransactionReviewServiceError } from './service'
 import type { MyReviewRow, ReviewTimelineRow, TransactionReviewsStore } from './store'
@@ -106,6 +113,46 @@ function serviceErrorOf(promise: Promise<unknown>): Promise<TransactionReviewSer
   )
 }
 
+/** 只实现 `moderateText`：评语只审正文，且必须看到 `field='content'`。 */
+function fakeModerationProvider(
+  outcome: ModerationDecision | ContentModerationError,
+): ContentModerationProvider & {
+  calls: { dataId: string; field: ModerationField; value: string }[]
+} {
+  const calls: { dataId: string; field: ModerationField; value: string }[] = []
+  const transport: ModerationTransport = 'local'
+  return {
+    calls,
+    transport,
+    async moderateText(input) {
+      calls.push(...input.fields.map((field) => ({ dataId: input.dataId, ...field })))
+      if (outcome instanceof ContentModerationError) throw outcome
+      const suggestion: ModerationSuggestion =
+        outcome === 'BLOCK' ? 'Block' : outcome === 'REVIEW' ? 'Review' : 'Pass'
+      return {
+        provider: 'LOCAL',
+        transport,
+        dataId: input.dataId,
+        policyVersion: 'test-policy',
+        decision: outcome,
+        suggestion,
+        fields: input.fields.map((field) => ({
+          field: field.field,
+          decision: outcome,
+          suggestion,
+          label: 'TEST',
+          subLabel: outcome === 'ALLOW' ? null : 'TEST_RULE',
+          score: null,
+          requestId: null,
+        })),
+      }
+    },
+    async moderateImage() {
+      throw new Error('评价正文审核不读图片')
+    },
+  }
+}
+
 describe('评价边（favorites 同款单资源三方法）', () => {
   test('非参与者与不存在同码 404（不泄漏交易存在性）', async () => {
     const service = createTransactionReviewService({
@@ -148,29 +195,96 @@ describe('评价边（favorites 同款单资源三方法）', () => {
     expect(error.code).toBe('TRANSACTION_REVIEW_EXISTS')
   })
 
-  test('正文命中敏感词 422（BLOCK 与 REVIEW 都拒绝，与 comments 同一规则库）', async () => {
+  test('正文命中敏感词（BLOCK）→ 422 REVIEW_CONTENT_BLOCKED，评价不落库', async () => {
+    let inserted = false
+    const store = fakeStore()
+    store.insertReviewWithImages = async () => {
+      inserted = true
+      return reviewRow()
+    }
     const service = createTransactionReviewService({
-      store: fakeStore(),
+      store,
       storage,
-      moderation: { moderate: () => ({ decision: 'BLOCK', matches: [] }) } as never,
+      moderationProvider: fakeModerationProvider('BLOCK'),
     })
     const error = await serviceErrorOf(
       service.createReview(BUYER_ID, TXN_ID, { rating: 'POSITIVE', body: '加微信聊聊' }),
     )
     expect(error.status).toBe(422)
     expect(error.code).toBe('REVIEW_CONTENT_BLOCKED')
+    expect(inserted).toBe(false)
   })
 
-  test('空串评语归一为 null 落库；正文过审才插行', async () => {
+  test('REVIEW（待人工确认）→ 422 专用码，与 BLOCK 区分且不落库', async () => {
+    let inserted = false
+    const store = fakeStore()
+    store.insertReviewWithImages = async () => {
+      inserted = true
+      return reviewRow()
+    }
+    const service = createTransactionReviewService({
+      store,
+      storage,
+      moderationProvider: fakeModerationProvider('REVIEW'),
+    })
+    const error = await serviceErrorOf(
+      service.createReview(BUYER_ID, TXN_ID, { rating: 'POSITIVE', body: '加个微信' }),
+    )
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('REVIEW_CONTENT_REVIEW_REQUIRED')
+    expect(error.details?.[0]?.field).toBe('body')
+    expect(inserted).toBe(false)
+  })
+
+  test('审核上游超时 → 503 CONTENT_MODERATION_UNAVAILABLE，评价不落库', async () => {
+    let inserted = false
+    const store = fakeStore()
+    store.insertReviewWithImages = async () => {
+      inserted = true
+      return reviewRow()
+    }
+    const service = createTransactionReviewService({
+      store,
+      storage,
+      moderationProvider: fakeModerationProvider(
+        new ContentModerationError({ reason: 'timeout', requestId: 'req-1' }),
+      ),
+    })
+    const error = await serviceErrorOf(
+      service.createReview(BUYER_ID, TXN_ID, { rating: 'POSITIVE', body: '很愉快' }),
+    )
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('CONTENT_MODERATION_UNAVAILABLE')
+    expect(inserted).toBe(false)
+  })
+
+  test('正文以 publicContent 字段、review 前缀送审（不伪装成 title）', async () => {
+    const provider = fakeModerationProvider('ALLOW')
+    const service = createTransactionReviewService({
+      store: fakeStore(),
+      storage,
+      moderationProvider: provider,
+    })
+    await service.createReview(BUYER_ID, TXN_ID, { rating: 'POSITIVE', body: '很愉快' })
+
+    const call = provider.calls[0]
+    expect(call?.field).toBe('publicContent')
+    expect(call?.value).toBe('很愉快')
+    expect(call?.dataId.startsWith('review-')).toBe(true)
+  })
+
+  test('空串评语归一为 null 落库；不调用文本审核', async () => {
     let inserted: { body: string | null } | null = null
+    const provider = fakeModerationProvider('ALLOW')
     const store = fakeStore()
     store.insertReviewWithImages = async (input) => {
       inserted = { body: input.body }
       return reviewRow()
     }
-    const service = createTransactionReviewService({ store, storage })
+    const service = createTransactionReviewService({ store, storage, moderationProvider: provider })
     await service.createReview(BUYER_ID, TXN_ID, { rating: 'NEUTRAL', body: '   ' })
     expect((inserted as { body: string | null } | null)?.body).toBeNull()
+    expect(provider.calls).toHaveLength(0)
   })
 
   test('GET 边：没评过 → 404 REVIEW_NOT_FOUND；评过 → DTO', async () => {

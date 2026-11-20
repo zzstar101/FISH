@@ -1,6 +1,6 @@
 import type { ModerationField, ModerationMatch, ModerationResult } from './types'
 
-export const MODERATION_RULE_VERSION = '2026-11-20-v4'
+export const MODERATION_RULE_VERSION = '2026-11-20-v5'
 
 type Rule = {
   code: string
@@ -28,6 +28,12 @@ const RULES: readonly Rule[] = [
     decision: 'REVIEW',
     terms: ['微信号', '加微信', 'vx', 'v信', '二维码', '外链'],
     fields: ['title', 'description'],
+  },
+  {
+    code: 'PUBLIC_EXTERNAL_CONTACT',
+    decision: 'REVIEW',
+    terms: ['微信号', '加微信', 'vx', 'v信', '二维码', '外链'],
+    fields: ['publicContent'],
   },
 ]
 

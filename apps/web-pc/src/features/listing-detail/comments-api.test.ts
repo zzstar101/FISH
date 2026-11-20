@@ -72,6 +72,12 @@ describe('describeCommentFailure', () => {
     expect(describeCommentFailure(new ApiError('COMMENT_CONTENT_BLOCKED', 422, 'blocked'))).toBe(
       '留言内容未通过审核，请修改后重试',
     )
+    expect(
+      describeCommentFailure(new ApiError('COMMENT_CONTENT_REVIEW_REQUIRED', 422, 'pending')),
+    ).toBe('留言内容需要人工复核，暂时无法发布，请修改后重试')
+    expect(
+      describeCommentFailure(new ApiError('CONTENT_MODERATION_UNAVAILABLE', 503, 'unavailable')),
+    ).toBe('内容审核暂不可用，请稍后重试')
     expect(describeCommentFailure(new ApiError('COMMENT_NOT_FOUND', 404, 'missing'))).toBe(
       '留言不存在或已失效',
     )

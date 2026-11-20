@@ -20,7 +20,13 @@ import type { TransactionReviewItem } from '@fish/contracts/transaction-reviews/
 import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { toListingCard } from '../listings/card'
-import { createModerationService, type ModerationService } from '../moderation/service'
+import { createLocalContentModerationProvider } from '../moderation/providers/local'
+import {
+  ContentModerationError,
+  type ContentModerationProvider,
+  type TextModerationResult,
+} from '../moderation/providers/types'
+import { moderatePublicUgcText } from '../moderation/ugc-text'
 import { toTransactionReviewItem } from '../transaction-reviews/service'
 import type { ReviewTimelineRow } from '../transaction-reviews/store'
 import { publicAvatarUrl } from '../uploads/avatar-url'
@@ -37,7 +43,7 @@ import type { CommentRow, CommentStore, MyCommentRow } from './store'
  */
 export class CommentServiceError extends Error {
   constructor(
-    readonly status: 404 | 422,
+    readonly status: 404 | 422 | 503,
     readonly code: CommentErrorCode | Extract<SystemErrorCode, 'VALIDATION_FAILED'>,
     message: string,
     readonly details?: ApiErrorDetail[],
@@ -172,14 +178,18 @@ export interface CommentReviewsSource {
 
 export function createCommentService(deps: {
   store: CommentStore
-  moderation?: ModerationService
+  /**
+   * 公开 UGC 文本审核 provider（#694 M6）。缺省走本地词表（开发/测试）；生产装配在
+   * `app.ts`，用公开评论策略号（`TENCENT_TMS_UGC_BIZ_TYPE`）。
+   */
+  moderationProvider?: ContentModerationProvider
   /** 只取 `publicUrl`：「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。 */
   storage: Pick<MediaStorage, 'publicUrl'>
   /** 评价来源（#195 PR2）。`kind=comment` 不需要它；`kind=review|all` 未装配时按装配 bug 抛错。 */
   reviews?: CommentReviewsSource
 }): CommentService {
   const { store, storage } = deps
-  const moderation = deps.moderation ?? createModerationService()
+  const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
 
   function invalidCursor(): CommentServiceError {
     return new CommentServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
@@ -195,21 +205,57 @@ export function createCommentService(deps: {
   }
 
   /**
-   * 正文敏感词校验。
+   * 正文送审（#694 M6）：留言 / 回复都走公开 UGC 策略，字段固定 `content`。
    *
-   * 复用 #74 的规则库（`moderation/rules.ts`），把留言正文当作 `title` 传入
-   * （规则只按字段名回填 `matches[].field`，这里只关心结论）。
-   *
-   * **BLOCK 与 REVIEW 都拒绝**：留言没有「人工复审」这条流水线（列表页不渲染待审状态），
-   * 放行 REVIEW 等于让「加微信 / 二维码」这类外联文案直接可见。命中即 422，
-   * `details` 指到 `content` 字段，前端能把它定位到输入框。
+   * 上游失败必须 fail-closed：超时、限频、网络、配置错误一律 503，不把「没有结论」当通过。
+   * 结论三档分开处理，不能合并：
+   * - ALLOW：放行；
+   * - BLOCK：确定违规 → 422 `COMMENT_CONTENT_BLOCKED`；
+   * - REVIEW：机器给不出确定结论 → 422 `COMMENT_CONTENT_REVIEW_REQUIRED`，**同样不落库**，
+   *   但错误码 / 文案 / 审计与 BLOCK 区分。留言当前没有人工复审流水线（列表页不渲染待审
+   *   状态），因此取「拒绝创建但保留待审语义」的兜底（#694 M6 允许）；接入队列后应改为
+   *   随留言进入待审状态，而不是继续拒绝。
    */
-  function assertContentAllowed(content: string): void {
-    const result = moderation.moderate({ title: content, description: '' })
-    if (result.decision !== 'ALLOW') {
+  async function moderateContent(
+    kind: 'comment' | 'reply',
+    content: string,
+  ): Promise<TextModerationResult> {
+    try {
+      return await moderatePublicUgcText(moderationProvider, { kind, content })
+    } catch (error) {
+      if (error instanceof ContentModerationError) {
+        // 审计：只记原因与上游请求标识，不记正文。
+        console.error('[comments] 内容审核不可用，留言未落库', {
+          kind,
+          reason: error.reason,
+          retryable: error.retryable,
+          requestId: error.requestId,
+        })
+        throw new CommentServiceError(
+          503,
+          'CONTENT_MODERATION_UNAVAILABLE',
+          '内容审核暂时不可用，请稍后重试',
+        )
+      }
+      throw error
+    }
+  }
+
+  async function assertContentAllowed(kind: 'comment' | 'reply', content: string): Promise<void> {
+    const result = await moderateContent(kind, content)
+
+    if (result.decision === 'BLOCK') {
       throw new CommentServiceError(422, 'COMMENT_CONTENT_BLOCKED', '留言内容未通过审核', [
         { field: 'content', message: '留言内容未通过审核' },
       ])
+    }
+    if (result.decision === 'REVIEW') {
+      throw new CommentServiceError(
+        422,
+        'COMMENT_CONTENT_REVIEW_REQUIRED',
+        '留言内容需要人工复核，暂时无法发布，请修改后重试',
+        [{ field: 'content', message: '留言内容待人工复核' }],
+      )
     }
   }
 
@@ -299,7 +345,7 @@ export function createCommentService(deps: {
 
     async createComment(userId, listingId, input) {
       const sellerId = await requireSellerId(listingId)
-      assertContentAllowed(input.content)
+      await assertContentAllowed('comment', input.content)
 
       const id = await insertComment({
         listingId,
@@ -326,7 +372,7 @@ export function createCommentService(deps: {
       }
 
       const sellerId = await requireSellerId(parent.listingId)
-      assertContentAllowed(input.content)
+      await assertContentAllowed('reply', input.content)
 
       const id = await insertComment({
         listingId: parent.listingId,
