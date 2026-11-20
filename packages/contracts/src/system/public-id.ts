@@ -29,6 +29,9 @@ export const WishModerationRecordIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.wish
 export const ProfileModerationRecordIdSchema = publicIdSchema(
   PUBLIC_ID_PREFIX.profileModerationRecord,
 )
+export const ReviewModerationRecordIdSchema = publicIdSchema(
+  PUBLIC_ID_PREFIX.reviewModerationRecord,
+)
 export const AuditLogIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.auditLog)
 
 export type UserId = z.infer<typeof UserIdSchema>
@@ -50,4 +53,5 @@ export type ModerationRecordId = z.infer<typeof ModerationRecordIdSchema>
 export type ChatModerationRecordId = z.infer<typeof ChatModerationRecordIdSchema>
 export type WishModerationRecordId = z.infer<typeof WishModerationRecordIdSchema>
 export type ProfileModerationRecordId = z.infer<typeof ProfileModerationRecordIdSchema>
+export type ReviewModerationRecordId = z.infer<typeof ReviewModerationRecordIdSchema>
 export type AuditLogId = z.infer<typeof AuditLogIdSchema>

@@ -1,4 +1,5 @@
 import { ALLOWED_IMAGE_MIME, MAX_IMAGE_BYTES } from '@fish/contracts/listings/schema'
+import type { ModerationDecision } from '@fish/contracts/moderation/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import type {
   TransactionReview,
@@ -23,10 +24,21 @@ import {
 } from '../moderation/providers/types'
 import { moderatePublicUgcText } from '../moderation/ugc-text'
 import { publicAvatarUrl } from '../uploads/avatar-url'
+import { isReviewModerationMediaKey, reviewModerationMediaPrefix } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
 import { isReviewMediaPublicKey, reviewMediaPublicPrefix } from '../uploads/storage'
-import { createReviewMediaService, type ReviewMediaService } from './media-service'
-import type { MyReviewRow, ReviewTimelineRow, TransactionReviewsStore } from './store'
+import {
+  createReviewMediaService,
+  type ReviewImageModerationConfig,
+  type ReviewMediaService,
+} from './media-service'
+import { effectiveReviewModerationDecision, type ReviewModerationStore } from './moderation-store'
+import type {
+  MyReviewRow,
+  ReviewTimelineRow,
+  TransactionReviewRow,
+  TransactionReviewsStore,
+} from './store'
 
 export class TransactionReviewServiceError extends Error {
   constructor(
@@ -60,6 +72,14 @@ const reviewImagesInvalidInput = (message: string) =>
   new TransactionReviewServiceError(422, 'VALIDATION_FAILED', message, [
     { field: 'imageObjectKeys', message },
   ])
+/** 已落库的审核结论是 BLOCK：这张图永远不能出现在评价里（也不给「重传同一键」的错觉）。 */
+const reviewImageBlocked = () =>
+  new TransactionReviewServiceError(
+    422,
+    'REVIEW_IMAGE_BLOCKED',
+    '图片未通过内容审核，请更换后重新上传',
+    [{ field: 'imageObjectKeys', message: '图片未通过内容审核' }],
+  )
 /**
  * #483 审查响应：存储运行错误是**可重试的服务故障**，与「图片无效」（422，用户要换图）分开——
  * 不把 MinIO 抖动伪装成让用户重传的问题。
@@ -81,13 +101,21 @@ function toReviewDto(
   row: MyReviewRow,
   transactionPublicId: string,
   storage: Pick<MediaStorage, 'publicUrl'>,
+  decisions?: ReadonlyMap<string, ModerationDecision>,
 ): TransactionReview | null {
+  const decisionOf = (key: string): ModerationDecision | undefined =>
+    decisions?.get(key) ?? row.imageModeration?.[key]
   const parsed = TransactionReviewSchema.safeParse({
     id: encodePublicId(PUBLIC_ID_PREFIX.review, row.id),
     transactionId: transactionPublicId,
     rating: row.rating,
     body: row.body,
-    images: row.imageKeys.map((objectKey) => ({ url: storage.publicUrl(objectKey) })),
+    // BLOCK 图不进任何 DTO（作者也不给）；没有台账结论的键按未通过处理。
+    images: row.imageKeys.flatMap((objectKey) => {
+      const decision = decisionOf(objectKey)
+      if (!decision || decision === 'BLOCK') return []
+      return [{ url: storage.publicUrl(objectKey), moderationDecision: decision }]
+    }),
     createdAt: row.createdAt,
   })
   if (!parsed.success) {
@@ -95,6 +123,18 @@ function toReviewDto(
     return null
   }
   return parsed.data
+}
+
+/**
+ * 公开可见性：只要有一条图片的有效结论不是 ALLOW，整条评价都不对外展示
+ * （图片待审期间评价正文也不公开，避免「图待审、文字先公开」的半截状态）。
+ * 作者视角例外：作者总能看到自己的评价与逐图状态（`toReviewDto` 会过滤 BLOCK）。
+ */
+function hasOnlyPublicImages(
+  row: MyReviewRow,
+  decisions: ReadonlyMap<string, ModerationDecision>,
+): boolean {
+  return row.imageKeys.every((key) => decisions.get(key) === 'ALLOW')
 }
 
 /**
@@ -212,8 +252,18 @@ export function createTransactionReviewService(deps: {
    * `app.ts`，与留言共用公开评论策略号（`TENCENT_TMS_UGC_BIZ_TYPE`）。
    */
   moderationProvider?: ContentModerationProvider
+  /**
+   * 评价图片审核台账（#694 M5c）：confirm 落记录；写侧引用/删改可见性都靠它判定
+   * 「这个 final 键确实审过、结论是什么」。缺省时含图片的请求 fail-closed 503。
+   */
+  moderationStore?: ReviewModerationStore
+  /**
+   * 评价图片送审配置（#694 M5c）：缺省本地 provider（图片恒 REVIEW，仅开发/测试）。
+   * 生产装配在 `app.ts`，使用独立的 `TENCENT_IMS_UGC_BIZ_TYPE`。
+   */
+  reviewImageModeration?: ReviewImageModerationConfig
 }): TransactionReviewService {
-  const { store, storage } = deps
+  const { store, storage, moderationStore } = deps
   const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
 
   /**
@@ -227,6 +277,46 @@ export function createTransactionReviewService(deps: {
   }
 
   /**
+   * 批量解析一页评价图片的有效结论。任何台账读失败都按 503 处理：
+   * 没有结论就不能判断可见性，不能默认 ALLOW。
+   */
+  async function decisionsOf(rows: MyReviewRow[]): Promise<Map<string, ModerationDecision>> {
+    const keys = [...new Set(rows.flatMap((row) => row.imageKeys))]
+    const decisions = new Map<string, ModerationDecision>()
+    if (keys.length === 0) return decisions
+    if (!moderationStore) throw reviewMediaUnavailable()
+    let records: Awaited<ReturnType<ReviewModerationStore['findByFinalKeys']>>
+    try {
+      records = await moderationStore.findByFinalKeys(keys)
+    } catch (error) {
+      console.error('[transaction-reviews] 读取图片审核记录失败，按 503 服务故障处理', error)
+      throw reviewMediaUnavailable()
+    }
+    for (const record of records) {
+      decisions.set(record.finalKey, effectiveReviewModerationDecision(record))
+    }
+    // #475 遗留公开键：审核台账上线前固化的 `reviews/` 对象没有记录。它们本来就已公开，
+    // 展示按 ALLOW 兼容；**新写入**不受影响——`resolveReviewImages` 仍要求台账存在。
+    for (const key of keys) {
+      if (!decisions.has(key) && isReviewMediaPublicKey(key)) decisions.set(key, 'ALLOW')
+    }
+    return decisions
+  }
+
+  /** 把已解析的结论挂到行上：`toTransactionReviewItem` 在 comments 侧同步映射时要用。 */
+  function withImageDecisions<T extends MyReviewRow>(
+    row: T,
+    decisions: ReadonlyMap<string, ModerationDecision>,
+  ): T {
+    const imageModeration: Record<string, ModerationDecision> = {}
+    for (const key of row.imageKeys) {
+      const decision = decisions.get(key)
+      if (decision) imageModeration[key] = decision
+    }
+    return { ...row, imageModeration }
+  }
+
+  /**
    * #475 上传链的授权门：与评价边 POST 同一条门（参与者 → COMPLETED → 尚未评价）。
    * `hasReview` 用 `findMyReview` 现查（评价不可修改，已评过就没有再上传的语义）。
    */
@@ -236,10 +326,12 @@ export function createTransactionReviewService(deps: {
         const txn = await store.transactionForParticipant(transactionId, userId)
         if (!txn) return null
         const existing = await store.findMyReview(transactionId, userId)
-        return { status: txn.status, hasReview: existing !== null }
+        return { id: txn.id, status: txn.status, hasReview: existing !== null }
       },
     },
     storage,
+    moderationStore,
+    moderation: deps.reviewImageModeration,
   })
 
   /**
@@ -306,16 +398,70 @@ export function createTransactionReviewService(deps: {
     }
   }
 
+  /**
+   * 写侧引用校验（#694 M5c）：键必须来自本用户某次 confirm 的台账，且有效结论不是 BLOCK。
+   * - ALLOW → 只认公开键；REVIEW → 只认私有待审键（键域与结论必须一致）；
+   * - 台账缺行/归属不符 → 与「没审过」同码 422（不给他人对象的存在性侧信道）；
+   * - 结论 BLOCK → 独立码，让端上明确「换图」而不是「重试」；
+   * - 再 stat 一次挡掉被替换/损坏的对象（需求 3 的摘要在 confirm/放行时已绑定）。
+   */
+  async function resolveReviewImages(
+    userId: string,
+    imageKeys: string[],
+  ): Promise<Map<string, ModerationDecision>> {
+    const decisions = new Map<string, ModerationDecision>()
+    if (imageKeys.length === 0) return decisions
+    if (!moderationStore) throw reviewMediaUnavailable()
+
+    let records: Awaited<ReturnType<ReviewModerationStore['findByFinalKeys']>>
+    try {
+      records = await moderationStore.findByFinalKeys(imageKeys)
+    } catch (error) {
+      console.error('[transaction-reviews] 读取图片审核记录失败，按 503 服务故障处理', error)
+      throw reviewMediaUnavailable()
+    }
+    const byKey = new Map(records.map((record) => [record.finalKey, record]))
+
+    for (const key of imageKeys) {
+      const publicOwned =
+        isReviewMediaPublicKey(key) && key.startsWith(reviewMediaPublicPrefix(userId))
+      const privateOwned =
+        isReviewModerationMediaKey(key) && key.startsWith(reviewModerationMediaPrefix(userId))
+      if (!publicOwned && !privateOwned) throw reviewImageInvalid()
+
+      const record = byKey.get(key)
+      if (!record || record.userId !== userId) throw reviewImageInvalid()
+      const decision = effectiveReviewModerationDecision(record)
+      if (decision === 'BLOCK') throw reviewImageBlocked()
+      // 键域与结论必须一致：公开键必须是 ALLOW，私有键必须是 REVIEW（放行后台账改公开键）。
+      if (decision === 'ALLOW' && !publicOwned) throw reviewImageInvalid()
+      if (decision === 'REVIEW' && !privateOwned) throw reviewImageInvalid()
+
+      const stat = await statReviewImage(key)
+      if (
+        !stat ||
+        stat.size > MAX_IMAGE_BYTES ||
+        !(ALLOWED_IMAGE_MIME as readonly string[]).includes(stat.contentType)
+      ) {
+        throw reviewImageInvalid()
+      }
+      decisions.set(key, decision)
+    }
+    return decisions
+  }
+
   return {
     media,
     async getMyReview(userId, transactionId) {
       await requireParticipantTransaction(transactionId, userId)
       const row = await store.findMyReview(transactionId, userId)
       if (!row) throw reviewNotFound()
+      const decisions = await decisionsOf([row])
       const dto = toReviewDto(
         row,
         encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId),
         storage,
+        decisions,
       )
       if (!dto) throw reviewNotFound()
       return dto
@@ -342,22 +488,7 @@ export function createTransactionReviewService(deps: {
       if (new Set(imageKeys).size !== imageKeys.length) {
         throw reviewImagesInvalidInput('图片对象键不能重复')
       }
-      // 逐个校验：只认本上传链 confirm 固化到**私有 final 前缀**、且归属当前用户的键。
-      // presign 永不签 final 前缀 → 「键在 final 前缀下存在」即证明经过服务端 confirm；
-      // 再加一次 stat（大小/MIME）挡掉被替换/损坏的对象。
-      for (const key of imageKeys) {
-        if (!isReviewMediaPublicKey(key) || !key.startsWith(reviewMediaPublicPrefix(userId))) {
-          throw reviewImageInvalid()
-        }
-        const stat = await statReviewImage(key)
-        if (
-          !stat ||
-          stat.size > MAX_IMAGE_BYTES ||
-          !(ALLOWED_IMAGE_MIME as readonly string[]).includes(stat.contentType)
-        ) {
-          throw reviewImageInvalid()
-        }
-      }
+      const decisions = await resolveReviewImages(userId, imageKeys)
 
       const inserted = await store.insertReviewWithImages({
         transactionId,
@@ -372,6 +503,7 @@ export function createTransactionReviewService(deps: {
         inserted,
         encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId),
         storage,
+        decisions,
       )
       if (!dto) throw new TransactionReviewServiceError(404, 'REVIEW_NOT_FOUND', '评价不存在')
       return dto
@@ -385,12 +517,16 @@ export function createTransactionReviewService(deps: {
 
     async listReviewsOf(userId, transactionId) {
       await requireParticipantTransaction(transactionId, userId)
-      const rows = await store.listReviewsOf(transactionId)
+      const rows: TransactionReviewRow[] = await store.listReviewsOf(transactionId)
+      const decisions = await decisionsOf(rows)
       const items = rows.flatMap((row) => {
+        // 对方视角：含未放行图片的评价整条不出现；作者视角：保留并逐图标注状态。
+        if (row.authorId !== userId && !hasOnlyPublicImages(row, decisions)) return []
         const review = toReviewDto(
           row,
           encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId),
           storage,
+          decisions,
         )
         return review ? [{ review, authorRole: row.authorRole }] : []
       })
@@ -414,8 +550,10 @@ export function createTransactionReviewService(deps: {
       // 与 comments 的 listMine 同款：多取一行判 hasMore，截断交给调用方
       // （kind=all 的合并归并要先拿两边的原始行）。
       const rows = await store.listByAuthor(userId, query.limit + 1, query.cursor)
+      const decisions = await decisionsOf(rows)
       const total = await store.countByAuthor(userId)
-      return { rows, total }
+      // 结论挂到行上：comments 侧同步映射 `toTransactionReviewItem` 时无需再查库。
+      return { rows: rows.map((row) => withImageDecisions(row, decisions)), total }
     },
   }
 }

@@ -73,9 +73,35 @@ export function isReviewMediaPublicKey(key: string): boolean {
   )
 }
 
-/** 允许经签名代理读取的私有键（两类私有前缀的并集，令牌签发与校验共用）。 */
+/**
+ * #694 M5c：评价图片审核中的私有前缀（机器 REVIEW 的不可变快照）。
+ *
+ * 它**绝不**出现在公开读模型里：评价对外隐藏、图片字节只给作者本人与管理员。因此也
+ * 不进匿名白名单，读取走下方同一个短期签名代理（作者侧）或管理员媒体端点（流式）。
+ */
+export const REVIEW_MODERATION_MEDIA_PREFIX = 'review-moderation-media/'
+
+/** 私有键形状：`review-moderation-media/{usr_…}/{med_…}.{ext}`。 */
+const REVIEW_MODERATION_MEDIA_KEY = /^review-moderation-media\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/
+
+export function reviewModerationMediaPrefix(userId: string): string {
+  return `${REVIEW_MODERATION_MEDIA_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+}
+
+export function isReviewModerationMediaKey(key: string): boolean {
+  const match = REVIEW_MODERATION_MEDIA_KEY.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
+
+/** 允许经签名代理读取的私有键（私有前缀的并集，令牌签发与校验共用）。 */
 function isProxyServedKey(key: string): boolean {
-  return isListingReviewMediaKey(key) || isReviewMediaPublicKey(key)
+  return (
+    isListingReviewMediaKey(key) || isReviewMediaPublicKey(key) || isReviewModerationMediaKey(key)
+  )
 }
 
 /**

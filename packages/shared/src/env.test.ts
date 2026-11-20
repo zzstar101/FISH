@@ -156,7 +156,7 @@ describe('loadContentModerationEnv', () => {
     )
   })
 
-  test('tencent 七项必填，缺任一项都失败（错误信息只报变量名）', () => {
+  test('tencent 八项必填，缺任一项都失败（错误信息只报变量名）', () => {
     const complete = {
       CONTENT_MODERATION_TRANSPORT: 'tencent',
       TENCENT_CLOUD_SECRET_ID: 'secret-id-value',
@@ -166,6 +166,7 @@ describe('loadContentModerationEnv', () => {
       TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-chat-biz',
       TENCENT_IMS_CHAT_BIZ_TYPE: 'ims-chat-biz',
       TENCENT_TMS_UGC_BIZ_TYPE: 'tms-ugc-biz',
+      TENCENT_IMS_UGC_BIZ_TYPE: 'ims-ugc-biz',
     }
     expect(loadContentModerationEnv(complete)).toEqual({
       transport: 'tencent',
@@ -176,6 +177,7 @@ describe('loadContentModerationEnv', () => {
       tmsChatBizType: 'tms-chat-biz',
       imsChatBizType: 'ims-chat-biz',
       tmsUgcBizType: 'tms-ugc-biz',
+      imsUgcBizType: 'ims-ugc-biz',
       region: DEFAULT_TENCENT_CLOUD_REGION,
     })
 
@@ -187,6 +189,7 @@ describe('loadContentModerationEnv', () => {
       'TENCENT_TMS_CHAT_BIZ_TYPE',
       'TENCENT_IMS_CHAT_BIZ_TYPE',
       'TENCENT_TMS_UGC_BIZ_TYPE',
+      'TENCENT_IMS_UGC_BIZ_TYPE',
     ] as const) {
       const source: Record<string, string | undefined> = { ...complete, [key]: ' ' }
       let message = ''
@@ -222,6 +225,7 @@ describe('loadContentModerationEnv', () => {
       TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-biz',
       TENCENT_IMS_CHAT_BIZ_TYPE: 'ims-chat-biz',
       TENCENT_TMS_UGC_BIZ_TYPE: 'tms-ugc-biz',
+      TENCENT_IMS_UGC_BIZ_TYPE: 'ims-ugc-biz',
     }
     expect(() => loadContentModerationEnv(complete)).toThrow(
       /TENCENT_TMS_CHAT_BIZ_TYPE 必须与 TENCENT_TMS_BIZ_TYPE 不同/,
@@ -235,6 +239,22 @@ describe('loadContentModerationEnv', () => {
         TENCENT_IMS_CHAT_BIZ_TYPE: 'ims-biz',
       }),
     ).toThrow(/TENCENT_IMS_CHAT_BIZ_TYPE 必须与 TENCENT_IMS_BIZ_TYPE 不同/)
+
+    // 评价图片（公开 UGC 图片）也不能复用商品或聊天图片策略号（#694 M5c）。
+    expect(() =>
+      loadContentModerationEnv({
+        ...complete,
+        TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-chat',
+        TENCENT_IMS_UGC_BIZ_TYPE: 'ims-biz',
+      }),
+    ).toThrow(/TENCENT_IMS_UGC_BIZ_TYPE 必须与商品、聊天图片策略号都不同/)
+    expect(() =>
+      loadContentModerationEnv({
+        ...complete,
+        TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-chat',
+        TENCENT_IMS_UGC_BIZ_TYPE: 'ims-chat-biz',
+      }),
+    ).toThrow(/TENCENT_IMS_UGC_BIZ_TYPE 必须与商品、聊天图片策略号都不同/)
   })
 
   test('值两侧空白被 trim，region 可覆盖且默认 ap-guangzhou', () => {
@@ -247,6 +267,7 @@ describe('loadContentModerationEnv', () => {
       TENCENT_TMS_CHAT_BIZ_TYPE: ' chat ',
       TENCENT_IMS_CHAT_BIZ_TYPE: ' ims-chat ',
       TENCENT_TMS_UGC_BIZ_TYPE: ' ugc ',
+      TENCENT_IMS_UGC_BIZ_TYPE: ' ims-ugc ',
       TENCENT_CLOUD_REGION: ' ap-shanghai ',
     })
     expect(env).toEqual({
@@ -258,6 +279,7 @@ describe('loadContentModerationEnv', () => {
       tmsChatBizType: 'chat',
       imsChatBizType: 'ims-chat',
       tmsUgcBizType: 'ugc',
+      imsUgcBizType: 'ims-ugc',
       region: 'ap-shanghai',
     })
   })

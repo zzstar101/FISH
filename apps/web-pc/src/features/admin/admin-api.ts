@@ -77,6 +77,13 @@ import {
   type AdminReportQueueQuery,
 } from '@fish/contracts/reports/schema'
 import {
+  REVIEW_MODERATION_ROUTES,
+  type ReviewModerationDecisionInput,
+  ReviewModerationDecisionResponseSchema,
+  type ReviewModerationQueueResponse,
+  ReviewModerationQueueResponseSchema,
+} from '@fish/contracts/transaction-reviews/moderation'
+import {
   WISH_MODERATION_ROUTES,
   type WishModerationDecisionInput,
   type WishModerationQueueResponse,
@@ -296,6 +303,40 @@ export async function submitChatModerationDecision(
 export function adminChatModerationMediaPath(recordId: string): string {
   // 契约路径不带 /api 前缀（apiRequest 才拼）；但这里直接给 <img src> 用，必须补上同源前缀。
   return `/api${CHAT_MODERATION_ROUTES.media(recordId)}`
+}
+
+// ---------------------------------------------------------------------------
+// 交易评价图片待审（#694 M5c）
+// ---------------------------------------------------------------------------
+
+export async function fetchReviewModerationQueue(
+  cursor?: string,
+): Promise<ReviewModerationQueueResponse> {
+  return ReviewModerationQueueResponseSchema.parse(
+    await apiRequest(
+      adminQueryPath(REVIEW_MODERATION_ROUTES.queue, {
+        ...(cursor ? { cursor } : {}),
+        limit: ADMIN_PAGE_LIMIT,
+      }),
+    ),
+  )
+}
+
+export async function submitReviewModerationDecision(
+  recordId: string,
+  input: ReviewModerationDecisionInput,
+): Promise<void> {
+  ReviewModerationDecisionResponseSchema.parse(
+    await apiRequest(REVIEW_MODERATION_ROUTES.decision(recordId), {
+      body: JSON.stringify(input),
+      method: 'POST',
+    }),
+  )
+}
+
+/** 待审图片走管理员鉴权的私有端点（private, no-store），路径同样要补 /api。 */
+export function adminReviewModerationMediaPath(recordId: string): string {
+  return `/api${REVIEW_MODERATION_ROUTES.media(recordId)}`
 }
 
 // ---------------------------------------------------------------------------

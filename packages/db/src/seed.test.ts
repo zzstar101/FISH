@@ -17,6 +17,7 @@ import { messages } from './schema/messages'
 import { notifications } from './schema/notifications'
 import { profileModerationRecords } from './schema/profile-moderation'
 import { rateLimitEvents } from './schema/rate-limits'
+import { reviewModerationRecords } from './schema/review-moderation'
 import { subscribeMessageDeliveries, subscribeMessageGrants } from './schema/subscribe-messages'
 import { transactions } from './schema/transactions'
 import { userInterestProfiles } from './schema/user-interest-profiles'
@@ -88,6 +89,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       rateLimitEvents,
       wishModerationRecords,
       profileModerationRecords,
+      reviewModerationRecords,
       transactions,
       disputes,
       disputeAttachments,
@@ -115,6 +117,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // #694 M5：许愿 / 资料审核记录由真实提交产生，seed 不预置。
       wishModerationRecords: 0,
       profileModerationRecords: 0,
+      // #694 M5c：评价图片审核记录由 confirm 产生，seed 不预置。
+      reviewModerationRecords: 0,
       // #322 M1：向量由 worker 的 EMBED_* job 生成，seed 不预置（假向量落进 seed 库比空表更误导）。
       embeddings: 0,
       // `matches` / `notifications` 由 worker 用真实打分产出（#43）：seed 只投一条

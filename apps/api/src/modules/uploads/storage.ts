@@ -8,13 +8,20 @@ import { isLegacyListingKey, legacyMediaToken } from './legacy-url'
 import {
   isListingReviewMediaKey,
   isReviewMediaPublicKey,
+  isReviewModerationMediaKey,
   REVIEW_MEDIA_URL_TTL_SECONDS,
   reviewMediaToken,
 } from './review-media'
 
 // 评价配图 final 键的形状/归属判据定义在 `./review-media`（私有媒体模块，与令牌同处）；
 // 这里 re-export 维持「键域校验统一从 storage 出口拿」的既有 import 面。
-export { isReviewMediaPublicKey, reviewMediaPublicPrefix } from './review-media'
+export {
+  isReviewMediaPublicKey,
+  isReviewModerationMediaKey,
+  REVIEW_MODERATION_MEDIA_PREFIX,
+  reviewMediaPublicPrefix,
+  reviewModerationMediaPrefix,
+} from './review-media'
 
 /**
  * 对象存储的唯一出入口（#6 契约 §2.7 / §7.7 / §7.8）。
@@ -502,7 +509,11 @@ export function createBunS3MediaStorage(options: {
       // 私有对象（#286 审核中快照 / #475 评价配图 final 键）：不在匿名白名单里，只能通过
       // 带过期时刻的签名代理读。评价配图私有化的原因：评价读 API 是交易参与者边界，
       // 匿名直链等于给边界外的人留一条永久旁路（#483 审查响应）。
-      if (isListingReviewMediaKey(key) || isReviewMediaPublicKey(key)) {
+      if (
+        isListingReviewMediaKey(key) ||
+        isReviewMediaPublicKey(key) ||
+        isReviewModerationMediaKey(key)
+      ) {
         if (!reviewUrlBase || !reviewUrlSecret) throw new Error('私有媒体 URL 代理未配置')
         const expiresAtSeconds = Math.floor(Date.now() / 1000) + REVIEW_MEDIA_URL_TTL_SECONDS
         return `${reviewUrlBase.replace(/\/+$/, '')}/${reviewMediaToken(key, reviewUrlSecret, expiresAtSeconds)}`

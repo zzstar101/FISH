@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { ALLOWED_IMAGE_MIME, MAX_IMAGE_BYTES } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import type {
@@ -8,32 +9,43 @@ import type {
 } from '@fish/contracts/transaction-reviews/schema'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { createLocalContentModerationProvider } from '../moderation/providers/local'
+import type { LoadModerationImage } from '../moderation/providers/tencent'
+import {
+  ContentModerationError,
+  type ContentModerationProvider,
+} from '../moderation/providers/types'
 import { createTokenBucketLimiter } from '../recommendation/rate-limit'
-import type { MediaObjectStat, MediaStorage } from '../uploads/storage'
+import { reviewModerationMediaPrefix } from '../uploads/review-media'
+import type { MediaStorage } from '../uploads/storage'
 import {
   isReviewMediaStagingKey,
   reviewMediaPublicPrefix,
   reviewMediaStagingPrefix,
 } from '../uploads/storage'
+import {
+  effectiveReviewModerationDecision,
+  type ReviewModerationRow,
+  type ReviewModerationStore,
+} from './moderation-store'
 
 /**
- * 评价配图上传链（#475）：presign（签 staging）→ 客户端直传 → confirm（校验并固化到私有 final 键）。
+ * 评价配图上传链（#475，审核闭环 #694 M5c）：presign（签 staging）→ 客户端直传 →
+ * confirm（读真实字节 → IMS → 按结论固化 final）。
  *
- * 与 listing 的上传链同形但**独立成链**（票内决策：不动 `/uploads/*` 的既有 listing 语义）：
- * - 键域函数与写入端引用校验共用 `../uploads/storage` 的同一族函数（改名即编译错）；
- * - **不做内容审核**（票内待冻结项 3 取默认：本期不进 IMS；chat-media 现状同款），
- *   因此没有 staging→IMS→固化 的结算机，confirm 只做形状/归属/存在/大小/MIME/真实图片校验；
- * - **无登记表**：presign 永不签 final 前缀，所以「final 键下对象存在」本身就证明经过本链 confirm。
- * - **confirm 幂等且不覆盖**（#483 审查响应）：final 已存在即视为本次（或此前）confirm 已成功，
- *   直接返回同一 final 键、绝不重写——同一 staging 键换一笔交易再 confirm 也改不掉
- *   已提交评价引用的图；重试安全性因此不依赖 staging 对象还活着。
- * - **授权门是反滥用门，键不绑定交易**：键 `reviews/{usr_…}/{med_…}.ext` 不含交易段，
- *   同一用户可以把在交易 A 下 confirm 的图引用到交易 B 的评价里（两笔都需 COMPLETED 且本人未评价）。
- *   验收只要求「键来自本链且属于本人」，本期即此语义；要绑定交易需在键里加交易段或引入登记表。
- * - **频控**：confirm 若完全无上限，本链就是一条「向私有 final 前缀不限量写对象」的通道——
- *   按用户令牌桶兜底（与契约的 3 张上限是两个维度：那个约束单条评价引用几张，这个约束产出速率）。
- * - **存储运行错误显式 503**（#483 审查响应）：stat 用 `statStrict`（只有真不存在才是 422），
- *   读/写的运行错误不吞——MinIO 抖动是可重试的服务故障，不能伪装成「图片无效」让用户重传。
+ * 与 listing 的上传链同形，但**审核后的落点不同**：
+ * - ALLOW → `reviews/{usr_…}/{med_…}.ext`（公开代理读）；
+ * - REVIEW → `review-moderation-media/{usr_…}/{med_…}.ext`（私有，仅本人/管理员可读，进人工队列）；
+ * - BLOCK → 不写任何 final 键，删 staging，返回 422 `REVIEW_IMAGE_BLOCKED`。
+ *
+ * 防 TOCTOU 的根据是「只审一次、只固化同一份字节」：confirm 全量读一次 staging，算 sha256，
+ * 让 provider 的 loadImage 回放**这次读到的**字节（不重读对象存储），再比较腾讯 `FileMD5`
+ * 与本地 md5。落库的摘要/大小/结论与固化的 final 对象绑定；之后 staging 被覆盖也改不掉 final
+ * （条件写不覆盖；重放走审核台账而不是重跑 IMS）。
+ *
+ * 幂等：唯一键 `(user_id, staging_key, content_digest)` 是并发 confirm 的仲裁点；输家读赢家
+ * 那一行返回同一结论。同一 staging 键换了字节再 confirm 时，final 已存在且摘要不同 →
+ * 显式 422（已固化的图不可被替换）。
  */
 
 export class ReviewMediaServiceError extends Error {
@@ -72,9 +84,21 @@ const rateLimited = (retryAfterSeconds: number) =>
 const storageUnavailable = () =>
   new ReviewMediaServiceError(503, 'REVIEW_MEDIA_UNAVAILABLE', '图片上传暂时不可用，请稍后重试')
 
+const moderationUnavailable = () =>
+  new ReviewMediaServiceError(
+    503,
+    'CONTENT_MODERATION_UNAVAILABLE',
+    '内容审核暂时不可用，请稍后重试',
+  )
+
 const invalidKey = () =>
   new ReviewMediaServiceError(422, 'REVIEW_IMAGE_INVALID', '图片对象不可引用，请重新上传', [
     { field: 'objectKey', message: '图片对象不可引用' },
+  ])
+
+const imageBlocked = () =>
+  new ReviewMediaServiceError(422, 'REVIEW_IMAGE_BLOCKED', '图片未通过内容审核，请更换后重新上传', [
+    { field: 'objectKey', message: '图片未通过内容审核' },
   ])
 
 const EXTENSION_BY_MIME: Record<(typeof ALLOWED_IMAGE_MIME)[number], string> = {
@@ -121,11 +145,14 @@ function sniffImageMime(bytes: Uint8Array): string | null {
 
 /** presign/confirm 共用的门（与评价边 POST 一致：参与者 → COMPLETED → 尚未评价）。 */
 export interface ReviewMediaGate {
-  /** 返回 `null` = 不是参与者/交易不存在（404）；否则给出状态与「我是否已评价」。 */
+  /**
+   * 返回 `null` = 不是参与者/交易不存在（404）；否则给出**内部交易 id**（审核记录外键）、
+   * 状态与「我是否已评价」。
+   */
   transactionGate(
     transactionId: string,
     userId: string,
-  ): Promise<{ status: string; hasReview: boolean } | null>
+  ): Promise<{ id: string; status: string; hasReview: boolean } | null>
 }
 
 export interface ReviewMediaService {
@@ -141,15 +168,26 @@ export interface ReviewMediaService {
   ): Promise<ReviewMediaConfirmResponse>
 }
 
+/** 评价图片送审配置：provider 按需创建（loadImage 回放本次读到的字节）。 */
+export interface ReviewImageModerationConfig {
+  createProvider(loadImage: LoadModerationImage): ContentModerationProvider
+  /** 腾讯 IMS 策略号（审计列）；local transport 为 null。 */
+  bizType: string | null
+}
+
 export function createReviewMediaService(options: {
   gate: ReviewMediaGate
   storage: MediaStorage
+  /** 审核台账；缺失时 confirm fail-closed 503（不能在没有记录的情况下产出公开键）。 */
+  moderationStore?: ReviewModerationStore
+  /** 缺省本地 provider（图片恒 REVIEW），生产装配注入腾讯 IMS。 */
+  moderation?: ReviewImageModerationConfig
   /** 令牌桶可注入（测试用假时钟/小容量）；缺省按用户限速：突发 10、约 10/分钟补充。 */
   limiter?: {
     take(subject: string): { allowed: true } | { allowed: false; retryAfterSeconds: number }
   }
 }): ReviewMediaService {
-  const { gate, storage } = options
+  const { gate, storage, moderationStore } = options
   const limiter =
     options.limiter ??
     createTokenBucketLimiter({ capacity: 10, maxSubjects: 10_000, refillPerSecond: 10 / 60 })
@@ -159,12 +197,13 @@ export function createReviewMediaService(options: {
     if (!decision.allowed) throw rateLimited(decision.retryAfterSeconds)
   }
 
-  async function requireGate(transactionId: string, userId: string): Promise<void> {
+  async function requireGate(transactionId: string, userId: string): Promise<{ id: string }> {
     const state = await gate.transactionGate(transactionId, userId)
     if (!state) throw transactionNotFound()
     if (state.status !== 'COMPLETED') throw notCompleted()
     // 评价不可修改（冻结口径）——已评过就没有再上传的语义，提前 409 而不是让 confirm 白跑。
     if (state.hasReview) throw reviewExists()
+    return { id: state.id }
   }
 
   /**
@@ -178,12 +217,23 @@ export function createReviewMediaService(options: {
     })
   }
 
+  /** 台账行 → confirm 响应；BLOCK 行永远不会被当成可引用对象。 */
+  function responseOf(record: ReviewModerationRow): ReviewMediaConfirmResponse {
+    const decision = effectiveReviewModerationDecision(record)
+    if (decision === 'BLOCK' || !record.finalKey) throw imageBlocked()
+    return {
+      objectKey: record.finalKey,
+      url: storage.publicUrl(record.finalKey),
+      moderationDecision: decision,
+    }
+  }
+
   return {
     async presign(userId, transactionId, input) {
       assertWithinRate(userId)
       await requireGate(transactionId, userId)
       // 键由服务端生成且必带 userId：confirm 与写侧引用校验都只靠这个前缀判归属。
-      // presign 永不签 `reviews/`（final）——这是「无登记表」安全性的根据。
+      // presign 永不签 `reviews/`（final）——final 只能由 confirm 在审核后产出。
       const objectKey = `${reviewMediaStagingPrefix(userId)}${encodePublicId(
         PUBLIC_ID_PREFIX.media,
         newId(),
@@ -199,33 +249,41 @@ export function createReviewMediaService(options: {
 
     async confirm(userId, transactionId, input) {
       assertWithinRate(userId)
-      await requireGate(transactionId, userId)
-      if (!storage.statStrict || !storage.readMediaBytes || !storage.writeMediaBytesIfAbsent) {
+      const txn = await requireGate(transactionId, userId)
+      const moderation = options.moderation ?? {
+        createProvider: () => createLocalContentModerationProvider(),
+        bizType: null,
+      }
+      if (
+        !moderationStore ||
+        !storage.statStrict ||
+        !storage.readMediaBytes ||
+        !storage.writeMediaBytesIfAbsent
+      ) {
         throw storageUnavailable()
       }
-      const { statStrict, readMediaBytes, writeMediaBytesIfAbsent } = storage
+      const { statStrict, readMediaBytes, writeMediaBytesIfAbsent, delete: deleteObject } = storage
       const key = input.objectKey
       // 形状 + 归属（`..`/编码绕过由 isSafeObjectKey 前提挡住，见 uploads/storage.ts 头注释）。
       if (!isReviewMediaStagingKey(key) || !key.startsWith(reviewMediaStagingPrefix(userId))) {
         throw invalidKey()
       }
 
-      // 由 staging 键派生 final 键：**只换前缀**（media 段原样保留 —— 它已经是公开 id，
-      // 再走一次 encodePublicId 会二次编码）。
-      const finalKey = key.replace(
-        reviewMediaStagingPrefix(userId),
-        reviewMediaPublicPrefix(userId),
-      )
-      // #483 审查响应：幂等只保证同一 staging 键首次固化的内容；final 已存在即成功返回，
-      // 绝不重写。同一 staging 键换一笔交易再 confirm，已提交评价引用的图保持原样。
-      const existing: MediaObjectStat | null = await asServiceOutage(
-        'stat final',
-        statStrict(finalKey),
-      )
-      if (existing) return { objectKey: finalKey, url: storage.publicUrl(finalKey) }
+      // 由 staging 键派生两个候选 final 键（只换前缀，media 段原样保留）。
+      const filename = key.slice(reviewMediaStagingPrefix(userId).length)
+      const publicKey = `${reviewMediaPublicPrefix(userId)}${filename}`
+      const privateKey = `${reviewModerationMediaPrefix(userId)}${filename}`
 
       const stat = await asServiceOutage('stat staging', statStrict(key))
-      if (!stat) throw invalidKey()
+      if (!stat) {
+        // staging 可能已被生命周期策略清理：只要台账里有这次 confirm 的结论，重试仍幂等。
+        const recorded = await moderationStore.findByStagingKey({
+          userId,
+          stagingKey: key,
+        })
+        if (recorded) return responseOf(recorded)
+        throw invalidKey()
+      }
       if (stat.size > MAX_IMAGE_BYTES || !ALLOWED_MIME.has(stat.contentType)) throw invalidKey()
       const bytes = await asServiceOutage('read staging', readMediaBytes(key))
       // stat 刚成功、此刻却读不到：对象在确认中途消失属存储故障，不是「图片无效」。
@@ -234,14 +292,133 @@ export function createReviewMediaService(options: {
       if (bytes.byteLength !== stat.size) throw invalidKey()
       if (sniffImageMime(bytes) !== stat.contentType) throw invalidKey()
 
-      // 前置 stat 只用于幂等快路径，不能承担互斥：多个 confirm 可同时观察到不存在。
-      // 条件写（S3/MinIO 由 If-None-Match:* 在存储端原子仲裁；COS 由存储适配器在进程内按键排队，
-      // 只在单 API 进程下成立）让输家复用已固化的 final，不覆盖其字节。
-      await asServiceOutage(
+      const contentDigest = createHash('sha256').update(bytes).digest('hex')
+
+      // 幂等快路径：同一 staging 的同一份字节已经审过 → 直接给出既有结论，不重跑 IMS。
+      const existing = await moderationStore.findByDigest({
+        userId,
+        stagingKey: key,
+        contentDigest,
+      })
+      if (existing) return responseOf(existing)
+
+      // loadImage 回放**本次读到的字节**：provider 不再读对象存储，审核对象与固化对象同源。
+      const provider = moderation.createProvider(async (objectKey) =>
+        objectKey === key ? { bytes, contentType: stat.contentType } : null,
+      )
+
+      let verdict: Awaited<ReturnType<ContentModerationProvider['moderateImage']>>
+      try {
+        verdict = await provider.moderateImage({
+          // 腾讯 DataId 白名单 `[A-Za-z0-9_@#-]{1,64}`：由内容摘要派生，稳定且可关联重试。
+          dataId: `rv-${contentDigest.slice(0, 61)}`,
+          objectKey: key,
+        })
+      } catch (error) {
+        if (!(error instanceof ContentModerationError)) throw error
+        console.warn('[review-media] 图片送审失败，按 fail-closed 处理', {
+          reason: error.reason,
+          provider: error.provider,
+          requestId: error.requestId,
+          detail: error.detail,
+        })
+        if (error.reason === 'invalid_input') throw invalidKey()
+        throw moderationUnavailable()
+      }
+
+      // 腾讯的 FileMD5 必须等于我们对同一份字节算的 md5；不一致说明上游看的不是这次读的字节。
+      const providerMd5 = verdict.transport === 'tencent' ? verdict.contentDigest : null
+      if (verdict.transport === 'tencent') {
+        const localMd5 = createHash('md5').update(bytes).digest('hex')
+        if (!providerMd5 || providerMd5 !== localMd5) {
+          console.warn('[review-media] 上游摘要与本地字节不一致，按 fail-closed 处理', {
+            provider: verdict.provider,
+            requestId: verdict.requestId,
+          })
+          throw moderationUnavailable()
+        }
+      }
+
+      const baseRecord = {
+        userId,
+        transactionId: txn.id,
+        stagingKey: key,
+        contentType: stat.contentType,
+        sizeBytes: stat.size,
+        contentDigest,
+        providerMd5,
+        provider: verdict.provider,
+        providerRequestId: verdict.requestId,
+        policyVersion: verdict.policyVersion,
+        bizType: moderation.bizType,
+        suggestion: verdict.suggestion,
+        label: verdict.label,
+        subLabel: verdict.subLabel,
+        score: verdict.score,
+        // provider 不单独返回规则码；subLabel 已单列存储，这里不再重复。
+        matchedRules: [],
+        matchedTermsMasked: verdict.maskedTerms ?? [],
+      }
+
+      if (verdict.decision === 'BLOCK') {
+        const inserted = await moderationStore.insert({
+          ...baseRecord,
+          finalKey: null,
+          moderationDecision: 'BLOCK',
+        })
+        // 输给并发 confirm：以先落库的结论为准（同摘要下判定本应一致，但仍不覆盖）。
+        if (!inserted) {
+          const winner =
+            (await moderationStore.findByDigest({
+              userId,
+              stagingKey: key,
+              contentDigest,
+            })) ?? (await moderationStore.findByStagingKey({ userId, stagingKey: key }))
+          if (winner && winner.contentDigest === contentDigest) return responseOf(winner)
+        }
+        // 不得留下可被再次引用的 staging 对象；删除失败不影响 422（final 键本来就不存在）。
+        if (deleteObject) {
+          await deleteObject(key).catch((error: unknown) => {
+            console.warn('[review-media] BLOCK 后删除 staging 失败，已忽略', { error })
+          })
+        }
+        throw imageBlocked()
+      }
+
+      const finalKey = verdict.decision === 'ALLOW' ? publicKey : privateKey
+      const written = await asServiceOutage(
         'write final',
         writeMediaBytesIfAbsent(finalKey, bytes, stat.contentType),
       )
-      return { objectKey: finalKey, url: storage.publicUrl(finalKey) }
+      if (!written) {
+        // final 已存在：必须是同一份字节才允许复用；不同 → staging 已被替换/键被占用。
+        const current = await asServiceOutage('read existing final', readMediaBytes(finalKey))
+        if (
+          !current ||
+          current.byteLength !== bytes.byteLength ||
+          createHash('sha256').update(current).digest('hex') !== contentDigest
+        ) {
+          throw invalidKey()
+        }
+      }
+
+      const inserted = await moderationStore.insert({
+        ...baseRecord,
+        finalKey,
+        moderationDecision: verdict.decision,
+      })
+      if (inserted) {
+        return responseOf(inserted)
+      }
+      // 并发输家：读赢家。若赢家摘要不同（同一 staging 被换过字节且 final 尚不存在）→ 拒绝。
+      const winner =
+        (await moderationStore.findByDigest({
+          userId,
+          stagingKey: key,
+          contentDigest,
+        })) ?? (await moderationStore.findByStagingKey({ userId, stagingKey: key }))
+      if (!winner || winner.contentDigest !== contentDigest) throw invalidKey()
+      return responseOf(winner)
     },
   }
 }

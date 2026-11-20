@@ -7,6 +7,7 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createSessions } from './modules/auth/session'
 import { createTestUser } from './modules/auth/testing'
 import { reviewMediaKey } from './modules/uploads/review-media'
 
@@ -335,7 +336,7 @@ describe('交易评价 app 级接线（#195 PR2）', () => {
   })
 })
 
-describe('#475 评价配图上传链 app 级接线', () => {
+describe('#694 M5c 评价配图审核链 app 级接线', () => {
   /** 64 字节 PNG（魔数正确即可——本链不做尺寸解析，内容层面只验魔数与声明一致）。 */
   const pngBytes = (() => {
     const bytes = new Uint8Array(64)
@@ -369,8 +370,17 @@ describe('#475 评价配图上传链 app 级接线', () => {
       json({ objectKey: presign.objectKey }, cookie),
     )
     expect(confirmRes.status).toBe(200)
-    const confirm = (await confirmRes.json()) as { objectKey: string; url: string }
-    expect(confirm.objectKey).toMatch(/^reviews\/usr_[0-9a-z]+\/med_[0-9a-z]+\.png$/)
+    const confirm = (await confirmRes.json()) as {
+      objectKey: string
+      url: string
+      moderationDecision: string
+    }
+    // local transport 图片恒 REVIEW（LOCAL_IMAGE_NOT_AUDITED）：只能落私有待审键，
+    // 公开 reviews/ 键必须等管理员放行后才会出现（#694 M5c）。
+    expect(confirm.objectKey).toMatch(
+      /^review-moderation-media\/usr_[0-9a-z]+\/med_[0-9a-z]+\.png$/,
+    )
+    expect(confirm.moderationDecision).toBe('REVIEW')
     // #483 审查响应：读路径私有化——confirm 返回的 URL 是短期签名代理地址，不含对象键。
     expect(confirm.url).toContain('/api/uploads/media/')
     expect(confirm.url).not.toContain(confirm.objectKey)
@@ -387,8 +397,7 @@ describe('#475 评价配图上传链 app 级接线', () => {
     const secondKey = await uploadImage(buyerCookie, txn.publicId)
     expect(firstKey).not.toBe(secondKey)
 
-    // 下单即验证：final 对象真实存在（presign 从不签 reviews/，只能在 confirm 之后出现），
-    // 但**不**匿名可读——桶策略撤出 reviews/* 后，存在性本身也被 403 挡住（#483 审查响应）。
+    // 待审对象真实存在，但**不**匿名可读——私有前缀不在桶的公开策略里。
     const readable = await fetch(`http://localhost:9000/fish/${firstKey}`)
     expect(readable.status).toBe(403)
 
@@ -398,7 +407,7 @@ describe('#475 评价配图上传链 app 级接线', () => {
     )
     expect(created.status).toBe(201)
     const body = (await created.json()) as {
-      images: { url: string }[]
+      images: { url: string; moderationDecision?: string }[]
       id: string
     }
     // 数组下标即 sort_order：先 second 后 first。URL 是签名代理地址、不含键本身，
@@ -410,6 +419,7 @@ describe('#475 评价配图上传链 app 级接线', () => {
         meetupEnv.MEETUP_TOKEN_SECRET,
         Math.floor(Date.now() / 1000),
       )
+    expect(body.images.map((image) => image.moderationDecision)).toEqual(['REVIEW', 'REVIEW'])
     const urls = body.images.map((image) => image.url)
     expect(urls.map((url) => url.startsWith(proxyBase))).toEqual([true, true])
     expect(urls.map(decodeToken)).toEqual([secondKey, firstKey])
@@ -433,6 +443,21 @@ describe('#475 评价配图上传链 app 级接线', () => {
     )
     expect(afterReview.status).toBe(409)
     expect(error(await afterReview.json())).toBe('TRANSACTION_REVIEW_EXISTS')
+
+    // 公开对账：作者本人能看见自己待审的图，卖家/其他人看不到整条评价；
+    // 管理员放行后才会恢复公开（由 app.review-moderation.test.ts 覆盖端到端放行）。
+    const { token: sellerToken } = await createSessions(db).create(sellerId)
+    const sellerListRes = await app.request(`/transactions/${txn.publicId}/reviews`, {
+      headers: { cookie: `fish_session=${sellerToken}` },
+    })
+    expect(sellerListRes.status).toBe(200)
+    const sellerList = (await sellerListRes.json()) as { items: unknown[] }
+    expect(sellerList.items).toHaveLength(0)
+
+    const mine = await app.request(edge, get(buyerCookie))
+    expect(mine.status).toBe(200)
+    const mineBody = (await mine.json()) as { images: { moderationDecision?: string }[] }
+    expect(mineBody.images.map((image) => image.moderationDecision)).toEqual(['REVIEW', 'REVIEW'])
 
     // 删除评价 → 图片行级联清掉
     const deleted = await app.request(edge, { ...get(buyerCookie), method: 'DELETE' })

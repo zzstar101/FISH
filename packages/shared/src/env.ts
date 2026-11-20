@@ -279,7 +279,7 @@ export const DEFAULT_TENCENT_CLOUD_REGION = 'ap-guangzhou'
  * - `local`：只允许显式开发/测试使用。文本走本地词表（`apps/api/src/modules/moderation/rules.ts`），
  *   图片不做内容审核（一律 REVIEW，不公开）；`NODE_ENV=production` 下直接启动失败——本地词表是
  *   演示规则，不是内容安全审核，生产禁止本地兜底。
- * - `tencent`：腾讯云 TMS（文本）/ IMS（图片），六项配置缺一即失败。
+ * - `tencent`：腾讯云 TMS（文本）/ IMS（图片），八项配置缺一即失败。
  *
  * Secret 只在部署环境变量/密钥文件；本加载器只在错误里报变量名，**不回显任何值**。
  */
@@ -298,6 +298,8 @@ export type ContentModerationEnv =
       imsChatBizType: string
       /** #694 M5：公开 UGC（许愿墙等）必须使用独立 BizType，禁止复用商品/聊天策略。 */
       tmsUgcBizType: string
+      /** #694 M5c：交易评价图片必须使用独立 BizType，禁止复用商品/聊天图片策略。 */
+      imsUgcBizType: string
     }
 
 export function loadContentModerationEnv(
@@ -323,6 +325,7 @@ export function loadContentModerationEnv(
     const tmsChatBizType = source.TENCENT_TMS_CHAT_BIZ_TYPE?.trim()
     const imsChatBizType = source.TENCENT_IMS_CHAT_BIZ_TYPE?.trim()
     const tmsUgcBizType = source.TENCENT_TMS_UGC_BIZ_TYPE?.trim()
+    const imsUgcBizType = source.TENCENT_IMS_UGC_BIZ_TYPE?.trim()
     if (
       !secretId ||
       !secretKey ||
@@ -330,7 +333,8 @@ export function loadContentModerationEnv(
       !imsBizType ||
       !tmsChatBizType ||
       !imsChatBizType ||
-      !tmsUgcBizType
+      !tmsUgcBizType ||
+      !imsUgcBizType
     ) {
       // 点名「缺了哪一个」：只报一句「六个都要配」的话，运维无法判断到底漏了哪一项。
       const missing = [
@@ -341,9 +345,10 @@ export function loadContentModerationEnv(
         !tmsChatBizType ? 'TENCENT_TMS_CHAT_BIZ_TYPE' : null,
         !imsChatBizType ? 'TENCENT_IMS_CHAT_BIZ_TYPE' : null,
         !tmsUgcBizType ? 'TENCENT_TMS_UGC_BIZ_TYPE' : null,
+        !imsUgcBizType ? 'TENCENT_IMS_UGC_BIZ_TYPE' : null,
       ].filter((name): name is string => name !== null)
       throw new Error(
-        `环境变量校验失败：CONTENT_MODERATION_TRANSPORT=tencent 缺少 ${missing.join(' / ')}。七项配置都必须提供：TENCENT_CLOUD_SECRET_ID / TENCENT_CLOUD_SECRET_KEY / TENCENT_TMS_BIZ_TYPE / TENCENT_IMS_BIZ_TYPE / TENCENT_TMS_CHAT_BIZ_TYPE / TENCENT_IMS_CHAT_BIZ_TYPE / TENCENT_TMS_UGC_BIZ_TYPE`,
+        `环境变量校验失败：CONTENT_MODERATION_TRANSPORT=tencent 缺少 ${missing.join(' / ')}。八项配置都必须提供：TENCENT_CLOUD_SECRET_ID / TENCENT_CLOUD_SECRET_KEY / TENCENT_TMS_BIZ_TYPE / TENCENT_IMS_BIZ_TYPE / TENCENT_TMS_CHAT_BIZ_TYPE / TENCENT_IMS_CHAT_BIZ_TYPE / TENCENT_TMS_UGC_BIZ_TYPE / TENCENT_IMS_UGC_BIZ_TYPE`,
       )
     }
     // #694 M1：聊天必须有自己的策略号。只校验非空不够——把商品策略号复制一份同样能通过，
@@ -364,6 +369,13 @@ export function loadContentModerationEnv(
         '环境变量校验失败：TENCENT_IMS_CHAT_BIZ_TYPE 必须与 TENCENT_IMS_BIZ_TYPE 不同（聊天图片不能复用商品策略号）',
       )
     }
+    // #694 M5c：交易评价图片是公开 UGC，必须使用独立策略号。商品/聊天策略号各有不同阈值
+    // 与规则集，复用会让评价图片静默套用错误策略，事后也无法从 policyVersion 区分。
+    if (imsUgcBizType === imsBizType || imsUgcBizType === imsChatBizType) {
+      throw new Error(
+        '环境变量校验失败：TENCENT_IMS_UGC_BIZ_TYPE 必须与商品、聊天图片策略号都不同（交易评价图片不能复用现有策略号）',
+      )
+    }
     return {
       transport: 'tencent',
       secretId,
@@ -373,6 +385,7 @@ export function loadContentModerationEnv(
       tmsChatBizType,
       imsChatBizType,
       tmsUgcBizType,
+      imsUgcBizType,
       region: source.TENCENT_CLOUD_REGION?.trim() || DEFAULT_TENCENT_CLOUD_REGION,
     }
   }

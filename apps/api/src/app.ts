@@ -94,6 +94,7 @@ import { createChatModerationPolicy } from './modules/moderation/chat'
 import { createChatModerationService } from './modules/moderation/chat-service'
 import { createSqlChatModerationStore } from './modules/moderation/chat-store'
 import { createContentModerationProvider } from './modules/moderation/providers/factory'
+import type { LoadModerationImage } from './modules/moderation/providers/tencent'
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
 import { createSqlNotificationStore } from './modules/notifications/store'
@@ -135,6 +136,8 @@ import {
   resolveCapability,
 } from './modules/subscribe-messages/service'
 import { createSqlSubscribeMessageStore } from './modules/subscribe-messages/store'
+import { createReviewModerationService } from './modules/transaction-reviews/moderation-service'
+import { createSqlReviewModerationStore } from './modules/transaction-reviews/moderation-store'
 import { createTransactionReviewsRouter } from './modules/transaction-reviews/router'
 import { createTransactionReviewService } from './modules/transaction-reviews/service'
 import { createSqlTransactionReviewStore } from './modules/transaction-reviews/store'
@@ -611,12 +614,32 @@ export function createApp(
     { loadImage: () => Promise.reject(new Error('public UGC moderation does not read images')) },
   )
 
+  // 交易评价配图审核（#694 M5c）：独立公开 UGC 图片策略号（`TENCENT_IMS_UGC_BIZ_TYPE`），
+  // 与商品/聊天图片都不同 —— 评价配图是公开 UGC，复审口径不能跟着商品或私聊走。
+  // 审核时回放 confirm 读到的**同一份字节**，不复用 staging key 的二次读取（防 TOCTOU）。
+  const reviewImageModerationEnv =
+    moderationEnv.transport === 'tencent'
+      ? {
+          ...moderationEnv,
+          tmsBizType: moderationEnv.tmsUgcBizType,
+          imsBizType: moderationEnv.imsUgcBizType,
+        }
+      : moderationEnv
+  const reviewImageModeration = {
+    bizType: moderationEnv.transport === 'tencent' ? moderationEnv.imsUgcBizType : null,
+    createProvider: (loadImage: LoadModerationImage) =>
+      createContentModerationProvider(reviewImageModerationEnv, { loadImage }),
+  }
+  const reviewModerationStore = createSqlReviewModerationStore(db, storage)
+
   // 交易评价 service（#195 PR2）：一个实例两处用 —— 评价边 router 直接挂，
   // comments 的 `/me/comments?kind=review|all` 借道它读评价时间线。
   const transactionReviewService = createTransactionReviewService({
     store: createSqlTransactionReviewStore(db),
     storage,
     moderationProvider: publicUgcModerationProvider,
+    moderationStore: reviewModerationStore,
+    reviewImageModeration,
   })
 
   // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
@@ -1075,12 +1098,16 @@ export function createApp(
   const profileModerationService = createProfileModerationService({
     store: createSqlProfileModerationStore(db),
   })
+  // 交易评价图片待审（#694 M5c）：队列与用户端共用同一个审核台账 store；放行在 store 的
+  // 同一事务里搬迁字节并改写评价引用，管理端 service 只做映射/错误码。
+  const reviewModerationService = createReviewModerationService({ store: reviewModerationStore })
   const admin = createAdminModule({
     db,
     storage,
     chatModeration: chatModerationService,
     wishModeration: wishModerationService,
     profileModeration: profileModerationService,
+    reviewModeration: reviewModerationService,
     requireAuth: auth.requireAuth,
     governance: governanceService,
     guard: restrictionGuard,
