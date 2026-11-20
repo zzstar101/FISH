@@ -47,6 +47,7 @@ import {
   fetchAdminUserDetail,
   fetchAdminUsers,
   fetchChatModerationQueue,
+  fetchProfileModerationQueue,
   fetchWishModerationQueue,
   liftUserRestriction,
   restoreListing,
@@ -55,6 +56,7 @@ import {
   submitDisputeResolve,
   submitFeedbackHandle,
   submitModerationDecision,
+  submitProfileModerationDecision,
   submitReportHandle,
   submitWishModerationDecision,
 } from './admin-api'
@@ -89,6 +91,7 @@ export const adminKeys = {
   reportDetail: (reportId: string) => [...adminKeys.all(), 'report', reportId] as const,
   chatModerationQueue: () => [...adminKeys.all(), 'chat-moderation-queue'] as const,
   wishModerationQueue: () => [...adminKeys.all(), 'wish-moderation-queue'] as const,
+  profileModerationQueue: () => [...adminKeys.all(), 'profile-moderation-queue'] as const,
   feedback: (filters: AdminFeedbackFilters) => [...adminKeys.all(), 'feedback', filters] as const,
   feedbackDetail: (feedbackId: string) =>
     [...adminKeys.all(), 'feedback-detail', feedbackId] as const,
@@ -246,6 +249,30 @@ export function useWishModerationDecision(): UseMutationResult<
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ recordId, input }) => submitWishModerationDecision(recordId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: adminKeys.all() })
+    },
+  })
+}
+
+export function useProfileModerationQueue() {
+  return useInfiniteQuery({
+    queryKey: adminKeys.profileModerationQueue(),
+    queryFn: ({ pageParam }) => fetchProfileModerationQueue(pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 0,
+  })
+}
+
+export function useProfileModerationDecision(): UseMutationResult<
+  void,
+  Error,
+  { recordId: string; input: { decision: 'ALLOW' | 'BLOCK'; reason: string; version: number } }
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ recordId, input }) => submitProfileModerationDecision(recordId, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: adminKeys.all() })
     },

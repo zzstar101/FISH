@@ -13,6 +13,8 @@ import type { GovernanceService } from '../governance/service'
 import { createChatModerationRouter } from '../moderation/chat-router'
 import type { ChatModerationService } from '../moderation/chat-service'
 import { createSqlModerationStore } from '../moderation/store'
+import { createProfileModerationRouter } from '../profile/moderation-router'
+import type { ProfileModerationService } from '../profile/moderation-service'
 import { createReportsRouter } from '../reports/router'
 import { createReportService } from '../reports/service'
 import { createSqlReportStore } from '../reports/store'
@@ -62,6 +64,8 @@ export function createAdminModule(options: {
   chatModeration?: ChatModerationService
   /** 许愿墙待审（#694 M5）；未传时不挂载 /admin/wishes/moderation。 */
   wishModeration?: WishModerationService
+  /** 用户资料（昵称/签名/头像）待审（#694 M5）；未传时不挂载 /admin/profile/moderation。 */
+  profileModeration?: ProfileModerationService
 }) {
   // #286 复审 blocker 1：管理员对 REVIEW 商品的 ALLOW/BLOCK 必须同时结算它引用的审核中图片，
   // 否则人工放行会被卖家下一次「不改图」的文本编辑重新压回人工队列。钩子从 uploads 域注入，
@@ -107,6 +111,13 @@ export function createAdminModule(options: {
     wishModerationRouter: options.wishModeration
       ? createWishModerationRouter({
           service: options.wishModeration,
+          requireAuth: options.requireAuth,
+          requireAdmin,
+        })
+      : undefined,
+    profileModerationRouter: options.profileModeration
+      ? createProfileModerationRouter({
+          service: options.profileModeration,
           requireAuth: options.requireAuth,
           requireAdmin,
         })

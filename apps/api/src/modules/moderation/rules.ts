@@ -33,7 +33,9 @@ const RULES: readonly Rule[] = [
     code: 'PUBLIC_EXTERNAL_CONTACT',
     decision: 'REVIEW',
     terms: ['微信号', '加微信', 'vx', 'v信', '二维码', '外链'],
-    fields: ['publicContent'],
+    // 公开 UGC 正文与用户昵称/签名同属「任何访客都能看到」的内容，引流一律进人工复审；
+    // 商品文案有自己更宽的 EXTERNAL_CONTACT，私聊不套这两条（#694 M1）。
+    fields: ['publicContent', 'nickname', 'signature'],
   },
 ]
 

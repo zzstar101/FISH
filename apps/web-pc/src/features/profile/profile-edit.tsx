@@ -1,3 +1,4 @@
+import type { ProfilePendingChange } from '@fish/contracts/profile/schema'
 import { Button } from '@fish/ui/button'
 import {
   Dialog,
@@ -26,6 +27,16 @@ import {
 import { type ProfileFieldErrors, profileUpdateErrorView } from './api'
 import { useUpdateProfile } from './queries'
 import { prepareSignatureInput } from './signature'
+
+/** 待审提示：明确指出哪些字段在等人工确认，避免「已保存」的误解。 */
+function pendingNotice(pending: ProfilePendingChange): string {
+  const labels: string[] = []
+  if (pending.fields.includes('nickname')) labels.push('昵称')
+  if (pending.fields.includes('signature')) labels.push('个性签名')
+  if (pending.fields.includes('avatarUrl')) labels.push('头像')
+  const what = labels.length > 0 ? labels.join('、') : '资料变更'
+  return `新的${what}已提交人工审核，审核通过后才会对外显示；当前对外仍是旧资料。`
+}
 
 export function ProfileEditDialog({
   open,
@@ -64,6 +75,7 @@ function ProfileEditForm({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<ProfileFieldErrors>({})
 
   useEffect(() => {
@@ -73,6 +85,7 @@ function ProfileEditForm({
     setFile(null)
     setPreviewUrl(null)
     setMessage(null)
+    setNotice(null)
     setFieldErrors({})
   }, [me.nickname, me.signature, open])
 
@@ -117,6 +130,7 @@ function ProfileEditForm({
     }
 
     setMessage(null)
+    setNotice(null)
     setFieldErrors({})
 
     let avatarObjectKey: string | undefined
@@ -168,7 +182,14 @@ function ProfileEditForm({
     }
 
     try {
-      await updateProfile.mutateAsync(input)
+      const result = await updateProfile.mutateAsync(input)
+      // 机审 REVIEW：新值只进待审队列，公开资料仍是旧值（#694 M5）。
+      // 留在弹窗里说明，避免用户以为「关掉就是保存成功」。
+      const pending = result.pending ?? null
+      if (pending !== null) {
+        setNotice(pendingNotice(pending))
+        return
+      }
       onOpenChange(false)
     } catch (error) {
       const view = profileUpdateErrorView(error)
@@ -251,6 +272,12 @@ function ProfileEditForm({
               <p className="text-ink-3 text-xs">最多 200 字；清空保存即删除签名。</p>
             )}
           </Field>
+
+          {notice !== null ? (
+            <p className="rounded-xl bg-brand-soft px-3 py-2 text-brand text-sm" role="status">
+              {notice}
+            </p>
+          ) : null}
 
           {message !== null ? (
             <p className="rounded-xl bg-danger-soft px-3 py-2 text-danger text-sm" role="alert">

@@ -2,11 +2,15 @@ import { describe, expect, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { UserRow } from '../auth/me'
+import { ContentModerationError } from '../moderation/providers/types'
 import { type UploadService, UploadServiceError } from '../uploads/service'
 import type { MediaStorage } from '../uploads/storage'
-import { createProfileService, PROFILE_LIST_LIMIT } from './service'
+import type { ProfileModerationPolicy, ProfileTextModerationResult } from './moderation-policy'
+import type { ProfileChange, ProfileModerationRecordInput } from './moderation-store'
+import { createProfileService, PROFILE_LIST_LIMIT, ProfileServiceError } from './service'
 import type {
   ProfileListingRow,
+  ProfilePendingRow,
   ProfileStatsRow,
   ProfileStore,
   ProfileTransactionRow,
@@ -137,6 +141,12 @@ const txRow = (overrides: Partial<ProfileTransactionRow> = {}): ProfileTransacti
   ...overrides,
 })
 
+/** #694 M5：待审记录 → 本人视图的 fixture（`payload` 只含本次变化的列）。 */
+const pendingRow = (
+  payload: ProfileChange,
+  submittedAt = new Date('2026-09-12T04:00:00.000Z'),
+): ProfilePendingRow => ({ payload, submittedAt })
+
 class MemoryProfileStore implements ProfileStore {
   statsRow: ProfileStatsRow = {
     activeListings: 1,
@@ -148,13 +158,23 @@ class MemoryProfileStore implements ProfileStore {
   listings: ProfileListingRow[] = [listingRow()]
   wishes: ProfileWishRow[] = [wishRow()]
   transactions: ProfileTransactionRow[] = [txRow()]
-  /** `updateUser` 收到的最后一次写入（写用例断言「只写了该写的列」）。 */
-  updated: {
+  pending: ProfilePendingRow | null = null
+  /** `applyProfileChange` 收到的最后一次写入（写用例断言「只写了该写的列」）。 */
+  applied: {
     userId: string
-    patch: { nickname?: string; avatarUrl?: string; signature?: string | null }
+    change: ProfileChange
+    options: { supersedePending: boolean }
   } | null = null
-  /** 覆盖 `updateUser` 的返回行；null 模拟「认证与写入之间账号被删」。 */
-  updateResult: UserRow | null | undefined = undefined
+  /** `queuePendingProfileChange` 收到的最后一次挂起。 */
+  queued: {
+    userId: string
+    change: ProfileChange
+    record: ProfileModerationRecordInput
+  } | null = null
+  /** 覆盖 `applyProfileChange` 的返回行；null 模拟「认证与写入之间账号被删」。 */
+  applyResult: UserRow | null | undefined = undefined
+  /** 覆盖 `queuePendingProfileChange` 的返回值；null 模拟账号已不存在。 */
+  queueResult: ProfilePendingRow | null | undefined = undefined
 
   async stats(userId: string): Promise<ProfileStatsRow> {
     this.lastStatsUserId = userId
@@ -169,18 +189,73 @@ class MemoryProfileStore implements ProfileStore {
   async ownTransactions(_userId: string, limit: number) {
     return this.transactions.slice(0, limit)
   }
-  async updateUser(userId: string, patch: { nickname?: string; avatarUrl?: string }) {
-    this.updated = { userId, patch }
-    if (this.updateResult !== undefined) return this.updateResult
-    return userRow({ id: userId, ...patch })
+  async findPendingProfileChange(_userId: string) {
+    return this.pending
+  }
+  async applyProfileChange(
+    userId: string,
+    change: ProfileChange,
+    options: { supersedePending: boolean },
+  ) {
+    this.applied = { userId, change, options }
+    if (options.supersedePending) this.pending = null
+    if (this.applyResult !== undefined) return this.applyResult
+    return userRow({
+      id: userId,
+      ...(change.nickname === undefined ? {} : { nickname: change.nickname }),
+      ...(change.avatarUrl === undefined ? {} : { avatarUrl: change.avatarUrl }),
+      ...(change.signature === undefined ? {} : { signature: change.signature }),
+    })
+  }
+  async queuePendingProfileChange(
+    userId: string,
+    change: ProfileChange,
+    record: ProfileModerationRecordInput,
+  ) {
+    this.queued = { userId, change, record }
+    if (this.queueResult !== undefined) return this.queueResult
+    this.pending = pendingRow(change)
+    return this.pending
   }
 }
 
-/** 读用例的统一装配（#86 B 起 createProfileService 多一个必填的 uploads 依赖）。 */
+/**
+ * #694 M5：资料文本审核策略的假实现。真实现的 BizType / provider 映射由装配处决定，
+ * 这里只回一个可编排的结论，让 service 的分支（ALLOW / BLOCK / REVIEW / 上游故障）都可测。
+ */
+function fakeModeration(
+  decision: 'ALLOW' | 'BLOCK' | 'REVIEW' = 'ALLOW',
+  overrides: Partial<ProfileTextModerationResult> = {},
+): ProfileModerationPolicy & { calls: { nickname?: string; signature?: string }[] } {
+  const calls: { nickname?: string; signature?: string }[] = []
+  return {
+    calls,
+    async moderateProfile(input) {
+      calls.push(input)
+      return {
+        decision,
+        provider: 'LOCAL',
+        policyVersion: 'local-v1',
+        providerRequestId: null,
+        suggestion: decision === 'ALLOW' ? 'Pass' : decision === 'BLOCK' ? 'Block' : 'Review',
+        label: null,
+        subLabel: decision === 'ALLOW' ? null : 'PUBLIC_EXTERNAL_CONTACT',
+        score: null,
+        matchedRules: decision === 'ALLOW' ? [] : ['PUBLIC_EXTERNAL_CONTACT'],
+        matchedTermsMasked: [],
+        blockedFields: [],
+        ...overrides,
+      }
+    },
+  }
+}
+
+/** 读用例的统一装配（#86 B 起多一个必填的 uploads 依赖，#694 M5 再多一个审核策略）。 */
 const createService = (
   store: ProfileStore,
   uploads: Pick<UploadService, 'confirm'> = fakeUploads(),
-) => createProfileService({ store, storage, uploads })
+  moderation: ProfileModerationPolicy = fakeModeration(),
+) => createProfileService({ store, storage, uploads, moderation })
 
 describe('profile service: getProfile', () => {
   test('aggregates user + stats + three lists in one call', async () => {
@@ -280,15 +355,42 @@ describe('profile service: getProfile', () => {
     const profile = await service.getProfile(me)
     expect(profile.listings[0]?.coverUrl).toBeNull()
   })
+
+  // #694 M5：待审新值只回给本人，且**不进任何公开投射**（列表 / 商品卡 / 订单对方）。
+  test('待审资料只出现在 pending 里，列表与卡片仍是旧公开值', async () => {
+    const store = new MemoryProfileStore()
+    store.pending = pendingRow({ nickname: '待审昵称', avatarUrl: 'https://cdn.test/new.jpg' })
+    const profile = await createService(store).getProfile(me)
+
+    expect(profile.user.nickname).toBe('小明')
+    expect(profile.pending).toEqual({
+      nickname: '待审昵称',
+      signature: null,
+      avatarUrl: 'https://cdn.test/new.jpg',
+      fields: ['nickname', 'avatarUrl'],
+      submittedAt: '2026-09-12T04:00:00.000Z',
+    })
+    expect(profile.listings[0]?.seller?.nickname).toBe('小明')
+    expect(profile.transactions[0]?.counterpart.nickname).toBe('卖家小王')
+  })
+
+  test('没有待审记录时 pending 为 null', async () => {
+    const profile = await createService(new MemoryProfileStore()).getProfile(me)
+    expect(profile.pending).toBeNull()
+  })
 })
 
 describe('profile service: updateProfile（#86 B：编辑资料）', () => {
   test('只改昵称：只写 nickname 一列，不碰头像、不碰上传域', async () => {
     const store = new MemoryProfileStore()
     const uploads = fakeUploads()
-    const user = await createService(store, uploads).updateProfile(me, { nickname: '新名字' })
+    const { user } = await createService(store, uploads).updateProfile(me, { nickname: '新名字' })
 
-    expect(store.updated).toEqual({ userId: USER_ID, patch: { nickname: '新名字' } })
+    expect(store.applied).toEqual({
+      userId: USER_ID,
+      change: { nickname: '新名字' },
+      options: { supersedePending: true },
+    })
     expect(uploads.calls).toEqual([])
     expect(user.nickname).toBe('新名字')
     expect(user.avatarUrl).toBeNull()
@@ -296,48 +398,54 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
 
   test('签名（#179）：原文落库、空白串归一化为 null（清空）', async () => {
     const store = new MemoryProfileStore()
-    const user = await createService(store).updateProfile(me, {
+    const { user } = await createService(store).updateProfile(me, {
       signature: '  面交优先，可小刀  ',
     })
 
-    expect(store.updated?.patch).toEqual({ signature: '面交优先，可小刀' })
+    expect(store.applied?.change).toEqual({ signature: '面交优先，可小刀' })
     expect(user.signature).toBe('面交优先，可小刀')
   })
 
-  test('签名（#179）：只传空白 = 清空，patch.signature 是 null', async () => {
+  test('签名（#179）：只传空白 = 清空，change.signature 是 null', async () => {
     const store = new MemoryProfileStore()
-    const user = await createService(store).updateProfile(me, { signature: '   ' })
+    // 已经为 null 的签名再清空是空操作（不写库），所以这里必须先有旧值。
+    const { user } = await createService(store).updateProfile(
+      { ...me, signature: '旧签名' },
+      { signature: '   ' },
+    )
 
-    expect(store.updated?.patch).toEqual({ signature: null })
+    expect(store.applied?.change).toEqual({ signature: null })
     expect(user.signature).toBeNull()
   })
 
   test('签名（#179）：不传 signature 就不碰该列', async () => {
     const store = new MemoryProfileStore()
     await createService(store).updateProfile(me, { nickname: '新名字' })
-    expect(Object.hasOwn(store.updated?.patch ?? {}, 'signature')).toBe(false)
+    expect(Object.hasOwn(store.applied?.change ?? {}, 'signature')).toBe(false)
   })
 
   test('只改头像：objectKey 交给上传域 confirm，落库的是它给的绝对 URL', async () => {
     const store = new MemoryProfileStore()
     const uploads = fakeUploads()
-    const user = await createService(store, uploads).updateProfile(me, {
+    const { user } = await createService(store, uploads).updateProfile(me, {
       avatarObjectKey: 'listings/u1/a.jpg',
     })
 
     expect(uploads.calls).toEqual(['listings/u1/a.jpg'])
-    expect(store.updated?.patch).toEqual({ avatarUrl: 'https://cdn.test/listings/u1/a.jpg' })
+    expect(store.applied?.change).toEqual({ avatarUrl: 'https://cdn.test/listings/u1/a.jpg' })
+    // 只改头像没有文本过审，不能顺手撤掉用户更早的待审昵称。
+    expect(store.applied?.options).toEqual({ supersedePending: false })
     expect(user.avatarUrl).toBe('https://cdn.test/listings/u1/a.jpg')
   })
 
   test('两项一起改：一次 update 同时落 nickname 与 avatarUrl', async () => {
     const store = new MemoryProfileStore()
-    const user = await createService(store).updateProfile(me, {
+    const { user } = await createService(store).updateProfile(me, {
       nickname: '新名字',
       avatarObjectKey: 'listings/u1/a.jpg',
     })
 
-    expect(store.updated?.patch).toEqual({
+    expect(store.applied?.change).toEqual({
       nickname: '新名字',
       avatarUrl: 'https://cdn.test/listings/u1/a.jpg',
     })
@@ -348,9 +456,9 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
     })
   })
 
-  test('写入与认证之间账号被删：updateUser 回 null 时抛错，不返回假 Me', async () => {
+  test('写入与认证之间账号被删：applyProfileChange 回 null 时抛错，不返回假 Me', async () => {
     const store = new MemoryProfileStore()
-    store.updateResult = null
+    store.applyResult = null
 
     await expect(createService(store).updateProfile(me, { nickname: '新名字' })).rejects.toThrow(
       '更新资料时账号已不存在',
@@ -368,7 +476,7 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
     await expect(
       createService(store, rejected).updateProfile(me, { avatarObjectKey: 'listings/u2/b.jpg' }),
     ).rejects.toThrow('IMAGE_REFERENCE_INVALID')
-    expect(store.updated).toBeNull()
+    expect(store.applied).toBeNull()
   })
 
   // #286 复审 blocker 2：REVIEW 的头像固化在**私有**前缀、BLOCK 的头像根本不固化，两者都不可能
@@ -393,7 +501,148 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
         { field: 'avatarObjectKey', message: '头像未通过审核，请更换图片' },
       ])
       expect(uploads.calls).toEqual(['listing-review-media/u1/a.jpg'])
-      expect(store.updated).toBeNull()
+      expect(store.applied).toBeNull()
     }
+  })
+})
+
+describe('profile service: updateProfile（#694 M5 公开 UGC 审核）', () => {
+  test('只送审本次变化的字段：昵称没变就只审签名', async () => {
+    const store = new MemoryProfileStore()
+    const moderation = fakeModeration()
+    await createService(store, fakeUploads(), moderation).updateProfile(me, {
+      nickname: me.nickname,
+      signature: '新签名',
+    })
+
+    expect(moderation.calls).toEqual([{ signature: '新签名' }])
+  })
+
+  test('BLOCK：422 PROFILE_CONTENT_BLOCKED，只报被 BLOCK 的字段，公开值一个都不改', async () => {
+    const store = new MemoryProfileStore()
+    const uploads = fakeUploads()
+    const moderation = fakeModeration('BLOCK', {
+      blockedFields: ['signature'],
+      matchedRules: ['PROHIBITED_CONTENT'],
+    })
+
+    const caught = await createService(store, uploads, moderation)
+      .updateProfile(me, {
+        nickname: '新名字',
+        signature: '加微信 123456',
+        avatarObjectKey: 'listings/u1/a.jpg',
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      )
+
+    expect(caught).toBeInstanceOf(ProfileServiceError)
+    if (!(caught instanceof ProfileServiceError)) throw caught
+    expect(caught.status).toBe(422)
+    expect(caught.code).toBe('PROFILE_CONTENT_BLOCKED')
+    expect(caught.details).toEqual([
+      { field: 'signature', message: '个性签名包含平台禁止发布的内容' },
+    ])
+    // fail-closed 的关键：文本没过审时连头像都不 confirm（否则私有固化 + 旧值不动也算部分提交）
+    expect(uploads.calls).toEqual([])
+    expect(store.applied).toBeNull()
+    expect(store.queued).toBeNull()
+  })
+
+  test('上游审核不可用：503 CONTENT_MODERATION_UNAVAILABLE，不降级放行也不写库', async () => {
+    const store = new MemoryProfileStore()
+    const moderation: ProfileModerationPolicy = {
+      moderateProfile: async () => {
+        throw new ContentModerationError({ reason: 'timeout', provider: 'TENCENT_TMS' })
+      },
+    }
+
+    const caught = await createService(store, fakeUploads(), moderation)
+      .updateProfile(me, { nickname: '新名字' })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      )
+
+    expect(caught).toBeInstanceOf(ProfileServiceError)
+    if (!(caught instanceof ProfileServiceError)) throw caught
+    expect(caught.status).toBe(503)
+    expect(caught.code).toBe('CONTENT_MODERATION_UNAVAILABLE')
+    expect(store.applied).toBeNull()
+    expect(store.queued).toBeNull()
+  })
+
+  test('REVIEW：落待审并保留旧公开值，头像与文本一起挂起（放行时一次性切换）', async () => {
+    const store = new MemoryProfileStore()
+    const moderation = fakeModeration('REVIEW')
+    const { user, pending } = await createService(store, fakeUploads(), moderation).updateProfile(
+      me,
+      { nickname: '待审昵称', signature: '待审签名', avatarObjectKey: 'listings/u1/a.jpg' },
+    )
+
+    // 公开值不动：user 仍是 requireAuth 给的旧 Me
+    expect(user).toEqual(me)
+    expect(store.applied).toBeNull()
+    expect(store.queued?.change).toEqual({
+      nickname: '待审昵称',
+      signature: '待审签名',
+      avatarUrl: 'https://cdn.test/listings/u1/a.jpg',
+    })
+    // 审核结论原样进待审记录（人工队列要看到机审档位与命中规则）
+    expect(store.queued?.record).toMatchObject({
+      machineDecision: 'REVIEW',
+      decision: 'REVIEW',
+      provider: 'LOCAL',
+      policyVersion: 'local-v1',
+      matchedRules: ['PUBLIC_EXTERNAL_CONTACT'],
+    })
+    expect(pending).toEqual({
+      nickname: '待审昵称',
+      signature: '待审签名',
+      avatarUrl: 'https://cdn.test/listings/u1/a.jpg',
+      fields: ['nickname', 'signature', 'avatarUrl'],
+      submittedAt: '2026-09-12T04:00:00.000Z',
+    })
+  })
+
+  test('REVIEW 但账号已不存在：queuePendingProfileChange 回 null 时抛错', async () => {
+    const store = new MemoryProfileStore()
+    store.queueResult = null
+
+    await expect(
+      createService(store, fakeUploads(), fakeModeration('REVIEW')).updateProfile(me, {
+        nickname: '待审昵称',
+      }),
+    ).rejects.toThrow('更新资料时账号已不存在')
+  })
+
+  test('提交值与当前公开值完全一致：不写库、不送审，原样回当前待审状态', async () => {
+    const store = new MemoryProfileStore()
+    store.pending = pendingRow({ nickname: '更早的待审昵称' })
+    const moderation = fakeModeration()
+    const uploads = fakeUploads()
+
+    const { user, pending } = await createService(store, uploads, moderation).updateProfile(me, {
+      nickname: me.nickname,
+    })
+
+    expect(moderation.calls).toEqual([])
+    expect(uploads.calls).toEqual([])
+    expect(store.applied).toBeNull()
+    expect(store.queued).toBeNull()
+    expect(user).toEqual(me)
+    expect(pending?.nickname).toBe('更早的待审昵称')
+  })
+
+  test('ALLOW：直接生效并取代更早的待审，pending 归零', async () => {
+    const store = new MemoryProfileStore()
+    store.pending = pendingRow({ nickname: '更早的待审昵称' })
+    const { user, pending } = await createService(store).updateProfile(me, { nickname: '新名字' })
+
+    expect(store.applied?.options).toEqual({ supersedePending: true })
+    expect(store.queued).toBeNull()
+    expect(user.nickname).toBe('新名字')
+    expect(pending).toBeNull()
   })
 })

@@ -3,6 +3,8 @@ import { createDb } from '@fish/db/client'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import type { ProfileModerationRecordInput } from './moderation-store'
+import { decodeProfileChange } from './moderation-store'
 import { createSqlProfileStore } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -25,6 +27,24 @@ const scratchUrl = (() => {
 const admin = createDb(databaseUrl)
 const db = createDb(scratchUrl)
 const store = createSqlProfileStore(db)
+
+/** 机审 REVIEW 时的待审记录 fixture（provider/suggestion 取值受 DB CHECK 约束）。 */
+const moderationRecord = (
+  overrides: Partial<ProfileModerationRecordInput> = {},
+): ProfileModerationRecordInput => ({
+  machineDecision: 'REVIEW',
+  decision: 'REVIEW',
+  provider: 'LOCAL',
+  providerRequestId: null,
+  policyVersion: 'local-v1',
+  suggestion: 'Review',
+  label: null,
+  subLabel: 'PUBLIC_EXTERNAL_CONTACT',
+  score: null,
+  matchedRules: ['PUBLIC_EXTERNAL_CONTACT'],
+  matchedTermsMasked: [],
+  ...overrides,
+})
 
 const me = '01990000-0000-7000-8000-0000000000a1'
 const other = '01990000-0000-7000-8000-0000000000a2'
@@ -227,15 +247,25 @@ describe('profile store (integration)', () => {
     expect(row?.listing?.coverObjectKey).toBeNull()
   })
 
-  test('updateUser 只改传入的列并真的落库（#86 B）', async () => {
-    // 本域唯一的写操作，service.test.ts 用的是 fake store —— 真库 SQL 只有这里会执行。
-    const renamed = await store.updateUser(me, { nickname: '改过的昵称' })
+  test('applyProfileChange 只改传入的列并真的落库（#86 B）', async () => {
+    // 本域唯一的公开值写操作，service.test.ts 用的是 fake store —— 真库 SQL 只有这里会执行。
+    const renamed = await store.applyProfileChange(
+      me,
+      { nickname: '改过的昵称' },
+      {
+        supersedePending: false,
+      },
+    )
     expect(renamed?.nickname).toBe('改过的昵称')
     expect(renamed?.avatarUrl).toBeNull() // 没传的列不动
 
     const objectKey = `listings/${me}/01990000-0000-7000-8000-0000000000f2.jpg`
     const avatarUrl = `http://localhost:9000/fish/${objectKey}`
-    const withAvatar = await store.updateUser(me, { avatarUrl })
+    const withAvatar = await store.applyProfileChange(
+      me,
+      { avatarUrl },
+      { supersedePending: false },
+    )
     expect(withAvatar?.avatarUrl).toBe(avatarUrl)
     expect(withAvatar?.nickname).toBe('改过的昵称') // 上一次的改动保留（partial patch）
 
@@ -248,7 +278,94 @@ describe('profile store (integration)', () => {
 
     // 行不存在（认证与写入之间账号被删）→ null，由 service 决定怎么报
     expect(
-      await store.updateUser('01990000-0000-7000-8000-0000000000ff', { nickname: '无此人' }),
+      await store.applyProfileChange(
+        '01990000-0000-7000-8000-0000000000ff',
+        { nickname: '无此人' },
+        { supersedePending: false },
+      ),
     ).toBeNull()
+  })
+})
+
+/*
+ * #694 M5：待审资料的库层语义。公开值只落 users，待审快照落
+ * profile_moderation_records —— 这两条断言合起来才证明「REVIEW 期间新值不可见」
+ * 不是靠各处读路径过滤，而是结构上就没写进公开列。
+ */
+describe('profile store: 待审资料与公开值切换（#694 M5）', () => {
+  test('queuePendingProfileChange 不动 users；重复提交整体替换旧待审', async () => {
+    const uid = '01990000-0000-7000-8000-0000000000a3'
+    await db.execute(sql`
+      INSERT INTO users (id, nickname, signature) VALUES (${uid}, '原昵称', '原签名')
+    `)
+
+    const queued = await store.queuePendingProfileChange(
+      uid,
+      { nickname: '待审昵称', signature: null },
+      moderationRecord(),
+    )
+    expect(decodeProfileChange(queued?.payload)).toEqual({ nickname: '待审昵称', signature: null })
+    // 裸 SQL 的时间戳回来是 string，直接在对外视图里调 toISOString 会炸；这里钉住归一化。
+    expect(queued?.submittedAt).toBeInstanceOf(Date)
+    expect(decodeProfileChange((await store.findPendingProfileChange(uid))?.payload)).toEqual({
+      nickname: '待审昵称',
+      signature: null,
+    })
+
+    // 旧公开值原样保留：待审值没有进 users，任何公开投射都不可能看到它。
+    const users = await db.execute<{ nickname: string; signature: string | null }>(
+      sql`SELECT nickname, signature FROM users WHERE id = ${uid}`,
+    )
+    expect(users[0]?.nickname).toBe('原昵称')
+    expect(users[0]?.signature).toBe('原签名')
+
+    // 同一用户再提交：整体替换旧待审（部分唯一索引 + 先删后插），不会出现两份待审。
+    await store.queuePendingProfileChange(uid, { signature: '新的待审签名' }, moderationRecord())
+    expect(decodeProfileChange((await store.findPendingProfileChange(uid))?.payload)).toEqual({
+      signature: '新的待审签名',
+    })
+    const pendingCount = await db.execute<{ count: number }>(sql`
+      SELECT count(*)::int AS count FROM profile_moderation_records
+      WHERE user_id = ${uid} AND status = 'PENDING'
+    `)
+    expect(pendingCount[0]?.count).toBe(1)
+
+    // 行不存在 → null（认证与写入之间账号被删）
+    expect(
+      await store.queuePendingProfileChange(
+        '01990000-0000-7000-8000-0000000000ff',
+        { nickname: '无此人' },
+        moderationRecord(),
+      ),
+    ).toBeNull()
+  })
+
+  test('applyProfileChange 的 supersedePending 控制是否取代更早的待审', async () => {
+    const uid = '01990000-0000-7000-8000-0000000000a4'
+    await db.execute(sql`INSERT INTO users (id, nickname) VALUES (${uid}, '原昵称')`)
+    await store.queuePendingProfileChange(uid, { nickname: '待审昵称' }, moderationRecord())
+
+    // 只改头像：不构成「文本已过审」，不能顺手撤掉用户的待审昵称。
+    await store.applyProfileChange(
+      uid,
+      { avatarUrl: 'https://cdn.test/a.jpg' },
+      {
+        supersedePending: false,
+      },
+    )
+    expect(decodeProfileChange((await store.findPendingProfileChange(uid))?.payload)).toEqual({
+      nickname: '待审昵称',
+    })
+
+    // 文本过审直接生效：更早的待审被本次提交取代（否则队列里留一条永远不生效的旧值）。
+    const applied = await store.applyProfileChange(
+      uid,
+      { nickname: '新昵称' },
+      {
+        supersedePending: true,
+      },
+    )
+    expect(applied?.nickname).toBe('新昵称')
+    expect(await store.findPendingProfileChange(uid)).toBeNull()
   })
 })

@@ -15,6 +15,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  UserRound,
   Users,
 } from 'lucide-react'
 import { adminLoadOutcome } from './admin-messages'
@@ -28,6 +29,7 @@ const ADMIN_NAV_ITEMS = [
   { to: '/admin/moderation', label: '审核', Icon: ShieldCheck, exact: false },
   { to: '/admin/chat-moderation', label: '聊天待审', Icon: ShieldAlert, exact: false },
   { to: '/admin/wishes-moderation', label: '许愿待审', Icon: Sparkles, exact: false },
+  { to: '/admin/profile-moderation', label: '资料待审', Icon: UserRound, exact: false },
   { to: '/admin/reports', label: '举报', Icon: Flag, exact: false },
   { to: '/admin/disputes', label: '争议', Icon: Scale, exact: false },
   { to: '/admin/feedback', label: '反馈', Icon: MessageSquareText, exact: false },

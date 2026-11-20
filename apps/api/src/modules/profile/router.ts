@@ -8,7 +8,7 @@ import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { RestrictionGuard } from '../governance/guard'
 import { UploadServiceError } from '../uploads/service'
-import type { ProfileService } from './service'
+import { type ProfileService, ProfileServiceError } from './service'
 
 export type ProfileRouterOptions = {
   service: ProfileService
@@ -39,11 +39,14 @@ export function createProfileRouter({ service, requireAuth, guard }: ProfileRout
   })
 
   /**
-   * #86 B：编辑资料（昵称 / 头像）。读写共用同一个资源路径，只差方法。
+   * #86 B：编辑资料（昵称 / 头像 / 签名）。读写共用同一个资源路径，只差方法。
    *
-   * 只回更新后的 `Me`，不回整个聚合视图：端上拿到就覆盖 store，页面无需重拉。
+   * 只回更新后的 `Me` 与待审状态，不回整个聚合视图：端上拿到就覆盖 store，页面无需重拉。
    * 头像的**对象键**在这里被换成绝对 URL（service 内复用上传域的 confirm 校验），
    * 因此 422 必须按上传域的错误码原样透出——端上「发布商品」的错误处理直接复用。
+   *
+   * #694 M5：昵称 / 签名被公开 UGC 策略判 BLOCK 时 422 `PROFILE_CONTENT_BLOCKED`，
+   * 审核上游不可用时 503 `CONTENT_MODERATION_UNAVAILABLE`；两种情况都不会改动任何公开值。
    */
   app.patch('/', requireAuth, guard.write, async (c: Context<{ Variables: AuthVariables }>) => {
     const parsed = profileUpdateRequestSchema.safeParse(await readJson(c))
@@ -56,10 +59,10 @@ export function createProfileRouter({ service, requireAuth, guard }: ProfileRout
     }
 
     try {
-      const user = await service.updateProfile(c.get('me'), parsed.data)
-      return c.json(profileUpdateResponseSchema.parse({ user }), 200)
+      const { user, pending } = await service.updateProfile(c.get('me'), parsed.data)
+      return c.json(profileUpdateResponseSchema.parse({ user, pending }), 200)
     } catch (error) {
-      if (error instanceof UploadServiceError) {
+      if (error instanceof UploadServiceError || error instanceof ProfileServiceError) {
         return c.json(errorBody(error.code, error.message, error.details), error.status)
       }
       throw error

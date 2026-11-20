@@ -1,3 +1,4 @@
+import type { ProfilePendingChange } from '@fish/contracts/profile/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
@@ -35,6 +36,15 @@ import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
 import { signatureFirstLine } from './signature'
 
+/** 待审字段 → 中文名；顺序固定，避免同一份数据渲染出不同文案。 */
+function pendingFieldLabels(pending: ProfilePendingChange): string {
+  const labels: string[] = []
+  if (pending.fields.includes('nickname')) labels.push('昵称')
+  if (pending.fields.includes('signature')) labels.push('个性签名')
+  if (pending.fields.includes('avatarUrl')) labels.push('头像')
+  return labels.length > 0 ? labels.join('、') : '资料'
+}
+
 export function ProfilePage() {
   const { me } = useAuth()
   if (!me) return null
@@ -60,6 +70,9 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
 
   const user = profile.data.user
   const stats = profile.data.stats
+  // 昵称/签名待审（#694 M5）：公开值仍是 user，待审新值只在这里提示本人。
+  // `?? null`：PC 与 API 独立发版，旧 API 没有 pending 字段时页面不许炸。
+  const pending = profile.data.pending ?? null
 
   async function handleLogout() {
     setLogoutError(null)
@@ -87,6 +100,11 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2.5">
               <h2 className="truncate font-semibold text-2xl">{user.nickname}</h2>
+              {pending !== null ? (
+                <Badge shape="pill" variant="secondary">
+                  审核中
+                </Badge>
+              ) : null}
               {/* 徽章本身就是认证入口（#380）：未认证时点它去 /verify 完成教育邮箱验证。 */}
               <Link
                 aria-label={user.authStatus === 'VERIFIED' ? '查看校园认证' : '去完成校园认证'}
@@ -107,6 +125,11 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
             {user.signature ? (
               <p className="mt-2 line-clamp-2 text-ink-2 text-sm">
                 {signatureFirstLine(user.signature)}
+              </p>
+            ) : null}
+            {pending !== null ? (
+              <p className="mt-2 text-brand text-sm" role="status">
+                {`新的${pendingFieldLabels(pending)}正在人工审核，通过后才会对外显示。`}
               </p>
             ) : null}
             {user.phoneBound ? (

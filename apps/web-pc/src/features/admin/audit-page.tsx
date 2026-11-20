@@ -14,6 +14,7 @@ import {
   FeedbackIdSchema,
   ListingIdSchema,
   ModerationRecordIdSchema,
+  ProfileModerationRecordIdSchema,
   ReportIdSchema,
   UserIdSchema,
   UserRestrictionIdSchema,
@@ -67,7 +68,7 @@ const AUDIT_ID_FILTERS: Record<'actorId' | 'targetId', PublicIdSpec> = {
   actorId: { label: '操作者 ID', prefix: 'usr_', schema: UserIdSchema },
   targetId: {
     label: '目标 ID',
-    prefix: 'usr_ / lst_ / mdr_ / rpt_ / dsp_ / fbk_ / rst_',
+    prefix: 'usr_ / lst_ / mdr_ / cmr_ / wmr_ / pmr_ / rpt_ / dsp_ / fbk_ / rst_',
     schema: AdminAuditTargetIdSchema,
   },
 }
@@ -85,6 +86,11 @@ const AUDIT_TARGET_ID_SPECS = {
     label: '目标 ID',
     prefix: 'wmr_',
     schema: WishModerationRecordIdSchema,
+  },
+  PROFILE_MODERATION_RECORD: {
+    label: '目标 ID',
+    prefix: 'pmr_',
+    schema: ProfileModerationRecordIdSchema,
   },
   REPORT: { label: '目标 ID', prefix: 'rpt_', schema: ReportIdSchema },
   DISPUTE: { label: '目标 ID', prefix: 'dsp_', schema: DisputeIdSchema },

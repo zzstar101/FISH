@@ -24,6 +24,8 @@ export const PUBLIC_ID_PREFIX = {
   /** 聊天机器审核记录（#694 M2），与商品审核记录分属不同表，公开 ID 前缀也分开。 */
   chatModerationRecord: 'cmr',
   wishModerationRecord: 'wmr',
+  /** 用户资料（昵称 / 签名 / 头像）待审记录（#694 M5）。 */
+  profileModerationRecord: 'pmr',
   auditLog: 'aud',
 } as const
 

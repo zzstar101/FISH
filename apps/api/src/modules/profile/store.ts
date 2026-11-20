@@ -2,10 +2,17 @@ import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
 import { listingViewsCount } from '@fish/db/listing-views'
 import { listingWantsCount } from '@fish/db/listing-wants'
+import { profileModerationRecords } from '@fish/db/schema/profile-moderation'
 import { users } from '@fish/db/schema/users'
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import type { UserRow } from '../auth/me'
 import type { ListingCardSeller } from '../listings/card'
+import {
+  insertProfileModerationRecord,
+  type ProfileChange,
+  type ProfileModerationRecordInput,
+  profileChangeFields,
+} from './moderation-store'
 
 /** 我发布的商品行（含封面 objectKey；URL 由共享映射 listings/card 拼）。 */
 export interface ProfileListingRow {
@@ -75,23 +82,54 @@ export interface ProfileStatsRow {
   followingCount: number
 }
 
+/** 一条待审资料变更（#694 M5）。公开值仍在 `users`，这里只是「还没生效的新值」。 */
+export interface ProfilePendingRow {
+  /** 只含本次变化的列，见 `ProfileChange`。 */
+  payload: unknown
+  submittedAt: Date
+}
+
 export interface ProfileStore {
   stats(userId: string): Promise<ProfileStatsRow>
   ownListings(userId: string, limit: number): Promise<ProfileListingRow[]>
   ownWishes(userId: string, limit: number): Promise<ProfileWishRow[]>
   ownTransactions(userId: string, limit: number): Promise<ProfileTransactionRow[]>
   /**
-   * #86 B：本域**唯一**的写操作——只改传入的列（昵称 / 头像 URL / 签名）。
+   * 当前的待审资料变更（没有则 `null`）。一个用户同时最多一条（部分唯一索引）。
+   * 只有本人视角会读它：待审值不进任何公开投射。
+   */
+  findPendingProfileChange(userId: string): Promise<ProfilePendingRow | null>
+  /**
+   * #86 B：本域的直接写操作——只改传入的列（昵称 / 头像 URL / 签名），一次 UPDATE 落地。
+   *
+   * 在一个事务里先 `SELECT ... FOR UPDATE` 锁住 users 行：与管理端放行同一个锁顺序，
+   * 保证「用户提交」与「管理员放行」不会交错成两份不同的公开值。
+   *
+   * `supersedePending`：本次提交的文本已经过审并直接生效，更早的待审记录被取代
+   * （否则队列里会留下一条永远不会生效的旧值）。只改头像时传 false：
+   * 头像不构成「文本已过审」，不能顺手替用户撤回他的待审昵称。
    *
    * 回整行而不是只回 `Me`：对外映射统一走认证域的 `toMe`（头像脏值降级、
    * 手机号只出派生态都在那里），本域不复制第二份。
    * 行不存在（认证与写入之间账号被删）回 `null`，由 service 决定怎么报。
    * #179：`signature` 传 `null` 即清空（service 已做 trim 与空串归一化）。
    */
-  updateUser(
+  applyProfileChange(
     userId: string,
-    patch: { nickname?: string; avatarUrl?: string; signature?: string | null },
+    change: ProfileChange,
+    options: { supersedePending: boolean },
   ): Promise<UserRow | null>
+  /**
+   * 机审判定 `REVIEW`：把本次改动挂起为待审记录，**不动 `users`**（旧公开值继续对外可见）。
+   *
+   * 新提交整体替换旧待审：同一个用户同时只保留一份待审资料，避免「两份待审谁先放行谁生效」。
+   * 行不存在回 `null`。
+   */
+  queuePendingProfileChange(
+    userId: string,
+    change: ProfileChange,
+    record: ProfileModerationRecordInput,
+  ): Promise<ProfilePendingRow | null>
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -266,11 +304,83 @@ export function createSqlProfileStore(db: Db): ProfileStore {
       }))
     },
 
-    async updateUser(userId, patch) {
-      // `set(patch)` 的列由调用方决定：空 patch（两个字段都没给）在契约层就被 refine 拦掉了，
-      // 走不到这里；drizzle 也不允许 `set({})`。
-      const rows = await db.update(users).set(patch).where(eq(users.id, userId)).returning()
+    async findPendingProfileChange(userId) {
+      const rows = await db
+        .select({
+          payload: profileModerationRecords.payload,
+          submittedAt: profileModerationRecords.createdAt,
+        })
+        .from(profileModerationRecords)
+        .where(
+          and(
+            eq(profileModerationRecords.userId, userId),
+            eq(profileModerationRecords.status, 'PENDING'),
+          ),
+        )
+        .limit(1)
       return rows[0] ?? null
+    },
+
+    async applyProfileChange(userId, change, { supersedePending }) {
+      return db.transaction(async (tx) => {
+        const locked = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, userId))
+          .for('update')
+        if (locked.length === 0) return null
+
+        if (profileChangeFields(change).length > 0) {
+          // 一次 UPDATE 写全部列：昵称与签名要么一起生效、要么都不生效。
+          await tx.update(users).set(change).where(eq(users.id, userId))
+        }
+        if (supersedePending) {
+          await tx
+            .delete(profileModerationRecords)
+            .where(
+              and(
+                eq(profileModerationRecords.userId, userId),
+                eq(profileModerationRecords.status, 'PENDING'),
+              ),
+            )
+        }
+
+        const rows = await tx.select().from(users).where(eq(users.id, userId)).limit(1)
+        return rows[0] ?? null
+      })
+    },
+
+    async queuePendingProfileChange(userId, change, record) {
+      return db.transaction(async (tx) => {
+        const locked = await tx
+          .select({
+            id: users.id,
+            nickname: users.nickname,
+            signature: users.signature,
+            avatarUrl: users.avatarUrl,
+          })
+          .from(users)
+          .where(eq(users.id, userId))
+          .for('update')
+        if (locked.length === 0) return null
+        const current = locked[0]
+        if (!current) return null
+
+        await tx
+          .delete(profileModerationRecords)
+          .where(
+            and(
+              eq(profileModerationRecords.userId, userId),
+              eq(profileModerationRecords.status, 'PENDING'),
+            ),
+          )
+        const inserted = await insertProfileModerationRecord(tx, userId, change, record, {
+          nickname: current.nickname,
+          signature: current.signature,
+          avatarUrl: current.avatarUrl,
+        })
+        return { payload: change, submittedAt: inserted.createdAt }
+      })
     },
   }
 }

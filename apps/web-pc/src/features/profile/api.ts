@@ -13,6 +13,7 @@ import {
 } from '@fish/contracts/listings/schema'
 import { PROFILE_ROUTES } from '@fish/contracts/profile/routes'
 import {
+  type ProfilePendingChange,
   type ProfileResponse,
   type ProfileUpdateRequest,
   profileResponseSchema,
@@ -81,15 +82,21 @@ export async function fetchProfile(): Promise<ProfileResponse> {
   return profileResponseSchema.parse(await apiRequest(PROFILE_ROUTES.me))
 }
 
-/** 昵称 / 头像写入；响应只回更新后的 Me，直接用于覆盖顶栏。 */
-export async function updateProfile(input: ProfileUpdateRequest): Promise<Me> {
-  const response = profileUpdateResponseSchema.parse(
+export interface ProfileUpdateOutcome {
+  /** 已生效的公开资料；REVIEW 时是**旧值**（待审新值绝不进公开投射）。 */
+  user: Me
+  /** 待人工确认的变更；非 null 时公开资料仍是 `user`。 */
+  pending: ProfilePendingChange | null
+}
+
+/** 昵称 / 头像写入；ALLOW 才切换公开值，REVIEW 回待审快照。 */
+export async function updateProfile(input: ProfileUpdateRequest): Promise<ProfileUpdateOutcome> {
+  return profileUpdateResponseSchema.parse(
     await apiRequest(PROFILE_ROUTES.me, {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
   )
-  return response.user
 }
 
 export async function fetchMyListings(
@@ -447,6 +454,9 @@ export function profileUpdateErrorView(error: unknown): {
       if (detail.field === 'signature') fields.signature = detail.message
     }
 
+    if (error.code === 'PROFILE_CONTENT_BLOCKED') {
+      return { message: '昵称或个性签名未通过审核，请修改后重试', fields }
+    }
     if (error.code === 'IMAGE_REFERENCE_INVALID') {
       return { message: '头像文件校验失败，请重新选择图片', fields }
     }

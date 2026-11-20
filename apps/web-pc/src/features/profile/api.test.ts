@@ -229,6 +229,16 @@ describe('profile api errors', () => {
     )
     expect(view.fields.signature).toBe('个性签名最多 200 字')
   })
+
+  test('machine BLOCK keeps the input and points at the offending field (#694 M5)', () => {
+    const view = profileUpdateErrorView(
+      new ApiError('PROFILE_CONTENT_BLOCKED', 422, '昵称或个性签名未通过审核', [
+        { field: 'signature', message: '个性签名包含平台禁止发布的内容' },
+      ]),
+    )
+    expect(view.message).toBe('昵称或个性签名未通过审核，请修改后重试')
+    expect(view.fields).toEqual({ signature: '个性签名包含平台禁止发布的内容' })
+  })
 })
 
 describe('proposal decisions', () => {

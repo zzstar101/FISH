@@ -14,6 +14,7 @@ import {
   FeedbackIdSchema,
   ListingIdSchema,
   ModerationRecordIdSchema,
+  ProfileModerationRecordIdSchema,
   ReportIdSchema,
   TransactionIdSchema,
   UserIdSchema,
@@ -147,6 +148,7 @@ export const AdminAuditTargetTypeSchema = z.enum([
   'USER_RESTRICTION',
   'CHAT_MODERATION_RECORD',
   'WISH_MODERATION_RECORD',
+  'PROFILE_MODERATION_RECORD',
 ])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
 
@@ -160,6 +162,7 @@ export const AdminAuditTargetIdSchema = z.union([
   UserRestrictionIdSchema,
   ChatModerationRecordIdSchema,
   WishModerationRecordIdSchema,
+  ProfileModerationRecordIdSchema,
 ])
 
 const auditTargetIdByType = {
@@ -172,6 +175,7 @@ const auditTargetIdByType = {
   USER_RESTRICTION: UserRestrictionIdSchema,
   CHAT_MODERATION_RECORD: ChatModerationRecordIdSchema,
   WISH_MODERATION_RECORD: WishModerationRecordIdSchema,
+  PROFILE_MODERATION_RECORD: ProfileModerationRecordIdSchema,
 } satisfies Record<AdminAuditTargetType, (typeof AdminAuditTargetIdSchema.options)[number]>
 
 function auditTargetMatches(value: {
@@ -371,6 +375,8 @@ export const AdminAuditActionSchema = z.enum([
   /** #694 M2：人工处理聊天待审消息（ALLOW 投递 / BLOCK 拒绝）。 */
   'CHAT_MODERATION_DECISION',
   'WISH_MODERATION_DECISION',
+  /** #694 M5：人工处理用户资料（昵称 / 签名 / 头像）待审。 */
+  'PROFILE_MODERATION_DECISION',
 ])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 

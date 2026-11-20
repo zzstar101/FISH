@@ -154,9 +154,9 @@ export function useUpdateProfile(ownerId: string) {
   return useMutation({
     mutationFn: updateProfile,
     onMutate: captureSession,
-    onSuccess: (user, _input, context) => {
+    onSuccess: (result, _input, context) => {
       if (!isSessionCurrent(context)) return
-      queryClient.setQueryData(AUTH_ME_QUERY_KEY, user)
+      queryClient.setQueryData(AUTH_ME_QUERY_KEY, result.user)
       invalidateProfileSummary(queryClient, ownerId)
     },
   })
