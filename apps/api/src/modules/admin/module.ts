@@ -10,8 +10,12 @@ import { createFeedbackService } from '../feedback/service'
 import { createSqlFeedbackStore } from '../feedback/store'
 import type { RestrictionGuard } from '../governance/guard'
 import type { GovernanceService } from '../governance/service'
+import { createLegacyMediaAuditRouter } from '../legacy-media/moderation-router'
+import { createLegacyMediaAuditService } from '../legacy-media/moderation-service'
+import { createSqlLegacyMediaAuditStore } from '../legacy-media/moderation-store'
 import { createChatModerationRouter } from '../moderation/chat-router'
 import type { ChatModerationService } from '../moderation/chat-service'
+import { createLegacyMediaAuditSettlement } from '../moderation/legacy-media-settlement'
 import { createSqlModerationStore } from '../moderation/store'
 import { createProfileModerationRouter } from '../profile/moderation-router'
 import type { ProfileModerationService } from '../profile/moderation-service'
@@ -76,6 +80,8 @@ export function createAdminModule(options: {
   // moderation 域只负责在决策事务里调用它（见 modules/moderation/store.ts 的 decideWithin）。
   const moderation = createSqlModerationStore(options.db, {
     settleListingMedia: createListingMediaSettlement({ storage: options.storage }),
+    // #694 审查 P1-3：商品人工结论与存量图片补审结论同事务同步。
+    settleLegacyMediaAudit: createLegacyMediaAuditSettlement(),
   })
   const store = createSqlAdminStore(options.db, moderation)
   const requireAdmin = createRequireAdmin({ store })
@@ -134,6 +140,15 @@ export function createAdminModule(options: {
           requireAdmin,
         })
       : undefined,
+    // #694 审查 P1-2：存量图片补审的人工队列（商品 / 评价 / 聊天来源统一入口）。
+    legacyMediaRouter: createLegacyMediaAuditRouter({
+      service: createLegacyMediaAuditService({
+        store: createSqlLegacyMediaAuditStore(options.db),
+      }),
+      storage: options.storage,
+      requireAuth: options.requireAuth,
+      requireAdmin,
+    }),
   })
   return {
     router,

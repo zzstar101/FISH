@@ -57,7 +57,7 @@ services:
     depends_on:
       minio:
         condition: service_healthy
-    # 仅商品图片（listings/*）公开；评价配图（reviews/*，#483 审查响应起撤出匿名直读，
+    # 仅商品图片（listings/usr_*/* 与 listings/seed-*/*）公开；评价配图（reviews/*，#483 审查响应起撤出匿名直读，
     # 走短期签名代理）、聊天临时对象、上传 staging 与最终快照不允许匿名读取或列举。
     # ilm.json 是**期望态**整体导入（幂等，重复运行收敛到同一份生命周期配置）：
     # 评价配图 staging 前缀 1 天过期（confirm 幂等不依赖 staging 存活，见 docs/deployment.md）。

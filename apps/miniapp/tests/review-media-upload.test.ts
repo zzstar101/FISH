@@ -78,6 +78,7 @@ beforeEach(() => {
   confirmResponse = {
     objectKey: FINAL_KEY,
     url: 'https://api.example.com/api/uploads/media/tok',
+    // #694 M5c 起 confirm 响应必带机器结论（BLOCK 不会走到这里）。
     moderationDecision: 'ALLOW',
   }
 })

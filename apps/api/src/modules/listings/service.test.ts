@@ -302,6 +302,19 @@ describe('listFeed', () => {
     expect(response.nextCursor).not.toBeNull()
   })
 
+  // #694 M8：feed 卡片封面也属于公开读面，不能只拦详情。
+  test('hides audited non-ALLOW legacy covers from the feed', async () => {
+    const cover = `listings/${SELLER_ID}/legacy-blocked.jpg`
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({ listFeed: async () => [feedEntry(listingRow(), cover)] }),
+      legacyMediaDecisions: async () => new Map([[cover, 'BLOCK']]),
+    })
+
+    const response = await service.listFeed(null, feedQuery())
+    expect(response.items[0]?.coverUrl).toBeNull()
+  })
+
   test('returns a null cursor and a null cover when the page ends', async () => {
     const service = createListingService({
       storage: fakeStorage(),
@@ -582,6 +595,34 @@ describe('getDetail', () => {
       avatarUrl: null,
       authStatus: 'VERIFIED',
     })
+  })
+
+  // #694 M8：盘点后有结论且非 ALLOW 的 legacy 图，对非本人从详情和封面一起隐藏。
+  test('hides audited non-ALLOW legacy images and cover from non-owners', async () => {
+    const auditedKey = `listings/${SELLER_ID}/legacy-review.jpg`
+    const allowedKey = `listings/${SELLER_ID}/legacy-allow.jpg`
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        findDetail: async () => ({
+          listing: listingRow(),
+          seller: sellerRow(),
+          images: [imageRow(0, auditedKey), imageRow(1, allowedKey)],
+          wants: 0,
+          views: 0,
+        }),
+      }),
+      legacyMediaDecisions: async () => new Map([[auditedKey, 'REVIEW']]),
+    })
+
+    const anonymous = await service.getDetail(null, LISTING_ID)
+    expect(anonymous.coverUrl).toBeNull()
+    expect(anonymous.images.map((image) => image.url)).toEqual([`https://cdn.test/${allowedKey}`])
+
+    // 卖家本人仍要看到待审原图（改图 / 回出物页），不套用公开可见性过滤。
+    const owner = await service.getDetail(SELLER_ID, LISTING_ID)
+    expect(owner.coverUrl).toBe(`https://cdn.test/${auditedKey}`)
+    expect(owner.images).toHaveLength(2)
   })
 
   test('returns 404 for a missing listing', async () => {

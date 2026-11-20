@@ -110,7 +110,7 @@ export type JobQueue = {
 }
 
 /**
- * 每个 `JobType` 的"同实体"键，必须与 `packages/db/src/schema/jobs.ts` 的 6 条 partial unique
+ * 每个 `JobType` 的"同实体"键，必须与 `packages/db/src/schema/jobs.ts` 的 7 条 partial unique
  * index 一一对应（那些索引的键都是单个 `payload->>'xxx'`）。
  *
  * 只用于一件事：判断"同实体是否已经有一条 `PENDING` 行"。漏掉一个类型，那个类型的让位判定就会
@@ -124,6 +124,7 @@ const PENDING_DEDUPE_KEY: Record<JobType, string> = {
   EMBED_WISH: 'wishId',
   REFRESH_USER_INTEREST: 'userId',
   VISUAL_EMBED_LISTING: 'listingId',
+  LEGACY_MEDIA_AUDIT: 'objectKey',
 }
 
 /**
