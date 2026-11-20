@@ -107,6 +107,42 @@ test('编号只返回 canonical TypeID；不可见商品与不存在同为 404 �
   }
 })
 
+test('#705 出租商品的编号在出售编号查询里视为未找到', async () => {
+  // 编号空间是共享的，但旧编号查询是**出售域**的入口：出租编号若返回 id，调用方拿到的
+  // 会是一个详情 404 的死链，而且等于确认「这个号存在且是出租」。
+  const rentalId = newId()
+  const rentalNo = '348572910466'
+  await db.insert(listingNumbers).values({ listingNo: BigInt(rentalNo), listingId: rentalId })
+  await db.insert(listings).values({
+    id: rentalId,
+    listingNo: BigInt(rentalNo),
+    sellerId,
+    title: '出租编号样本',
+    description: '仅测试类型隔离',
+    priceCents: 500,
+    category: 'BOOKS',
+    condition: 'GOOD',
+    status: 'ACTIVE',
+    listingType: 'RENTAL',
+  })
+  try {
+    await expect(lookup().lookup(rentalNo, sellerId, null)).rejects.toMatchObject({
+      status: 404,
+      code: 'LISTING_NOT_FOUND',
+    })
+    // 反向对照：出售编号照常解析。
+    expect(
+      decodePublicId(
+        PUBLIC_ID_PREFIX.listing,
+        (await lookup().lookup(listingNo, sellerId, null)).id,
+      ),
+    ).toBe(listingId)
+  } finally {
+    await db.delete(listings).where(eq(listings.id, rentalId))
+    await db.delete(listingNumbers).where(eq(listingNumbers.listingId, rentalId))
+  }
+})
+
 test('真实 HTTP 编号查询返回的 lst_ ID 可直接读取详情；错前缀不能访问商品', async () => {
   const app = createApp(
     { ...loadServerEnv(), DATABASE_URL: scratchUrl.toString() },

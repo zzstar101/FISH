@@ -18,6 +18,7 @@ import { createFavoriteService } from '../favorites/service'
 import { createSqlFavoriteStore } from '../favorites/store'
 import { createSqlMatchingStore } from '../matching/store'
 import { createSqlProfileStore } from '../profile/store'
+import { createSqlRecommendationStore } from '../recommendation/store'
 import { createSqlPublicUserStore } from '../users/store'
 import { createSqlViewHistoryStore } from '../view-history/store'
 import { createListingService } from './service'
@@ -60,6 +61,7 @@ const commentStore = createSqlCommentStore(db)
 const profileStore = createSqlProfileStore(db)
 const matchingStore = createSqlMatchingStore(db)
 const conversationStore = createSqlConversationStore(db)
+const recommendationStore = createSqlRecommendationStore(db)
 
 const storage = {
   publicUrl: (key: string) => `https://cdn.example/${key}`,
@@ -296,6 +298,11 @@ describe('#705 买卖读路径隔离：RENTAL 不出现在出售语义的返回�
     expect(ids).toContain(saleId)
     expect(ids).not.toContain(rentalId)
     expect(total).toBe(1)
+  })
+
+  test('推荐事件摄取：出租商品按不存在处理（不写足迹、不写事件）', async () => {
+    // 事件端点只校验「商品存在」；不区分类型的话，出租互动会混进浏览足迹与推荐指标。
+    expect(await recommendationStore.findExistingListingIds([saleId, rentalId])).toEqual([saleId])
   })
 
   test('会话：出租商品建不了买卖会话（读取行即按不存在处理）', async () => {

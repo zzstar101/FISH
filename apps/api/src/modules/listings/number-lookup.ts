@@ -132,9 +132,16 @@ export function createListingNumberLookup(
         )
       }
       if (Math.random() < 0.02) await pruneExpiredNumberLookups(db)
+      /*
+       * #705：编号空间共享，但本端点是**出售域**入口。类型条件与下面的 `getDetail`
+       * （对出租商品 404）是两层：这里先按未找到处理，省掉一次详情读，
+       * 也让这条 SQL 单独读起来就是「只查出售」。
+       */
       const [found] = rowsOf(
         await db.execute(sql`
-        SELECT id FROM listings WHERE listing_no = ${number}::bigint LIMIT 1
+        SELECT id FROM listings
+        WHERE listing_no = ${number}::bigint AND listing_type = 'SALE'
+        LIMIT 1
       `),
       )
       if (!found) throw new ListingNumberLookupError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
