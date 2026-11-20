@@ -11,7 +11,7 @@ import { toListingCard } from '../listings/card'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { UploadService } from '../uploads/service'
 import { UploadServiceError } from '../uploads/service'
-import type { MediaStorage } from '../uploads/storage'
+import { listingCoverUrl, type MediaStorage } from '../uploads/storage'
 import { toWishDto } from '../wishes/service'
 import type { ProfileStore, ProfileTransactionRow } from './store'
 
@@ -29,7 +29,7 @@ function toProfileTransaction(row: ProfileTransactionRow, viewerId: string, stor
       title: row.listing.title,
       priceCents: row.listing.priceCents,
       status: row.listing.status as 'ACTIVE' | 'RESERVED' | 'SOLD' | 'OFFLINE',
-      coverUrl: row.listing.coverObjectKey ? storage.publicUrl(row.listing.coverObjectKey) : null,
+      coverUrl: listingCoverUrl(storage, row.listing.coverObjectKey),
     },
     counterpart: {
       ...row.counterpart,

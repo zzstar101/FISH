@@ -17,6 +17,7 @@ import {
   isListingMediaStagingKey,
   isPublicListingKey,
   listingMediaStagingPrefix,
+  listingThumbnailKeyOf,
   type MediaStorage,
 } from './storage'
 
@@ -29,12 +30,27 @@ const STAGING_KEY = `${STAGING_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '
 const FINAL_KEY = `${FINAL_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c2')}.jpg`
 const ROW_ID = '01930000-0000-7000-8000-0000000000d1'
 
-// 4 字节的假图片：足够算出本地 sha256，也让"字节数与 stat.size 一致"可断言。
-const IMAGE_BYTES = new Uint8Array([1, 2, 3, 4])
+// 1×1 透明 PNG：夹具必须是**真实图片**——confirm 在 ALLOW 之后要解码它生成列表缩略图（#620），
+// `Bun.Image` 会把随便几个字节判成损坏。字节数同时用于"与 stat.size 一致"的断言。
+const IMAGE_BYTES = new Uint8Array(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  ),
+)
 const CONTENT_DIGEST = createHash('sha256').update(IMAGE_BYTES).digest('hex')
 const PROVIDER_MD5 = 'a'.repeat(32)
 
 type WrittenObject = { key: string; bytes: Uint8Array; contentType: string }
+
+/**
+ * 规范公开键对应的缩略图键；用非规范夹具键调用说明用例本身写错了，直接抛。
+ */
+function thumbnailKeyOf(publicKey: string): string {
+  const key = listingThumbnailKeyOf(publicKey)
+  if (!key) throw new Error(`不是规范公开键：${publicKey}`)
+  return key
+}
 type FakeStorage = MediaStorage & { writes: WrittenObject[]; reads: number }
 
 function fakeStorage(overrides: Partial<MediaStorage> = {}): FakeStorage {
@@ -478,9 +494,15 @@ describe('confirm', () => {
     expect(confirmed.objectKey).not.toBe(STAGING_KEY)
     expect(isPublicListingKey(confirmed.objectKey)).toBe(true)
     expect(confirmed.url).toBe(`https://cdn.test/${confirmed.objectKey}`)
-    expect(storage.writes).toEqual([
-      { key: confirmed.objectKey, bytes: IMAGE_BYTES, contentType: 'image/jpeg' },
-    ])
+    expect(storage.writes[0]).toEqual({
+      key: confirmed.objectKey,
+      bytes: IMAGE_BYTES,
+      contentType: 'image/jpeg',
+    })
+    // #620：公开固化时同时写一份列表缩略图，列表/卡片的封面指向它（详情仍用原图）。
+    expect(storage.writes).toHaveLength(2)
+    expect(storage.writes[1]?.key).toBe(thumbnailKeyOf(confirmed.objectKey))
+    expect(storage.writes[1]?.contentType).toBe('image/webp')
     expect(mediaObjects.inserted[0]).toMatchObject({
       userId: USER_ID,
       stagingKey: STAGING_KEY,
@@ -729,7 +751,7 @@ describe('confirm', () => {
     expect(confirmed.objectKey).toBe(FINAL_KEY)
     expect(lookups).toBe(2)
     // 本次写的对象成了孤儿（内容相同、已过审），但只暴露先落库那一个可引用键。
-    expect(storage.writes).toHaveLength(1)
+    expect(storage.writes).toHaveLength(2)
   })
 
   test('fails closed when the verdict cannot be persisted', async () => {
@@ -745,6 +767,7 @@ describe('confirm', () => {
 
     expect(error.status).toBe(503)
     expect(error.code).toBe('CONTENT_MODERATION_UNAVAILABLE')
-    expect(storage.writes).toHaveLength(1)
+    // 原图与缩略图都已落存储（对象写入不随事务回滚），但没有任何可引用键被登记。
+    expect(storage.writes).toHaveLength(2)
   })
 })

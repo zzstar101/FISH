@@ -8,7 +8,14 @@ import { allowRestrictionGuard } from '../governance/testing'
 import { publicAvatarUrl } from './avatar-url'
 import { disputeMediaObjectKey, disputeMediaPrefix } from './dispute-media'
 import { createUploadsRouter } from './router'
-import { createBunS3MediaStorage, isSafeObjectKey, type MediaStorage } from './storage'
+import {
+  createBunS3MediaStorage,
+  isListingThumbnailKey,
+  isSafeObjectKey,
+  listingCoverUrl,
+  listingThumbnailKeyOf,
+  type MediaStorage,
+} from './storage'
 
 /**
  * 真对象存储的集成测试。
@@ -512,6 +519,49 @@ test('公开媒体 URL 只使用 TypeID 对象键；历史 UUID 键走加密代�
   expect(url).not.toContain('01930000')
   expect(media.publicUrl(`listings/${USER_ID}/old.jpg`)).not.toContain(USER_ID)
   expect(() => media.publicUrl(`listings/${USER_ID}/unknown.exe`)).toThrow()
+})
+
+// #620：列表卡片的封面换成缩略图对象（`listings/{usr}/{med}-thumb.webp`）。缩略图键是**独立对象**，
+// 不是原键加查询参数——issue 实测生产 CDN 忽略 `imageMogr2` 查询参数，返回的仍是原字节与原 ETag。
+test('列表封面指向缩略图对象；无法生成缩略图的历史键回退原地址', () => {
+  const media = createBunS3MediaStorage({
+    client: new Bun.S3Client({
+      endpoint: 'http://127.0.0.1:1',
+      region: 'us-east-1',
+      accessKeyId: 'test',
+      secretAccessKey: 'test',
+      bucket: 'fish',
+    }),
+    publicUrlBase: 'https://cdn.test/fish/',
+    legacyUrlBase: 'https://web.test/api/uploads/legacy',
+    legacyUrlSecret: 'test-secret-for-legacy-media-longer-than-32-characters',
+  })
+  const userKey = encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)
+  const mediaKey = encodePublicId(PUBLIC_ID_PREFIX.media, newId())
+  const original = `listings/${userKey}/${mediaKey}.jpg`
+  const thumbnail = `listings/${userKey}/${mediaKey}-thumb.webp`
+
+  expect(listingThumbnailKeyOf(original)).toBe(thumbnail)
+  expect(isListingThumbnailKey(thumbnail)).toBe(true)
+  // 只有规范公开键有缩略图：seed 演示键、legacy UUID 键、私有审核键、非 TypeID 键都没有。
+  expect(listingThumbnailKeyOf('listings/seed-k380/0.jpg')).toBeNull()
+  expect(
+    listingThumbnailKeyOf(`listings/${USER_ID}/01930000-0000-4000-8000-000000000001.jpg`),
+  ).toBeNull()
+  expect(listingThumbnailKeyOf(`listing-review-media/${userKey}/${mediaKey}.jpg`)).toBeNull()
+  expect(isListingThumbnailKey(`listings/${userKey}/${mediaKey}-thumb.png`)).toBe(false)
+
+  // 缩略图键本身也能出公开直链（存储白名单要放行它，否则写入后读不到）。
+  expect(media.publicUrl(thumbnail)).toBe(`https://cdn.test/fish/${thumbnail}`)
+  expect(listingCoverUrl(media, original)).toBe(`https://cdn.test/fish/${thumbnail}`)
+  // 无图商品、以及没有缩略图的历史键：分别返回 null / 原地址，前端行为不变。
+  expect(listingCoverUrl(media, null)).toBeNull()
+  expect(listingCoverUrl(media, 'listings/seed-k380/0.jpg')).toBe(
+    'https://cdn.test/fish/listings/seed-k380/0.jpg',
+  )
+  const legacy = `listings/${USER_ID}/01930000-0000-4000-8000-000000000001.jpg`
+  expect(listingCoverUrl(media, legacy)).toBe(media.publicUrl(legacy))
+  expect(listingCoverUrl(media, legacy)).toContain('/api/uploads/legacy/')
 })
 
 // #406 第 4 项：seed 数据的三条隐性契约违约时，服务端只回 500 INTERNAL_ERROR，

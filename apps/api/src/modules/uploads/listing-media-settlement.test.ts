@@ -9,7 +9,7 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq } from 'drizzle-orm'
 import { createListingMediaSettlement } from './listing-media-settlement'
 import { isListingReviewMediaKey, listingReviewMediaPrefix } from './review-media'
-import type { MediaStorage } from './storage'
+import { listingThumbnailKeyOf, type MediaStorage } from './storage'
 
 // 与 packages/db 的集成测试同一约定：没有 DATABASE_URL 就明确失败，而不是静默跳过。
 const databaseUrl = process.env.DATABASE_URL
@@ -18,9 +18,32 @@ if (!databaseUrl) {
 }
 
 const db = createDb(databaseUrl)
-const IMAGE_BYTES = new Uint8Array([7, 7, 7, 7])
+// 1×1 透明 PNG：放行结算要真的生成缩略图（#620），假字节会让 `Bun.Image` 解不出来。
+const IMAGE_BYTES = new Uint8Array(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  ),
+)
 
 type WrittenObject = { key: string; bytes: Uint8Array; contentType: string }
+
+/**
+ * 规范公开键对应的缩略图键；用非规范夹具键调用说明用例本身写错了，直接抛。
+ */
+function thumbnailKeyOf(publicKey: string): string {
+  const key = listingThumbnailKeyOf(publicKey)
+  if (!key) throw new Error(`不是规范公开键：${publicKey}`)
+  return key
+}
+
+/**
+ * #620：放行结算在原图之后还会写一份 `-thumb.webp`。下面的用例断言的是"搬了几个原图对象"，
+ * 缩略图不是搬运对象，过滤掉它。
+ */
+function imageWrites(storage: FakeStorage): WrittenObject[] {
+  return storage.writes.filter((write) => !write.key.endsWith('-thumb.webp'))
+}
 type FakeStorage = MediaStorage & { writes: WrittenObject[]; reads: number }
 
 function fakeStorage(objects: Map<string, Uint8Array>): FakeStorage {
@@ -125,7 +148,7 @@ test('人工 ALLOW 把私有审核对象搬到公开前缀，并同事务改写�
 
     // 对象被搬到公开前缀（匿名白名单里的那个前缀），字节原样。
     expect(storage.reads).toBe(1)
-    expect(storage.writes).toHaveLength(1)
+    expect(imageWrites(storage)).toHaveLength(1)
     const publicKey = storage.writes[0]?.key ?? ''
     expect(
       publicKey.startsWith(`listings/${encodePublicId(PUBLIC_ID_PREFIX.user, sellerId)}/`),
@@ -133,6 +156,9 @@ test('人工 ALLOW 把私有审核对象搬到公开前缀，并同事务改写�
     expect(storage.writes[0]?.bytes).toBe(IMAGE_BYTES)
     expect(storage.writes[0]?.contentType).toBe('image/jpeg')
     expect(isListingReviewMediaKey(publicKey)).toBe(false)
+    // #620：公开键生成的同时写出列表缩略图（原图之后的那一次写入）。
+    expect(storage.writes[1]?.key).toBe(thumbnailKeyOf(publicKey))
+    expect(storage.writes[1]?.contentType).toBe('image/webp')
 
     // 媒体行：可引用键换成公开键，结算结论落库（旧的私有键不再可查）。
     const rows = await db
@@ -188,7 +214,7 @@ test('重复结算（决策重试）不会把同一个对象搬第二遍', async
       await settlement(tx, { listingId, decision: 'ALLOW' })
     })
 
-    expect(storage.writes).toHaveLength(1)
+    expect(imageWrites(storage)).toHaveLength(1)
     expect(storage.writes[0]?.key).toBe(firstKey)
   })
 })
@@ -302,7 +328,7 @@ test('同一个键被另一条商品放行后，所有引用该键的商品图�
     await db.transaction(async (tx) => {
       await settlement(tx, { listingId: blockedListingId, decision: 'ALLOW' })
     })
-    expect(storage.writes).toHaveLength(1)
+    expect(imageWrites(storage)).toHaveLength(1)
     const publicKey = storage.writes[0]?.key ?? ''
     expect(isListingReviewMediaKey(publicKey)).toBe(false)
     expect(reviewKey).not.toBe(publicKey)
@@ -319,7 +345,7 @@ test('同一个键被另一条商品放行后，所有引用该键的商品图�
     await db.transaction(async (tx) => {
       await settlement(tx, { listingId: pendingListingId, decision: 'ALLOW' })
     })
-    expect(storage.writes).toHaveLength(1)
+    expect(imageWrites(storage)).toHaveLength(1)
     const after = await db
       .select()
       .from(listingImages)
@@ -477,7 +503,7 @@ test('并发：放行事务已锁台账行时，另一条商品的 BLOCK 会等�
       await allow
       await block
 
-      expect(storage.writes).toHaveLength(1)
+      expect(imageWrites(storage)).toHaveLength(1)
       const publicKey = storage.writes[0]?.key ?? ''
       const rows = await db
         .select()

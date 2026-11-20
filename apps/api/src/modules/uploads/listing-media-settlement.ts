@@ -5,6 +5,7 @@ import { listingImages } from '@fish/db/schema/listings'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { type ModerationDbTransaction, ModerationSettlementError } from '../moderation/store'
+import { tryWriteListingThumbnail } from './listing-thumbnail'
 import { effectiveModerationDecision } from './media-objects'
 import { isListingReviewMediaKey } from './review-media'
 import type { MediaStorage } from './storage'
@@ -188,6 +189,9 @@ export function createListingMediaSettlement(deps: { storage: MediaStorage }): S
     // rowcount：并发下另一个事务抢先结算时这里改不到行，整个决策回滚，绝不会覆盖对方的结论。
     for (const promotion of promotions) {
       await storage.writeMediaBytes(promotion.publicKey, promotion.bytes, promotion.contentType)
+      // #620：搬到公开前缀的同时生成列表缩略图。失败不阻断人工结论（图片本身已合法放行），
+      // 由回填脚本补 —— 与 confirm 同一取舍。
+      await tryWriteListingThumbnail(storage, promotion.publicKey, promotion.bytes)
       const updated = await tx
         .update(listingMediaObjects)
         .set({

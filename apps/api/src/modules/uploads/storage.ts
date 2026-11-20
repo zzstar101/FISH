@@ -193,6 +193,55 @@ export function isPublicListingKey(key: string): boolean {
 const SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/
 
 /**
+ * 列表缩略图的对象键后缀（#620）。
+ *
+ * 为什么是**独立对象**而不是 CDN 查询参数：issue #620 实测同一张公开封面加
+ * `?imageMogr2/thumbnail/320x320/format/webp` 后仍返回原字节、`image/jpeg` 与相同 ETag ——
+ * 腾讯云 COS/EdgeOne 的图像处理在本项目当前配置下没有生效，而打开它要改生产 CDN 配置
+ * （本 Issue 明确不允许盲改）。服务端在写入时就生成好缩略图字节，只依赖对象存储，
+ * 不依赖任何运行时图像处理能力，CDN 也能当作普通静态对象直接缓存。
+ */
+export const LISTING_THUMBNAIL_SUFFIX = '-thumb.webp'
+
+/** 缩略图键形状：`listings/{usr_…}/{med_…}-thumb.webp`（两段都必须是规范 TypeID）。 */
+const LISTING_THUMBNAIL_KEY = /^listings\/([^/]+)\/([^/.]+)-thumb\.webp$/
+
+export function isListingThumbnailKey(key: string): boolean {
+  const match = LISTING_THUMBNAIL_KEY.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
+
+/**
+ * 公开固化键 → 缩略图键；不是规范公开键时返回 `null`。
+ *
+ * 只有 `confirm` 固化出来的 `listings/{usr}/{med}.{ext}`（以及历史对象的回填）才有缩略图；
+ * legacy UUID 键、审核中的私有键、seed 演示键都**没有**，调用方拿到 `null` 时必须保留原 URL。
+ */
+export function listingThumbnailKeyOf(publicKey: string): string | null {
+  if (!isPublicListingKey(publicKey)) return null
+  return `${publicKey.slice(0, publicKey.lastIndexOf('.'))}${LISTING_THUMBNAIL_SUFFIX}`
+}
+
+/**
+ * 卡片封面地址（#620）：列表/卡片一律给缩略图，详情与放大仍走原图。
+ *
+ * 只对规范公开键换成缩略图键，其余键（审核中签名代理、legacy、seed）原样交给 `publicUrl` ——
+ * 那些前缀下没有缩略图对象，硬换会 404。缩略图在 `confirm` / 人工放行结算时随原图一起写，
+ * 历史对象由 `apps/api/scripts/backfill-listing-thumbnails.ts` 补齐。
+ */
+export function listingCoverUrl(
+  storage: Pick<MediaStorage, 'publicUrl'>,
+  objectKey: string | null,
+): string | null {
+  if (!objectKey) return null
+  return storage.publicUrl(listingThumbnailKeyOf(objectKey) ?? objectKey)
+}
+
+/**
  * #286：**待审核**的 staging 前缀。
  *
  * 它故意不落在匿名读白名单里（`docs/deployment.md` 只放开 `listings/*`），因此「未审核的图天然
@@ -521,12 +570,13 @@ export function createBunS3MediaStorage(options: {
       }
       // New listing keys must carry strict resource TypeIDs; refuse any other shape instead of
       // silently exposing raw UUIDs or unknown object namespaces in a public response.
-      if (!isPublicListingKey(key) && !SEED_LISTING_KEY.test(key)) {
+      if (!isPublicListingKey(key) && !isListingThumbnailKey(key) && !SEED_LISTING_KEY.test(key)) {
         // 这一句是"真实 POST /visual-search 回 500 INTERNAL_ERROR"最常见的根因（#406 第 4 项：
         // seed 数据的三条隐性契约）。把出错的键与两种合法形状一起打出来，否则只能从 500 反推。
         throw new Error(
           `公开媒体对象键不规范：${JSON.stringify(key)}` +
-            '（期望 listings/{usr_…}/{med_…}.jpg|png|webp，或 seed 演示键 listings/seed-<slug>/<n>.jpg|png|webp）',
+            '（期望 listings/{usr_…}/{med_…}.jpg|png|webp、listings/{usr_…}/{med_…}-thumb.webp，' +
+            '或 seed 演示键 listings/seed-<slug>/<n>.jpg|png|webp）',
         )
       }
       return `${publicUrlBase.replace(/\/+$/, '')}/${key}`

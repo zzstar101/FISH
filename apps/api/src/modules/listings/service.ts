@@ -357,6 +357,9 @@ export function createListingService(deps: {
       urgent: input.listing.urgent,
       negotiable: input.listing.negotiable,
       free: input.listing.free,
+      // #620：详情页的封面**保留原图**（放大/分享/海报都用它），列表卡片才换成缩略图
+      // （`toListingCard` 的 `listingCoverUrl`）。契约 `ListingDetailSchema.coverUrl` 因此与
+      // `ListingCardSchema.coverUrl` 同名字、不同用途：详情以 `images` 为准，这里是兜底。
       coverUrl: cover ? storage.publicUrl(cover.objectKey) : null,
       createdAt: input.listing.createdAt.toISOString(),
       // 想要数对**所有**视角都出（不像审核态那样只给本人）：它是公开的市场信号，
