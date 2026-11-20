@@ -9,6 +9,7 @@ import { transactionStatusSchema } from '@fish/contracts/transactions/schema'
 import { z } from 'zod'
 import {
   AuditLogIdSchema,
+  ChatModerationRecordIdSchema,
   DisputeIdSchema,
   FeedbackIdSchema,
   ListingIdSchema,
@@ -143,6 +144,7 @@ export const AdminAuditTargetTypeSchema = z.enum([
   'DISPUTE',
   'FEEDBACK',
   'USER_RESTRICTION',
+  'CHAT_MODERATION_RECORD',
 ])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
 
@@ -154,6 +156,7 @@ export const AdminAuditTargetIdSchema = z.union([
   DisputeIdSchema,
   FeedbackIdSchema,
   UserRestrictionIdSchema,
+  ChatModerationRecordIdSchema,
 ])
 
 const auditTargetIdByType = {
@@ -164,6 +167,7 @@ const auditTargetIdByType = {
   DISPUTE: DisputeIdSchema,
   FEEDBACK: FeedbackIdSchema,
   USER_RESTRICTION: UserRestrictionIdSchema,
+  CHAT_MODERATION_RECORD: ChatModerationRecordIdSchema,
 } satisfies Record<AdminAuditTargetType, (typeof AdminAuditTargetIdSchema.options)[number]>
 
 function auditTargetMatches(value: {
@@ -360,6 +364,8 @@ export const AdminAuditActionSchema = z.enum([
    * 422。
    */
   'ACCOUNT_DELETION_COMPLETED',
+  /** #694 M2：人工处理聊天待审消息（ALLOW 投递 / BLOCK 拒绝）。 */
+  'CHAT_MODERATION_DECISION',
 ])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 

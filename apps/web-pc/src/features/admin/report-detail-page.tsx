@@ -1,3 +1,4 @@
+import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import type { AdminReportDetail } from '@fish/contracts/reports/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
@@ -57,10 +58,11 @@ function ReportDetailView({
   const { item } = detail
   const statusMeta = REPORT_STATUS_META[item.report.status]
   const isListingTarget = item.target.targetType === 'LISTING'
-  const targetUrl =
-    item.target.targetType === 'LISTING'
-      ? `/admin/listings/${item.target.targetId}`
-      : `/admin/users/${item.target.targetId}`
+  const isMessageTarget = item.target.targetType === 'MESSAGE'
+  const targetKindLabel = isListingTarget ? '商品' : isMessageTarget ? '消息' : '用户'
+  const targetUrl = isListingTarget
+    ? `/admin/listings/${item.target.targetId}`
+    : `/admin/users/${item.target.targetId}`
 
   async function submit(input: { result: 'HANDLED' | 'REJECTED'; reason: string }) {
     setDialogError(null)
@@ -90,7 +92,7 @@ function ReportDetailView({
             ← 举报队列
           </Link>
           <h1 className="mt-1 font-semibold text-[26px] tracking-[-0.03em]">
-            举报：{isListingTarget ? '商品' : '用户'}「{item.target.label}」
+            举报：{targetKindLabel}「{item.target.label}」
           </h1>
           <p className="mt-1.5 flex items-center gap-2 text-ink-3 text-sm">
             <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
@@ -141,10 +143,46 @@ function ReportDetailView({
           ) : null}
         </Card>
 
+        {item.messageEvidence ? (
+          <Card className="gap-3 border border-line p-5" id="message-evidence">
+            <h2 className="font-semibold">消息证据（服务端快照）</h2>
+            {item.messageEvidence.kind === 'TEXT' ? (
+              <p className="text-sm">{item.messageEvidence.content}</p>
+            ) : item.messageEvidence.kind === 'IMAGE' ? (
+              <img
+                alt="被举报图片消息"
+                className="max-h-[420px] w-auto rounded-lg border border-line object-contain"
+                src={`/api${ADMIN_ROUTES.reportEvidenceMedia(reportId)}`}
+              />
+            ) : (
+              // biome-ignore lint/a11y/useMediaCaption: 私聊语音没有字幕轨道；证据仅管理员复核。
+              <audio
+                className="w-full"
+                controls
+                src={`/api${ADMIN_ROUTES.reportEvidenceMedia(reportId)}`}
+              />
+            )}
+            {item.messageEvidence.kind === 'TEXT' ? null : (
+              <p className="text-ink-3 text-xs">
+                {item.messageEvidence.kind === 'IMAGE' ? '图片' : '语音'}消息（
+                {item.messageEvidence.mimeType ?? '未知类型'}，{item.messageEvidence.sizeBytes ?? 0}{' '}
+                字节）
+              </p>
+            )}
+            <p className="text-ink-3 text-xs">
+              发送者 {item.messageEvidence.senderNickname} · 发送于{' '}
+              {formatAdminDateTime(item.messageEvidence.createdAt)}
+              {item.messageEvidence.recalledAt !== null
+                ? ` · 取证时该消息已撤回（${formatAdminDateTime(item.messageEvidence.recalledAt)}），快照保留`
+                : ''}
+            </p>
+          </Card>
+        ) : null}
+
         <Card className="gap-3 border border-line p-5">
           <h2 className="font-semibold">被举报目标</h2>
           <p className="text-sm">
-            {isListingTarget ? '商品' : '用户'}「{item.target.label}」
+            {targetKindLabel}「{item.target.label}」
           </p>
           {isListingTarget && item.target.listingStatus !== null ? (
             <p className="flex items-center gap-2 text-ink-2 text-sm">
@@ -159,9 +197,15 @@ function ReportDetailView({
               ) : null}
             </p>
           ) : null}
-          <Link className="text-brand text-sm hover:underline" to={targetUrl}>
-            {isListingTarget ? '查看商品详情 →' : '查看用户详情（可执行治理）→'}
-          </Link>
+          {isMessageTarget ? (
+            <a className="text-brand text-sm hover:underline" href="#message-evidence">
+              查看消息证据 →
+            </a>
+          ) : (
+            <Link className="text-brand text-sm hover:underline" to={targetUrl}>
+              {isListingTarget ? '查看商品详情 →' : '查看用户详情（可执行治理）→'}
+            </Link>
+          )}
 
           {detail.related.length > 0 ? (
             <div>

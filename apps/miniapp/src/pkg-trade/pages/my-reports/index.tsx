@@ -56,7 +56,8 @@ import './index.scss'
  * 换号在**渲染期**同步清空列表 + 加载代次丢弃迟到响应（与 `pages/comments` 同一套写法）。
  */
 
-const TABS: { key: ReportTarget; label: string }[] = [
+// 消息举报的端上入口/列表在 M4 批次补齐（需开发者工具演示门禁）。
+const TABS: { key: Exclude<ReportTarget, 'MESSAGE'>; label: string }[] = [
   { key: 'LISTING', label: '商品' },
   { key: 'USER', label: '用户' },
 ]

@@ -1,10 +1,19 @@
 import { sql } from 'drizzle-orm'
-import { index, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import {
+  index,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core'
 import { primaryKey, timestamps } from './common'
 import { users } from './users'
 
 /** 举报对象类型。#73 治理半场只支持商品与用户，留言 / 私聊消息不在本期范围。 */
-export const reportTargetTypeEnum = pgEnum('report_target_type', ['LISTING', 'USER'])
+export const reportTargetTypeEnum = pgEnum('report_target_type', ['LISTING', 'USER', 'MESSAGE'])
 
 /**
  * 举报原因。**一张枚举同时服务两类对象**，契约层按 targetType 收敛可选子集：
@@ -50,6 +59,11 @@ export const reports = pgTable(
     reason: reportReasonEnum('reason').notNull(),
     /** 举报人补充说明，可空。 */
     detailText: text('detail_text'),
+    /**
+     * 服务端取证快照（#694 M2，仅 MESSAGE 目标）。举报创建时由服务端从可信消息/媒体行读取并固化，
+     * 不采信客户端上传的正文；消息撤回不销毁这张快照，管理员据此审核历史举报。
+     */
+    evidenceSnapshot: jsonb('evidence_snapshot'),
     status: reportStatusEnum('status').notNull().default('PENDING'),
     handledBy: uuid('handled_by').references(() => users.id),
     handledAt: timestamptz('handled_at'),

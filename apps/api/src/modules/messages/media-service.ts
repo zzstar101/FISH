@@ -140,7 +140,7 @@ const imageMime = (value: string): boolean =>
  * 撤回后**不下发** url / 尺寸 / 时长：客户端只该渲染撤回碑，不该再去下载字节。
  * 字节仍在存储里（审计保留），所以这里只是读侧收敛，不是删除。
  */
-function dto(
+export function toMediaDto(
   row: MediaRow,
   baseUrl: (id: string) => string,
   replyTo: MessageReply | null = null,
@@ -230,11 +230,11 @@ export function createMediaMessageService({
 }): MediaMessageService {
   const assertNotBlocked = makeBlockAssertion(blocks)
   /** 媒体行 → DTO；引用目标只取已投递的（与文本路径同一规则）。 */
-  const toMediaDto = async (conversationId: string, row: MediaRow) => {
+  const mediaDtoFor = async (conversationId: string, row: MediaRow) => {
     const target = row.reply_to_id
       ? (await store.findReplyTargets([row.reply_to_id])).get(row.reply_to_id)
       : undefined
-    return dto(
+    return toMediaDto(
       row,
       (id) => mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
       target ? toReply(target) : null,
@@ -279,7 +279,7 @@ export function createMediaMessageService({
         const replay = await store.findByRequestKey(conversationId, userId, sendKey)
         if (replay) {
           if (!replay.matchedHash) throw idempotencyConflict()
-          return toMediaDto(conversationId, replay.row)
+          return mediaDtoFor(conversationId, replay.row)
         }
       }
       // #694 M1：语音审核上游未接入，显式关闭新语音发送（历史语音读取不受影响）。
@@ -399,7 +399,7 @@ export function createMediaMessageService({
               // 并发同键：若另一请求已投递，重试应重放既有消息而不是报内容被拒。
               if (sendKey) {
                 const replay = await store.findByRequestKey(conversationId, userId, sendKey)
-                if (replay?.matchedHash) return toMediaDto(conversationId, replay.row)
+                if (replay?.matchedHash) return mediaDtoFor(conversationId, replay.row)
               }
               throw contentBlocked()
             }
@@ -448,7 +448,7 @@ export function createMediaMessageService({
         }
         // 并发重放：另一个请求已经落库并拥有自己的快照，这一份刚写的字节没人引用。
         if (row.object_key !== snapshotKey) await discardSnapshot()
-        const result = await toMediaDto(conversationId, row)
+        const result = await mediaDtoFor(conversationId, row)
         // #694 M1：只有已投递的消息才推实时事件；待审只有发送者能通过 API 看到。
         const participants =
           row.visibility === 'DELIVERED' ? await store.participant(conversationId, userId) : null
@@ -488,7 +488,7 @@ export function createMediaMessageService({
       return mediaListResponseSchema.parse({
         items: page.map((row) => {
           const target = row.reply_to_id ? targets.get(row.reply_to_id) : undefined
-          return dto(
+          return toMediaDto(
             row,
             (id) => mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
             target ? toReply(target) : null,

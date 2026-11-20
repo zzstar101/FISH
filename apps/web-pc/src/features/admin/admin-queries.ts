@@ -46,9 +46,11 @@ import {
   fetchAdminTransactions,
   fetchAdminUserDetail,
   fetchAdminUsers,
+  fetchChatModerationQueue,
   liftUserRestriction,
   restoreListing,
   restrictUserPublish,
+  submitChatModerationDecision,
   submitDisputeResolve,
   submitFeedbackHandle,
   submitModerationDecision,
@@ -83,6 +85,7 @@ export const adminKeys = {
   moderationDetail: (recordId: string) => [...adminKeys.all(), 'moderation', recordId] as const,
   reports: (filters: AdminReportsFilters) => [...adminKeys.all(), 'reports', filters] as const,
   reportDetail: (reportId: string) => [...adminKeys.all(), 'report', reportId] as const,
+  chatModerationQueue: () => [...adminKeys.all(), 'chat-moderation-queue'] as const,
   feedback: (filters: AdminFeedbackFilters) => [...adminKeys.all(), 'feedback', filters] as const,
   feedbackDetail: (feedbackId: string) =>
     [...adminKeys.all(), 'feedback-detail', feedbackId] as const,
@@ -195,6 +198,30 @@ export function useAdminReports(filters: AdminReportsFilters) {
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 0,
+  })
+}
+
+export function useChatModerationQueue() {
+  return useInfiniteQuery({
+    queryKey: adminKeys.chatModerationQueue(),
+    queryFn: ({ pageParam }) => fetchChatModerationQueue(pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 0,
+  })
+}
+
+export function useChatModerationDecision(): UseMutationResult<
+  void,
+  Error,
+  { recordId: string; input: { decision: 'ALLOW' | 'BLOCK'; reason: string; version: number } }
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ recordId, input }) => submitChatModerationDecision(recordId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: adminKeys.all() })
+    },
   })
 }
 

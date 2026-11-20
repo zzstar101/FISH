@@ -51,7 +51,7 @@ describe('chat moderation policy（#694 M1）', () => {
 
     const policy = createChatModerationPolicy(provider)
     const first = await policy.moderateText({ content: '加微信聊' })
-    const second = await policy.moderateText({ content: '在吗' })
+    await policy.moderateText({ content: '在吗' })
 
     expect(inputs).toHaveLength(2)
     expect(inputs[0]?.fields).toEqual([{ field: 'content', value: '加微信聊' }])

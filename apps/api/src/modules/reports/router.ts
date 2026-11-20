@@ -60,7 +60,11 @@ export function createReportsRouter(options: ReportsRouterOptions) {
       const response = await service.createReport(getUserId(ctx), {
         targetType: input.targetType,
         targetId: decodePublicId(
-          input.targetType === 'LISTING' ? PUBLIC_ID_PREFIX.listing : PUBLIC_ID_PREFIX.user,
+          input.targetType === 'LISTING'
+            ? PUBLIC_ID_PREFIX.listing
+            : input.targetType === 'MESSAGE'
+              ? PUBLIC_ID_PREFIX.message
+              : PUBLIC_ID_PREFIX.user,
           input.targetId,
         ),
         reason: input.reason,

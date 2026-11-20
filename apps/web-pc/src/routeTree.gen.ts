@@ -31,6 +31,7 @@ import { Route as VerifyRouteImport } from './routes/verify'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
+import { Route as AdminChatModerationRouteImport } from './routes/admin.chat-moderation'
 import { Route as AdminDisputesRouteImport } from './routes/admin.disputes'
 import { Route as AdminFeedbackRouteImport } from './routes/admin.feedback'
 import { Route as AdminListingsRouteImport } from './routes/admin.listings'
@@ -172,6 +173,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
 const AdminAuditRoute = AdminAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminChatModerationRoute = AdminChatModerationRouteImport.update({
+  id: '/chat-moderation',
+  path: '/chat-moderation',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminDisputesRoute = AdminDisputesRouteImport.update({
@@ -357,6 +363,7 @@ export interface FileRoutesByFullPath {
   '/verify': typeof VerifyRoute
   '/wish': typeof WishRouteWithChildren
   '/admin/audit': typeof AdminAuditRouteWithChildren
+  '/admin/chat-moderation': typeof AdminChatModerationRoute
   '/admin/disputes': typeof AdminDisputesRouteWithChildren
   '/admin/feedback': typeof AdminFeedbackRouteWithChildren
   '/admin/listings': typeof AdminListingsRouteWithChildren
@@ -407,6 +414,7 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
+  '/admin/chat-moderation': typeof AdminChatModerationRoute
   '/admin/metrics': typeof AdminMetricsRoute
   '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -457,6 +465,7 @@ export interface FileRoutesById {
   '/verify': typeof VerifyRoute
   '/wish': typeof WishRouteWithChildren
   '/admin/audit': typeof AdminAuditRouteWithChildren
+  '/admin/chat-moderation': typeof AdminChatModerationRoute
   '/admin/disputes': typeof AdminDisputesRouteWithChildren
   '/admin/feedback': typeof AdminFeedbackRouteWithChildren
   '/admin/listings': typeof AdminListingsRouteWithChildren
@@ -515,6 +524,7 @@ export interface FileRouteTypes {
     | '/verify'
     | '/wish'
     | '/admin/audit'
+    | '/admin/chat-moderation'
     | '/admin/disputes'
     | '/admin/feedback'
     | '/admin/listings'
@@ -565,6 +575,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/search'
     | '/verify'
+    | '/admin/chat-moderation'
     | '/admin/metrics'
     | '/disputes/$disputeId'
     | '/listing/$listingId'
@@ -614,6 +625,7 @@ export interface FileRouteTypes {
     | '/verify'
     | '/wish'
     | '/admin/audit'
+    | '/admin/chat-moderation'
     | '/admin/disputes'
     | '/admin/feedback'
     | '/admin/listings'
@@ -828,6 +840,13 @@ declare module '@tanstack/react-router' {
       path: '/audit'
       fullPath: '/admin/audit'
       preLoaderRoute: typeof AdminAuditRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/chat-moderation': {
+      id: '/admin/chat-moderation'
+      path: '/chat-moderation'
+      fullPath: '/admin/chat-moderation'
+      preLoaderRoute: typeof AdminChatModerationRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/disputes': {
@@ -1166,6 +1185,7 @@ const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
 
 interface AdminRouteChildren {
   AdminAuditRoute: typeof AdminAuditRouteWithChildren
+  AdminChatModerationRoute: typeof AdminChatModerationRoute
   AdminDisputesRoute: typeof AdminDisputesRouteWithChildren
   AdminFeedbackRoute: typeof AdminFeedbackRouteWithChildren
   AdminListingsRoute: typeof AdminListingsRouteWithChildren
@@ -1179,6 +1199,7 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditRoute: AdminAuditRouteWithChildren,
+  AdminChatModerationRoute: AdminChatModerationRoute,
   AdminDisputesRoute: AdminDisputesRouteWithChildren,
   AdminFeedbackRoute: AdminFeedbackRouteWithChildren,
   AdminListingsRoute: AdminListingsRouteWithChildren,

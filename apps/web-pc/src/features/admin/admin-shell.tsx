@@ -12,6 +12,7 @@ import {
   Package,
   Scale,
   ScrollText,
+  ShieldAlert,
   ShieldCheck,
   Users,
 } from 'lucide-react'
@@ -24,6 +25,7 @@ const ADMIN_NAV_ITEMS = [
   { to: '/admin/users', label: '用户', Icon: Users, exact: false },
   { to: '/admin/listings', label: '商品', Icon: Package, exact: false },
   { to: '/admin/moderation', label: '审核', Icon: ShieldCheck, exact: false },
+  { to: '/admin/chat-moderation', label: '聊天待审', Icon: ShieldAlert, exact: false },
   { to: '/admin/reports', label: '举报', Icon: Flag, exact: false },
   { to: '/admin/disputes', label: '争议', Icon: Scale, exact: false },
   { to: '/admin/feedback', label: '反馈', Icon: MessageSquareText, exact: false },

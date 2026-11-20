@@ -1,6 +1,6 @@
 import type { ReportReason } from '@fish/contracts/reports/schema'
 import { ReportReasonSchema } from '@fish/contracts/reports/schema'
-import type { ListingId, UserId } from '@fish/contracts/system/public-id'
+import type { ListingId, MessageId, UserId } from '@fish/contracts/system/public-id'
 import { Alert, AlertDescription, AlertTitle } from '@fish/ui/alert'
 import { Button } from '@fish/ui/button'
 import {
@@ -28,6 +28,7 @@ import { submitFailureText, submitSuccessText } from './view'
 export type ReportTarget =
   | { type: 'LISTING'; id: ListingId; label: string }
   | { type: 'USER'; id: UserId; label: string }
+  | { type: 'MESSAGE'; id: MessageId; label: string }
 
 /**
  * 举报弹窗。商品与用户共用同一个组件 —— 两者的差异只有「原因枚举」与文案，
@@ -70,7 +71,8 @@ export function ReportDialog({
     })
   }
 
-  const targetKind = target.type === 'LISTING' ? '商品' : '用户'
+  const targetKind =
+    target.type === 'LISTING' ? '商品' : target.type === 'MESSAGE' ? '消息' : '用户'
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>

@@ -4,7 +4,9 @@ import { REPORT_ROUTES } from '@fish/contracts/reports/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { adminAuditLogs } from '@fish/db/schema/admin'
+import { conversations } from '@fish/db/schema/conversations'
 import { listings } from '@fish/db/schema/listings'
+import { messages } from '@fish/db/schema/messages'
 import { reports } from '@fish/db/schema/reports'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
@@ -48,6 +50,11 @@ const REPORTER_ID = '01930000-0000-7000-8000-000000000092'
 const SECOND_REPORTER_ID = '01930000-0000-7000-8000-000000000093'
 const TARGET_USER_ID = '01930000-0000-7000-8000-000000000094'
 const LISTING_ID = '01930000-0000-7000-8000-0000000000a1'
+const CONVERSATION_ID = '01930000-0000-7000-8000-0000000000c1'
+const RECEIVED_MESSAGE_ID = '01930000-0000-7000-8000-0000000000d1'
+const OWN_MESSAGE_ID = '01930000-0000-7000-8000-0000000000d2'
+const PENDING_MESSAGE_ID = '01930000-0000-7000-8000-0000000000d3'
+const PUBLIC_RECEIVED_MESSAGE_ID = encodePublicId(PUBLIC_ID_PREFIX.message, RECEIVED_MESSAGE_ID)
 const PUBLIC_LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID)
 const PUBLIC_TARGET_USER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, TARGET_USER_ID)
 const PUBLIC_REPORTER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, REPORTER_ID)
@@ -98,6 +105,43 @@ beforeAll(async () => {
     status: 'ACTIVE',
     createdAt: new Date('2026-09-02T02:00:00Z'),
   })
+  await scratch.insert(conversations).values({
+    id: CONVERSATION_ID,
+    listingId: LISTING_ID,
+    buyerId: REPORTER_ID,
+    sellerId: TARGET_USER_ID,
+    lastMessageAt: new Date('2026-09-02T03:00:00Z'),
+    createdAt: new Date('2026-09-02T03:00:00Z'),
+  })
+  await scratch.insert(messages).values([
+    {
+      id: RECEIVED_MESSAGE_ID,
+      conversationId: CONVERSATION_ID,
+      senderId: TARGET_USER_ID,
+      type: 'TEXT',
+      content: '加我微信，私下转账',
+      visibility: 'DELIVERED',
+      createdAt: new Date('2026-09-02T03:00:00Z'),
+    },
+    {
+      id: OWN_MESSAGE_ID,
+      conversationId: CONVERSATION_ID,
+      senderId: REPORTER_ID,
+      type: 'TEXT',
+      content: '我自己发的',
+      visibility: 'DELIVERED',
+      createdAt: new Date('2026-09-02T03:01:00Z'),
+    },
+    {
+      id: PENDING_MESSAGE_ID,
+      conversationId: CONVERSATION_ID,
+      senderId: TARGET_USER_ID,
+      type: 'TEXT',
+      content: '待审内容',
+      visibility: 'PENDING_REVIEW',
+      createdAt: new Date('2026-09-02T03:02:00Z'),
+    },
+  ])
 })
 
 afterAll(async () => {
@@ -267,6 +311,146 @@ describe('举报闭环（#73 用户端）', () => {
     })
     const otherBody = (await other.json()) as { items: { reason: string }[] }
     expect(otherBody.items.map((item) => item.reason)).toEqual(['FRAUD'])
+  })
+})
+
+describe('私聊消息举报（#694 M2）', () => {
+  test('接收方举报收到的消息：201，且服务端固化正文快照（不采信客户端）', async () => {
+    const res = await app.request(
+      REPORT_ROUTES.create,
+      postAs(reporterCookie, {
+        targetType: 'MESSAGE',
+        targetId: PUBLIC_RECEIVED_MESSAGE_ID,
+        reason: 'HARASSMENT',
+        detailText: '要求私下转账',
+      }),
+    )
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as { report: { targetType: string; targetId: string } }
+    expect(body.report.targetType).toBe('MESSAGE')
+    expect(body.report.targetId).toBe(PUBLIC_RECEIVED_MESSAGE_ID)
+    const rows = await scratch
+      .select()
+      .from(reports)
+      .where(eq(reports.targetId, RECEIVED_MESSAGE_ID))
+    expect(rows.length).toBe(1)
+    expect(rows[0]?.evidenceSnapshot).toMatchObject({
+      kind: 'TEXT',
+      content: '加我微信，私下转账',
+      senderNickname: '被举报用户丁',
+    })
+  })
+
+  test('发送方不能举报自己的消息（422）；非参与者猜 id 按不存在处理（404）', async () => {
+    const self = await app.request(
+      REPORT_ROUTES.create,
+      postAs(adminCookie, {
+        targetType: 'MESSAGE',
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.message, OWN_MESSAGE_ID),
+        reason: 'SPAM',
+      }),
+    )
+    // adminCookie 是管理员，与举报人无关；先验「恰好是自己发的」用 REPORTER 的 cookie。
+    const own = await app.request(
+      REPORT_ROUTES.create,
+      postAs(reporterCookie, {
+        targetType: 'MESSAGE',
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.message, OWN_MESSAGE_ID),
+        reason: 'SPAM',
+      }),
+    )
+    expect(own.status).toBe(422)
+    expect((await own.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: 'REPORT_SELF_TARGET' },
+    })
+    expect(self.status).toBe(404)
+
+    const outsider = await app.request(
+      REPORT_ROUTES.create,
+      postAs(secondReporterCookie, {
+        targetType: 'MESSAGE',
+        targetId: PUBLIC_RECEIVED_MESSAGE_ID,
+        reason: 'SPAM',
+      }),
+    )
+    expect(outsider.status).toBe(404)
+    expect((await outsider.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: 'REPORT_TARGET_NOT_FOUND' },
+    })
+  })
+
+  test('待审消息对接收者不可见，举报按不存在处理', async () => {
+    const res = await app.request(
+      REPORT_ROUTES.create,
+      postAs(reporterCookie, {
+        targetType: 'MESSAGE',
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.message, PENDING_MESSAGE_ID),
+        reason: 'SPAM',
+      }),
+    )
+    expect(res.status).toBe(404)
+  })
+
+  test('管理端详情返回取证快照；消息撤回后快照仍在', async () => {
+    await scratch
+      .update(messages)
+      .set({ recalledAt: new Date('2026-09-02T04:00:00Z') })
+      .where(eq(messages.id, RECEIVED_MESSAGE_ID))
+
+    const queue = await app.request(`${ADMIN_ROUTES.reports}?targetType=MESSAGE`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(queue.status).toBe(200)
+    const queueBody = (await queue.json()) as {
+      items: { report: { id: string; targetType: string }; target: { label: string } }[]
+    }
+    const item = queueBody.items.find((entry) => entry.report.targetType === 'MESSAGE')
+    expect(item).toBeDefined()
+    expect(item?.target.label).toContain('加我微信')
+
+    const detail = await app.request(ADMIN_ROUTES.reportDetail(item?.report.id ?? ''), {
+      headers: { cookie: adminCookie },
+    })
+    expect(detail.status).toBe(200)
+    const detailBody = (await detail.json()) as {
+      item: {
+        messageEvidence: {
+          kind: string
+          content: string | null
+          hasMedia: boolean
+          senderNickname: string
+          recalledAt: string | null
+        } | null
+      }
+    }
+    expect(detailBody.item.messageEvidence).toMatchObject({
+      kind: 'TEXT',
+      content: '加我微信，私下转账',
+      hasMedia: false,
+      senderNickname: '被举报用户丁',
+    })
+    // 快照是举报创建时的取证：撤回发生在之后，只能说明「撤回不销毁证据」，
+    // 不会把撤回时间补写进历史快照。
+    expect(detailBody.item.messageEvidence?.recalledAt).toBeNull()
+  })
+
+  test('证据媒体：匿名 401、普通用户 403、文本举报 404', async () => {
+    const queue = await app.request(`${ADMIN_ROUTES.reports}?targetType=MESSAGE`, {
+      headers: { cookie: adminCookie },
+    })
+    const body = (await queue.json()) as { items: { report: { id: string } }[] }
+    const reportId = body.items[0]?.report.id
+    expect(reportId).toBeDefined()
+    const url = ADMIN_ROUTES.reportEvidenceMedia(reportId ?? '')
+
+    expect((await app.request(url)).status).toBe(401)
+    expect((await app.request(url, { headers: { cookie: reporterCookie } })).status).toBe(403)
+    // 文本消息没有可读媒体快照：管理端也不能凭 reportId 读到别的东西。
+    expect((await app.request(url, { headers: { cookie: adminCookie } })).status).toBe(404)
+  })
+
+  test('cleanup: 清掉消息举报，避免影响举报队列的跨目标计数用例', async () => {
+    await scratch.delete(reports).where(eq(reports.targetType, 'MESSAGE'))
   })
 })
 

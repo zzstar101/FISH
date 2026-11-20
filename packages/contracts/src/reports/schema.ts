@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ListingIdSchema, ReportIdSchema, UserIdSchema } from '../system/public-id'
+import { ListingIdSchema, MessageIdSchema, ReportIdSchema, UserIdSchema } from '../system/public-id'
 
 /**
  * Reports Domain Contract（#73 治理半场）。
@@ -19,8 +19,11 @@ import { ListingIdSchema, ReportIdSchema, UserIdSchema } from '../system/public-
 // 枚举（镜像 DB：packages/db/src/schema/reports.ts）
 // ---------------------------------------------------------------------------
 
-/** 举报对象类型。本期只支持商品与用户；留言 / 私聊消息不在范围内。 */
-export const ReportTargetTypeSchema = z.enum(['LISTING', 'USER'])
+/**
+ * 举报对象类型（#73 治理半场 + #694 M2）。
+ * `MESSAGE` 只能由会话参与者中的**接收方**举报，正文证据由服务端固化，不采信客户端。
+ */
+export const ReportTargetTypeSchema = z.enum(['LISTING', 'USER', 'MESSAGE'])
 export type ReportTargetType = z.infer<typeof ReportTargetTypeSchema>
 
 /**
@@ -62,20 +65,35 @@ export const USER_REPORT_REASONS = [
   'ABUSE',
   'OTHER',
 ] as const
+/** 私聊消息举报原因（#694 M2）。 */
+export const MESSAGE_REPORT_REASONS = [
+  'SPAM',
+  'FRAUD',
+  'HARASSMENT',
+  'PROHIBITED',
+  'OTHER',
+] as const
 
 export const ListingReportReasonSchema = z.enum(LISTING_REPORT_REASONS)
 export type ListingReportReason = z.infer<typeof ListingReportReasonSchema>
 export const UserReportReasonSchema = z.enum(USER_REPORT_REASONS)
 export type UserReportReason = z.infer<typeof UserReportReasonSchema>
+export const MessageReportReasonSchema = z.enum(MESSAGE_REPORT_REASONS)
+export type MessageReportReason = z.infer<typeof MessageReportReasonSchema>
 
-const ReportTargetIdSchema = z.union([ListingIdSchema, UserIdSchema])
+const ReportTargetIdSchema = z.union([ListingIdSchema, UserIdSchema, MessageIdSchema])
+
+const TARGET_ID_SCHEMAS = {
+  LISTING: ListingIdSchema,
+  USER: UserIdSchema,
+  MESSAGE: MessageIdSchema,
+} as const
 
 function reportTargetMatches(value: {
   targetType: ReportTargetType
   targetId: z.infer<typeof ReportTargetIdSchema>
 }): boolean {
-  return (value.targetType === 'LISTING' ? ListingIdSchema : UserIdSchema).safeParse(value.targetId)
-    .success
+  return TARGET_ID_SCHEMAS[value.targetType].safeParse(value.targetId).success
 }
 
 // ---------------------------------------------------------------------------
@@ -95,12 +113,19 @@ export const ReportCreateInputSchema = z
     if (!reportTargetMatches(value)) {
       ctx.addIssue({ code: 'custom', path: ['targetId'], message: '举报目标 ID 前缀不匹配' })
     }
-    const allowed = value.targetType === 'LISTING' ? LISTING_REPORT_REASONS : USER_REPORT_REASONS
+    const allowed =
+      value.targetType === 'LISTING'
+        ? LISTING_REPORT_REASONS
+        : value.targetType === 'USER'
+          ? USER_REPORT_REASONS
+          : MESSAGE_REPORT_REASONS
     if (!(allowed as readonly string[]).includes(value.reason)) {
+      const label =
+        value.targetType === 'LISTING' ? '商品' : value.targetType === 'USER' ? '用户' : '消息'
       ctx.addIssue({
         code: 'custom',
         path: ['reason'],
-        message: `举报 ${value.targetType === 'LISTING' ? '商品' : '用户'}时不支持该原因`,
+        message: `举报${label}时不支持该原因`,
       })
     }
   })
@@ -185,6 +210,22 @@ export const ReportTargetSummarySchema = z
   .refine(reportTargetMatches, { path: ['targetId'], message: '举报目标 ID 与资源类型不匹配' })
 export type ReportTargetSummary = z.infer<typeof ReportTargetSummarySchema>
 
+/**
+ * 私聊消息举报的服务端取证快照（#694 M2）。只对管理端返回；`content` 仅 TEXT 有值，
+ * 媒体只给出元数据与「有无可读快照」标记，字节必须走带审计的管理端媒体端点，不能伪造 URL。
+ */
+export const ReportMessageEvidenceSchema = z.object({
+  kind: z.enum(['TEXT', 'IMAGE', 'VOICE']),
+  content: z.string().nullable(),
+  mimeType: z.string().nullable(),
+  sizeBytes: z.number().int().nullable(),
+  hasMedia: z.boolean(),
+  senderNickname: z.string(),
+  createdAt: z.iso.datetime(),
+  recalledAt: z.iso.datetime().nullable(),
+})
+export type ReportMessageEvidence = z.infer<typeof ReportMessageEvidenceSchema>
+
 export const AdminReportItemSchema = z.object({
   /** 管理端可见处理原因与处理人；其余字段与用户端 DTO 一致。 */
   report: ReportSchema.safeExtend({
@@ -195,6 +236,8 @@ export const AdminReportItemSchema = z.object({
   target: ReportTargetSummarySchema,
   /** 同一目标收到的举报条数（含本条，不限举报人）：多个人打同一个目标时队列里能看出来。 */
   reportCount: z.number().int().min(0),
+  /** 目标为 MESSAGE 时的服务端取证快照；其它目标为 null。 */
+  messageEvidence: ReportMessageEvidenceSchema.nullable(),
 })
 export type AdminReportItem = z.infer<typeof AdminReportItemSchema>
 
