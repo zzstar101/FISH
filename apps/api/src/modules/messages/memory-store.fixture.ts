@@ -1,6 +1,9 @@
+import type { MessageVisibility } from '@fish/contracts/chat/schema'
 import { MessageIdempotencyConflictError, type MessageSendKey } from './idempotency'
 import type {
+  ChatModerationRecordInput,
   ConversationParticipant,
+  InsertUserMessageOptions,
   ListingBrief,
   MessageRow,
   MessageStore,
@@ -25,6 +28,25 @@ export const MEMORY_SELLER_ID = '01930000-0000-7000-8000-0000000000a2'
 export const MEMORY_OUTSIDER_ID = '01930000-0000-7000-8000-0000000000a3'
 export const MEMORY_CONVERSATION_ID = '01930000-0000-7000-8000-0000000000c1'
 
+/** #694 M1 测试夹具：待审消息必须同时带审核记录，这里给一份最小合法值。 */
+export function pendingReviewModeration(): ChatModerationRecordInput {
+  return {
+    kind: 'TEXT',
+    decision: 'REVIEW',
+    machineDecision: 'REVIEW',
+    status: 'PENDING',
+    provider: 'LOCAL',
+    providerRequestId: null,
+    policyVersion: 'test-policy',
+    suggestion: 'Review',
+    label: null,
+    subLabel: null,
+    score: null,
+    matchedRules: [],
+    matchedTermsMasked: [],
+  }
+}
+
 export class MemoryMessageStore implements MessageStore {
   conversations = new Map<string, ConversationParticipant>([
     [
@@ -33,6 +55,8 @@ export class MemoryMessageStore implements MessageStore {
     ],
   ])
   messages: MessageRow[] = []
+  /** 与 SQL store 的 `chat_moderation_records` 对齐：只记审计字段，不记正文。 */
+  moderationRecords: { messageId: string; record: ChatModerationRecordInput }[] = []
   /** LISTING 消息富化用的商品读数（#359）；测试按需预置，缺省为空 = 商品不存在。 */
   listings = new Map<string, ListingBrief>()
   private seq = 0
@@ -49,10 +73,12 @@ export class MemoryMessageStore implements MessageStore {
 
   async listByConversation(
     conversationId: string,
-    filter: { limit: number; before: string | null },
+    filter: { limit: number; before: string | null; viewerId: string },
   ) {
     const all = this.messages
       .filter((row) => row.conversation_id === conversationId)
+      // 与 SQL store 同一可见性口径：接收者只读 DELIVERED，发送者可见自己的待审/拒绝行。
+      .filter((row) => row.visibility === 'DELIVERED' || row.sender_id === filter.viewerId)
       // 与 SQL 同一排序键：(created_at DESC, id DESC)——同 created_at 的行也要有稳定顺序
       .sort(
         (a, b) =>
@@ -71,10 +97,9 @@ export class MemoryMessageStore implements MessageStore {
     conversationId: string,
     senderId: string,
     content: string,
-    key?: MessageSendKey | null,
-    replyToId?: string | null,
+    options?: InsertUserMessageOptions,
   ) {
-    return this.insert(conversationId, senderId, 'TEXT', content, key, replyToId)
+    return this.insert(conversationId, senderId, 'TEXT', content, options)
   }
 
   async insertListing(
@@ -83,7 +108,7 @@ export class MemoryMessageStore implements MessageStore {
     listingPublicId: string,
     key?: MessageSendKey | null,
   ) {
-    return this.insert(conversationId, senderId, 'LISTING', listingPublicId, key)
+    return this.insert(conversationId, senderId, 'LISTING', listingPublicId, { key })
   }
 
   async findMessageByRequestKey(conversationId: string, senderId: string, key: MessageSendKey) {
@@ -108,9 +133,9 @@ export class MemoryMessageStore implements MessageStore {
     senderId: string,
     type: 'TEXT' | 'LISTING',
     content: string,
-    key?: MessageSendKey | null,
-    replyToId?: string | null,
+    options: InsertUserMessageOptions = {},
   ) {
+    const { key = null, replyToId = null, visibility = 'DELIVERED', moderation = null } = options
     if (key) {
       const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
       if (existing) {
@@ -130,8 +155,10 @@ export class MemoryMessageStore implements MessageStore {
       created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
       sender_nickname: senderId === MEMORY_BUYER_ID ? '买家' : '卖家',
       sender_avatar_url: null,
+      visibility,
     }
     this.messages.push(row)
+    if (moderation) this.moderationRecords.push({ messageId: row.id, record: moderation })
     if (key) {
       this.requestKeys.set(requestKeyOf(senderId, conversationId, key), {
         requestHash: key.requestHash,
@@ -152,6 +179,8 @@ export class MemoryMessageStore implements MessageStore {
     const map = new Map<string, ReplyTargetRow>()
     for (const row of this.messages) {
       if (!ids.includes(row.id)) continue
+      // 与 SQL store 一致：引用目标必须是已投递消息，否则摘录会把待审正文带给接收者。
+      if (row.visibility !== 'DELIVERED') continue
       map.set(row.id, {
         id: row.id,
         conversation_id: row.conversation_id,
@@ -198,6 +227,7 @@ export class MemoryMessageStore implements MessageStore {
       created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
       sender_nickname: null,
       sender_avatar_url: null,
+      visibility: 'DELIVERED' satisfies MessageVisibility,
     }
     this.messages.push(row)
     return row

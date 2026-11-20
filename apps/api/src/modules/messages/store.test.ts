@@ -101,14 +101,22 @@ describe('messages store (integration)', () => {
     const [id0, id1, id2, id3] = ids
     if (!id0 || !id1 || !id2 || !id3) throw new Error('unreachable')
 
-    const page1 = await store.listByConversation(conversationA, { limit: 2, before: null })
+    const page1 = await store.listByConversation(conversationA, {
+      limit: 2,
+      before: null,
+      viewerId: buyer,
+    })
     if (page1.kind !== 'ok') throw new Error('unreachable')
     expect(page1.rows).toHaveLength(3) // limit+1 判底行
     // 升序页保留的是**最新** 2 条，最早的一条是下一页游标
     const newestTwo = page1.rows.slice(-2).map((row) => row.id)
     expect(newestTwo).toEqual([id2, id3])
 
-    const page2 = await store.listByConversation(conversationA, { limit: 2, before: id2 })
+    const page2 = await store.listByConversation(conversationA, {
+      limit: 2,
+      before: id2,
+      viewerId: buyer,
+    })
     if (page2.kind !== 'ok') throw new Error('unreachable')
     // 游标（严格更早）之后的全部消息（升序）：test 2 的"在吗"也在其中 —— 不重（无 id2/id3）不漏
     expect(page2.rows.map((row) => row.id)).toEqual([firstMessageId, id0, id1])
@@ -118,6 +126,7 @@ describe('messages store (integration)', () => {
     const result = await store.listByConversation(conversationA, {
       limit: 10,
       before: '01990000-0000-7000-8000-0000000000ff',
+      viewerId: buyer,
     })
     expect(result.kind).toBe('invalid-cursor')
   })
@@ -153,8 +162,8 @@ describe('messages store (integration)', () => {
   test('insertText 重放同一幂等键：返回既有消息且只落一行（#67 验收①）', async () => {
     const key = messageSendKey('01990000-0000-7000-8000-0000000000e1', textRequestHash('重试'))
     if (!key) throw new Error('unreachable')
-    const first = await store.insertText(conversationA, buyer, '重试', key)
-    const retry = await store.insertText(conversationA, buyer, '重试', key)
+    const first = await store.insertText(conversationA, buyer, '重试', { key: key })
+    const retry = await store.insertText(conversationA, buyer, '重试', { key: key })
     expect(retry.id).toBe(first.id)
 
     const result = await db.execute(
@@ -175,7 +184,9 @@ describe('messages store (integration)', () => {
     // 查不到既有行、各自 INSERT：一个赢，其余撞 (sender, conversation, client_request_id)
     // 的部分唯一索引 → 23505 → 500。锁把「查重 + 插入」压成串行，全部重放同一条。
     const rows = await Promise.all(
-      Array.from({ length: 8 }, () => store.insertText(conversationA, buyer, '并发重试', key)),
+      Array.from({ length: 8 }, () =>
+        store.insertText(conversationA, buyer, '并发重试', { key: key }),
+      ),
     )
     expect(new Set(rows.map((row) => row.id)).size).toBe(1)
 
@@ -191,19 +202,13 @@ describe('messages store (integration)', () => {
 
   test('insertText 同一键携带不同内容 → MessageIdempotencyConflictError', async () => {
     const clientRequestId = '01990000-0000-7000-8000-0000000000e2'
-    await store.insertText(
-      conversationA,
-      seller,
-      'A',
-      messageSendKey(clientRequestId, textRequestHash('A')),
-    )
+    await store.insertText(conversationA, seller, 'A', {
+      key: messageSendKey(clientRequestId, textRequestHash('A')),
+    })
     expect(
-      store.insertText(
-        conversationA,
-        seller,
-        'B',
-        messageSendKey(clientRequestId, textRequestHash('B')),
-      ),
+      store.insertText(conversationA, seller, 'B', {
+        key: messageSendKey(clientRequestId, textRequestHash('B')),
+      }),
     ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
   })
 
@@ -223,7 +228,7 @@ describe('messages store (integration)', () => {
           index % 2 === 0 ? conversationA.toUpperCase() : conversationA,
           outsider,
           '大小写会话',
-          key,
+          { key },
         ),
       ),
     )
@@ -251,8 +256,8 @@ describe('messages store (integration)', () => {
     )
     if (!upper || !lower) throw new Error('unreachable')
 
-    const first = await store.insertText(conversationA, seller, '请求标识', upper)
-    const retry = await store.insertText(conversationA, seller, '请求标识', lower)
+    const first = await store.insertText(conversationA, seller, '请求标识', { key: upper })
+    const retry = await store.insertText(conversationA, seller, '请求标识', { key: lower })
     expect(retry.id).toBe(first.id)
 
     const result = await db.execute(
@@ -271,8 +276,8 @@ describe('messages store (integration)', () => {
     const second = messageSendKey('01990000-0000-7000-8000-0000000000e8', textRequestHash('B'))
     if (!first || !second) throw new Error('unreachable')
 
-    await store.insertText(conversationA, buyer, 'A', first)
-    expect(store.insertText(conversationA, buyer, 'B', second)).rejects.toBeInstanceOf(
+    await store.insertText(conversationA, buyer, 'A', { key: first })
+    expect(store.insertText(conversationA, buyer, 'B', { key: second })).rejects.toBeInstanceOf(
       MessageIdempotencyConflictError,
     )
   })
@@ -354,5 +359,63 @@ describe('messages store: LISTING（#359 商品卡）', () => {
     expect(
       store.insertListing(conversationA, seller, otherPublicId, otherKey),
     ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
+  })
+})
+
+/*
+ * #694 M1：机器判 REVIEW 的消息必须落库（发送者能查到「审核中」），但接收者的任何读侧
+ * 都不该看见它 —— 这里钉住消息列表与「不推进会话排序键」两点，记录与消息同事务。
+ */
+describe('messages store: 聊天可见性（#694 M1）', () => {
+  test('PENDING_REVIEW：接收者不可见、发送者可见，不推进 last_message_at，审核记录同事务落库', async () => {
+    const lastMessageAt = async () => {
+      const result = await db.execute(
+        sql`SELECT last_message_at FROM conversations WHERE id = ${conversationA}`,
+      )
+      const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+        last_message_at: Date | string
+      }
+      return new Date(row.last_message_at).getTime()
+    }
+    const before = await lastMessageAt()
+    const row = await store.insertText(conversationA, seller, '加微信聊', {
+      visibility: 'PENDING_REVIEW',
+      moderation: {
+        kind: 'TEXT',
+        decision: 'REVIEW',
+        machineDecision: 'REVIEW',
+        status: 'PENDING',
+        provider: 'LOCAL',
+        providerRequestId: null,
+        policyVersion: 'test',
+        suggestion: 'Review',
+        label: null,
+        subLabel: 'EXTERNAL_CONTACT',
+        score: null,
+        matchedRules: ['EXTERNAL_CONTACT'],
+        matchedTermsMasked: ['微**'],
+      },
+    })
+    expect(row.visibility).toBe('PENDING_REVIEW')
+
+    const receiver = await store.listByConversation(conversationA, {
+      limit: 50,
+      before: null,
+      viewerId: buyer,
+    })
+    expect(receiver.kind === 'ok' && receiver.rows.map((item) => item.id)).not.toContain(row.id)
+    const sender = await store.listByConversation(conversationA, {
+      limit: 50,
+      before: null,
+      viewerId: seller,
+    })
+    expect(sender.kind === 'ok' && sender.rows.map((item) => item.id)).toContain(row.id)
+    expect(await lastMessageAt()).toBe(before)
+
+    const records = await db.execute(
+      sql`SELECT status::text AS status FROM chat_moderation_records WHERE message_id = ${row.id}`,
+    )
+    const recordRows = Array.isArray(records) ? records : (records as { rows: unknown[] }).rows
+    expect(recordRows).toEqual([{ status: 'PENDING' }])
   })
 })

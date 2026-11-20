@@ -1,7 +1,11 @@
 export const MODERATION_DECISIONS = ['ALLOW', 'BLOCK', 'REVIEW'] as const
 export type ModerationDecision = (typeof MODERATION_DECISIONS)[number]
 
-export type ModerationField = 'title' | 'description'
+/**
+ * 可送审的字段。商品是 title/description（#228），聊天正文是 content（#694 M1）——
+ * provider 不关心字段的业务含义，只按字段逐个回带结论。
+ */
+export type ModerationField = 'title' | 'description' | 'content'
 
 export type ModerationMatch = {
   field: ModerationField

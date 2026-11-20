@@ -42,6 +42,7 @@ function message(id: MessageDto['id'], content: string): MessageDto {
     content,
     recalledAt: null,
     replyTo: null,
+    visibility: 'DELIVERED',
     createdAt: '2026-01-01T00:00:00.000Z',
   }
 }

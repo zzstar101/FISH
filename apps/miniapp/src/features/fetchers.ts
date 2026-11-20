@@ -701,6 +701,8 @@ function toMessageDto(
     // 演示 fixture 不做商品卡投射（富化只在服务端），与契约的可选字段一致
     listing: null,
     replyTo,
+    // 演示 fixture 只有已投递消息；待审/拒绝状态由服务端可见性过滤，不该出现在演示数据里。
+    visibility: 'DELIVERED',
     createdAt: item.createdAt,
   }
 }

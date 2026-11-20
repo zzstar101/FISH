@@ -7,6 +7,7 @@ import {
   type MessageListQuery,
   type MessageListResponse,
   type MessageSendInput,
+  type MessageVisibility,
   messageDtoSchema,
   messageListResponseSchema,
 } from '@fish/contracts/chat/schema'
@@ -19,6 +20,8 @@ import {
   type PublicId,
 } from '@fish/shared/public-id'
 import type { BlockRelationCheck } from '../blocks/store'
+import type { ChatModerationPolicy, ChatModerationResult } from '../moderation/chat'
+import { ContentModerationError } from '../moderation/providers/types'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -29,11 +32,18 @@ import {
   textRequestHash,
 } from './idempotency'
 import { ReplyTargetInvalidError, resolveReplyTarget, toReply } from './reply'
-import type { ListingBrief, MessageRow, MessageStore, ReplyTargetRow } from './store'
+import type {
+  ChatModerationRecordInput,
+  ListingBrief,
+  MessageRow,
+  MessageStore,
+  ReplyTargetRow,
+} from './store'
 
 export class MessageServiceError extends Error {
   constructor(
-    readonly status: 403 | 404 | 409 | 422,
+    /** 503 只用于审核上游不可用（#694 M1 fail-closed）：消息未落库，可原样重试。 */
+    readonly status: 403 | 404 | 409 | 422 | 503,
     readonly code: string,
     message: string,
   ) {
@@ -70,6 +80,41 @@ const recallExpired = () =>
   new MessageServiceError(409, 'MESSAGE_RECALL_WINDOW_EXCEEDED', '超出可撤回时间')
 
 /**
+ * #694 M1：聊天审核必须显式给结论。BLOCK 不落消息行（与商品 422 同风格），
+ * 上游故障一律 503——调用方可以原样重试，且此时库里没有任何可见/不可见的半成品。
+ */
+const contentBlocked = () =>
+  new MessageServiceError(422, 'MESSAGE_CONTENT_BLOCKED', '消息包含不允许发送的内容')
+const moderationUnavailable = () =>
+  new MessageServiceError(503, 'CONTENT_MODERATION_UNAVAILABLE', '内容审核暂时不可用，请稍后重试')
+
+/**
+ * 审核结论 → 审计行（与消息同事务写入）。
+ *
+ * `machineDecision` 与 `decision` 在时间点 0 相同；人工复核只改 `decision`，保留机器原始结论。
+ */
+function moderationRecord(
+  result: ChatModerationResult,
+  status: 'PENDING' | 'SETTLED',
+): ChatModerationRecordInput {
+  return {
+    kind: 'TEXT',
+    decision: result.decision,
+    machineDecision: result.decision,
+    status,
+    provider: result.provider,
+    providerRequestId: result.providerRequestId,
+    policyVersion: result.policyVersion,
+    suggestion: result.suggestion,
+    label: result.label,
+    subLabel: result.subLabel,
+    score: result.score,
+    matchedRules: result.matchedRules,
+    matchedTermsMasked: result.matchedTermsMasked,
+  }
+}
+
+/**
  * 单条消息的引用投射（发送路径用；历史走 `enrichMessageRows` 的批量富化）。
  * `replyToId` 刚刚校验过，这里只补投射；查不到（并发删除）就退化为「无引用」，
  * 不让一次投射失败把已经落库的消息变成 500。
@@ -80,6 +125,7 @@ async function withReply(
   replyToId: string | null,
 ): Promise<MessageDto> {
   if (!replyToId) return dto
+  // 存储层只返回 DELIVERED 的目标（#694 M1）：摘录会被广播给双方，待审正文不能进来。
   const target = (await store.findReplyTargets([replyToId])).get(replyToId)
   return target ? { ...dto, replyTo: toReply(target) } : dto
 }
@@ -113,6 +159,7 @@ export function toMessageDto(
     recalledAt: row.recalled_at ? new Date(row.recalled_at).toISOString() : null,
     replyTo: null,
     listing,
+    visibility: row.visibility,
     createdAt: new Date(row.created_at).toISOString(),
   })
 }
@@ -299,6 +346,11 @@ export function createMessageService({
    * 守卫失效，所以在类型层要求装配方显式提供。
    */
   blocks,
+  /**
+   * #694 M1 聊天内容安全：**必填**。文字消息在写库前送审；漏接线等于聊天无审核，
+   * 所以在类型层要求装配方显式提供（与 `blocks` 同一取舍）。
+   */
+  chatModeration,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
   /** 撤回落库后推送（#359 3c）：与 `message.new` 同一条「先落库再推送」语义。 */
@@ -308,6 +360,7 @@ export function createMessageService({
   store: MessageStore
   storage: MediaStorage
   blocks: BlockRelationCheck
+  chatModeration: ChatModerationPolicy
   projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
@@ -334,6 +387,7 @@ export function createMessageService({
       const result = await store.listByConversation(conversationId, {
         limit: query.limit,
         before: query.before ?? null,
+        viewerId: userId,
       })
       if (result.kind === 'invalid-cursor') {
         throw new MessageServiceError(422, 'VALIDATION_FAILED', '游标不合法')
@@ -367,22 +421,31 @@ export function createMessageService({
       // 与拉黑守卫。
       // 否则「第一次其实已落库、响应丢了」的重试会因为被引用那条此刻已撤回而撞 422
       // （消息早发出去了，客户端却以为没发成）。权威去重仍在 insertText 的事务里。
-      if (key) {
+      /**
+       * 幂等重放：同键且指纹一致就返回既有行。
+       *
+       * 三处使用：开头的快速路径、审核返回 BLOCK、审核上游失败。后两处是并发窗口的兜底
+       * ——同键的第一次请求可能已经提交，第二次不该因为自己这一次拿到 BLOCK/503 就把
+       * 「其实已投递」当成本次失败。
+       */
+      const replayCommitted = async (): Promise<MessageDto | null> => {
+        if (!key) return null
         const replay = await store.findByRequestKey(conversationId, userId, key)
-        if (replay) {
-          if (!replay.matchedHash) throw idempotencyConflict()
-          const dto = await withReply(
-            store,
-            toMessageDto(replay.row),
-            replay.row.reply_to_id ?? null,
-          )
+        if (!replay) return null
+        if (!replay.matchedHash) throw idempotencyConflict()
+        const dto = await withReply(store, toMessageDto(replay.row), replay.row.reply_to_id ?? null)
+        // 只有已投递的消息才推送：待审消息的正文不能经 WebSocket 漏给接收者（#694 M1）。
+        // 发送者拿到的是同一个 DTO（HTTP 响应），不需要再收一条推送。
+        if (replay.row.visibility === 'DELIVERED') {
           onMessageCreated?.(
             { buyerId: conversation.buyerId, sellerId: conversation.sellerId },
             dto,
           )
-          return dto
         }
+        return dto
       }
+      const replayedBeforeModeration = await replayCommitted()
+      if (replayedBeforeModeration) return replayedBeforeModeration
       /*
        * #466 拉黑守卫（双向）：放在幂等重放**之后**——「首发已落库、响应丢了」的重试必须
        * 重放既有行，否则客户端会把一条早已送达的消息当成本次发送失败（与上面「重放先于
@@ -391,9 +454,86 @@ export function createMessageService({
       await assertNotBlocked(conversation, userId)
       // 引用目标先校验（#359 3c）：不可用直接 422，不落库。
       const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
+
+      /*
+       * #694 M1：文字在**写可见消息之前**送审。
+       *
+       * - 上游调用不持事务、不持行锁（provider 层已有超时与有限重试）；
+       * - BLOCK：不落消息行，直接 422（客户端改文案后应换一个 clientRequestId）；
+       * - REVIEW：落 PENDING_REVIEW 行，只有发送者能读到，人工复核后再投递；
+       * - ALLOW：落 DELIVERED 行，走原有的插入/幂等/推送路径；
+       * - 上游异常：fail-closed 503，库里不留任何行——这是「没有结论就不放行」。
+       */
+      let moderation: ChatModerationResult
+      try {
+        moderation = await chatModeration.moderateText({ content })
+      } catch (error) {
+        // 并发窗口：同键的第一次可能已经提交，先重放；重放不到才 fail-closed。
+        const replayed = await replayCommitted()
+        if (replayed) return replayed
+        /*
+         * 任何上游拒绝（包括策略层未包装的异常）都转成 503：聊天审核没有「放行」的兜底
+         * 分支。日志只记可诊断的元数据，不记正文与用户标识。
+         */
+        console.warn(
+          '[chat-moderation] 审核失败，按 503 fail-closed',
+          error instanceof ContentModerationError
+            ? {
+                provider: error.provider,
+                reason: error.reason,
+                requestId: error.requestId,
+                httpCode: error.httpCode,
+              }
+            : {
+                provider: 'unknown',
+                reason: 'unexpected_error',
+                errorName: error instanceof Error ? error.name : typeof error,
+              },
+        )
+        throw moderationUnavailable()
+      }
+      if (moderation.decision === 'BLOCK') {
+        // 并发窗口：同键第一次可能已经以 ALLOW 提交，重放而不是报 422。
+        const replayed = await replayCommitted()
+        if (replayed) return replayed
+        /*
+         * 机器 BLOCK 不落消息行（票面「不新增可见消息」），但审计不能因此丢结论：
+         * 只打元数据，不打正文（#694 M1 日志纪律）。sender/conversation 也不打，
+         * 避免日志成为可关联的私聊行为轨迹。
+         */
+        console.info('[chat-moderation] BLOCK', {
+          provider: moderation.provider,
+          policyVersion: moderation.policyVersion,
+          requestId: moderation.providerRequestId,
+          decision: moderation.decision,
+          score: moderation.score,
+        })
+        throw contentBlocked()
+      }
+      const visibility: MessageVisibility =
+        moderation.decision === 'REVIEW' ? 'PENDING_REVIEW' : 'DELIVERED'
+      /*
+       * 审核在途期间对方可能刚拉黑：进入送审前的守卫已经判过一次，这里必须再判一次
+       * （送审是一次可能数百毫秒的网络往返），否则会投递一条「发送时未拉黑、投递时已
+       * 拉黑」的消息。
+       */
+      await assertNotBlocked(conversation, userId)
+
       let row: MessageRow
       try {
-        row = await store.insertText(conversationId, userId, content, key, replyToId)
+        // 审核结论与消息同事务落库：ALLOW 直接 SETTLED，REVIEW 进人工队列。
+        const record = moderationRecord(
+          moderation,
+          visibility === 'DELIVERED' ? 'SETTLED' : 'PENDING',
+        )
+        row = await store.insertText(
+          conversationId,
+          userId,
+          content,
+          visibility === 'DELIVERED'
+            ? { key, replyToId, visibility: 'DELIVERED', moderation: record }
+            : { key, replyToId, visibility, moderation: record },
+        )
       } catch (error) {
         if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
         /*
@@ -411,9 +551,12 @@ export function createMessageService({
       // （与媒体域 `media-service.ts` 的重放路径同口径）。新插入时两者本就相同。
       const dto = await withReply(store, toMessageDto(row), row.reply_to_id ?? null)
       // 先落库（上面已 await）再推送；推送失败由 hub 吞掉，不影响 201 响应。
-      // 重试命中既有消息时也会推一次：契约明确「推送不保证不重不漏」，客户端按服务端
-      // id 去重（#67 第三步），这里不为去重再引入「新建/重放」的返回值分叉。
-      onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
+      // 只有 DELIVERED 才推送：PENDING_REVIEW 若推给双方，正文会绕过读侧过滤直接到接收者。
+      // 重试命中既有 DELIVERED 消息时也会推一次：契约明确「推送不保证不重不漏」，
+      // 客户端按服务端 id 去重（#67 第三步）。
+      if (row.visibility === 'DELIVERED') {
+        onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
+      }
       return dto
     },
 
@@ -488,15 +631,20 @@ export function createMessageService({
       if (result === 'not-found') throw recallNotFound()
       if (result === 'forbidden') throw recallForbidden()
       if (result === 'window-exceeded') throw recallExpired()
-      onMessageRecalled?.(
-        { buyerId: conversation.buyerId, sellerId: conversation.sellerId },
-        {
-          conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId),
-          messageId: encodePublicId(PUBLIC_ID_PREFIX.message, messageId),
-          recalledAt: new Date(result.recalled_at as Date | string).toISOString(),
-          recalledBy: encodePublicId(PUBLIC_ID_PREFIX.user, userId),
-        },
-      )
+      /*
+       * #694 M1：待审消息接收者从未见过它，撤回事件也不能成为侧信道（messageId 与时间戳）。
+       * 未投递时只回推给发送者本人；同一 id 由 app 侧 Set 去重，不会重复下发。
+       */
+      const recipients =
+        result.visibility === 'DELIVERED'
+          ? { buyerId: conversation.buyerId, sellerId: conversation.sellerId }
+          : { buyerId: userId, sellerId: userId }
+      onMessageRecalled?.(recipients, {
+        conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId),
+        messageId: encodePublicId(PUBLIC_ID_PREFIX.message, messageId),
+        recalledAt: new Date(result.recalled_at as Date | string).toISOString(),
+        recalledBy: encodePublicId(PUBLIC_ID_PREFIX.user, userId),
+      })
     },
   }
 }

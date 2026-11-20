@@ -520,21 +520,31 @@ read -rs -p '腾讯云 SecretId: ' TENCENT_CLOUD_SECRET_ID
 read -rs -p '腾讯云 SecretKey（不回显）: ' TENCENT_CLOUD_SECRET_KEY && echo
 read -r  -p 'TMS（文本）BizType: ' TENCENT_TMS_BIZ_TYPE
 read -r  -p 'IMS（图片）BizType: ' TENCENT_IMS_BIZ_TYPE
+read -r  -p 'TMS（聊天文本）BizType: ' TENCENT_TMS_CHAT_BIZ_TYPE
 {
   printf 'CONTENT_MODERATION_TRANSPORT=tencent\n'
   printf 'TENCENT_CLOUD_SECRET_ID=%s\n' "$TENCENT_CLOUD_SECRET_ID"
   printf 'TENCENT_CLOUD_SECRET_KEY=%s\n' "$TENCENT_CLOUD_SECRET_KEY"
   printf 'TENCENT_TMS_BIZ_TYPE=%s\n' "$TENCENT_TMS_BIZ_TYPE"
   printf 'TENCENT_IMS_BIZ_TYPE=%s\n' "$TENCENT_IMS_BIZ_TYPE"
+  printf 'TENCENT_TMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_TMS_CHAT_BIZ_TYPE"
 } | sudo tee -a /etc/fish/api-mail.env >/dev/null
 unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
 ```
 
-- 四项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
+- 五项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
   600），轮换后重启 API 生效，不影响存量数据。
 - `TENCENT_CLOUD_REGION` 可选，默认 `ap-guangzhou`；应与存储/会话所在地域一致，跨境调用会明显变慢。
 - `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 是腾讯云控制台按业务创建的两个策略号（文本、图片
   各一），会作为审核结果的 `policyVersion` 记录，便于事后按策略回溯。
+- **聊天必须使用独立的 `TENCENT_TMS_CHAT_BIZ_TYPE`（#694 M1）**：聊天正文是私聊内容，不能套商品的
+  `TENCENT_TMS_BIZ_TYPE` 策略（商品策略会把「加微信」这类正常商品描述话术判成引流）。该变量缺失、
+  或它与 `TENCENT_TMS_BIZ_TYPE` 相同时 API 都会启动失败；聊天审核结论与 `chat_moderation_records` 的
+  `policyVersion` 一一对应，便于按策略回溯。
+  只接文本：`ALLOW` 正常投递，`REVIEW` 落 `PENDING_REVIEW`（仅发送者可见，等待人工队列），`BLOCK`
+  返回 **422 `MESSAGE_CONTENT_BLOCKED`** 且不落消息行；上游超时/失败返回 **503
+  `CONTENT_MODERATION_UNAVAILABLE`** 且不落消息行（fail-closed，不推送、不计未读）。图片/语音审核
+  在后续批次接线，届时同样需要独立策略号。
 - 日志只允许出现腾讯 `RequestId`：Secret 与完整私密文本（含图片字节）都不进日志。密钥随 §10 备份
   的 `config-*.tar.gz` 进备份，泄漏处置与其它 API 密钥同口径。
 - **接线面（#228）**：商品**文本**（title / description）在 `POST /listings` 与 `PATCH /listings/:id`

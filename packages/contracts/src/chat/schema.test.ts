@@ -232,6 +232,7 @@ describe('messageDtoSchema', () => {
     recalledAt: null,
     replyTo: null,
     content: 'hello',
+    visibility: 'DELIVERED',
     createdAt: '2026-09-12T00:00:00.000Z',
   }
 
@@ -470,6 +471,7 @@ describe('realtime events', () => {
         content: 'hi',
         recalledAt: null,
         replyTo: null,
+        visibility: 'DELIVERED',
         createdAt: '2026-09-12T00:00:00.000Z',
       },
     }

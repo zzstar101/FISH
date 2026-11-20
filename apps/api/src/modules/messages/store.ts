@@ -1,6 +1,10 @@
+import type { MessageVisibility } from '@fish/contracts/chat/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { jsonParam } from '@fish/db/json'
 import { sql } from 'drizzle-orm'
+import type { ModerationProviderName, ModerationSuggestion } from '../moderation/providers/types'
+import type { ModerationDecision } from '../moderation/types'
 import {
   MessageIdempotencyConflictError,
   type MessageSendKey,
@@ -21,6 +25,8 @@ export interface MessageRow {
   /** join 出的发送者公开信息；SYSTEM 消息为 null。仅 listByConversation 填充。 */
   sender_nickname?: string | null
   sender_avatar_url?: string | null
+  /** #694 M1：DELIVERED 才进接收者读路径；旧行由 DB 默认值补齐。 */
+  visibility: MessageVisibility
 }
 
 /** 引用块投射需要的被引用行（#359 3c）。 */
@@ -41,6 +47,44 @@ export interface ConversationParticipant {
   sellerId: string
 }
 
+/** #694 M1 审核结论的审计快照；与消息行同事务写入 `chat_moderation_records`。 */
+export interface ChatModerationRecordInput {
+  kind: 'TEXT' | 'IMAGE' | 'VOICE'
+  decision: ModerationDecision
+  machineDecision: ModerationDecision
+  status: 'PENDING' | 'SETTLED'
+  provider: ModerationProviderName
+  providerRequestId: string | null
+  policyVersion: string
+  suggestion: ModerationSuggestion
+  label: string | null
+  subLabel: string | null
+  score: number | null
+  matchedRules: string[]
+  matchedTermsMasked: string[]
+}
+
+/**
+ * 可选的插入参数：TEXT / LISTING 共用；LISTING 不审核，因此不传 moderation。
+ *
+ * 用判别联合而不是「两个可选字段」：待审/被拒的行**必须**同一事务写入审核记录，
+ * 否则它会变成一条永远不进人工队列、也永远不会被放行的隐藏消息。DELIVERED 可以
+ * 带 SETTLED 记录（机器 ALLOW），也可以不带（LISTING/SYSTEM）。
+ */
+export type InsertUserMessageOptions =
+  | {
+      key?: MessageSendKey | null
+      replyToId?: string | null
+      visibility?: 'DELIVERED'
+      moderation?: ChatModerationRecordInput | null
+    }
+  | {
+      key?: MessageSendKey | null
+      replyToId?: string | null
+      visibility: 'PENDING_REVIEW' | 'REJECTED'
+      moderation: ChatModerationRecordInput
+    }
+
 export interface MessageStore {
   findConversationForUser(
     conversationId: string,
@@ -52,7 +96,8 @@ export interface MessageStore {
    */
   listByConversation(
     conversationId: string,
-    filter: { limit: number; before: string | null },
+    /** `viewerId` 用于过滤未投递消息：#694 M1 规定接收者只读 DELIVERED。 */
+    filter: { limit: number; before: string | null; viewerId: string },
   ): Promise<{ kind: 'ok'; rows: MessageRow[] } | { kind: 'invalid-cursor' }>
   /**
    * 插入 TEXT 消息并 bump 会话的 `last_message_at`（同一事务，两写必须原子）。
@@ -65,12 +110,15 @@ export interface MessageStore {
     conversationId: string,
     senderId: string,
     content: string,
-    key?: MessageSendKey | null,
-    replyToId?: string | null,
+    options?: InsertUserMessageOptions,
   ): Promise<MessageRow>
   /**
    * 按内部 uuid 批量取引用块投射需要的行（#359 3c）。缺失的 id 不在返回 Map 里
    * （行被并发删除），调用方按「引用已失效」渲染。
+   *
+   * #694 M1：只返回 **DELIVERED** 的行。引用摘录会在发送路径里被投影一次然后广播给
+   * 会话双方，如果允许引用自己待审的消息，摘录就会把未过审正文带给接收者；因此
+   * 「引用目标必须已投递」在存储层统一收口，引用校验、列表富化、媒体富化共用这一条。
    */
   findReplyTargets(ids: string[]): Promise<Map<string, ReplyTargetRow>>
   /**
@@ -170,7 +218,18 @@ function toRow(row: Record<string, unknown>): MessageRow {
     created_at: row.created_at as Date | string,
     sender_nickname: (row.sender_nickname as string | null) ?? null,
     sender_avatar_url: (row.sender_avatar_url as string | null) ?? null,
+    visibility: visibilityOf(row),
   }
+}
+
+/**
+ * 行必须显式选取 visibility（#694 M1）：默认成 DELIVERED 会让「漏选该列」的查询在未来
+ * fail-open —— 一条待审消息会被当成已投递。缺失即报错，让漏改在开发/测试期炸掉。
+ */
+function visibilityOf(row: Record<string, unknown>): MessageVisibility {
+  const value = row.visibility
+  if (value === 'DELIVERED' || value === 'PENDING_REVIEW' || value === 'REJECTED') return value
+  throw new Error('消息行缺少合法的 visibility 列：查询必须显式选取 m.visibility')
 }
 
 /**
@@ -187,7 +246,7 @@ async function findByRequestKey(
 ): Promise<{ row: Record<string, unknown>; hashMatches: boolean } | null> {
   const result = await executor.execute(sql`
     SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
-           m.reply_to_id, m.recalled_at,
+           m.reply_to_id, m.recalled_at, m.visibility::text AS visibility,
            u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url,
            (m.client_request_hash = ${key.requestHash}) AS hash_matches
     FROM messages m
@@ -217,15 +276,17 @@ export function createSqlMessageStore(db: Db): MessageStore {
         : null
     },
 
-    async listByConversation(conversationId, { limit, before }) {
+    async listByConversation(conversationId, { limit, before, viewerId }) {
       let cursorCreatedAt: string | undefined
       if (before) {
         // 游标消息必须属于本会话：跨会话的合法 uuid 也不能当作分页起点。
-        // 与主查询一致，MEDIA 消息不能作为文本分页锚点（fix-plan F8）。
+        // 与主查询一致，MEDIA 消息不能作为文本分页锚点（fix-plan F8）；未投递消息
+        // 也不能当锚点——接收者看不到它，用它分页等于确认它存在。
         const cursorResult = await db.execute(sql`
           SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ts
           FROM messages WHERE id = ${before}::uuid AND conversation_id = ${conversationId}::uuid
             AND type <> 'MEDIA'
+            AND (visibility = 'DELIVERED' OR sender_id = ${viewerId}::uuid)
         `)
         const cursorRow = rowsOf(cursorResult)[0]
         if (!cursorRow) return { kind: 'invalid-cursor' }
@@ -239,12 +300,13 @@ export function createSqlMessageStore(db: Db): MessageStore {
         : sql``
       const result = await db.execute(sql`
         SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
-               m.reply_to_id, m.recalled_at,
+               m.reply_to_id, m.recalled_at, m.visibility::text AS visibility,
                u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
         FROM messages m
         LEFT JOIN users u ON u.id = m.sender_id
         WHERE m.conversation_id = ${conversationId}::uuid
           AND m.type <> 'MEDIA'
+          AND (m.visibility = 'DELIVERED' OR m.sender_id = ${viewerId}::uuid)
           ${condition}
         ORDER BY m.created_at DESC, m.id DESC
         LIMIT ${limit + 1}
@@ -263,12 +325,14 @@ export function createSqlMessageStore(db: Db): MessageStore {
      * 幂等键路径：先拿该键的 advisory lock 再查重，两个并发同键请求因此串行 —— 第二个
      * 读到第一个已提交的行并直接返回，不会撞唯一索引变成 500。
      */
-    async insertText(conversationId, senderId, content, key, replyToId) {
-      return insertUserMessage(db, conversationId, senderId, 'TEXT', content, key, replyToId)
+    async insertText(conversationId, senderId, content, options) {
+      return insertUserMessage(db, conversationId, senderId, 'TEXT', content, options)
     },
 
     async insertListing(conversationId, senderId, listingPublicId, key) {
-      return insertUserMessage(db, conversationId, senderId, 'LISTING', listingPublicId, key)
+      return insertUserMessage(db, conversationId, senderId, 'LISTING', listingPublicId, {
+        key,
+      })
     },
 
     async findListingBriefs(ids) {
@@ -305,7 +369,7 @@ export function createSqlMessageStore(db: Db): MessageStore {
     async findByRequestKey(conversationId, senderId, key) {
       const result = await db.execute(sql`
         SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
-               m.reply_to_id, m.recalled_at,
+               m.reply_to_id, m.recalled_at, m.visibility::text AS visibility,
                u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url,
                (m.client_request_hash = ${key.requestHash}) AS hash_matches
         FROM messages m
@@ -328,6 +392,7 @@ export function createSqlMessageStore(db: Db): MessageStore {
           ids.map((id) => sql`${id}::uuid`),
           sql`, `,
         )})
+          AND visibility = 'DELIVERED'
       `)
       for (const row of rowsOf(result)) {
         map.set(row.id as string, {
@@ -365,7 +430,7 @@ export function createSqlMessageStore(db: Db): MessageStore {
             OR clock_timestamp() - created_at <= make_interval(secs => ${windowMs / 1000})
           )
         RETURNING id, conversation_id, sender_id, type::text, content, created_at,
-                  reply_to_id, recalled_at
+                  reply_to_id, recalled_at, visibility::text AS visibility
       `)
       const row = rowsOf(updated)[0]
       if (row) return toRow(row)
@@ -404,9 +469,17 @@ async function insertUserMessage(
   senderId: string,
   type: 'TEXT' | 'LISTING',
   content: string,
-  key?: MessageSendKey | null,
-  replyToId?: string | null,
+  options: InsertUserMessageOptions = {},
 ): Promise<MessageRow> {
+  const { key = null, replyToId = null, visibility = 'DELIVERED', moderation = null } = options
+  // 运行时不变量：类型层只挡住本仓库的调用方，挡不住 JSON/脚本直插；这条守卫让
+  // 「PENDING_REVIEW 却没有审核记录」在写路径上直接失败，而不是留一条孤儿隐藏行。
+  if (visibility !== 'DELIVERED' && !moderation) {
+    throw new Error(`消息可见性 ${visibility} 必须同时写入审核记录`)
+  }
+  if (moderation && (moderation.status === 'PENDING') !== (visibility === 'PENDING_REVIEW')) {
+    throw new Error(`消息可见性 ${visibility} 与审核记录状态 ${moderation.status} 不一致`)
+  }
   return db.transaction(async (tx) => {
     if (key) {
       await tx.execute(sendKeyLockQuery(conversationId, senderId, key.clientRequestId))
@@ -420,26 +493,64 @@ async function insertUserMessage(
       WITH msg AS (
         INSERT INTO messages
           (id, conversation_id, sender_id, type, content, client_request_id,
-           client_request_hash, reply_to_id)
+           client_request_hash, reply_to_id, visibility)
         VALUES (
           ${newId()}, ${conversationId}::uuid, ${senderId}::uuid, ${type}, ${content},
           ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null},
-          ${replyToId ?? null}::uuid
+          ${replyToId ?? null}::uuid, ${visibility}::message_visibility
         )
-        RETURNING id, conversation_id, sender_id, type::text, content, created_at,
-                  reply_to_id, recalled_at
-      ), bump AS (
-        UPDATE conversations c SET
-          last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),
-          updated_at = now()
-        FROM msg WHERE c.id = msg.conversation_id
+        RETURNING *
       )
-      SELECT msg.*, u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
-      FROM msg LEFT JOIN users u ON u.id = msg.sender_id
+      SELECT msg.id, msg.conversation_id, msg.sender_id, msg.type::text, msg.content,
+             msg.created_at, msg.reply_to_id, msg.recalled_at,
+             msg.visibility::text AS visibility,
+             u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
+      FROM msg
+      LEFT JOIN users u ON u.id = msg.sender_id
     `)
     const row = rowsOf(result)[0]
     if (!row) throw new Error('消息插入失败：会话可能已被并发删除')
-    return toRow(row)
+    const inserted = toRow(row)
+
+    /*
+     * 只有已投递的消息才推进会话的 `last_message_at`（#694 M1）：
+     * 待审消息若 bump，接收者的会话列表会因为它跳到最前，通过「最后消息摘要」间接泄露
+     * 一条本不该存在的内容（以及未读红点）。
+     */
+    if (visibility === 'DELIVERED') {
+      await tx.execute(sql`
+        UPDATE conversations c SET
+          last_message_at = GREATEST(c.last_message_at, ${inserted.created_at}::timestamptz),
+          updated_at = now()
+        WHERE c.id = ${conversationId}::uuid
+      `)
+    }
+
+    /*
+     * 审核结论与消息**同事务**落库：事务回滚时两者一起消失，人工复核队列与消息状态
+     * 不会出现「有结论没有消息」或反过来的半写。
+     */
+    if (moderation) {
+      await tx.execute(sql`
+        INSERT INTO chat_moderation_records
+          (id, message_id, conversation_id, sender_id, kind, decision, machine_decision,
+           status, provider, provider_request_id, policy_version, suggestion, label,
+           sub_label, score, matched_rules, matched_terms_masked)
+        VALUES (
+          ${newId()}, ${inserted.id}::uuid, ${conversationId}::uuid, ${senderId}::uuid,
+          ${moderation.kind}::chat_moderation_kind,
+          ${moderation.decision}::moderation_decision,
+          ${moderation.machineDecision}::moderation_decision,
+          ${moderation.status}::chat_moderation_status,
+          ${moderation.provider}, ${moderation.providerRequestId}, ${moderation.policyVersion},
+          ${moderation.suggestion}, ${moderation.label}, ${moderation.subLabel},
+          ${moderation.score}, ${jsonParam(moderation.matchedRules)},
+          ${jsonParam(moderation.matchedTermsMasked)}
+        )
+      `)
+    }
+
+    return inserted
   })
 }
 
@@ -471,7 +582,8 @@ export async function insertSystemWithin(
     WITH msg AS (
       INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at)
       VALUES (${newId()}, ${conversationId}::uuid, NULL, 'SYSTEM', ${content}, clock_timestamp())
-      RETURNING id, conversation_id, sender_id, type::text, content, created_at
+      RETURNING id, conversation_id, sender_id, type::text, content, created_at,
+                visibility::text AS visibility
     ), bump AS (
       UPDATE conversations c SET
         last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),

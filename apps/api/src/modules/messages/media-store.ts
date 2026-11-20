@@ -146,7 +146,10 @@ export interface MediaMessageStore {
     senderId: string,
     key: MessageSendKey,
   ): Promise<MediaRequestLookup | null>
-  /** #359 3c 引用投射：批量取被引用行（与 messages 域同形的投射源）。 */
+  /**
+   * #359 3c 引用投射：批量取被引用行（与 messages 域同形的投射源）。
+   * #694 M1：只返回 DELIVERED —— 摘录会广播/出现在媒体的持久列表里，待审正文不能进来。
+   */
   findReplyTargets(ids: string[]): Promise<Map<string, ReplyTargetRow>>
 }
 
@@ -184,6 +187,7 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
           ids.map((id) => sql`${id}::uuid`),
           sql`, `,
         )})
+          AND visibility = 'DELIVERED'
       `)
       for (const row of rowsOf(result)) {
         map.set(row.id as string, {
@@ -270,6 +274,11 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
             SELECT buyer_id FROM conversations WHERE id = m.conversation_id
             UNION ALL SELECT seller_id FROM conversations WHERE id = m.conversation_id
           )
+          /*
+           * #694 M1：接收者只读 DELIVERED；发送者可以看见自己的待审媒体（M2 复核前
+           * 只给发送者一个稳定的「审核中」状态），所以这里按查看者放行自己的行。
+           */
+          AND (m.visibility = 'DELIVERED' OR m.sender_id = ${userId}::uuid)
           ${condition}
         ORDER BY m.created_at DESC, m.id DESC
         LIMIT ${limit + 1}
@@ -286,6 +295,8 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
         WHERE mm.id = ${mediaId}::uuid
           AND mm.conversation_id = ${conversationId}::uuid
           AND ${userId}::uuid IN (c.buyer_id, c.seller_id)
+          /* 同 list：待审/被拒媒体只对发送者本人可见（#694 M1）。 */
+          AND (m.visibility = 'DELIVERED' OR m.sender_id = ${userId}::uuid)
       `)
       const row = rowsOf(result)[0]
       return row ? toRow(row) : null

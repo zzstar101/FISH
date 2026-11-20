@@ -731,8 +731,10 @@ export function createSqlDisputeStore(
         JOIN transactions t ON t.id = d.transaction_id
         LEFT JOIN users ms ON ms.id = m.sender_id
         WHERE m.id = ${messageId}
+          AND m.visibility = 'DELIVERED'
           AND c.listing_id = t.listing_id
           AND c.buyer_id = t.buyer_id
+          -- #694 M1：待审/被拒消息对接收者不可见，不能升格为双方可见的争议证据。
           -- 只有买卖双方或 SYSTEM 的消息能升格为证据。当前会话层已经限制了
           -- 发送者（只有双方能发、SYSTEM 由服务端写），这里是纵深防御。
           AND (m.sender_id IN (t.buyer_id, t.seller_id) OR m.sender_id IS NULL)

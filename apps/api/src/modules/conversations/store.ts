@@ -183,12 +183,18 @@ function toDetailRow(row: Record<string, unknown>): ConversationDetailRow {
  *
  * 媒体消息（MEDIA）**计入未读**（#67 第四步）：对方发来一张图却不亮红点，用户无从得知。
  * 列表行的摘要同样不再跳过 MEDIA，两边口径仍由这一份谓词与 `detailSelect` 的 LATERAL 对齐。
+ *
+ * 时间基准用 `COALESCE(delivered_at, created_at)`（#694 M1）：人工放行一条待审消息时
+ * `created_at` 可能早于接收者已经推进的 last_read_at，若按 created_at 判定就永远不会
+ * 产生那次「首次投递」的未读；正常直发的行 delivered_at 为空，退化为 created_at。
  */
 const unreadMessagePredicate = (viewerId: string) => sql`
-  (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
+  m.visibility = 'DELIVERED'
+  AND (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
   AND (
     (CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END) IS NULL
-    OR m.created_at > CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END
+    OR COALESCE(m.delivered_at, m.created_at)
+      > CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END
   )
 `
 
@@ -218,11 +224,14 @@ const detailSelect = (viewerId: string) => sql`
   LEFT JOIN LATERAL (
     -- 摘要不再跳过 MEDIA（#67 第四步）：否则发完图片会话行只剩「打个招呼吧」。
     -- 媒体正文不在消息流里，所以把 kind 一起带出来，由 toDetailRow 翻成可读文案。
+    -- #694 M1：接收者只能看到 DELIVERED；待审/被拒消息只对自己的发送者显示
+    -- （发送者列表里那条气泡本来就在，摘要与它保持一致）。
     SELECT m.type, m.content, m.sender_id, m.created_at, m.recalled_at,
            mm.kind::text AS media_kind
     FROM messages m
     LEFT JOIN message_media mm ON mm.message_id = m.id
     WHERE m.conversation_id = c.id
+      AND (m.visibility = 'DELIVERED' OR m.sender_id = ${viewerId}::uuid)
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 1
   ) lm ON TRUE

@@ -475,3 +475,74 @@ test('撤回的消息在会话行摘要里显示为「消息已撤回」，不�
   const after = await store.findDetail(conversationId, buyer)
   expect(after?.lastMessage).toMatchObject({ content: '[消息已撤回]', senderId: seller })
 })
+
+/*
+ * #694 M1：待审消息对接收者的三个读侧（未读、最后消息摘要、会话排序键）都必须不可见；
+ * 发送者自己的摘要仍要能看到那条待审气泡，否则发送者列表与消息页自相矛盾。
+ */
+describe('conversations store: 聊天可见性（#694 M1）', () => {
+  test('待审消息不计未读、不进接收者摘要、不推进排序键；发送者摘要保留自己的待审气泡', async () => {
+    const listingId = newId()
+    await seedListing(listingId, seller, '待审消息商品')
+    const inserted = await store.insertIfAbsent(listingId, outsider, seller)
+    if (!inserted) throw new Error('unreachable')
+    const conversationId = inserted.id
+    try {
+      const before = await store.findDetail(conversationId, seller)
+      if (!before) throw new Error('unreachable')
+      const beforeSortKey = new Date(before.conversation.last_message_at).getTime()
+
+      await db.execute(sql`
+        INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at, visibility)
+        VALUES (${crypto.randomUUID()}, ${conversationId}, ${outsider}, 'TEXT', '加微信聊', now(), 'PENDING_REVIEW')
+      `)
+
+      const receiverView = await store.findDetail(conversationId, seller)
+      expect(receiverView?.unreadCount).toBe(0)
+      expect(receiverView?.lastMessage).toBeNull()
+      expect(new Date(receiverView?.conversation.last_message_at ?? 0).getTime()).toBe(
+        beforeSortKey,
+      )
+
+      const senderView = await store.findDetail(conversationId, outsider)
+      expect(senderView?.unreadCount).toBe(0)
+      expect(senderView?.lastMessage).toMatchObject({
+        type: 'TEXT',
+        content: '加微信聊',
+        senderId: outsider,
+      })
+    } finally {
+      await db.execute(sql`DELETE FROM conversations WHERE id = ${conversationId}`)
+      await db.execute(sql`DELETE FROM listings WHERE id = ${listingId}`)
+    }
+  })
+
+  test('人工放行按 delivered_at 计一次未读：created_at 早于已读水位也不漏', async () => {
+    const listingId = newId()
+    await seedListing(listingId, seller, '放行未读商品')
+    const inserted = await store.insertIfAbsent(listingId, outsider, seller)
+    if (!inserted) throw new Error('unreachable')
+    const conversationId = inserted.id
+    const messageId = crypto.randomUUID()
+    try {
+      // 待审消息先落库（时间早于接收者即将推进的已读水位）。
+      await db.execute(sql`
+        INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at, visibility)
+        VALUES (${messageId}, ${conversationId}, ${outsider}, 'TEXT', '放行后可见',
+                now() - interval '1 hour', 'PENDING_REVIEW')
+      `)
+      await store.markRead(conversationId, seller)
+      expect((await store.findDetail(conversationId, seller))?.unreadCount).toBe(0)
+
+      // 模拟人工放行：投递态与 delivered_at 同时写入（PR3 的结算路径）。
+      await db.execute(sql`
+        UPDATE messages SET visibility = 'DELIVERED', delivered_at = now()
+        WHERE id = ${messageId}
+      `)
+      expect((await store.findDetail(conversationId, seller))?.unreadCount).toBe(1)
+    } finally {
+      await db.execute(sql`DELETE FROM conversations WHERE id = ${conversationId}`)
+      await db.execute(sql`DELETE FROM listings WHERE id = ${listingId}`)
+    }
+  })
+})
