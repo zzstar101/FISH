@@ -26,6 +26,7 @@ import { notifications } from './schema/notifications'
 import { recommendationEvents } from './schema/recommendation-events'
 import { recommendationRequestItems } from './schema/recommendation-request-items'
 import { recommendationRequests } from './schema/recommendation-requests'
+import { rentalTerms } from './schema/rentals'
 import { reports } from './schema/reports'
 import { sessions } from './schema/sessions'
 import { subscribeMessageDeliveries, subscribeMessageGrants } from './schema/subscribe-messages'
@@ -123,7 +124,8 @@ function stubOpenid(code: string): string {
  */
 export async function seed(tx: SeedTx): Promise<void> {
   // 一次性列出全部业务表：单条 TRUNCATE 可以跨外键，但必须把所有被引用的表都列全。
-  // `sessions` / `campus_email_verifications`（#68）/ `listing_moderation_records`（#80）
+  // `rental_terms`（#706，引用 listings，ON DELETE CASCADE）/ `sessions` /
+  // `campus_email_verifications`（#68）/ `listing_moderation_records`（#80）
   // / `admin_audit_logs`（#73，引用 users 且 ON DELETE RESTRICT）/ `message_media`（#79）
   // / `comments`（#111，引用 users 与 listings）/ `transaction_meetup_tokens`（#70，引用
   // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）/ `wechat_identities`
@@ -148,7 +150,7 @@ export async function seed(tx: SeedTx): Promise<void> {
   // `subscribe_message_grants` / `subscribe_message_deliveries`（#462，均引用 users）同理；
   // 两者由真实授权与调度循环产生，seed 不预置。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${rentalTerms}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
   )
 
   const now = new Date()

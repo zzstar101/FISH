@@ -11,27 +11,27 @@ import {
   type ListingModerationStatus,
   type ListingSeller,
   type ListingUpdateInput,
-  listingObjectKeyPrefix,
-  MAX_IMAGE_BYTES,
 } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import {
+  ContentModerationUnavailable,
+  createContentModeration,
+  type ModerationReject,
+} from '../moderation/content'
 import { createLocalContentModerationProvider } from '../moderation/providers/local'
 import {
   aggregateModerationDecision,
-  ContentModerationError,
   type ContentModerationProvider,
   type FieldModerationResult,
-  moderationErrorResponse,
   type TextModerationResult,
 } from '../moderation/providers/types'
 import type { ModerationDecision, ModerationField } from '../moderation/types'
 import { publicAvatarUrl } from '../uploads/avatar-url'
-import { isLegacyListingKey } from '../uploads/legacy-url'
 import { type ConfirmedImageLookup, effectiveModerationDecision } from '../uploads/media-objects'
-import { isListingReviewMediaKey, listingReviewMediaPrefix } from '../uploads/review-media'
-import { isListingMediaStagingKey, isPublicListingKey, type MediaStorage } from '../uploads/storage'
+import { isListingReviewMediaKey } from '../uploads/review-media'
+import { isPublicListingKey, type MediaStorage } from '../uploads/storage'
 import type { ListingCardSeller } from './card'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
@@ -182,10 +182,21 @@ export function createListingService(deps: {
   const pendingDeletions = deps.pendingImageDeletions ?? NO_PENDING_DELETIONS
   const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
   const now = deps.now ?? (() => new Date())
+  /**
+   * #706：审核与图片确认走**共享内核** —— 出租发布用同一份实现，避免「同一条内容在出租能过、
+   * 在出售被拒」的不可解释差异。内核不抛业务错误，`rejectContent` 负责翻成本域的错误码。
+   */
+  const contentModeration = createContentModeration({
+    storage,
+    moderationProvider,
+    mediaObjects,
+    pendingDeletions,
+    legacyUserIds: (userId) => store.legacyUserIds(userId),
+  })
 
   /**
-   * #228：文本审核。provider 异常一律 fail-closed：转成 400/503，**绝不返回 ALLOW**。
-   * 本地 provider 走同一接口，因此开发/测试行为与旧同步词表一致。
+   * #228：文本审核 —— 实现已抽到共享内核 `moderation/content.ts`（#706 的出租发布用同一份）。
+   * 这里只负责把内核的 `ContentModerationUnavailable` 翻成本域的错误类型。
    */
   async function moderateListingText(input: {
     dataId: string
@@ -193,24 +204,18 @@ export function createListingService(deps: {
     description: string
   }): Promise<TextModerationResult> {
     try {
-      return await moderationProvider.moderateText({
-        dataId: input.dataId,
-        fields: [
-          { field: 'title', value: input.title },
-          { field: 'description', value: input.description },
-        ],
-      })
+      return await contentModeration.moderateText(input)
     } catch (error) {
-      if (error instanceof ContentModerationError) {
-        const mapped = moderationErrorResponse(error)
-        throw new ListingServiceError(
-          mapped.status,
-          mapped.code,
-          mapped.status === 400 ? '内容不符合审核要求' : '内容安全审核服务暂不可用，请稍后重试',
-        )
+      if (error instanceof ContentModerationUnavailable) {
+        throw new ListingServiceError(error.status, error.code as never, error.message)
       }
       throw error
     }
+  }
+
+  /** 本域的错误信封适配器：内核只报「哪个字段、什么原因」，错误码由这里决定。 */
+  const rejectContent: ModerationReject = (status, code, message, details): never => {
+    throw new ListingServiceError(status === 422 ? 422 : status, code, message, details)
   }
 
   function notFound(): ListingServiceError {
@@ -447,92 +452,14 @@ export function createListingService(deps: {
     objectKeys: string[],
     storedKeys: ReadonlySet<string>,
   ): Promise<ModerationDecision[]> {
-    const publicPrefix = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
-    // #286 复审 blocker 2：`REVIEW` 图片固化在私有的 `listing-review-media/`（不在匿名白名单里），
-    // 由签名代理读取。它对卖家来说是**正常的**可引用键：商品要带着审核中的图进人工队列，管理员才能
-    // 看到这张图并做出结论（`admin/service.ts` 用 `storage.publicUrl` 取签名 URL）。
-    const reviewPrefix = listingReviewMediaPrefix(userId)
-    const currentLegacyPrefix = listingObjectKeyPrefix(userId)
-    const prefixes = objectKeys.every(
-      (key) => key.startsWith(publicPrefix) || key.startsWith(reviewPrefix),
-    )
-      ? [currentLegacyPrefix]
-      : [currentLegacyPrefix, ...(await store.legacyUserIds(userId)).map(listingObjectKeyPrefix)]
-
-    for (const objectKey of objectKeys) {
-      // staging 键既能过"是自己前缀"，也能过对象存在性 —— 但它的内容**没有**经过审核固化。
-      // 先单独拦一道，给出比"不属于当前用户"更准确的原因：客户端必须回填 confirm 返回的 final 键。
-      if (isListingMediaStagingKey(objectKey)) {
-        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
-          { field: 'objectKeys', message: '图片尚未通过审核，请使用上传确认后返回的图片标识' },
-        ])
-      }
-      if (
-        !(isPublicListingKey(objectKey) && objectKey.startsWith(publicPrefix)) &&
-        !(isListingReviewMediaKey(objectKey) && objectKey.startsWith(reviewPrefix)) &&
-        !(isLegacyListingKey(objectKey) && prefixes.some((prefix) => objectKey.startsWith(prefix)))
-      ) {
-        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
-          { field: 'objectKeys', message: '图片不属于当前用户' },
-        ])
-      }
-    }
-
-    const decisions: ModerationDecision[] = []
-    // 逐张校验：≤9 次 HEAD，换掉"客户端可以拿 presign 传任意类型"的洞（契约 §7.7）。
-    for (const objectKey of objectKeys) {
-      // #476：已被摘除、等待回收的公开键**不能被重新引用**。写路径的登记与回收任务的复核/删除之间
-      // 有一个窗口，若允许重新引用，回收会删掉一个刚被引用回来的对象、留下坏图。正常前端拿不到
-      // 已摘除的键（编辑态只下发当前图片组里的键），所以这条只挡构造请求。
-      // `storedKeys` 里的键是本商品图片组里没变的老图，**豁免**：多条商品共享同一个键时，一条摘除它、
-      // 另一条仍持有它，后者编辑（`objectKeys` 带上它）不能被误拒——那时该键仍被引用，回收本来也不会删。
-      if (
-        isPublicListingKey(objectKey) &&
-        !storedKeys.has(objectKey) &&
-        (await pendingDeletions.isPending(objectKey))
-      ) {
-        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
-          { field: 'objectKeys', message: '图片已不可用，请重新上传' },
-        ])
-      }
-      // 两类服务端固化键都必须命中一行确认记录（#286）：机器 `ALLOW` 的公开键，以及审核中的私有键。
-      // 没有记录 = 没走完 confirm，或当初被判 BLOCK（BLOCK 不固化、不落可引用键）。历史遗留键是
-      // #286 之前的存量数据，本来就没有对应记录；`storedKeys` 里的键是本商品图片组里没变的老图，
-      // 写入时已经校验过（它们的归属与格式仍由上面的前缀校验 + stat 守住）。
-      if (isPublicListingKey(objectKey) || isListingReviewMediaKey(objectKey)) {
-        // 用原始行而不是 `findConfirmedFinalKey`：后者对"有效结论 = BLOCK"与"没有记录"都返回 null，
-        // 而这里必须区分 —— 人工结算成 BLOCK 的图仍躺在商品图片组里（商品已下架），一旦被当成
-        // "没有记录"就会走 `storedKeys` 豁免，等于让一次纯文本编辑洗掉人工 BLOCK。
-        const row = await mediaObjects.findByFinalKey(objectKey)
-        const decision = row && row.userId === userId ? effectiveModerationDecision(row) : null
-        if (decision === 'BLOCK') {
-          throw new ListingServiceError(422, 'IMAGE_CONTENT_BLOCKED', '图片内容未通过审核', [
-            { field: 'objectKeys', message: '图片内容未通过审核' },
-          ])
-        }
-        if (decision !== null) {
-          decisions.push(decision)
-        } else if (!storedKeys.has(objectKey)) {
-          throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
-            { field: 'objectKeys', message: '图片尚未通过审核' },
-          ])
-        }
-      }
-
-      const stat = await storage.stat(objectKey)
-      if (!stat) {
-        throw new ListingServiceError(422, 'UPLOAD_OBJECT_MISSING', '图片尚未上传完成', [
-          { field: 'objectKeys', message: '图片尚未上传完成' },
-        ])
-      }
-      if (stat.size > MAX_IMAGE_BYTES || !isAllowedMime(stat.contentType)) {
-        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片格式或大小不符合要求', [
-          { field: 'objectKeys', message: '图片格式或大小不符合要求' },
-        ])
-      }
-    }
-
-    return decisions
+    // 实现与出租发布共用（`moderation/content.ts`）：前缀归属、staging 键、#476 待删键、
+    // 确认记录命中、对象存在性与大小/MIME 校验只有这一份。
+    return contentModeration.assertUsableObjectKeys({
+      userId,
+      objectKeys,
+      storedKeys,
+      reject: rejectContent,
+    })
   }
 
   /**
@@ -550,15 +477,7 @@ export function createListingService(deps: {
     userId: string,
     storedKeys: readonly string[],
   ): Promise<ModerationDecision[]> {
-    const decisions: ModerationDecision[] = []
-    for (const objectKey of storedKeys) {
-      if (!isPublicListingKey(objectKey) && !isListingReviewMediaKey(objectKey)) continue
-      // 同样用原始行：有效结论为 BLOCK 的老图必须继续把整条商品压住（推入 BLOCK 让聚合结果为
-      // BLOCK），而不是因为查不到"可引用记录"被跳过。
-      const row = await mediaObjects.findByFinalKey(objectKey)
-      if (row && row.userId === userId) decisions.push(effectiveModerationDecision(row))
-    }
-    return decisions
+    return contentModeration.imageDecisionsOfStoredKeys({ userId, storedKeys })
   }
 
   return {
@@ -1035,7 +954,7 @@ function moderationBlockDetailsOf(result: TextModerationResult): ApiErrorDetail[
   }))
 }
 
-function isAllowedMime(contentType: string): boolean {
+function _isAllowedMime(contentType: string): boolean {
   return (ALLOWED_IMAGE_MIME as readonly string[]).includes(contentType)
 }
 

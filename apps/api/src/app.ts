@@ -89,6 +89,7 @@ import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService, toMessageDto } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
 import { createSystemContentProjector } from './modules/messages/system-content'
+import { createContentModeration } from './modules/moderation/content'
 import { createContentModerationProvider } from './modules/moderation/providers/factory'
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
@@ -112,6 +113,9 @@ import { createRecommendationRecall } from './modules/recommendation/recall/serv
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
+import { createRentalsRouter } from './modules/rentals/router'
+import { createRentalService } from './modules/rentals/service'
+import { createSqlRentalStore } from './modules/rentals/store'
 import {
   createSubscribeMessageClient,
   miniprogramStateOf,
@@ -400,6 +404,22 @@ export function createApp(
       loadImage: () => Promise.reject(new Error('listings 不使用图片审核')),
     }),
   })
+  /**
+   * #706：审核 + 图片确认的共享内核。出租发布与出售发布用**同一份**实现 ——
+   * 两套词表或两套图片规则会让「同一条内容在出租能过、在出售被拒」这种不可解释的差异出现。
+   * provider 与 `listingService` 用的是同一个 `moderationEnv` 配置。
+   */
+  const contentModeration = createContentModeration({
+    storage,
+    mediaObjects,
+    moderationProvider: createContentModerationProvider(moderationEnv, {
+      loadImage: () => Promise.reject(new Error('content moderation 内核不使用图片审核')),
+    }),
+    pendingDeletions: {
+      isPending: (objectKey) => isListingImageKeyPendingDeletion(db, objectKey),
+    },
+    legacyUserIds: async (userId) => createSqlListingStore(db).legacyUserIds(userId),
+  })
   app.route(
     '/listings',
     createListingsRouter({
@@ -409,6 +429,24 @@ export function createApp(
       resolveViewerId: auth.resolveViewerId,
       resolveClientIp: (c) =>
         trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
+      guard: restrictionGuard,
+      requirePhone: requirePhoneBound,
+    }),
+  )
+  // #706 RNT-02：租赁域的发布 / 编辑 / 详情 / 广场。与 `/listings` 共用同一套三道写门禁
+  // （登录 → 绑手机 → 治理限制），额外的一道「教育邮箱认证」由 service 的 `assertEligible` 判定
+  // （它是业务规则，不是入口安全门）。审核与图片确认走共享内核 `createContentModeration`，
+  // 与出售是**同一份实现**。
+  app.route(
+    '/rentals',
+    createRentalsRouter({
+      service: createRentalService({
+        store: createSqlRentalStore(db),
+        storage,
+        moderation: contentModeration,
+      }),
+      requireAuth: auth.requireAuth,
+      resolveViewerId: auth.resolveViewerId,
       guard: restrictionGuard,
       requirePhone: requirePhoneBound,
     }),
