@@ -119,6 +119,10 @@ export default function MyReports() {
   const counts = {
     LISTING: items.filter((item) => item.target === 'LISTING').length,
     USER: items.filter((item) => item.target === 'USER').length,
+    // #694 M7 扩了契约枚举；端上尚未提供这三类的筛选 tab（见 TABS），计数只保证类型完整。
+    COMMENT: items.filter((item) => item.target === 'COMMENT').length,
+    REVIEW: items.filter((item) => item.target === 'REVIEW').length,
+    WISH: items.filter((item) => item.target === 'WISH').length,
   }
 
   const copyEmpty = emptyCopyOf(demo)

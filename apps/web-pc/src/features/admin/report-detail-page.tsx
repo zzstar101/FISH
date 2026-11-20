@@ -1,12 +1,15 @@
 import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
-import type { AdminReportDetail } from '@fish/contracts/reports/schema'
+import type { AdminReportDetail, ReportTargetEvidence } from '@fish/contracts/reports/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
-import { REPORT_STATUS_META, reasonLabel } from '../reports/meta'
+import { formatPrice } from '../../lib/format'
+import { categoryLabel } from '../../lib/labels'
+import { REPORT_STATUS_META, REPORT_TARGET_LABEL, reasonLabel } from '../reports/meta'
+import { RATING_VIEW } from '../transaction-review/rating'
 import { ForbiddenInline, NotFoundInline } from './admin-filter'
 import { adminLoadView, reportHandleError } from './admin-messages'
 import { useAdminReportDetail, useReportHandle } from './admin-queries'
@@ -57,12 +60,21 @@ function ReportDetailView({
 
   const { item } = detail
   const statusMeta = REPORT_STATUS_META[item.report.status]
-  const isListingTarget = item.target.targetType === 'LISTING'
-  const isMessageTarget = item.target.targetType === 'MESSAGE'
-  const targetKindLabel = isListingTarget ? '商品' : isMessageTarget ? '消息' : '用户'
+  const { evidence, target } = item
+  const isListingTarget = target.targetType === 'LISTING'
+  const isMessageTarget = target.targetType === 'MESSAGE'
+  const targetKindLabel = REPORT_TARGET_LABEL[target.targetType]
   const targetUrl = isListingTarget
-    ? `/admin/listings/${item.target.targetId}`
-    : `/admin/users/${item.target.targetId}`
+    ? `/admin/listings/${target.targetId}`
+    : `/admin/users/${target.targetId}`
+  // 留言/评价/愿望没有独立的管理端详情页；可执行治理的对象是内容作者，公开 ID 在快照里。
+  const targetAuthor =
+    evidence === null || evidence.targetType === 'MESSAGE'
+      ? null
+      : evidence.targetType === 'COMMENT' || evidence.targetType === 'REVIEW'
+        ? evidence.author
+        : evidence.owner
+  const targetAuthorUrl = targetAuthor !== null ? `/admin/users/${targetAuthor.id}` : null
 
   async function submit(input: { result: 'HANDLED' | 'REJECTED'; reason: string }) {
     setDialogError(null)
@@ -143,40 +155,8 @@ function ReportDetailView({
           ) : null}
         </Card>
 
-        {item.messageEvidence ? (
-          <Card className="gap-3 border border-line p-5" id="message-evidence">
-            <h2 className="font-semibold">消息证据（服务端快照）</h2>
-            {item.messageEvidence.kind === 'TEXT' ? (
-              <p className="text-sm">{item.messageEvidence.content}</p>
-            ) : item.messageEvidence.kind === 'IMAGE' ? (
-              <img
-                alt="被举报图片消息"
-                className="max-h-[420px] w-auto rounded-lg border border-line object-contain"
-                src={`/api${ADMIN_ROUTES.reportEvidenceMedia(reportId)}`}
-              />
-            ) : (
-              // biome-ignore lint/a11y/useMediaCaption: 私聊语音没有字幕轨道；证据仅管理员复核。
-              <audio
-                className="w-full"
-                controls
-                src={`/api${ADMIN_ROUTES.reportEvidenceMedia(reportId)}`}
-              />
-            )}
-            {item.messageEvidence.kind === 'TEXT' ? null : (
-              <p className="text-ink-3 text-xs">
-                {item.messageEvidence.kind === 'IMAGE' ? '图片' : '语音'}消息（
-                {item.messageEvidence.mimeType ?? '未知类型'}，{item.messageEvidence.sizeBytes ?? 0}{' '}
-                字节）
-              </p>
-            )}
-            <p className="text-ink-3 text-xs">
-              发送者 {item.messageEvidence.senderNickname} · 发送于{' '}
-              {formatAdminDateTime(item.messageEvidence.createdAt)}
-              {item.messageEvidence.recalledAt !== null
-                ? ` · 取证时该消息已撤回（${formatAdminDateTime(item.messageEvidence.recalledAt)}），快照保留`
-                : ''}
-            </p>
-          </Card>
+        {item.evidence !== null ? (
+          <EvidenceCard evidence={item.evidence} reportId={reportId} />
         ) : null}
 
         <Card className="gap-3 border border-line p-5">
@@ -184,6 +164,7 @@ function ReportDetailView({
           <p className="text-sm">
             {targetKindLabel}「{item.target.label}」
           </p>
+          <p className="text-ink-3 text-xs">目标公开 ID：{item.target.targetId}</p>
           {isListingTarget && item.target.listingStatus !== null ? (
             <p className="flex items-center gap-2 text-ink-2 text-sm">
               当前状态：
@@ -201,6 +182,43 @@ function ReportDetailView({
             <a className="text-brand text-sm hover:underline" href="#message-evidence">
               查看消息证据 →
             </a>
+          ) : evidence?.targetType === 'COMMENT' ? (
+            <div className="flex flex-wrap gap-3">
+              {targetAuthorUrl !== null ? (
+                <Link className="text-brand text-sm hover:underline" to={targetAuthorUrl}>
+                  查看留言作者（可执行治理）→
+                </Link>
+              ) : null}
+              <Link
+                className="text-brand text-sm hover:underline"
+                params={{ listingId: evidence.listingId }}
+                to="/admin/listings/$listingId"
+              >
+                查看所属商品 →
+              </Link>
+            </div>
+          ) : evidence?.targetType === 'REVIEW' ? (
+            <div className="flex flex-wrap gap-3">
+              {targetAuthorUrl !== null ? (
+                <Link className="text-brand text-sm hover:underline" to={targetAuthorUrl}>
+                  查看评价作者（可执行治理）→
+                </Link>
+              ) : null}
+              <a className="text-brand text-sm hover:underline" href="#review-evidence">
+                查看评价证据 →
+              </a>
+            </div>
+          ) : evidence?.targetType === 'WISH' ? (
+            <div className="flex flex-wrap gap-3">
+              {targetAuthorUrl !== null ? (
+                <Link className="text-brand text-sm hover:underline" to={targetAuthorUrl}>
+                  查看许愿人详情（可执行治理）→
+                </Link>
+              ) : null}
+              <a className="text-brand text-sm hover:underline" href="#wish-evidence">
+                查看愿望证据 →
+              </a>
+            </div>
           ) : (
             <Link className="text-brand text-sm hover:underline" to={targetUrl}>
               {isListingTarget ? '查看商品详情 →' : '查看用户详情（可执行治理）→'}
@@ -242,4 +260,137 @@ function ReportDetailView({
       ) : null}
     </div>
   )
+}
+
+const WISH_STATUS_LABEL = {
+  ACTIVE: '进行中',
+  CLOSED: '已关闭',
+  FULFILLED: '已达成',
+} as const
+
+const WISH_MODERATION_LABEL = {
+  APPROVED: '审核通过',
+  PENDING_REVIEW: '待审核',
+  REJECTED: '已驳回',
+} as const
+
+function wishBudgetLabel(min: number | null, max: number | null): string {
+  if (min === null && max === null) return '未填预算'
+  if (min !== null && max !== null) return `${formatPrice(min)} – ${formatPrice(max)}`
+  return min !== null ? `${formatPrice(min)} 起` : `不超过 ${formatPrice(max as number)}`
+}
+
+/**
+ * 服务端取证快照卡（#694 M7）：消息/留言/评价/愿望各一种形态，媒体一律经
+ * admin 守卫的证据端点流式读取，详情响应里不出现私有 objectKey。
+ */
+function EvidenceCard({
+  evidence,
+  reportId,
+}: {
+  evidence: ReportTargetEvidence
+  reportId: string
+}) {
+  switch (evidence.targetType) {
+    case 'MESSAGE':
+      return (
+        <Card className="gap-3 border border-line p-5" id="message-evidence">
+          <h2 className="font-semibold">消息证据（服务端快照）</h2>
+          {evidence.kind === 'TEXT' ? (
+            <p className="text-sm">{evidence.content}</p>
+          ) : evidence.kind === 'IMAGE' ? (
+            <img
+              alt="被举报图片消息"
+              className="max-h-[420px] w-auto rounded-lg border border-line object-contain"
+              src={`/api${ADMIN_ROUTES.reportEvidenceMedia(reportId)}`}
+            />
+          ) : (
+            // biome-ignore lint/a11y/useMediaCaption: 私聊语音没有字幕轨道；证据仅管理员复核。
+            <audio
+              className="w-full"
+              controls
+              src={`/api${ADMIN_ROUTES.reportEvidenceMedia(reportId)}`}
+            />
+          )}
+          {evidence.kind === 'TEXT' ? null : (
+            <p className="text-ink-3 text-xs">
+              {evidence.kind === 'IMAGE' ? '图片' : '语音'}消息（{evidence.mimeType ?? '未知类型'}，
+              {evidence.sizeBytes ?? 0} 字节）
+            </p>
+          )}
+          <p className="text-ink-3 text-xs">
+            发送者 {evidence.senderNickname} · 发送于 {formatAdminDateTime(evidence.createdAt)}
+            {evidence.recalledAt !== null
+              ? ` · 取证时该消息已撤回（${formatAdminDateTime(evidence.recalledAt)}），快照保留`
+              : ''}
+          </p>
+        </Card>
+      )
+    case 'COMMENT':
+      return (
+        <Card className="gap-3 border border-line p-5" id="comment-evidence">
+          <h2 className="font-semibold">留言证据（服务端快照）</h2>
+          <p className="whitespace-pre-wrap text-sm">{evidence.content}</p>
+          <p className="text-ink-3 text-xs">
+            作者 {evidence.author.nickname} · 发表于 {formatAdminDateTime(evidence.createdAt)}
+            {evidence.parentId !== null ? ' · 这是一条回复' : ''}
+          </p>
+        </Card>
+      )
+    case 'REVIEW':
+      return (
+        <Card className="gap-3 border border-line p-5" id="review-evidence">
+          <h2 className="font-semibold">评价证据（服务端快照）</h2>
+          <p>
+            <Badge variant={RATING_VIEW[evidence.rating].variant}>
+              {RATING_VIEW[evidence.rating].label}
+            </Badge>
+          </p>
+          {evidence.body !== null ? (
+            <p className="whitespace-pre-wrap text-sm">{evidence.body}</p>
+          ) : (
+            <p className="text-ink-3 text-sm">仅评分，没有文字正文。</p>
+          )}
+          {evidence.imageCount > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {Array.from({ length: evidence.imageCount }, (_, index) => (
+                <img
+                  alt={`被举报评价配图 ${index + 1}`}
+                  className="h-28 w-28 rounded-lg border border-line object-cover"
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 快照只存图片数量，序号即身份
+                  key={`${reportId}-${index}`}
+                  src={`/api${ADMIN_ROUTES.reportEvidenceMedia(reportId, index)}`}
+                />
+              ))}
+            </div>
+          ) : null}
+          <p className="text-ink-3 text-xs">
+            作者 {evidence.author.nickname} · 评价于 {formatAdminDateTime(evidence.createdAt)} ·
+            交易编号 {evidence.transactionId}
+          </p>
+        </Card>
+      )
+    case 'WISH':
+      return (
+        <Card className="gap-3 border border-line p-5" id="wish-evidence">
+          <h2 className="font-semibold">愿望证据（服务端快照）</h2>
+          <p className="font-medium text-sm">「{evidence.keyword}」</p>
+          {evidence.description !== null ? (
+            <p className="whitespace-pre-wrap text-sm">{evidence.description}</p>
+          ) : null}
+          <p className="flex flex-wrap items-center gap-2 text-ink-3 text-xs">
+            <span>
+              {evidence.category === null ? '不限分类' : categoryLabel(evidence.category)}
+            </span>
+            <span>·</span>
+            <span>预算 {wishBudgetLabel(evidence.budgetMinCents, evidence.budgetMaxCents)}</span>
+            <Badge variant="secondary">{WISH_STATUS_LABEL[evidence.status]}</Badge>
+            <Badge variant="secondary">{WISH_MODERATION_LABEL[evidence.moderationStatus]}</Badge>
+          </p>
+          <p className="text-ink-3 text-xs">
+            许愿人 {evidence.owner.nickname} · 发布于 {formatAdminDateTime(evidence.createdAt)}
+          </p>
+        </Card>
+      )
+  }
 }

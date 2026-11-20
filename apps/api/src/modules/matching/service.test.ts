@@ -215,6 +215,7 @@ test('listing 侧：只返回 ACTIVE 愿望，可空字段原样带出', async (
     expect(response.items[0]?.score).toBe(88)
     expect(response.items[0]?.wish).toEqual({
       id: publicWish(openWish),
+      userId: encodePublicId(PUBLIC_ID_PREFIX.user, otherId),
       keyword: '机械键盘',
       category: null,
       budgetMinCents: null,

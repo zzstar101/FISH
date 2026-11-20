@@ -57,8 +57,11 @@ export type CommentAuthor = z.infer<typeof CommentAuthorSchema>
  * 一个「回复的回复」或更深层的漂移响应必须在本层 parse 失败，而不是被渲染成
  * 页面不支持的评论树。`z.tuple([])` 只接受 `[]`。
  */
+/** 留言公开 ID（`cmt_…`）；举报 COMMENT 目标需要这一层品牌类型，不能用裸 string。 */
+export type CommentId = z.infer<typeof PublicCommentIdSchema>
+
 export type CommentReply = {
-  id: string
+  id: CommentId
   listingId: string
   author: CommentAuthor
   content: string

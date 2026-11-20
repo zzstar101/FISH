@@ -11,7 +11,12 @@ import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { REPORT_REASON_LABEL, REPORT_STATUS_META, reasonLabel } from '../reports/meta'
+import {
+  REPORT_REASON_LABEL,
+  REPORT_STATUS_META,
+  REPORT_TARGET_LABEL,
+  reasonLabel,
+} from '../reports/meta'
 import { FilterChips, ForbiddenInline, LoadMore } from './admin-filter'
 import { adminLoadOutcome } from './admin-messages'
 import { useAdminReports } from './admin-queries'
@@ -86,6 +91,9 @@ export function ReportsPage({ search }: { search: ReportsSearch }) {
             { value: 'LISTING', label: '商品' },
             { value: 'USER', label: '用户' },
             { value: 'MESSAGE', label: '消息' },
+            { value: 'COMMENT', label: '留言' },
+            { value: 'REVIEW', label: '评价' },
+            { value: 'WISH', label: '愿望' },
           ]}
           value={search.targetType}
         />
@@ -154,12 +162,7 @@ export function ReportsPage({ search }: { search: ReportsSearch }) {
  */
 function ReportRow({ item, search }: { item: AdminReportItem; search: ReportsSearch }) {
   const statusMeta = REPORT_STATUS_META[item.report.status]
-  const targetLabel =
-    item.target.targetType === 'LISTING'
-      ? '商品'
-      : item.target.targetType === 'MESSAGE'
-        ? '消息'
-        : '用户'
+  const targetLabel = REPORT_TARGET_LABEL[item.target.targetType]
   return (
     <Link
       className="flex items-center gap-4 p-4 transition-colors hover:bg-surface-2/60"

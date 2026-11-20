@@ -12,14 +12,23 @@ import {
 import { primaryKey, timestamps } from './common'
 import { users } from './users'
 
-/** 举报对象类型。#73 治理半场只支持商品与用户，留言 / 私聊消息不在本期范围。 */
-export const reportTargetTypeEnum = pgEnum('report_target_type', ['LISTING', 'USER', 'MESSAGE'])
+/**
+ * 举报对象类型。#73 治理半场支持商品与用户；#694 M2 增加私聊消息、M7 增加留言 / 交易评价 / 愿望。
+ * 多态目标不建外键，目标存在性与举报资格由 reports service 在创建时校验。
+ */
+export const reportTargetTypeEnum = pgEnum('report_target_type', [
+  'LISTING',
+  'USER',
+  'MESSAGE',
+  'COMMENT',
+  'REVIEW',
+  'WISH',
+])
 
 /**
- * 举报原因。**一张枚举同时服务两类对象**，契约层按 targetType 收敛可选子集：
- * 商品 = MISLEADING / PROHIBITED / FRAUD / SPAM / OTHER，
- * 用户 = HARASSMENT / FRAUD / IMPERSONATION / ABUSE / OTHER。
- * 只在 DB 放一个枚举，避免为"原因随目标类型变化"再加 CHECK 约束。
+ * 举报原因。**一张枚举服务全部目标类型**，契约层按 targetType 收敛可选子集
+ * （商品 / 用户 / 消息 / 留言 / 评价 / 愿望各有自己的组合）。
+ * 只在 DB 放一个枚举，避免为「原因随目标类型变化」再加 CHECK 约束。
  */
 export const reportReasonEnum = pgEnum('report_reason', [
   'MISLEADING',
@@ -60,8 +69,8 @@ export const reports = pgTable(
     /** 举报人补充说明，可空。 */
     detailText: text('detail_text'),
     /**
-     * 服务端取证快照（#694 M2，仅 MESSAGE 目标）。举报创建时由服务端从可信消息/媒体行读取并固化，
-     * 不采信客户端上传的正文；消息撤回不销毁这张快照，管理员据此审核历史举报。
+     * 服务端取证快照（#694 M2 / M7）。举报创建时由服务端从可信目标行读取并固化，
+     * 不采信客户端上传的正文；目标被撤回 / 删除不销毁这张快照，管理员据此审核历史举报。
      */
     evidenceSnapshot: jsonb('evidence_snapshot'),
     status: reportStatusEnum('status').notNull().default('PENDING'),

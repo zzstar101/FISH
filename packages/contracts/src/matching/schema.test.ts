@@ -130,6 +130,8 @@ describe('WishMatchListResponseSchema', () => {
 describe('ListingMatchListResponseSchema', () => {
   const validWish = {
     id: publicWishId,
+    // #694 M7：给端上隐藏「自己的愿望」用；服务端仍按 matches 判定举报授权。
+    userId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-00000000000a'),
     keyword: '机械键盘',
     category: 'DIGITAL',
     budgetMinCents: null,

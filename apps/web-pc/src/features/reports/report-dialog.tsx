@@ -1,6 +1,13 @@
 import type { ReportReason } from '@fish/contracts/reports/schema'
 import { ReportReasonSchema } from '@fish/contracts/reports/schema'
-import type { ListingId, MessageId, UserId } from '@fish/contracts/system/public-id'
+import type {
+  CommentId,
+  ListingId,
+  MessageId,
+  ReviewId,
+  UserId,
+  WishId,
+} from '@fish/contracts/system/public-id'
 import { Alert, AlertDescription, AlertTitle } from '@fish/ui/alert'
 import { Button } from '@fish/ui/button'
 import {
@@ -17,18 +24,28 @@ import { Textarea } from '@fish/ui/textarea'
 import { CheckCircle2, Loader2, ShieldAlert } from 'lucide-react'
 import { type FormEvent, useEffect, useState } from 'react'
 import { ApiError } from '../../lib/api-client'
-import { REPORT_DESC_PLACEHOLDER, REPORT_DETAIL_MAX_LENGTH, reasonsOf } from './meta'
+import {
+  REPORT_DESC_PLACEHOLDER,
+  REPORT_DETAIL_MAX_LENGTH,
+  REPORT_TARGET_LABEL,
+  reasonsOf,
+} from './meta'
 import { useSubmitReport } from './queries'
 import { submitFailureText, submitSuccessText } from './view'
 
 /**
  * 举报目标。用可辨识联合而不是 `{ type; id: string }`：契约的 `targetId` 是
- * `lst_…` / `usr_…` 两个模板字面量类型的联合，写宽成 `string` 就丢掉前缀约束了。
+ * `lst_…` / `usr_…` / `cmt_…` 等模板字面量类型的联合，写宽成 `string` 就丢掉前缀约束了。
+ *
+ * `label` 是给举报人看的对象摘要（商品标题 / 昵称 / 留言正文片段…），不由服务端取信。
  */
 export type ReportTarget =
   | { type: 'LISTING'; id: ListingId; label: string }
   | { type: 'USER'; id: UserId; label: string }
   | { type: 'MESSAGE'; id: MessageId; label: string }
+  | { type: 'COMMENT'; id: CommentId; label: string }
+  | { type: 'REVIEW'; id: ReviewId; label: string }
+  | { type: 'WISH'; id: WishId; label: string }
 
 /**
  * 举报弹窗。商品与用户共用同一个组件 —— 两者的差异只有「原因枚举」与文案，
@@ -71,8 +88,7 @@ export function ReportDialog({
     })
   }
 
-  const targetKind =
-    target.type === 'LISTING' ? '商品' : target.type === 'MESSAGE' ? '消息' : '用户'
+  const targetKind = REPORT_TARGET_LABEL[target.type]
 
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>

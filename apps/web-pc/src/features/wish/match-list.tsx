@@ -10,12 +10,14 @@ import {
 } from '@fish/ui/dialog'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { MessageCircle } from 'lucide-react'
+import { Flag, MessageCircle } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice } from '../../lib/format'
 import { categoryLabel } from '../../lib/labels'
 import { currentSessionGeneration } from '../../lib/session-cache'
+import { ReportEntry } from '../reports/report-entry'
+import { canReportContent } from '../reports/view'
 import { conversationStartError, MATCH_PAGE_LIMIT, wishMatchError } from './api'
 import { useListingMatches, useStartConversation, useWishMatches } from './queries'
 
@@ -163,7 +165,7 @@ export function MatchListDialog({
                 : null}
               {target?.kind === 'listing' && listingMatches.data
                 ? listingMatches.data.items.map((item) => (
-                    <ListingMatchRow item={item} key={item.id} />
+                    <ListingMatchRow item={item} key={item.id} viewerId={ownerId} />
                   ))
                 : null}
             </div>
@@ -216,7 +218,7 @@ function WishMatchRow({
   )
 }
 
-function ListingMatchRow({ item }: { item: ListingMatchItem }) {
+function ListingMatchRow({ item, viewerId }: { item: ListingMatchItem; viewerId: string }) {
   const budget = budgetLabel(item.wish.budgetMinCents, item.wish.budgetMaxCents)
   return (
     <article className="flex items-center gap-4 rounded-2xl border border-line p-4">
@@ -229,7 +231,22 @@ function ListingMatchRow({ item }: { item: ListingMatchItem }) {
           {item.wish.category ? categoryLabel(item.wish.category) : '不限分类'} · 预算 {budget}
         </p>
       </div>
-      <Badge variant="brand">匹配度 {item.score}%</Badge>
+      <div className="flex shrink-0 items-center gap-3">
+        <Badge variant="brand">匹配度 {item.score}%</Badge>
+        {/* 愿望详情本身是 owner-scoped；这里是 PC 上唯一能看到他人愿望的公开面，
+            所以举报入口放在这里（自己的愿望在「我的愿望」里，不出现）。 */}
+        {canReportContent(viewerId, item.wish.userId) ? (
+          <ReportEntry
+            className="text-ink-3"
+            size="sm"
+            target={{ type: 'WISH', id: item.wish.id, label: item.wish.keyword }}
+            variant="ghost"
+          >
+            <Flag className="size-3.5" />
+            举报
+          </ReportEntry>
+        ) : null}
+      </div>
     </article>
   )
 }

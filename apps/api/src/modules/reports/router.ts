@@ -1,11 +1,10 @@
 import { ReportCreateInputSchema, ReportMineQuerySchema } from '@fish/contracts/reports/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
-import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
 import type { ReportService } from './service'
-import { ReportServiceError } from './service'
+import { decodeReportTargetId, ReportServiceError } from './service'
 
 type ReportsVariables = { userId: string }
 type ReportsContext = Context<{ Variables: ReportsVariables }>
@@ -59,14 +58,7 @@ export function createReportsRouter(options: ReportsRouterOptions) {
     try {
       const response = await service.createReport(getUserId(ctx), {
         targetType: input.targetType,
-        targetId: decodePublicId(
-          input.targetType === 'LISTING'
-            ? PUBLIC_ID_PREFIX.listing
-            : input.targetType === 'MESSAGE'
-              ? PUBLIC_ID_PREFIX.message
-              : PUBLIC_ID_PREFIX.user,
-          input.targetId,
-        ),
+        targetId: decodeReportTargetId(input.targetType, input.targetId),
         reason: input.reason,
         detailText: input.detailText ?? null,
       })

@@ -51,6 +51,8 @@ export type ListingMatchEntry = {
   createdAt: Date
   wish: {
     id: string
+    /** 许愿人内部 uuid（service 侧编码成 `usr_` 公开 ID，供端上隐藏自举报入口）。 */
+    userId: string
     keyword: string
     category: ListingCategory | null
     budgetMinCents: number | null
@@ -232,6 +234,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           createdAt: matches.createdAt,
           wish: {
             id: wishes.id,
+            userId: wishes.userId,
             keyword: wishes.keyword,
             category: wishes.category,
             budgetMinCents: wishes.budgetMinCents,

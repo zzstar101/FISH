@@ -39,6 +39,17 @@ export function canReportUser(viewerId: string | null, targetUserId: string): bo
   return viewerId === null || viewerId !== targetUserId
 }
 
+/**
+ * 能否举报一条内容：必须已登录且不是作者。
+ *
+ * 服务端对自举报返回 422 `REPORT_SELF_TARGET`；端上不展示入口是更清楚的交互。
+ * 与 `canReportUser` 的差别：留言/评价/愿望的匿名访问者也不该看到入口 —— 他们本来
+ * 就没有可举报的身份，点了只会被弹去登录。
+ */
+export function canReportContent(viewerId: string | null, authorId: string): boolean {
+  return viewerId !== null && viewerId !== authorId
+}
+
 /** 列表脚行的编号截断：`rpt_01J8ZQ3XK7M2` → `rpt_01J8Z…K7M2`。 */
 export function shortReportId(id: string): string {
   if (id.length <= 14) return id

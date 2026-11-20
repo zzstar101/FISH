@@ -4,11 +4,16 @@ import { REPORT_ROUTES } from '@fish/contracts/reports/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { adminAuditLogs } from '@fish/db/schema/admin'
+import { comments } from '@fish/db/schema/comments'
 import { conversations } from '@fish/db/schema/conversations'
 import { listings } from '@fish/db/schema/listings'
+import { matches } from '@fish/db/schema/matches'
 import { messages } from '@fish/db/schema/messages'
 import { reports } from '@fish/db/schema/reports'
+import { transactionReviewImages, transactionReviews } from '@fish/db/schema/transaction-reviews'
+import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
+import { wishes } from '@fish/db/schema/wishes'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
@@ -414,7 +419,8 @@ describe('私聊消息举报（#694 M2）', () => {
     expect(detail.status).toBe(200)
     const detailBody = (await detail.json()) as {
       item: {
-        messageEvidence: {
+        evidence: {
+          targetType: string
           kind: string
           content: string | null
           hasMedia: boolean
@@ -423,7 +429,8 @@ describe('私聊消息举报（#694 M2）', () => {
         } | null
       }
     }
-    expect(detailBody.item.messageEvidence).toMatchObject({
+    expect(detailBody.item.evidence).toMatchObject({
+      targetType: 'MESSAGE',
       kind: 'TEXT',
       content: '加我微信，私下转账',
       hasMedia: false,
@@ -431,7 +438,7 @@ describe('私聊消息举报（#694 M2）', () => {
     })
     // 快照是举报创建时的取证：撤回发生在之后，只能说明「撤回不销毁证据」，
     // 不会把撤回时间补写进历史快照。
-    expect(detailBody.item.messageEvidence?.recalledAt).toBeNull()
+    expect(detailBody.item.evidence?.recalledAt).toBeNull()
   })
 
   test('证据媒体：匿名 401、普通用户 403、文本举报 404', async () => {
@@ -859,5 +866,186 @@ describe('举报闭环（#73 Admin 端）', () => {
     } finally {
       await scratch.delete(reports).where(inArray(reports.id, ids))
     }
+  })
+})
+
+/**
+ * #694 M7：举报目标扩展到 COMMENT / REVIEW / WISH。
+ *
+ * 放在文件末尾：前面的队列用例断言 PENDING 队列的精确条数与目标类型，新目标产生的
+ * 举报行不能混进那些断言；本组用例在 scratch 库里自建目标、不清理（库在 afterAll 整体丢弃）。
+ */
+describe('举报目标扩展（#694 M7）', () => {
+  test('COMMENT：201 + 取证快照落库；目标被删除后管理端详情仍有证据', async () => {
+    const commentId = newId()
+    await scratch.insert(comments).values({
+      id: commentId,
+      listingId: LISTING_ID,
+      authorId: TARGET_USER_ID,
+      parentId: null,
+      content: '评论区拉人私下交易',
+    })
+
+    const res = await app.request(
+      REPORT_ROUTES.create,
+      postAs(reporterCookie, {
+        targetType: 'COMMENT',
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.comment, commentId),
+        reason: 'SPAM',
+      }),
+    )
+    expect(res.status).toBe(201)
+    const created = (await res.json()) as {
+      created: boolean
+      report: { id: string; targetType: string; targetId: string }
+    }
+    expect(created.created).toBe(true)
+    expect(created.report.targetType).toBe('COMMENT')
+    expect(created.report.targetId).toBe(encodePublicId(PUBLIC_ID_PREFIX.comment, commentId))
+
+    const detail = await app.request(ADMIN_ROUTES.reportDetail(created.report.id), {
+      headers: { cookie: adminCookie },
+    })
+    expect(detail.status).toBe(200)
+    const detailBody = (await detail.json()) as {
+      item: {
+        evidence: { targetType: string; content: string; author: { id: string } } | null
+        target: { targetType: string; targetId: string; label: string }
+      }
+    }
+    expect(detailBody.item.target.targetType).toBe('COMMENT')
+    expect(detailBody.item.target.targetId).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.comment, commentId),
+    )
+    expect(detailBody.item.evidence).toMatchObject({
+      targetType: 'COMMENT',
+      content: '评论区拉人私下交易',
+      author: { id: encodePublicId(PUBLIC_ID_PREFIX.user, TARGET_USER_ID) },
+    })
+
+    // 留言被物理删除：多态举报行保留，管理端靠快照继续展示并标记目标已删除。
+    await scratch.delete(comments).where(eq(comments.id, commentId))
+    const afterDelete = await app.request(ADMIN_ROUTES.reportDetail(created.report.id), {
+      headers: { cookie: adminCookie },
+    })
+    expect(afterDelete.status).toBe(200)
+    const afterBody = (await afterDelete.json()) as {
+      item: { evidence: { targetType: string; content: string } | null; target: { label: string } }
+    }
+    expect(afterBody.item.target.label).toBe('目标已删除')
+    expect(afterBody.item.evidence).toMatchObject({
+      targetType: 'COMMENT',
+      content: '评论区拉人私下交易',
+    })
+  })
+
+  test('REVIEW：交易参与者 201 + 快照，非参与者 404；证据媒体按 index 取图', async () => {
+    const transactionId = newId()
+    await scratch.insert(transactions).values({
+      id: transactionId,
+      listingId: LISTING_ID,
+      buyerId: REPORTER_ID,
+      sellerId: TARGET_USER_ID,
+      amountCents: 9900,
+      status: 'COMPLETED',
+      completedAt: new Date('2026-09-03T02:00:00Z'),
+    })
+    const reviewId = newId()
+    await scratch.insert(transactionReviews).values({
+      id: reviewId,
+      transactionId,
+      authorId: TARGET_USER_ID,
+      rating: 'NEGATIVE',
+      body: '买家很麻烦',
+    })
+    await scratch.insert(transactionReviewImages).values({
+      reviewId,
+      objectKey: 'reviews/m7-evidence.jpg',
+      sortOrder: 0,
+    })
+
+    const publicReviewId = encodePublicId(PUBLIC_ID_PREFIX.review, reviewId)
+    // 丙与这笔交易无关：与「评价不存在」同一出口，不暴露评价归属。
+    const outsider = await app.request(
+      REPORT_ROUTES.create,
+      postAs(secondReporterCookie, {
+        targetType: 'REVIEW',
+        targetId: publicReviewId,
+        reason: 'HARASSMENT',
+      }),
+    )
+    expect(outsider.status).toBe(404)
+
+    const res = await app.request(
+      REPORT_ROUTES.create,
+      postAs(reporterCookie, {
+        targetType: 'REVIEW',
+        targetId: publicReviewId,
+        reason: 'HARASSMENT',
+      }),
+    )
+    expect(res.status).toBe(201)
+    const created = (await res.json()) as { report: { id: string } }
+
+    const detail = await app.request(ADMIN_ROUTES.reportDetail(created.report.id), {
+      headers: { cookie: adminCookie },
+    })
+    const detailBody = (await detail.json()) as {
+      item: { evidence: { targetType: string; rating: string; imageCount: number } | null }
+    }
+    expect(detailBody.item.evidence).toMatchObject({
+      targetType: 'REVIEW',
+      rating: 'NEGATIVE',
+      imageCount: 1,
+    })
+
+    const media = await app.request(
+      `${ADMIN_ROUTES.reportEvidenceMedia(created.report.id)}?index=0`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(media.status).toBe(200)
+    expect(media.headers.get('cache-control')).toBe('private, no-store')
+  })
+
+  test('WISH：与愿望匹配的商品卖家 201；许愿人自己 422', async () => {
+    const wishId = newId()
+    await scratch.insert(wishes).values({
+      id: wishId,
+      userId: SECOND_REPORTER_ID,
+      keyword: '机械键盘',
+      category: 'DIGITAL',
+      budgetMaxCents: 20000,
+      description: '求成色好的',
+    })
+    await scratch.insert(matches).values({
+      listingId: LISTING_ID,
+      wishId,
+      score: 88,
+      categoryScore: 100,
+      keywordScore: 80,
+      priceScore: 90,
+    })
+
+    const publicWishId = encodePublicId(PUBLIC_ID_PREFIX.wish, wishId)
+    const self = await app.request(
+      REPORT_ROUTES.create,
+      postAs(secondReporterCookie, { targetType: 'WISH', targetId: publicWishId, reason: 'OTHER' }),
+    )
+    expect(self.status).toBe(422)
+
+    // 乙没有商品，不存在与该愿望的匹配：同样按不存在处理。
+    const noMatch = await app.request(
+      REPORT_ROUTES.create,
+      postAs(reporterCookie, { targetType: 'WISH', targetId: publicWishId, reason: 'OTHER' }),
+    )
+    expect(noMatch.status).toBe(404)
+
+    // 丁是匹配商品（LISTING_ID）的卖家，也是许愿人以外的人 —— 唯一有资格举报的人。
+    const sellerCookie = await loginAs(TARGET_USER_ID)
+    const res = await app.request(
+      REPORT_ROUTES.create,
+      postAs(sellerCookie, { targetType: 'WISH', targetId: publicWishId, reason: 'OTHER' }),
+    )
+    expect(res.status).toBe(201)
   })
 })
