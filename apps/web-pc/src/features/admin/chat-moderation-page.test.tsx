@@ -55,6 +55,8 @@ describe('ChatModerationItemCard（聊天待审队列）', () => {
         onSelect: () => {},
       }),
     )
-    expect(html).toContain('/admin/chat-moderation/cmr_00000000-0000-4000-8000-000000000001/media')
+    expect(html).toContain(
+      '/api/admin/chat-moderation/cmr_00000000-0000-4000-8000-000000000001/media',
+    )
   })
 })

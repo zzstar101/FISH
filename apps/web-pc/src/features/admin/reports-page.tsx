@@ -85,6 +85,7 @@ export function ReportsPage({ search }: { search: ReportsSearch }) {
           options={[
             { value: 'LISTING', label: '商品' },
             { value: 'USER', label: '用户' },
+            { value: 'MESSAGE', label: '消息' },
           ]}
           value={search.targetType}
         />
@@ -153,7 +154,12 @@ export function ReportsPage({ search }: { search: ReportsSearch }) {
  */
 function ReportRow({ item, search }: { item: AdminReportItem; search: ReportsSearch }) {
   const statusMeta = REPORT_STATUS_META[item.report.status]
-  const targetLabel = item.target.targetType === 'LISTING' ? '商品' : '用户'
+  const targetLabel =
+    item.target.targetType === 'LISTING'
+      ? '商品'
+      : item.target.targetType === 'MESSAGE'
+        ? '消息'
+        : '用户'
   return (
     <Link
       className="flex items-center gap-4 p-4 transition-colors hover:bg-surface-2/60"

@@ -4,6 +4,7 @@ import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { useState } from 'react'
+import { ApiError } from '../../lib/api-client'
 import { adminChatModerationMediaPath } from './admin-api'
 import { adminLoadOutcome } from './admin-messages'
 import { useChatModerationDecision, useChatModerationQueue } from './admin-queries'
@@ -32,7 +33,8 @@ export function ChatModerationItemCard({
         <Badge variant="warn">{KIND_LABEL[item.kind]}</Badge>
         <span className="font-medium text-sm">{item.sender.nickname}</span>
         <span className="text-ink-3 text-xs">
-          {item.provider} · v{item.version} · {formatAdminDateTime(item.createdAt)}
+          {item.provider} · 机器判定 {item.suggestion ?? '未知'}
+          {item.score !== null ? ` · ${item.score} 分` : ''} · {formatAdminDateTime(item.createdAt)}
         </span>
         {item.matchedTermsMasked.length > 0 ? (
           <span className="text-ink-3 text-xs">命中词：{item.matchedTermsMasked.join('、')}</span>
@@ -66,6 +68,7 @@ export function ChatModerationPage() {
   const [selected, setSelected] = useState<ChatModerationQueueItem | null>(null)
   const [reason, setReason] = useState('')
   const [conflict, setConflict] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   if (queue.isPending) return <LoadingState label="正在加载聊天待审…" />
   if (queue.isError) {
@@ -92,9 +95,14 @@ export function ChatModerationPage() {
         input: { decision: value, reason: reason.trim(), version: selected.version },
       })
       close()
-    } catch {
-      setConflict(true)
-      void queue.refetch()
+    } catch (error) {
+      // 只有版本/终态冲突才提示「被别人处理了」；403、网络错误按普通失败展示。
+      if (error instanceof ApiError && error.code === 'CHAT_MODERATION_CONFLICT') {
+        setConflict(true)
+        void queue.refetch()
+        return
+      }
+      setActionError(error instanceof Error ? error.message : '处理失败，请重试')
     }
   }
 
@@ -104,7 +112,7 @@ export function ChatModerationPage() {
         <h1 className="font-semibold text-2xl">聊天待审</h1>
         <p className="mt-1 text-ink-3 text-sm">
           机器判定为 REVIEW
-          的私聊消息。放行后只投递一次、只产生一次未读；拒绝后发送者仍能看到稳定状态。
+          的私聊消息。放行后只投递一次、只产生一次未读；拒绝后该消息不会投递给接收者。
         </p>
       </div>
 
@@ -113,13 +121,26 @@ export function ChatModerationPage() {
           这条记录已被其他管理员处理或版本已过期，队列已刷新，请重新选择。
         </p>
       ) : null}
+      {actionError ? (
+        <p className="rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm" role="alert">
+          {actionError}
+        </p>
+      ) : null}
 
       {items.length === 0 ? (
         <EmptyState title="没有待审消息" description="当前没有等待人工复核的私聊内容。" />
       ) : (
         <div className="space-y-3">
           {items.map((item) => (
-            <ChatModerationItemCard key={item.id} item={item} onSelect={setSelected} />
+            <ChatModerationItemCard
+              key={item.id}
+              item={item}
+              onSelect={(next) => {
+                setActionError(null)
+                setConflict(false)
+                setSelected(next)
+              }}
+            />
           ))}
         </div>
       )}

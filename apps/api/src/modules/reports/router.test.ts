@@ -434,6 +434,21 @@ describe('私聊消息举报（#694 M2）', () => {
     expect(detailBody.item.messageEvidence?.recalledAt).toBeNull()
   })
 
+  test('证据媒体：匿名 401、普通用户 403、文本举报 404', async () => {
+    const queue = await app.request(`${ADMIN_ROUTES.reports}?targetType=MESSAGE`, {
+      headers: { cookie: adminCookie },
+    })
+    const body = (await queue.json()) as { items: { report: { id: string } }[] }
+    const reportId = body.items[0]?.report.id
+    expect(reportId).toBeDefined()
+    const url = ADMIN_ROUTES.reportEvidenceMedia(reportId ?? '')
+
+    expect((await app.request(url)).status).toBe(401)
+    expect((await app.request(url, { headers: { cookie: reporterCookie } })).status).toBe(403)
+    // 文本消息没有可读媒体快照：管理端也不能凭 reportId 读到别的东西。
+    expect((await app.request(url, { headers: { cookie: adminCookie } })).status).toBe(404)
+  })
+
   test('cleanup: 清掉消息举报，避免影响举报队列的跨目标计数用例', async () => {
     await scratch.delete(reports).where(eq(reports.targetType, 'MESSAGE'))
   })

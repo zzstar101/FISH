@@ -34,10 +34,11 @@ export const ChatModerationQueueItemSchema = z.object({
   kind: ChatModerationKindSchema,
   /** 机器结论（REVIEW 才会进队列，这里保留原始判定便于排查）。 */
   decision: z.enum(['ALLOW', 'BLOCK', 'REVIEW']),
-  suggestion: ChatModerationSuggestionSchema,
+  /** DB 列可空（历史/上游缺失时归一为空），管理页按「未知」展示，不能让整页 422。 */
+  suggestion: ChatModerationSuggestionSchema.nullable(),
   provider: ChatModerationProviderSchema,
   policyVersion: z.string(),
-  score: z.number().int().min(0).max(100).nullable(),
+  score: z.number().min(0).max(100).nullable(),
   matchedRules: z.array(z.string()),
   matchedTermsMasked: z.array(z.string()),
   /** TEXT 正文；媒体为 null（正文不是审核字段）。 */

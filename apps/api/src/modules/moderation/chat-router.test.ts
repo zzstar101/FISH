@@ -315,3 +315,39 @@ describe('管理端聊天待审（#694 M2）', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('管理端聊天待审：校验与媒体取证（#694 M2）', () => {
+  const recordPath = (id: string) =>
+    `${queueUrl}/${encodePublicId(PUBLIC_ID_PREFIX.chatModerationRecord, id)}`
+
+  test('非法 query / body 返回 422 而不是 500', async () => {
+    const badQuery = await app.request(`${queueUrl}?limit=abc`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(badQuery.status).toBe(422)
+    expect(((await badQuery.json()) as { error: { code: string } }).error.code).toBe(
+      'VALIDATION_FAILED',
+    )
+
+    const badBody = await app.request(recordPath(TEXT_RECORD_ID) + '/decision', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ decision: 'ALLOW' }),
+    })
+    expect(badBody.status).toBe(422)
+    const body = (await badBody.json()) as { error: { code: string; details?: unknown[] } }
+    expect(body.error.code).toBe('VALIDATION_FAILED')
+    expect(body.error.details?.length).toBeGreaterThan(0)
+  })
+
+  test('媒体快照：匿名 401、普通用户 403、未知记录 404', async () => {
+    const url = `${queueUrl}/${encodePublicId(PUBLIC_ID_PREFIX.chatModerationRecord, MEDIA_RECORD_ID)}/media`
+    expect((await app.request(url)).status).toBe(401)
+    expect((await app.request(url, { headers: { cookie: buyerCookie } })).status).toBe(403)
+    const missing = await app.request(
+      `${queueUrl}/${encodePublicId(PUBLIC_ID_PREFIX.chatModerationRecord, '01930000-0000-7000-8000-0000000000ff')}/media`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(missing.status).toBe(404)
+  })
+})

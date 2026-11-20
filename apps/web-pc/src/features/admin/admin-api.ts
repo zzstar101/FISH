@@ -280,7 +280,8 @@ export async function submitChatModerationDecision(
 
 /** 媒体快照只在管理员会话下可读；页面用 <img src> 直取，不在前端缓存 base64。 */
 export function adminChatModerationMediaPath(recordId: string): string {
-  return CHAT_MODERATION_ROUTES.media(recordId)
+  // 契约路径不带 /api 前缀（apiRequest 才拼）；但这里直接给 <img src> 用，必须补上同源前缀。
+  return `/api${CHAT_MODERATION_ROUTES.media(recordId)}`
 }
 
 // ---------------------------------------------------------------------------

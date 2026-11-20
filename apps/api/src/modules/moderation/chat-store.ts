@@ -261,6 +261,18 @@ export function createSqlChatModerationStore(db: Db): ChatModerationStore {
           WHERE id = ${messageId}
         `)
 
+        if (visibility === 'DELIVERED') {
+          // 放行后接收者的未读与摘要已经能看到这条消息（它们按 COALESCE(delivered_at, created_at)
+          // 判定），排序键也必须同步推进，否则会话仍停在旧位置、甚至被挤出第一页。
+          await tx.execute(sql`
+            UPDATE conversations c
+            SET last_message_at = GREATEST(c.last_message_at, m.created_at),
+                updated_at = now()
+            FROM messages m
+            WHERE m.id = ${messageId} AND c.id = m.conversation_id
+          `)
+        }
+
         await tx.insert(adminAuditLogs).values({
           id: newId(),
           actorUserId: input.actorUserId,

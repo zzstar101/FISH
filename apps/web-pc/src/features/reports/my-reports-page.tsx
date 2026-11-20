@@ -80,7 +80,8 @@ function MyReportsContent() {
 
 function ReportRow({ report }: { report: Report }) {
   const status = REPORT_STATUS_META[report.status]
-  const kind = report.targetType === 'LISTING' ? '商品' : '用户'
+  const kind =
+    report.targetType === 'LISTING' ? '商品' : report.targetType === 'MESSAGE' ? '消息' : '用户'
 
   return (
     <div className="flex items-start justify-between gap-4 px-5 py-4">

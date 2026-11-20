@@ -142,6 +142,10 @@ export interface ReportStore {
     excludeReportId: string,
     limit: number,
   ): Promise<ReportRow[]>
+  /** 被举报媒体（MESSAGE 举报）的证据快照位置；文本举报/不存在/快照缺 key 返回 null。 */
+  findEvidenceMedia(
+    reportId: string,
+  ): Promise<{ objectKey: string | null; mimeType: string | null } | null>
   /** 处理举报：业务 UPDATE 与审计写入同事务。 */
   handleReport(input: HandleReportInput): Promise<'applied' | 'not-found' | 'conflict'>
 }
@@ -327,7 +331,7 @@ export function createSqlReportStore(db: Db): ReportStore {
         DO NOTHING
         RETURNING id, reporter_id, target_type::text AS target_type, target_id, reason,
                   detail_text, status::text AS status, created_at, handled_at,
-                  handling_reason, handled_by,
+                  handling_reason, handled_by, evidence_snapshot,
                   ${createdAtCursorText(sql`reports.created_at`)} AS created_at_cursor
       `)
       const row = rowsOf(inserted)[0]
@@ -340,7 +344,7 @@ export function createSqlReportStore(db: Db): ReportStore {
         const existing = await db.execute(sql`
           SELECT id, reporter_id, target_type::text AS target_type, target_id, reason,
                  detail_text, status::text AS status, created_at, handled_at,
-                 handling_reason, handled_by,
+                 handling_reason, handled_by, evidence_snapshot,
                  ${createdAtCursorText(sql`reports.created_at`)} AS created_at_cursor
           FROM reports
           WHERE reporter_id = ${input.reporterId}
@@ -354,9 +358,11 @@ export function createSqlReportStore(db: Db): ReportStore {
         if (attempt === 1) break
 
         const retry = await db.execute(sql`
-          INSERT INTO reports (id, reporter_id, target_type, target_id, reason, detail_text)
+          INSERT INTO reports (id, reporter_id, target_type, target_id, reason, detail_text,
+                               evidence_snapshot)
           VALUES (${newId()}, ${input.reporterId}, ${input.targetType}::report_target_type,
-                  ${input.targetId}, ${input.reason}::report_reason, ${input.detailText})
+                  ${input.targetId}, ${input.reason}::report_reason, ${input.detailText},
+                  ${input.evidenceSnapshot === null ? null : jsonParam(input.evidenceSnapshot)})
           ON CONFLICT (reporter_id, target_type, target_id) WHERE status = 'PENDING'
           DO NOTHING
           RETURNING id
@@ -366,7 +372,7 @@ export function createSqlReportStore(db: Db): ReportStore {
           const reloaded = await db.execute(sql`
             SELECT id, reporter_id, target_type::text AS target_type, target_id, reason,
                    detail_text, status::text AS status, created_at, handled_at,
-                   handling_reason, handled_by,
+                   handling_reason, handled_by, evidence_snapshot,
                    ${createdAtCursorText(sql`reports.created_at`)} AS created_at_cursor
             FROM reports WHERE id = ${String(retryRow.id)}
           `)
@@ -435,6 +441,24 @@ export function createSqlReportStore(db: Db): ReportStore {
         LIMIT ${limit}
       `)
       return rowsOf(result).map(reportFromRow)
+    },
+
+    async findEvidenceMedia(reportId) {
+      const result = await db.execute(sql`
+        SELECT evidence_snapshot->>'objectKey' AS object_key,
+               evidence_snapshot->>'mimeType' AS mime_type
+        FROM reports
+        WHERE id = ${reportId}
+          AND target_type = 'MESSAGE'
+          AND evidence_snapshot IS NOT NULL
+        LIMIT 1
+      `)
+      const row = rowsOf(result)[0]
+      if (!row) return null
+      return {
+        objectKey: (row.object_key as string | null) ?? null,
+        mimeType: (row.mime_type as string | null) ?? null,
+      }
     },
 
     async handleReport(input) {

@@ -138,6 +138,10 @@ export interface ReportService {
   listMine(reporterId: string, query: ReportMineQuery): Promise<ReportListResponse>
   listAdminReports(query: AdminReportQueueQuery): Promise<AdminReportListResponse>
   getAdminReport(reportId: string): Promise<ReturnType<typeof AdminReportDetailSchema.parse>>
+  /** 管理端读取被举报媒体的证据快照（私有对象键）；非媒体/无快照返回 null。 */
+  getEvidenceMedia(
+    reportId: string,
+  ): Promise<{ objectKey: string | null; mimeType: string | null } | null>
   handleReport(input: {
     reportId: string
     actorUserId: string
@@ -254,6 +258,12 @@ export function createReportService(store: ReportStore): ReportService {
         item: toAdminReportItem(row),
         related: related.map(toReportDto),
       })
+    },
+
+    async getEvidenceMedia(reportId) {
+      const media = await store.findEvidenceMedia(reportId)
+      if (!media || !media.objectKey) return null
+      return media
     },
 
     async handleReport(input) {

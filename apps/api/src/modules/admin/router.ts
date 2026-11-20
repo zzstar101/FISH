@@ -39,6 +39,7 @@ import type { GovernanceService } from '../governance/service'
 import { GovernanceServiceError } from '../governance/service'
 import type { ReportService } from '../reports/service'
 import { ReportServiceError } from '../reports/service'
+import type { MediaStorage } from '../uploads/storage'
 import { AdminError } from './errors'
 import type { AdminService } from './service'
 
@@ -81,6 +82,11 @@ export type AdminRouterOptions = {
    * 注册在 `all('*')` catch-all 之前，否则路径会被吞成 404。
    */
   chatModerationRouter?: Hono<{ Variables: AuthVariables }>
+  /**
+   * 私有存储（#694 M2）：管理端读取「消息举报」的证据快照字节。取证对象是服务端在举报
+   * 创建时固化的快照，不是用户可以随时覆盖的 staging key。
+   */
+  storage: MediaStorage
 }
 
 function zodValidationFailure(
@@ -442,6 +448,25 @@ export function createAdminRouter(options: AdminRouterOptions) {
       })
       // 204：web 的 useHandleAdminReport 成功后不读 body，只失效队列 query。
       return c.body(null, 204)
+    } catch (error) {
+      return toReportErrorResponse(c, error)
+    }
+  })
+
+  // 证据媒体必须注册在 `/reports/:reportId` 之前的独立路径段：详情页不把私有 key
+  // 暴露给浏览器，只有这一条经 admin 守卫的流式读取。
+  router.get('/reports/:reportId/evidence-media', async (c) => {
+    try {
+      const media = await reportsService.getEvidenceMedia(requireReportId(c))
+      const object = media?.objectKey ? options.storage.getObject?.(media.objectKey) : null
+      if (!object) {
+        c.status(404)
+        return c.json(errorBody('REPORT_NOT_FOUND', '举报证据快照不存在'))
+      }
+      c.header('Content-Type', media?.mimeType ?? object.contentType)
+      c.header('Cache-Control', 'private, no-store')
+      c.header('X-Content-Type-Options', 'nosniff')
+      return c.body(object.stream)
     } catch (error) {
       return toReportErrorResponse(c, error)
     }

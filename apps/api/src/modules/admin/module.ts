@@ -91,6 +91,7 @@ export function createAdminModule(options: {
     requireAdmin,
     governance: options.governance,
     // 控制器自带鉴权守卫；父 router 的 `use('*')` 也会先跑一遍，双层等价于其它 /admin 端点。
+    storage: options.storage,
     chatModerationRouter: options.chatModeration
       ? createChatModerationRouter({
           service: options.chatModeration,

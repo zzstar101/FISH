@@ -2,7 +2,7 @@ import {
   ChatModerationDecisionInputSchema,
   ChatModerationQueueQuerySchema,
 } from '@fish/contracts/moderation/chat-schema'
-import { errorBody } from '@fish/contracts/system/error'
+import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import { type Context, Hono } from 'hono'
@@ -11,8 +11,6 @@ import type { MediaStorage } from '../uploads/storage'
 import { type ChatModerationService, ChatModerationServiceError } from './chat-service'
 
 type Ctx = Context<{ Variables: AuthVariables }>
-
-const MAX_MEDIA_BYTES = 5 * 1024 * 1024
 
 /**
  * 管理端聊天待审（#694 M2）。挂载在 `/admin/chat-moderation`，与其它 /admin 端点共用
@@ -44,13 +42,17 @@ export function createChatModerationRouter(options: {
     return undefined
   }
 
+  const invalid = (c: Ctx, issues: readonly { path: readonly PropertyKey[]; message: string }[]) =>
+    c.json(errorBody('VALIDATION_FAILED', '请求参数校验失败', validationDetails(issues)), 422)
+
   router.get('/', async (c) => {
     try {
-      const query = ChatModerationQueueQuerySchema.parse({
+      const parsed = ChatModerationQueueQuerySchema.safeParse({
         cursor: c.req.query('cursor'),
         limit: c.req.query('limit'),
       })
-      return c.json(await service.list(query))
+      if (!parsed.success) return invalid(c, parsed.error.issues)
+      return c.json(await service.list(parsed.data))
     } catch (err) {
       const response = fail(err, c)
       if (response) return response
@@ -60,9 +62,12 @@ export function createChatModerationRouter(options: {
 
   router.post('/:recordId/decision', async (c) => {
     try {
-      const input = ChatModerationDecisionInputSchema.parse(await c.req.json())
+      const parsed = ChatModerationDecisionInputSchema.safeParse(
+        await c.req.json().catch(() => null),
+      )
+      if (!parsed.success) return invalid(c, parsed.error.issues)
       return c.json(
-        await service.decide(recordIdOf(c.req.param('recordId')), input, c.get('userId')),
+        await service.decide(recordIdOf(c.req.param('recordId')), parsed.data, c.get('userId')),
       )
     } catch (err) {
       const response = fail(err, c)
@@ -84,7 +89,6 @@ export function createChatModerationRouter(options: {
         return c.json(errorBody('CHAT_MODERATION_NOT_FOUND', '媒体快照已被清理'))
       }
       c.header('Content-Type', snapshot.contentType)
-      c.header('Content-Length', String(snapshot.sizeBytes ?? MAX_MEDIA_BYTES))
       c.header('Cache-Control', 'private, no-store')
       c.header('X-Content-Type-Options', 'nosniff')
       return c.body(object.stream)
