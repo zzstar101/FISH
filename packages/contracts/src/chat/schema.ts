@@ -20,6 +20,18 @@ export const messageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'LISTING'])
 export type MessageType = z.infer<typeof messageTypeSchema>
 
 /**
+ * 消息投递可见性（#694 M1）。
+ *
+ * - `DELIVERED`：已通过审核并投递，接收者可读；
+ * - `PENDING_REVIEW`：机器判 REVIEW，仅发送者可见（历史、引用摘录、实时事件都不给接收者）；
+ * - `REJECTED`：人工复核判 BLOCK，同样只对发送者保留可读状态。
+ *
+ * 机器判 BLOCK 的文本不会落消息行（发送直接 422），所以本枚举只描述「已落库」的行。
+ */
+export const messageVisibilitySchema = z.enum(['DELIVERED', 'PENDING_REVIEW', 'REJECTED'])
+export type MessageVisibility = z.infer<typeof messageVisibilitySchema>
+
+/**
  * 引用块（#359 3c）的服务端投射：前端拿它直接画「引用条 / 气泡内摘引」，
  * 不需要再回查被引用消息。`excerpt` 由服务端按被引用行的类型合成（TEXT 原文截断、
  * MEDIA `[媒体]`、LISTING `[商品]`、已撤回 `[消息已撤回]`），与会话行摘要同一套可读口径。
@@ -266,6 +278,8 @@ export const messageDtoSchema = z
     recalledAt: z.iso.datetime().nullable(),
     /** 引用块投射（#359 3c）；无引用为 null。被引用行已撤回时 excerpt 为 `[消息已撤回]`。 */
     replyTo: messageReplySchema.nullable(),
+    /** #694 M1 投递可见性：接收者只会拿到 DELIVERED，发送者还可拿到自己的待审/被拒消息。 */
+    visibility: messageVisibilitySchema,
     createdAt: z.iso.datetime(),
   })
   // DB 的 CHECK 只保证「TEXT ⟹ sender_id 非空」；这里同步收紧到联合完整性，
@@ -516,6 +530,13 @@ export const ChatErrorCodeSchema = z.enum([
   'MESSAGE_NOT_FOUND',
   /** 422：被引用的消息不可用（类型不可引用——SYSTEM、已撤回）。 */
   'MESSAGE_REPLY_INVALID',
+  /**
+   * 422：文字消息被内容安全策略判 BLOCK（#694 M1）。不落可见消息行，客户端按失败气泡
+   * 渲染并允许用户修改后重发（同一个 clientRequestId 不应重试同一段内容）。
+   */
+  'MESSAGE_CONTENT_BLOCKED',
+  /** 503：审核上游不可用/超时（#694 M1 fail-closed），消息未落库，可原样重试。 */
+  'CONTENT_MODERATION_UNAVAILABLE',
   /** 403：撤回者不是消息发送者本人（SYSTEM 不可撤回）。 */
   'MESSAGE_RECALL_FORBIDDEN',
   /**

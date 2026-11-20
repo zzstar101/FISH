@@ -48,6 +48,34 @@ describe('本地 provider', () => {
     expect(allowed.fields[0]?.subLabel).toBeNull()
   })
 
+  // #694 M1：聊天正文以 `content` 字段送审。旧实现只认 title/description，会把聊天文本
+  // 静默判成 ALLOW —— 这里钉住 content 真的进了词表。
+  test('聊天正文（content 字段）同样经过词表，不被静默放行', async () => {
+    const provider = createLocalContentModerationProvider()
+    const blocked = await provider.moderateText({
+      dataId: 'chat_1',
+      fields: [{ field: 'content', value: '出售违禁品' }],
+    })
+    expect(blocked.decision).toBe('BLOCK')
+    expect(blocked.fields[0]).toMatchObject({ field: 'content', decision: 'BLOCK' })
+    // 审计只落脱敏命中词，不落正文。
+    expect(blocked.fields[0]?.maskedTerms).toEqual(['违*品'])
+
+    const allowed = await provider.moderateText({
+      dataId: 'chat_2',
+      fields: [{ field: 'content', value: '在吗' }],
+    })
+    expect(allowed.decision).toBe('ALLOW')
+
+    // #694 M1：EXTERNAL_CONTACT 是商品文案的引流规则，不能套到私聊——
+    // 私聊里交换联系方式是正常行为，不得因此被判 REVIEW。
+    const contact = await provider.moderateText({
+      dataId: 'chat_3',
+      fields: [{ field: 'content', value: '方便的话加微信：fish2026，我把图发你' }],
+    })
+    expect(contact.decision).toBe('ALLOW')
+  })
+
   test('多字段聚合取最高风险，字段判定各自独立', async () => {
     const provider = createLocalContentModerationProvider()
 
@@ -129,6 +157,7 @@ describe('provider 工厂', () => {
       TENCENT_CLOUD_SECRET_KEY: 'key',
       TENCENT_TMS_BIZ_TYPE: 'tms',
       TENCENT_IMS_BIZ_TYPE: 'ims',
+      TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-chat',
     })
     const provider = createContentModerationProvider(env, { loadImage })
 

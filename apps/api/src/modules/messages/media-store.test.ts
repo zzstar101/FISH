@@ -11,6 +11,7 @@ import {
   textRequestHash,
 } from './idempotency'
 import { createSqlMediaMessageStore } from './media-store'
+import { pendingReviewModeration } from './memory-store.fixture'
 import { createSqlMessageStore } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -180,7 +181,7 @@ describe('media message store (integration)', () => {
     const image = imageFor('e3')
     const textKey = messageSendKey(clientRequestId, textRequestHash('先发的文字'))
     if (!textKey) throw new Error('unreachable')
-    await messageStore.insertText(conversationA, buyer, '先发的文字', textKey)
+    await messageStore.insertText(conversationA, buyer, '先发的文字', { key: textKey })
 
     const mediaKey = messageSendKey(clientRequestId, mediaRequestHash(image))
     if (!mediaKey) throw new Error('unreachable')
@@ -251,8 +252,35 @@ describe('media message store (integration)', () => {
 
     await mediaStore.create(conversationA, buyer, image, mediaKey)
     expect(
-      messageStore.insertText(conversationA, buyer, '后来的文字', textKey),
+      messageStore.insertText(conversationA, buyer, '后来的文字', { key: textKey }),
     ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
     expect(await countByRequestId(clientRequestId, 'messages')).toBe(1)
+  })
+
+  test('待审媒体对接收者不可见，对发送者仍可读（#694 M1）', async () => {
+    const image = imageFor('pending')
+    const created = await mediaStore.create(conversationA, buyer, image)
+    await db.execute(
+      sql`UPDATE messages SET visibility = 'PENDING_REVIEW' WHERE id = ${created.message_id}::uuid`,
+    )
+
+    const bySeller = await mediaStore.list(conversationA, seller, { limit: 50, cursor: null })
+    expect(bySeller.some((row) => row.media_id === created.media_id)).toBe(false)
+    expect(await mediaStore.find(conversationA, created.media_id, seller)).toBeNull()
+
+    const byBuyer = await mediaStore.list(conversationA, buyer, { limit: 50, cursor: null })
+    expect(byBuyer.some((row) => row.media_id === created.media_id)).toBe(true)
+    expect(await mediaStore.find(conversationA, created.media_id, buyer)).not.toBeNull()
+  })
+
+  test('引用目标只取 DELIVERED：待审消息不参与摘录投射（#694 M1）', async () => {
+    const pending = await messageStore.insertText(conversationA, seller, '待审正文', {
+      visibility: 'PENDING_REVIEW',
+      moderation: pendingReviewModeration(),
+    })
+    const delivered = await messageStore.insertText(conversationA, seller, '已投递')
+    const targets = await mediaStore.findReplyTargets([pending.id, delivered.id])
+    expect(targets.has(pending.id)).toBe(false)
+    expect(targets.get(delivered.id)?.content).toBe('已投递')
   })
 })

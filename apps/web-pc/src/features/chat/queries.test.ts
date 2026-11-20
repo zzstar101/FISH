@@ -46,6 +46,7 @@ function message(id: MessageDto['id'], createdAt: string, content: string = id):
     content,
     recalledAt: null,
     replyTo: null,
+    visibility: 'DELIVERED',
     createdAt,
   }
 }

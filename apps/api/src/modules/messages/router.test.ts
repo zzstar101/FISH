@@ -21,6 +21,7 @@ const message: MessageDto = {
   content: '还在吗',
   recalledAt: null,
   replyTo: null,
+  visibility: 'DELIVERED',
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 

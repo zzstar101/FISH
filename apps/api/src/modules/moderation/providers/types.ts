@@ -38,6 +38,11 @@ export type ModerationVerdict = {
   score: number | null
   /** 腾讯 `RequestId`（可入日志，已过 `sanitizeRequestId` 白名单）；本地判定为 null。 */
   requestId: string | null
+  /**
+   * 命中词的脱敏形态（本地词表提供；腾讯不回带命中原文，因此缺省）。
+   * 只用于审计快照，**不含完整正文**——调用方不得把原文写进这里。
+   */
+  maskedTerms?: string[]
 }
 
 export type FieldModerationResult = ModerationVerdict & {

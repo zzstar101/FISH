@@ -278,6 +278,12 @@ export function describeSendFailure(error: unknown): string {
     // #466 拉黑守卫（中性码，双向同文案）：会话被拉黑关系冻结，重试不会成功。
     if (error.code === 'CONVERSATION_UNAVAILABLE') return '会话当前不可用，暂时无法发送消息'
     if (error.code === 'VALIDATION_FAILED') return '消息内容不合法'
+    // #694 M1 文字审核：BLOCK 不落库，同一段内容重发仍会被拒，必须提示用户修改后重发。
+    if (error.code === 'MESSAGE_CONTENT_BLOCKED') {
+      return '消息包含不适合发送的内容，请修改后重新发送'
+    }
+    // #694 M1 fail-closed：审核未给出结论，消息未落库，可原样重试。
+    if (error.code === 'CONTENT_MODERATION_UNAVAILABLE') return '内容审核暂不可用，请稍后重试'
     // #67 媒体链路：上传未完成 / 内容与声明不符 / 超限 / 越权读取，逐条给明确反馈。
     if (error.code === 'MEDIA_OBJECT_NOT_FOUND') return '媒体上传未完成，请重试'
     if (error.code === 'MEDIA_OBJECT_INVALID') return '媒体文件与声明不一致，请重试'

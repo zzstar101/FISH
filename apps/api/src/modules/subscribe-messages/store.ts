@@ -363,6 +363,14 @@ export function createSqlSubscribeMessageStore(db: Db): SubscribeMessageStore {
       const recipientId = sql<string>`case when ${messages.senderId} = ${conversations.buyerId} then ${conversations.sellerId} else ${conversations.buyerId} end`
       // 收件人一侧的读位；NULL = 从未读过（该会话的全部消息都算未读）。
       const recipientReadAt = sql<Date | null>`case when ${messages.senderId} = ${conversations.buyerId} then ${conversations.sellerLastReadAt} else ${conversations.buyerLastReadAt} end`
+      /*
+       * #694 M1：统一用「投递时间」而不是创建时间。
+       * - 待审消息（PENDING_REVIEW）接收者从未见过，下面直接排除，不能登记成新消息通知：
+       *   既泄漏存在性/发送者/时间，又会让 alreadyRegistered 把放行后的首次通知永久吞掉。
+       * - 人工放行的消息 created_at 可能早已在 10 分钟窗口外；按 delivered_at 才能产生
+       *   那次「首次投递」的订阅通知（与未读计数的 COALESCE 口径一致）。
+       */
+      const deliveredAt = sql<Date>`coalesce(${messages.deliveredAt}, ${messages.createdAt})`
 
       const alreadyRegistered = notExists(
         db
@@ -403,7 +411,7 @@ export function createSqlSubscribeMessageStore(db: Db): SubscribeMessageStore {
           recipientId,
           senderNickname: users.nickname,
           listingTitle: listings.title,
-          messageCreatedAt: messages.createdAt,
+          messageCreatedAt: deliveredAt,
         })
         .from(messages)
         .innerJoin(conversations, eq(conversations.id, messages.conversationId))
@@ -416,15 +424,16 @@ export function createSqlSubscribeMessageStore(db: Db): SubscribeMessageStore {
             // `ne` 对 NULL 求值为 NULL（不成立）：SYSTEM 消息因此已被排除，不需要额外判空。
             ne(messages.senderId, recipientId),
             isNull(messages.recalledAt),
-            gt(messages.createdAt, since),
-            lte(messages.createdAt, unreadBefore),
-            or(isNull(recipientReadAt), gt(messages.createdAt, recipientReadAt)),
+            eq(messages.visibility, 'DELIVERED'),
+            gt(deliveredAt, since),
+            lte(deliveredAt, unreadBefore),
+            or(isNull(recipientReadAt), gt(deliveredAt, recipientReadAt)),
             alreadyRegistered,
             throttled,
           ),
         )
         // `distinct on` 要求 ORDER BY 以同样的表达式开头；第三项决定组内留哪一条。
-        .orderBy(conversations.id, recipientId, desc(messages.createdAt))
+        .orderBy(conversations.id, recipientId, desc(deliveredAt))
         .limit(limit)
 
       return rows

@@ -292,6 +292,8 @@ export type ContentModerationEnv =
       region: string
       tmsBizType: string
       imsBizType: string
+      /** #694 M1：聊天文本必须使用独立 BizType，禁止复用商品策略。 */
+      tmsChatBizType: string
     }
 
 export function loadContentModerationEnv(
@@ -314,16 +316,25 @@ export function loadContentModerationEnv(
     const secretKey = source.TENCENT_CLOUD_SECRET_KEY?.trim()
     const tmsBizType = source.TENCENT_TMS_BIZ_TYPE?.trim()
     const imsBizType = source.TENCENT_IMS_BIZ_TYPE?.trim()
-    if (!secretId || !secretKey || !tmsBizType || !imsBizType) {
-      // 点名「缺了哪一个」：只报一句「四个都要配」的话，运维无法判断到底漏了哪一项。
+    const tmsChatBizType = source.TENCENT_TMS_CHAT_BIZ_TYPE?.trim()
+    if (!secretId || !secretKey || !tmsBizType || !imsBizType || !tmsChatBizType) {
+      // 点名「缺了哪一个」：只报一句「五个都要配」的话，运维无法判断到底漏了哪一项。
       const missing = [
         !secretId ? 'TENCENT_CLOUD_SECRET_ID' : null,
         !secretKey ? 'TENCENT_CLOUD_SECRET_KEY' : null,
         !tmsBizType ? 'TENCENT_TMS_BIZ_TYPE' : null,
         !imsBizType ? 'TENCENT_IMS_BIZ_TYPE' : null,
+        !tmsChatBizType ? 'TENCENT_TMS_CHAT_BIZ_TYPE' : null,
       ].filter((name): name is string => name !== null)
       throw new Error(
-        `环境变量校验失败：CONTENT_MODERATION_TRANSPORT=tencent 缺少 ${missing.join(' / ')}。四项配置都必须提供：TENCENT_CLOUD_SECRET_ID / TENCENT_CLOUD_SECRET_KEY / TENCENT_TMS_BIZ_TYPE / TENCENT_IMS_BIZ_TYPE`,
+        `环境变量校验失败：CONTENT_MODERATION_TRANSPORT=tencent 缺少 ${missing.join(' / ')}。五项配置都必须提供：TENCENT_CLOUD_SECRET_ID / TENCENT_CLOUD_SECRET_KEY / TENCENT_TMS_BIZ_TYPE / TENCENT_IMS_BIZ_TYPE / TENCENT_TMS_CHAT_BIZ_TYPE`,
+      )
+    }
+    // #694 M1：聊天必须有自己的策略号。只校验非空不够——把商品策略号复制一份同样能通过，
+    // 结果聊天静默套用 EXTERNAL_CONTACT 等商品规则，事后也无法从 policyVersion 区分。
+    if (tmsChatBizType === tmsBizType) {
+      throw new Error(
+        '环境变量校验失败：TENCENT_TMS_CHAT_BIZ_TYPE 必须与 TENCENT_TMS_BIZ_TYPE 不同（聊天不能复用商品策略号）',
       )
     }
     return {
@@ -332,6 +343,7 @@ export function loadContentModerationEnv(
       secretKey,
       tmsBizType,
       imsBizType,
+      tmsChatBizType,
       region: source.TENCENT_CLOUD_REGION?.trim() || DEFAULT_TENCENT_CLOUD_REGION,
     }
   }

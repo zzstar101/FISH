@@ -1,8 +1,20 @@
 import type { ModerationField, ModerationMatch, ModerationResult } from './types'
 
-export const MODERATION_RULE_VERSION = '2026-09-15-v3'
+export const MODERATION_RULE_VERSION = '2026-11-20-v4'
 
-type Rule = { code: string; decision: 'BLOCK' | 'REVIEW'; terms: readonly string[] }
+type Rule = {
+  code: string
+  decision: 'BLOCK' | 'REVIEW'
+  terms: readonly string[]
+  /**
+   * 规则生效的字段。缺省 = 所有字段。
+   *
+   * `EXTERNAL_CONTACT` 只针对商品文案：商品描述里留微信是引流违规，而私聊里交换联系方式是
+   * 正常行为（#694 M1 票面明令「不能把商品本地词表的 EXTERNAL_CONTACT 直接套到私聊」）。
+   * 聊天正文只走 `PROHIBITED_CONTENT` 这类通用规则。
+   */
+  fields?: readonly ModerationField[]
+}
 
 /** 词库只存在服务端；新增规则只改本文件并提升版本号。 */
 const RULES: readonly Rule[] = [
@@ -15,6 +27,7 @@ const RULES: readonly Rule[] = [
     code: 'EXTERNAL_CONTACT',
     decision: 'REVIEW',
     terms: ['微信号', '加微信', 'vx', 'v信', '二维码', '外链'],
+    fields: ['title', 'description'],
   },
 ]
 
@@ -51,14 +64,19 @@ function maskTerm(term: string): string {
   return `${term[0]}${'*'.repeat(Math.max(1, term.length - 2))}${term.at(-1)}`
 }
 
-export function moderateListingContent(input: {
-  title: string
-  description: string
-}): ModerationResult {
+/**
+ * 按字段匹配词表。商品（title/description）与聊天（content）共用同一份规则表，但每条规则
+ * 可以用 `fields` 限定生效字段（目前只有 `EXTERNAL_CONTACT` 限定在商品字段）。
+ * **不要**把聊天正文拼进 title 送给上游——字段名是审计与原因解释的一部分（#694 M1）。
+ */
+export function moderateContentFields(
+  input: Partial<Record<ModerationField, string>>,
+): ModerationResult {
   const matches: ModerationMatch[] = []
   for (const [field, value] of Object.entries(input) as [ModerationField, string][]) {
     const normalized = normalize(value)
     for (const rule of RULES) {
+      if (rule.fields && !rule.fields.includes(field)) continue
       for (const term of rule.terms) {
         if (normalized.includes(normalize(term)))
           matches.push({
@@ -86,4 +104,12 @@ export function moderateListingContent(input: {
           : null,
     ruleVersion: MODERATION_RULE_VERSION,
   }
+}
+
+/** 商品文本审核的既有入口（#228）：保留调用方签名，内部走 `moderateContentFields`。 */
+export function moderateListingContent(input: {
+  title: string
+  description: string
+}): ModerationResult {
+  return moderateContentFields(input)
 }

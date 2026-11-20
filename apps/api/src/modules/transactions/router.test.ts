@@ -51,6 +51,7 @@ const systemMessage: MessageDto = {
   content: '{"type":"tx.proposal","amountCents":16000}',
   recalledAt: null,
   replyTo: null,
+  visibility: 'DELIVERED',
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 

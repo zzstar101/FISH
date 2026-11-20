@@ -89,6 +89,7 @@ import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService, toMessageDto } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
 import { createSystemContentProjector } from './modules/messages/system-content'
+import { createChatModerationPolicy } from './modules/moderation/chat'
 import { createContentModerationProvider } from './modules/moderation/providers/factory'
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
@@ -382,6 +383,17 @@ export function createApp(
   // both pools coordinate through the same Postgres advisory key.
   const governanceService = createGovernanceService({ db, store: governanceStore })
   const projectSystemContent = createSystemContentProjector(db)
+
+  // #694 M1：聊天文本用**独立**的腾讯 BizType（禁止复用商品的 TENCENT_TMS_BIZ_TYPE）；
+  // `loadImage` 不会被调用——文本审核不读图片（图片/语音审核在后续批次接线）。
+  const chatModeration = createChatModerationPolicy(
+    createContentModerationProvider(
+      moderationEnv.transport === 'tencent'
+        ? { ...moderationEnv, tmsBizType: moderationEnv.tmsChatBizType }
+        : moderationEnv,
+      { loadImage: () => Promise.reject(new Error('聊天文本审核不读取图片')) },
+    ),
+  )
 
   // #6：`GET /listings*` 匿名可用，写接口在 router 内逐路由挂 requireAuth（读路径不能整体 401）。
   const listingService = createListingService({
@@ -818,6 +830,7 @@ export function createApp(
       service: createMessageService({
         store: createSqlMessageStore(db),
         blocks: blockStore,
+        chatModeration,
         // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
         storage,
         projectContent: projectSystemContent,
@@ -830,7 +843,8 @@ export function createApp(
         },
         // #359 3c 撤回：落库成功后推给会话双方（同一人多连接也要同步）。
         onMessageRecalled: (participants, event) => {
-          hub.pushToUsers([participants.buyerId, participants.sellerId], {
+          // 待审消息撤回只回推发送者（service 会把同一个 id 放进两端），这里去重。
+          hub.pushToUsers([...new Set([participants.buyerId, participants.sellerId])], {
             type: 'message.recalled',
             conversationId: event.conversationId,
             messageId: event.messageId,

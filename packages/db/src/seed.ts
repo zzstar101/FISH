@@ -4,6 +4,7 @@ import { jsonParam } from './json'
 import { adminAuditLogs } from './schema/admin'
 import { aiPolishRequests } from './schema/ai-polish-requests'
 import { userBlocks } from './schema/blocks'
+import { chatModerationRecords } from './schema/chat-moderation'
 import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
 import { disputeAttachments, disputeEvidenceMessages, disputes } from './schema/disputes'
@@ -147,8 +148,10 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 漏掉会让 seed 直接失败（实测未列入时报 0A000，不需要该表里真有数据）。
   // `subscribe_message_grants` / `subscribe_message_deliveries`（#462，均引用 users）同理；
   // 两者由真实授权与调度循环产生，seed 不预置。
+  // `chat_moderation_records`（#694 M1，引用 messages / conversations / users）必须在内：
+  // 它引用 messages，不一起 TRUNCATE 会直接撞外键（0A000）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${chatModerationRecords}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
   )
 
   const now = new Date()

@@ -481,6 +481,42 @@ describe('listChatSources（聊天登记）', () => {
     expect(mine?.listingTitle).toBe('九成新自行车')
   })
 
+  test('待审消息不登记；人工放行后按 delivered_at 登记一次（#694 M1）', async () => {
+    const buyer = await newUser()
+    const seller = await newUser()
+    const listingId = await newListing(seller, '待审通知')
+    const conversationId = await newConversation({ listingId, buyerId: buyer, sellerId: seller })
+    const at = Date.now()
+    const messageId = crypto.randomUUID()
+    // 20 分钟前创建：已经落在 10 分钟的登记窗口之外。
+    await db.insert(messages).values({
+      id: messageId,
+      conversationId,
+      senderId: buyer,
+      type: 'TEXT',
+      content: '待审正文',
+      createdAt: new Date(at - 20 * 60 * 1000),
+      visibility: 'PENDING_REVIEW',
+    })
+
+    // 待审：接收者从未见过它，不能登记（否则泄漏存在性并占掉 30 分钟限频窗口）。
+    expect(
+      (await store.listChatSources(chatWindow(at))).some((row) => row.messageId === messageId),
+    ).toBe(false)
+
+    // 人工放行：投递态与 delivered_at 一起写入，窗口与未读都按投递时间重新计算。
+    await db
+      .update(messages)
+      .set({ visibility: 'DELIVERED', deliveredAt: new Date(at - 90 * 1000) })
+      .where(eq(messages.id, messageId))
+
+    const approved = (await store.listChatSources(chatWindow(at))).find(
+      (row) => row.messageId === messageId,
+    )
+    expect(approved?.recipientId).toBe(seller)
+    expect(new Date(approved?.messageCreatedAt ?? 0).getTime()).toBe(at - 90 * 1000)
+  })
+
   test('刚发出（不满 60 秒）的消息不登记：可能马上就被读到', async () => {
     const buyer = await newUser()
     const seller = await newUser()

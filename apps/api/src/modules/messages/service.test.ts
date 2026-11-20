@@ -1,11 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { ChatModerationPolicy, ChatModerationResult } from '../moderation/chat'
+import { ContentModerationError } from '../moderation/providers/types'
 import type { MediaStorage } from '../uploads/storage'
+import { messageSendKey, textRequestHash } from './idempotency'
 import {
   MEMORY_BUYER_ID as buyer,
   MEMORY_CONVERSATION_ID as conversationA,
   MemoryMessageStore,
   MEMORY_OUTSIDER_ID as outsider,
+  pendingReviewModeration,
   MEMORY_SELLER_ID as seller,
 } from './memory-store.fixture'
 import { createMessageService, MessageServiceError } from './service'
@@ -42,8 +46,27 @@ function listingBrief(
 
 /** SQL store 的插入路径由 store 负责；service 测试只关心「注入了哪个商店 + storage」。 */
 const neverBlocked = { existsBlockBetween: async () => false }
+/**
+ * 默认放行的聊天审核：既有用例都在验证发送/幂等/推送语义，不该被词表命中干扰。
+ * 审核分支由本文件末尾的专门用例注入自定义 policy 覆盖。
+ */
+const allowAllChatModeration: ChatModerationPolicy = {
+  moderateText: async () => ({
+    decision: 'ALLOW',
+    provider: 'LOCAL',
+    transport: 'local',
+    providerRequestId: null,
+    policyVersion: 'test',
+    suggestion: 'Pass',
+    label: null,
+    subLabel: null,
+    score: null,
+    matchedRules: [],
+    matchedTermsMasked: [],
+  }),
+}
 const serviceOf = (store: MemoryMessageStore, blocks = neverBlocked) =>
-  createMessageService({ store, storage, blocks })
+  createMessageService({ store, storage, blocks, chatModeration: allowAllChatModeration })
 
 describe('message service: listMessages', () => {
   test('returns ascending messages with sender info', async () => {
@@ -127,6 +150,7 @@ describe('message service: sendTextMessage', () => {
     const service = createMessageService({
       store: new MemoryMessageStore(),
       storage,
+      chatModeration: allowAllChatModeration,
       blocks: {
         existsBlockBetween: async (a, b) =>
           (a === seller && b === buyer) || (a === buyer && b === seller),
@@ -141,6 +165,7 @@ describe('message service: sendTextMessage', () => {
     const service = createMessageService({
       store: new MemoryMessageStore(),
       storage,
+      chatModeration: allowAllChatModeration,
       blocks: {
         existsBlockBetween: async (a, b) =>
           (a === buyer && b === seller) || (a === seller && b === buyer),
@@ -333,6 +358,7 @@ describe('message service: sendListingMessage（#359 商品卡）', () => {
     const pushed: string[] = []
     const service = createMessageService({
       blocks: neverBlocked,
+      chatModeration: allowAllChatModeration,
       store,
       storage,
       onMessageCreated: (_participants, message) => pushed.push(message.id),
@@ -509,6 +535,9 @@ describe('message service: 引用（#359 3c）', () => {
       type: 'MEDIA',
       content: '',
       created_at: new Date('2026-09-12T10:00:00.500000Z'),
+      sender_nickname: '卖家',
+      sender_avatar_url: null,
+      visibility: 'DELIVERED',
     })
     const service = serviceOf(store)
     const dto = await service.sendTextMessage(buyer, conversationA, {
@@ -551,6 +580,37 @@ describe('message service: 引用（#359 3c）', () => {
       ).rejects.toMatchObject({ status: 422, code: 'MESSAGE_REPLY_INVALID' })
     }
     expect(store.messages).toHaveLength(2)
+  })
+
+  test('不能引用自己的待审消息：摘录会把未过审正文广播给接收者', async () => {
+    const store = new MemoryMessageStore()
+    const pending = await store.insertText(conversationA, buyer, '加微信 138xxxx', {
+      visibility: 'PENDING_REVIEW',
+      moderation: pendingReviewModeration(),
+    })
+    const service = serviceOf(store)
+    expect(
+      service.sendTextMessage(buyer, conversationA, {
+        content: '你看这个',
+        replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, pending.id),
+      }),
+    ).rejects.toMatchObject({ status: 422, code: 'MESSAGE_REPLY_INVALID' })
+    // BLOCK 之外唯一会写库的路径也没写：接收者不会收到任何带摘录的 DELIVERED 行。
+    expect(store.messages.filter((row) => row.visibility === 'DELIVERED')).toHaveLength(0)
+  })
+
+  test('历史里已存在的待审引用也不会被投影（纵深防御）', async () => {
+    const store = new MemoryMessageStore()
+    const pending = await store.insertText(conversationA, buyer, '内部待审正文', {
+      visibility: 'PENDING_REVIEW',
+      moderation: pendingReviewModeration(),
+    })
+    // 模拟修复前落库的行：DELIVERED 消息引用了自己尚未投递的待审消息。
+    await store.insertText(conversationA, buyer, '引用它', { replyToId: pending.id })
+    const service = serviceOf(store)
+    const page = await service.listMessages(seller, conversationA, { limit: 30 })
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0]?.replyTo).toBeNull()
   })
 })
 
@@ -626,6 +686,7 @@ describe('message service: 撤回（#359 3c）', () => {
     const events: Array<Record<string, string>> = []
     const service = createMessageService({
       blocks: neverBlocked,
+      chatModeration: allowAllChatModeration,
       store,
       storage,
       onMessageRecalled: (_participants, event) =>
@@ -636,6 +697,24 @@ describe('message service: 撤回（#359 3c）', () => {
     expect(events).toHaveLength(1)
     expect(events[0]?.messageId).toBe(sent.id)
     expect(events[0]?.recalledBy).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, buyer))
+  })
+
+  test('撤回待审消息只回推发送者，接收者收不到存在性信号', async () => {
+    const store = new MemoryMessageStore()
+    const recipients: Array<{ buyerId: string; sellerId: string }> = []
+    const service = createMessageService({
+      blocks: neverBlocked,
+      chatModeration: allowAllChatModeration,
+      store,
+      storage,
+      onMessageRecalled: (participants) => recipients.push(participants),
+    })
+    const pending = await store.insertText(conversationA, buyer, '待审内容', {
+      visibility: 'PENDING_REVIEW',
+      moderation: pendingReviewModeration(),
+    })
+    await service.recallMessage(buyer, conversationA, pending.id)
+    expect(recipients).toEqual([{ buyerId: buyer, sellerId: buyer }])
   })
 })
 
@@ -748,5 +827,233 @@ describe('message service: 幂等重放先于拉黑守卫（#466 审查）', () 
         listingId: LISTING_PUBLIC_ID,
       }),
     ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+  })
+})
+
+/*
+ * #694 M1 文字审核：机器结论决定消息可见性，只有 ALLOW 才投递与推送。
+ * 三条分支的断言都落在「消息行 / 审核记录 / 推送」三处，避免只测返回值。
+ */
+const chatVerdict = (overrides: Partial<ChatModerationResult>): ChatModerationResult => ({
+  decision: 'ALLOW',
+  provider: 'LOCAL',
+  transport: 'local',
+  providerRequestId: null,
+  policyVersion: 'test',
+  suggestion: 'Pass',
+  label: null,
+  subLabel: null,
+  score: null,
+  matchedRules: [],
+  matchedTermsMasked: [],
+  ...overrides,
+})
+
+function policyReturning(result: ChatModerationResult, calls = { count: 0 }): ChatModerationPolicy {
+  return {
+    moderateText: async () => {
+      calls.count += 1
+      return result
+    },
+  }
+}
+
+describe('message service: 聊天文字审核（#694 M1）', () => {
+  test('ALLOW：落 DELIVERED、记录 SETTLED、推 message.new', async () => {
+    const store = new MemoryMessageStore()
+    const calls = { count: 0 }
+    const pushed: string[] = []
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: policyReturning(chatVerdict({}), calls),
+      onMessageCreated: (_participants, message) => pushed.push(message.id),
+    })
+    const dto = await service.sendTextMessage(buyer, conversationA, { content: '在吗' })
+    expect(dto.visibility).toBe('DELIVERED')
+    expect(calls.count).toBe(1)
+    expect(pushed).toEqual([dto.id])
+    expect(store.moderationRecords).toHaveLength(1)
+    expect(store.moderationRecords[0]?.record).toMatchObject({
+      kind: 'TEXT',
+      decision: 'ALLOW',
+      machineDecision: 'ALLOW',
+      status: 'SETTLED',
+    })
+  })
+
+  test('REVIEW：落 PENDING_REVIEW、记录 PENDING、不推送，仅发送者可见', async () => {
+    const store = new MemoryMessageStore()
+    const pushed: string[] = []
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: policyReturning(
+        chatVerdict({ decision: 'REVIEW', suggestion: 'Review', subLabel: 'EXTERNAL_CONTACT' }),
+      ),
+      onMessageCreated: (_participants, message) => pushed.push(message.id),
+    })
+    const dto = await service.sendTextMessage(buyer, conversationA, { content: '加微信聊' })
+    expect(dto.visibility).toBe('PENDING_REVIEW')
+    expect(pushed).toHaveLength(0)
+    expect(store.moderationRecords[0]?.record).toMatchObject({
+      decision: 'REVIEW',
+      machineDecision: 'REVIEW',
+      status: 'PENDING',
+    })
+
+    const receiverView = await service.listMessages(seller, conversationA, { limit: 30 })
+    expect(receiverView.items).toHaveLength(0)
+    const senderView = await service.listMessages(buyer, conversationA, { limit: 30 })
+    expect(senderView.items.map((item) => item.visibility)).toEqual(['PENDING_REVIEW'])
+  })
+
+  test('BLOCK：422 MESSAGE_CONTENT_BLOCKED，不落消息行、不推送', async () => {
+    const store = new MemoryMessageStore()
+    const pushed: string[] = []
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: policyReturning(chatVerdict({ decision: 'BLOCK', suggestion: 'Block' })),
+      onMessageCreated: (_participants, message) => pushed.push(message.id),
+    })
+    await expect(
+      service.sendTextMessage(buyer, conversationA, { content: '违禁品' }),
+    ).rejects.toMatchObject({ status: 422, code: 'MESSAGE_CONTENT_BLOCKED' })
+    expect(store.messages).toHaveLength(0)
+    expect(store.moderationRecords).toHaveLength(0)
+    expect(pushed).toHaveLength(0)
+  })
+
+  test('上游故障：503 CONTENT_MODERATION_UNAVAILABLE，不落消息行', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: {
+        moderateText: async () => {
+          throw new ContentModerationError({ reason: 'timeout' })
+        },
+      },
+    })
+    await expect(
+      service.sendTextMessage(buyer, conversationA, { content: '在吗' }),
+    ).rejects.toMatchObject({ status: 503, code: 'CONTENT_MODERATION_UNAVAILABLE' })
+    expect(store.messages).toHaveLength(0)
+  })
+
+  test('REVIEW 幂等重放：同 clientRequestId 返回同一条，不重复审核/记录/推送', async () => {
+    const store = new MemoryMessageStore()
+    const calls = { count: 0 }
+    const pushed: string[] = []
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: policyReturning(
+        chatVerdict({ decision: 'REVIEW', suggestion: 'Review' }),
+        calls,
+      ),
+      onMessageCreated: (_participants, message) => pushed.push(message.id),
+    })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000f1'
+    const first = await service.sendTextMessage(buyer, conversationA, {
+      content: '加微信聊',
+      clientRequestId,
+    })
+    const retry = await service.sendTextMessage(buyer, conversationA, {
+      content: '加微信聊',
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(retry.visibility).toBe('PENDING_REVIEW')
+    expect(calls.count).toBe(1)
+    expect(store.messages).toHaveLength(1)
+    expect(store.moderationRecords).toHaveLength(1)
+    expect(pushed).toHaveLength(0)
+  })
+
+  test('审核在途时对方拉黑：插入前复判，403 且不落行（review #716-2）', async () => {
+    const store = new MemoryMessageStore()
+    let checks = 0
+    const blocks = {
+      existsBlockBetween: async () => {
+        checks += 1
+        // 第一次（送审前）无拉黑，第二次（审核返回、落库前）已拉黑。
+        return checks > 1
+      },
+    }
+    const service = createMessageService({
+      store,
+      storage,
+      blocks,
+      chatModeration: policyReturning(chatVerdict({})),
+    })
+    await expect(
+      service.sendTextMessage(buyer, conversationA, { content: '在吗' }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+    expect(checks).toBe(2)
+    expect(store.messages).toHaveLength(0)
+  })
+
+  test('并发同键：本次拿到 BLOCK，但同键请求已提交时重放既有消息而不是 422', async () => {
+    const store = new MemoryMessageStore()
+    const clientRequestId = '01990000-0000-7000-8000-0000000000f2'
+    const content = '违禁品'
+    const key = messageSendKey(clientRequestId, textRequestHash(content))
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: {
+        moderateText: async () => {
+          // 模拟同键的另一请求在本次审核期间已提交。
+          await store.insertText(conversationA, buyer, content, { key })
+          return chatVerdict({ decision: 'BLOCK', suggestion: 'Block' })
+        },
+      },
+    })
+    const dto = await service.sendTextMessage(buyer, conversationA, { content, clientRequestId })
+    expect(dto.visibility).toBe('DELIVERED')
+    expect(store.messages).toHaveLength(1)
+  })
+
+  test('未包装的审核异常也按 503 fail-closed，不漏成 500（review #716-11）', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: {
+        moderateText: async () => {
+          throw new Error('boom')
+        },
+      },
+    })
+    await expect(
+      service.sendTextMessage(buyer, conversationA, { content: '在吗' }),
+    ).rejects.toMatchObject({ status: 503, code: 'CONTENT_MODERATION_UNAVAILABLE' })
+    expect(store.messages).toHaveLength(0)
+  })
+
+  test('LISTING 消息不进入文字审核', async () => {
+    const store = new MemoryMessageStore()
+    store.listings.set(LISTING_ID, listingBrief())
+    const calls = { count: 0 }
+    const service = createMessageService({
+      store,
+      storage,
+      blocks: neverBlocked,
+      chatModeration: policyReturning(chatVerdict({}), calls),
+    })
+    await service.sendListingMessage(buyer, conversationA, {
+      type: 'LISTING',
+      listingId: LISTING_PUBLIC_ID,
+    })
+    expect(calls.count).toBe(0)
   })
 })

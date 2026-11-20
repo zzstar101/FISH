@@ -156,13 +156,14 @@ describe('loadContentModerationEnv', () => {
     )
   })
 
-  test('tencent 四项必填，缺任一项都失败（错误信息只报变量名）', () => {
+  test('tencent 五项必填，缺任一项都失败（错误信息只报变量名）', () => {
     const complete = {
       CONTENT_MODERATION_TRANSPORT: 'tencent',
       TENCENT_CLOUD_SECRET_ID: 'secret-id-value',
       TENCENT_CLOUD_SECRET_KEY: 'secret-key-value',
       TENCENT_TMS_BIZ_TYPE: 'tms-biz',
       TENCENT_IMS_BIZ_TYPE: 'ims-biz',
+      TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-chat-biz',
     }
     expect(loadContentModerationEnv(complete)).toEqual({
       transport: 'tencent',
@@ -170,6 +171,7 @@ describe('loadContentModerationEnv', () => {
       secretKey: 'secret-key-value',
       tmsBizType: 'tms-biz',
       imsBizType: 'ims-biz',
+      tmsChatBizType: 'tms-chat-biz',
       region: DEFAULT_TENCENT_CLOUD_REGION,
     })
 
@@ -178,6 +180,7 @@ describe('loadContentModerationEnv', () => {
       'TENCENT_CLOUD_SECRET_KEY',
       'TENCENT_TMS_BIZ_TYPE',
       'TENCENT_IMS_BIZ_TYPE',
+      'TENCENT_TMS_CHAT_BIZ_TYPE',
     ] as const) {
       const source: Record<string, string | undefined> = { ...complete, [key]: ' ' }
       let message = ''
@@ -186,7 +189,7 @@ describe('loadContentModerationEnv', () => {
       } catch (error) {
         message = (error as Error).message
       }
-      // 必须点名「缺的是哪一个」：只报一句「四个都要配」的话，删掉任一变量的校验这个断言仍会通过。
+      // 必须点名「缺的是哪一个」：只报一句「五个都要配」的话，删掉任一变量的校验这个断言仍会通过。
       expect(message).toContain(`缺少 ${key}。`)
       // 密钥值绝不进错误消息（错误信息可能进日志/告警）。
       expect(message).not.toContain('secret-key-value')
@@ -203,6 +206,20 @@ describe('loadContentModerationEnv', () => {
     ).toThrow(/缺少 TENCENT_TMS_BIZ_TYPE \/ TENCENT_IMS_BIZ_TYPE。/)
   })
 
+  test('chat BizType 必须与商品 BizType 不同（禁止复用商品策略号）', () => {
+    const complete = {
+      CONTENT_MODERATION_TRANSPORT: 'tencent',
+      TENCENT_CLOUD_SECRET_ID: 'secret-id-value',
+      TENCENT_CLOUD_SECRET_KEY: 'secret-key-value',
+      TENCENT_TMS_BIZ_TYPE: 'tms-biz',
+      TENCENT_IMS_BIZ_TYPE: 'ims-biz',
+      TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-biz',
+    }
+    expect(() => loadContentModerationEnv(complete)).toThrow(
+      /TENCENT_TMS_CHAT_BIZ_TYPE 必须与 TENCENT_TMS_BIZ_TYPE 不同/,
+    )
+  })
+
   test('值两侧空白被 trim，region 可覆盖且默认 ap-guangzhou', () => {
     const env = loadContentModerationEnv({
       CONTENT_MODERATION_TRANSPORT: 'tencent',
@@ -210,6 +227,7 @@ describe('loadContentModerationEnv', () => {
       TENCENT_CLOUD_SECRET_KEY: ' key ',
       TENCENT_TMS_BIZ_TYPE: ' tms ',
       TENCENT_IMS_BIZ_TYPE: ' ims ',
+      TENCENT_TMS_CHAT_BIZ_TYPE: ' chat ',
       TENCENT_CLOUD_REGION: ' ap-shanghai ',
     })
     expect(env).toEqual({
@@ -218,6 +236,7 @@ describe('loadContentModerationEnv', () => {
       secretKey: 'key',
       tmsBizType: 'tms',
       imsBizType: 'ims',
+      tmsChatBizType: 'chat',
       region: 'ap-shanghai',
     })
   })

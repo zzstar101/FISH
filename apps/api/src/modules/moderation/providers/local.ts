@@ -5,8 +5,8 @@
  * 图片**不做内容审核**——判不了就返回 REVIEW（进人工队列，不可公开），绝不返回 ALLOW。
  * 生产用 `CONTENT_MODERATION_TRANSPORT=local` 会在启动期直接失败（见 `@fish/shared/env`）。
  */
-import { MODERATION_RULE_VERSION, moderateListingContent } from '../rules'
-import type { ModerationDecision } from '../types'
+import { MODERATION_RULE_VERSION, moderateContentFields } from '../rules'
+import type { ModerationDecision, ModerationField } from '../types'
 import {
   aggregateModerationDecision,
   ContentModerationError,
@@ -28,10 +28,14 @@ export function createLocalContentModerationProvider(): ContentModerationProvide
         // 与腾讯 provider 同一口径：没有可审内容不等于通过。
         throw new ContentModerationError({ reason: 'invalid_input', detail: 'no_content' })
       }
-      const result = moderateListingContent({
-        title: input.fields.find((item) => item.field === 'title')?.value ?? '',
-        description: input.fields.find((item) => item.field === 'description')?.value ?? '',
-      })
+      // 逐字段匹配词表：商品（title/description）与聊天（content）走同一份规则。
+      // 旧实现只取 title/description，导致 #694 的聊天正文恒 ALLOW——这正是聊天不能
+      // 直接复用商品通道的原因。
+      const result = moderateContentFields(
+        Object.fromEntries(auditable.map((item) => [item.field, item.value])) as Partial<
+          Record<ModerationField, string>
+        >,
+      )
       const fields: FieldModerationResult[] = auditable.map((item) => {
         const matches = result.matches.filter((match) => match.field === item.field)
         // 该字段没有命中任何规则 = 这个字段无风险（是结论，不是「没有结论」），显式给 ALLOW。
@@ -48,6 +52,7 @@ export function createLocalContentModerationProvider(): ContentModerationProvide
           subLabel: matches[0]?.ruleCode ?? null,
           score: null,
           requestId: null,
+          maskedTerms: matches.map((match) => match.maskedTerm),
         }
       })
       const decision = aggregateModerationDecision(fields.map((item) => item.decision))

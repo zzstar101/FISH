@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb } from './client'
 import { jsonParam } from './json'
+import { chatModerationRecords } from './schema/chat-moderation'
 import { conversations } from './schema/conversations'
 import { disputeAttachments, disputeEvidenceMessages, disputes } from './schema/disputes'
 import { embeddings } from './schema/embeddings'
@@ -80,6 +81,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       matches,
       conversations,
       messages,
+      chatModerationRecords,
       transactions,
       disputes,
       disputeAttachments,
@@ -113,6 +115,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // 库上才有可演示数据；messages 相应多了两条 tx.accepted SYSTEM 消息。
       conversations: 3,
       messages: 4,
+      // #694 M1：聊天审核记录由真实发送产生，seed 不预置。
+      chatModerationRecords: 0,
       transactions: 2,
       // #465：争议与证据由用户真实发起产生，seed 不预置（同 matches / embeddings 的取舍：
       // 假争议落进 seed 库比空表更误导，它还会伪造一条不存在的处理进度）。

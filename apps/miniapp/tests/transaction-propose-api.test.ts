@@ -47,6 +47,7 @@ const PROPOSAL_MESSAGE: MessageDto = {
   createdAt: '2026-10-04T03:30:00.000Z',
   recalledAt: null,
   replyTo: null,
+  visibility: 'DELIVERED',
 }
 
 mock.module('@/lib/request', () => ({

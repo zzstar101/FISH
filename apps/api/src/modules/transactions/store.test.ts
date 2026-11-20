@@ -347,7 +347,11 @@ describe('transactions store (integration)', () => {
       const accepted = await accepting
       if (accepted.kind !== 'created') throw new Error('unreachable')
 
-      const page = await messages.listByConversation(conversationF, { limit: 10, before: null })
+      const page = await messages.listByConversation(conversationF, {
+        limit: 10,
+        before: null,
+        viewerId: buyer1,
+      })
       if (page.kind !== 'ok') throw new Error('unreachable')
       const ids = page.rows.map((row) => row.id)
       // 提交顺序是 TEXT → SYSTEM，按 (created_at, id) 升序重排后必须一致；

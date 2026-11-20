@@ -140,6 +140,12 @@ describe('chat error helpers', () => {
       '会话不存在或不可访问',
     )
     expect(describeSendFailure(new Error('network'))).toBe('发送失败，请重试')
+    expect(describeSendFailure(new ApiError('MESSAGE_CONTENT_BLOCKED', 422, '内容被拒绝'))).toBe(
+      '消息包含不适合发送的内容，请修改后重新发送',
+    )
+    expect(
+      describeSendFailure(new ApiError('CONTENT_MODERATION_UNAVAILABLE', 503, '上游不可用')),
+    ).toBe('内容审核暂不可用，请稍后重试')
   })
 
   test('describes media failures with their own messages', () => {
@@ -326,6 +332,7 @@ describe('proposeTransaction', () => {
           sender: null,
           type: 'SYSTEM',
           content: JSON.stringify({ type: 'tx.proposal', amountCents: 2000 }),
+          visibility: 'DELIVERED',
           createdAt: '2026-01-01T00:00:00.000Z',
           // #359 3c 起契约必填：SYSTEM 消息既不可撤回也不带引用。
           recalledAt: null,

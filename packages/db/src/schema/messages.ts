@@ -20,6 +20,16 @@ import { users } from './users'
  */
 export const messageTypeEnum = pgEnum('message_type', ['TEXT', 'SYSTEM', 'MEDIA', 'LISTING'])
 
+/**
+ * #694 M1 投递可见性：REVIEW 的消息只给发送者看，接收者的一切读路径都必须过滤。
+ * 旧行由默认值 DELIVERED 兼容（迁移不回填）。
+ */
+export const messageVisibilityEnum = pgEnum('message_visibility', [
+  'DELIVERED',
+  'PENDING_REVIEW',
+  'REJECTED',
+])
+
 /** 不可变行：只有 created_at，没有 updated_at。 */
 export const messages = pgTable(
   'messages',
@@ -55,6 +65,14 @@ export const messages = pgTable(
      * 把消息渲染成「撤回碑」并且不返回 content / listing / 媒体详情。
      */
     recalledAt: timestamp('recalled_at', { withTimezone: true }),
+    /** #694 M1：只有 DELIVERED 参与接收者读路径与未读；默认值兼容 #694 之前的旧行。 */
+    visibility: messageVisibilityEnum('visibility').notNull().default('DELIVERED'),
+    /**
+     * #694 M1 投递时刻：发送时即为 DELIVERED 的行可以留空（读侧按 created_at 兜底），
+     * 人工放行 PENDING_REVIEW 时写入 now()——否则放行消息的 created_at 早于接收者已推进的
+     * last_read_at，会永久不计未读。未读谓词用 COALESCE(delivered_at, created_at)。
+     */
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
     createdAt: createdAt(),
   },
   (table) => [
