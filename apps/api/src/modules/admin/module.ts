@@ -18,6 +18,8 @@ import { createReportService } from '../reports/service'
 import { createSqlReportStore } from '../reports/store'
 import { createListingMediaSettlement } from '../uploads/listing-media-settlement'
 import type { MediaStorage } from '../uploads/storage'
+import { createWishModerationRouter } from '../wishes/moderation-router'
+import type { WishModerationService } from '../wishes/moderation-service'
 import { createRequireAdmin } from './middleware'
 import { createAdminRouter } from './router'
 import { createAdminService, type RecommendationProcessMetrics } from './service'
@@ -58,6 +60,8 @@ export function createAdminModule(options: {
    * 不挂载 /admin/chat-moderation，其它管理端点不受影响。
    */
   chatModeration?: ChatModerationService
+  /** 许愿墙待审（#694 M5）；未传时不挂载 /admin/wishes/moderation。 */
+  wishModeration?: WishModerationService
 }) {
   // #286 复审 blocker 1：管理员对 REVIEW 商品的 ALLOW/BLOCK 必须同时结算它引用的审核中图片，
   // 否则人工放行会被卖家下一次「不改图」的文本编辑重新压回人工队列。钩子从 uploads 域注入，
@@ -96,6 +100,13 @@ export function createAdminModule(options: {
       ? createChatModerationRouter({
           service: options.chatModeration,
           storage: options.storage,
+          requireAuth: options.requireAuth,
+          requireAdmin,
+        })
+      : undefined,
+    wishModerationRouter: options.wishModeration
+      ? createWishModerationRouter({
+          service: options.wishModeration,
           requireAuth: options.requireAuth,
           requireAdmin,
         })

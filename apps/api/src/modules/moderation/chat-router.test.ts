@@ -329,7 +329,7 @@ describe('管理端聊天待审：校验与媒体取证（#694 M2）', () => {
       'VALIDATION_FAILED',
     )
 
-    const badBody = await app.request(recordPath(TEXT_RECORD_ID) + '/decision', {
+    const badBody = await app.request(`${recordPath(TEXT_RECORD_ID)}/decision`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie: adminCookie },
       body: JSON.stringify({ decision: 'ALLOW' }),

@@ -159,6 +159,7 @@ describe('provider 工厂', () => {
       TENCENT_IMS_BIZ_TYPE: 'ims',
       TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-chat',
       TENCENT_IMS_CHAT_BIZ_TYPE: 'ims-chat',
+      TENCENT_TMS_UGC_BIZ_TYPE: 'tms-ugc',
     })
     const provider = createContentModerationProvider(env, { loadImage })
 

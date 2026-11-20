@@ -155,6 +155,9 @@ import { createVisualSearchService } from './modules/visual-search/service'
 import { createVisualSearchStore } from './modules/visual-search/store'
 import { createVisualSearchSubjectResolver } from './modules/visual-search/subject'
 import { createDbWishMatchQueue } from './modules/wishes/match-queue'
+import { createWishModerationPolicy } from './modules/wishes/moderation-policy'
+import { createWishModerationService } from './modules/wishes/moderation-service'
+import { createSqlWishModerationStore } from './modules/wishes/moderation-store'
 import { createWishesRouterFromDb } from './modules/wishes/router'
 import { createDefaultLatencyRecorder } from './observability/latency'
 import { createRecommendationProcessMetrics } from './observability/recommendation-metrics'
@@ -758,9 +761,19 @@ export function createApp(
   // 历史：`WISH_ROUTES.base` 曾是 `/api/wishes`（把浏览器前缀写进了 API 路径）。#52 为不打断
   // 当时的调用方并存过 `/api/wishes` 过渡别名；#53 把常量收敛到根级后，别名已删除
   //（`apps/api/src/app.wishes.test.ts` 有一条断言钉住它不会被无意间重新引入）。
+  // #694 M5：许愿墙文本必须走独立的公开 UGC 策略号；图片审核本次不涉及，loadImage 不可用即可。
+  const wishModerationPolicy = createWishModerationPolicy(
+    createContentModerationProvider(
+      moderationEnv.transport === 'tencent'
+        ? { ...moderationEnv, tmsBizType: moderationEnv.tmsUgcBizType }
+        : moderationEnv,
+      { loadImage: () => Promise.reject(new Error('wish moderation does not read images')) },
+    ),
+  )
   const wishes = createWishesRouterFromDb(db, {
     getUserId: (c) => c.get('userId'),
     matchQueue: createDbWishMatchQueue(db),
+    moderation: wishModerationPolicy,
     guard: restrictionGuard,
     requirePhone: requirePhoneBound,
   })
@@ -1035,10 +1048,15 @@ export function createApp(
       })
     },
   })
+  const wishModerationService = createWishModerationService({
+    store: createSqlWishModerationStore(db),
+    matchQueue: createDbWishMatchQueue(db),
+  })
   const admin = createAdminModule({
     db,
     storage,
     chatModeration: chatModerationService,
+    wishModeration: wishModerationService,
     requireAuth: auth.requireAuth,
     governance: governanceService,
     guard: restrictionGuard,

@@ -296,6 +296,8 @@ export type ContentModerationEnv =
       tmsChatBizType: string
       /** #694 M1：聊天图片必须使用独立 BizType，禁止复用商品图片策略。 */
       imsChatBizType: string
+      /** #694 M5：公开 UGC（许愿墙等）必须使用独立 BizType，禁止复用商品/聊天策略。 */
+      tmsUgcBizType: string
     }
 
 export function loadContentModerationEnv(
@@ -320,13 +322,15 @@ export function loadContentModerationEnv(
     const imsBizType = source.TENCENT_IMS_BIZ_TYPE?.trim()
     const tmsChatBizType = source.TENCENT_TMS_CHAT_BIZ_TYPE?.trim()
     const imsChatBizType = source.TENCENT_IMS_CHAT_BIZ_TYPE?.trim()
+    const tmsUgcBizType = source.TENCENT_TMS_UGC_BIZ_TYPE?.trim()
     if (
       !secretId ||
       !secretKey ||
       !tmsBizType ||
       !imsBizType ||
       !tmsChatBizType ||
-      !imsChatBizType
+      !imsChatBizType ||
+      !tmsUgcBizType
     ) {
       // 点名「缺了哪一个」：只报一句「六个都要配」的话，运维无法判断到底漏了哪一项。
       const missing = [
@@ -336,9 +340,10 @@ export function loadContentModerationEnv(
         !imsBizType ? 'TENCENT_IMS_BIZ_TYPE' : null,
         !tmsChatBizType ? 'TENCENT_TMS_CHAT_BIZ_TYPE' : null,
         !imsChatBizType ? 'TENCENT_IMS_CHAT_BIZ_TYPE' : null,
+        !tmsUgcBizType ? 'TENCENT_TMS_UGC_BIZ_TYPE' : null,
       ].filter((name): name is string => name !== null)
       throw new Error(
-        `环境变量校验失败：CONTENT_MODERATION_TRANSPORT=tencent 缺少 ${missing.join(' / ')}。六项配置都必须提供：TENCENT_CLOUD_SECRET_ID / TENCENT_CLOUD_SECRET_KEY / TENCENT_TMS_BIZ_TYPE / TENCENT_IMS_BIZ_TYPE / TENCENT_TMS_CHAT_BIZ_TYPE / TENCENT_IMS_CHAT_BIZ_TYPE`,
+        `环境变量校验失败：CONTENT_MODERATION_TRANSPORT=tencent 缺少 ${missing.join(' / ')}。七项配置都必须提供：TENCENT_CLOUD_SECRET_ID / TENCENT_CLOUD_SECRET_KEY / TENCENT_TMS_BIZ_TYPE / TENCENT_IMS_BIZ_TYPE / TENCENT_TMS_CHAT_BIZ_TYPE / TENCENT_IMS_CHAT_BIZ_TYPE / TENCENT_TMS_UGC_BIZ_TYPE`,
       )
     }
     // #694 M1：聊天必须有自己的策略号。只校验非空不够——把商品策略号复制一份同样能通过，
@@ -346,6 +351,12 @@ export function loadContentModerationEnv(
     if (tmsChatBizType === tmsBizType) {
       throw new Error(
         '环境变量校验失败：TENCENT_TMS_CHAT_BIZ_TYPE 必须与 TENCENT_TMS_BIZ_TYPE 不同（聊天不能复用商品策略号）',
+      )
+    }
+    // #694 M5：公开 UGC 需要独立策略号，否则许愿墙会静默套用聊天/商品词表与阈值。
+    if (tmsUgcBizType === tmsBizType || tmsUgcBizType === tmsChatBizType) {
+      throw new Error(
+        '环境变量校验失败：TENCENT_TMS_UGC_BIZ_TYPE 必须与商品、聊天策略号都不同（公开 UGC 不能复用现有策略号）',
       )
     }
     if (imsChatBizType === imsBizType) {
@@ -361,6 +372,7 @@ export function loadContentModerationEnv(
       imsBizType,
       tmsChatBizType,
       imsChatBizType,
+      tmsUgcBizType,
       region: source.TENCENT_CLOUD_REGION?.trim() || DEFAULT_TENCENT_CLOUD_REGION,
     }
   }

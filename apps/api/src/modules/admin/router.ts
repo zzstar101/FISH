@@ -82,6 +82,8 @@ export type AdminRouterOptions = {
    * 注册在 `all('*')` catch-all 之前，否则路径会被吞成 404。
    */
   chatModerationRouter?: Hono<{ Variables: AuthVariables }>
+  /** 许愿墙待审子路由（#694 M5），同样必须在 catch-all 之前挂载。 */
+  wishModerationRouter?: Hono<{ Variables: AuthVariables }>
   /**
    * 私有存储（#694 M2）：管理端读取「消息举报」的证据快照字节。取证对象是服务端在举报
    * 创建时固化的快照，不是用户可以随时覆盖的 staging key。
@@ -684,6 +686,9 @@ export function createAdminRouter(options: AdminRouterOptions) {
   // #694 M2：聊天待审子路由必须注册在 catch-all 之前，否则会被 `all('*')` 吞成 404。
   if (options.chatModerationRouter) {
     router.route('/chat-moderation', options.chatModerationRouter)
+  }
+  if (options.wishModerationRouter) {
+    router.route('/wishes/moderation', options.wishModerationRouter)
   }
   router.all('*', (c) => c.json(errorBody('ADMIN_NOT_FOUND', '目标不存在'), 404))
 

@@ -10,6 +10,7 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
 import { createNoopWishMatchQueue, type WishMatchQueue } from './match-queue'
+import type { WishModerationPolicy } from './moderation-policy'
 import { createWishService, type WishService, WishServiceError } from './service'
 import { createSqlWishStore, type WishStore } from './store'
 
@@ -22,6 +23,8 @@ export type WishesRouterOptions = {
   matchQueue?: WishMatchQueue
   getUserId: WishUserIdResolver
   service?: WishService
+  /** 公开 UGC 文本审核（#694 M5）；省略时不做内容审核（仅测试/离线装配）。 */
+  moderation?: WishModerationPolicy
   /**
    * #73 治理守卫：写愿望前检查封禁 / 限制发布。
    *
@@ -44,6 +47,12 @@ function jsonError(message: string, code = 'BAD_REQUEST') {
 
 function serviceErrorResponse(c: WishesContext, error: unknown) {
   if (error instanceof WishServiceError) {
+    if (error.status === 422) return c.json(jsonError(error.message, error.code), 422)
+    if (error.status === 503) {
+      return c.json(jsonError(error.message, error.code), 503, {
+        'Retry-After': '30',
+      })
+    }
     const code =
       error.status === 403 ? 'FORBIDDEN' : error.status === 404 ? 'NOT_FOUND' : 'CONFLICT'
     switch (error.status) {
@@ -97,7 +106,9 @@ function parseWishId(raw: string): string | null {
  */
 export function createWishesRouter(options: WishesRouterOptions) {
   const matchQueue = options.matchQueue ?? createNoopWishMatchQueue()
-  const service = options.service ?? createWishService({ store: options.store, matchQueue })
+  const service =
+    options.service ??
+    createWishService({ store: options.store, matchQueue, moderation: options.moderation })
   const app = new Hono<{ Variables: WishesVariables }>()
 
   app.use('*', async (c, next) => {

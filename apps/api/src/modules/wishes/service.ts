@@ -12,16 +12,54 @@ import {
 } from '@fish/contracts/wishes/schema'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { type ContentModerationError, moderationErrorResponse } from '../moderation/providers/types'
 import type { WishMatchQueue } from './match-queue'
-import type { EditableWishFields, PoolRow, WishRow, WishStore } from './store'
+import type { WishModerationPolicy, WishTextModerationResult } from './moderation-policy'
+import type {
+  EditableWishFields,
+  ModerationRecordDraft,
+  PoolRow,
+  WishRow,
+  WishStore,
+} from './store'
 
 export class WishServiceError extends Error {
   constructor(
-    readonly status: 400 | 403 | 404 | 409,
+    readonly status: 400 | 403 | 404 | 409 | 422 | 503,
     message: string,
+    readonly code = 'WISH_INVALID',
   ) {
     super(message)
     this.name = 'WishServiceError'
+  }
+}
+
+function isModerationError(error: unknown): error is ContentModerationError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'reason' in error &&
+    typeof (error as { reason?: unknown }).reason === 'string' &&
+    (error as { name?: string }).name === 'ContentModerationError'
+  )
+}
+
+function moderationDraft(
+  result: WishTextModerationResult,
+  decision: 'REVIEW',
+): ModerationRecordDraft {
+  return {
+    machineDecision: result.decision,
+    decision,
+    provider: result.provider,
+    providerRequestId: result.providerRequestId,
+    policyVersion: result.policyVersion,
+    suggestion: result.suggestion,
+    label: result.label,
+    subLabel: result.subLabel,
+    score: result.score,
+    matchedRules: result.matchedRules,
+    matchedTermsMasked: result.matchedTermsMasked,
   }
 }
 
@@ -72,9 +110,11 @@ export interface WishService {
 export function createWishService({
   store,
   matchQueue,
+  moderation,
 }: {
   store: WishStore
   matchQueue: WishMatchQueue
+  moderation?: WishModerationPolicy
 }): WishService {
   let poolCache: { expiresAt: number; response: WishPoolResponse } | null = null
 
@@ -152,6 +192,33 @@ export function createWishService({
     async createWish(userId, input) {
       const parsed = wishCreateInputSchema.parse(input)
       const now = new Date()
+      let reviewDraft: ModerationRecordDraft | undefined
+      if (moderation) {
+        try {
+          const verdict = await moderation.moderateWish({
+            keyword: parsed.keyword,
+            description: parsed.description ?? null,
+          })
+          if (verdict.decision === 'BLOCK') {
+            throw new WishServiceError(
+              422,
+              '愿望内容未通过审核，请修改后重试',
+              'WISH_CONTENT_BLOCKED',
+            )
+          }
+          if (verdict.decision === 'REVIEW') reviewDraft = moderationDraft(verdict, 'REVIEW')
+        } catch (error) {
+          if (isModerationError(error)) {
+            const mapped = moderationErrorResponse(error)
+            throw new WishServiceError(
+              mapped.status,
+              mapped.status === 503 ? '内容审核暂不可用，请稍后重试' : '内容无法审核，请修改后重试',
+              mapped.code,
+            )
+          }
+          throw error
+        }
+      }
       const result = await store.createOrGetRecent(
         {
           id: newId(),
@@ -167,6 +234,13 @@ export function createWishService({
         },
         ACTIVE_WISH_LIMIT,
         new Date(now.getTime() - DUPLICATE_WINDOW_MS),
+        reviewDraft
+          ? {
+              moderationStatus: 'PENDING_REVIEW',
+              enqueueJobs: false,
+              moderation: reviewDraft,
+            }
+          : undefined,
       )
       if (result.kind === 'active-limit') {
         throw new WishServiceError(409, `ACTIVE 愿望最多 ${ACTIVE_WISH_LIMIT} 条`)
@@ -176,7 +250,8 @@ export function createWishService({
       if (result.kind === 'created') invalidatePoolCache()
 
       // 对重复请求重新投递，避免前一次投递失败后该愿望永久失配；匹配侧需按 wishId 幂等消费。
-      await matchQueue.enqueue(result.row.id)
+      // 待审内容不投递：审核通过后由管理端结算触发首次投递。
+      if (!reviewDraft) await matchQueue.enqueue(result.row.id)
       return toWishDto(result.row)
     },
 
@@ -215,6 +290,44 @@ export function createWishService({
         description: mergedDescription ?? undefined,
         acceptSimilar: patch.acceptSimilar ?? wish.accept_similar,
       })
+      const mergedKeyword = patch.keyword ?? wish.keyword
+      const textChanged = patch.keyword !== undefined || patch.description !== undefined
+      if (moderation && textChanged) {
+        try {
+          const verdict = await moderation.moderateWish({
+            keyword: mergedKeyword,
+            description: mergedDescription,
+          })
+          if (verdict.decision === 'BLOCK') {
+            throw new WishServiceError(
+              422,
+              '愿望内容未通过审核，请修改后重试',
+              'WISH_CONTENT_BLOCKED',
+            )
+          }
+          if (verdict.decision === 'REVIEW') {
+            const version = (wish.content_version ?? 1) + 1
+            const pending = await store.setPending(
+              id,
+              { keyword: mergedKeyword, description: mergedDescription, version },
+              moderationDraft(verdict, 'REVIEW'),
+            )
+            if (!pending) throw new WishServiceError(409, '只有 ACTIVE 愿望可以编辑')
+            // 公开字段未变：需求池缓存与匹配结果都不需要失效。
+            return toWishDto(pending)
+          }
+        } catch (error) {
+          if (isModerationError(error)) {
+            const mapped = moderationErrorResponse(error)
+            throw new WishServiceError(
+              mapped.status,
+              mapped.status === 503 ? '内容审核暂不可用，请稍后重试' : '内容无法审核，请修改后重试',
+              mapped.code,
+            )
+          }
+          throw error
+        }
+      }
       const updated = await store.update(id, toEditableFields(patch))
       if (updated) {
         invalidatePoolCache()
@@ -257,6 +370,13 @@ export function toWishDto(row: WishRow): WishDto {
     description: row.description,
     acceptSimilar: row.accept_similar,
     status: rowStatus(row),
+    moderationStatus:
+      row.moderation_status === 'PENDING_REVIEW'
+        ? 'PENDING_REVIEW'
+        : row.moderation_status === 'REJECTED'
+          ? 'REJECTED'
+          : 'APPROVED',
+    pendingReview: row.pending_version != null,
     matchCount: row.match_count ?? 0,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),

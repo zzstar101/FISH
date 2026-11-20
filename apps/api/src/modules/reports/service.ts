@@ -262,7 +262,7 @@ export function createReportService(store: ReportStore): ReportService {
 
     async getEvidenceMedia(reportId) {
       const media = await store.findEvidenceMedia(reportId)
-      if (!media || !media.objectKey) return null
+      if (!media?.objectKey) return null
       return media
     },
 
