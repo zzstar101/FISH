@@ -207,7 +207,7 @@ export const ListingCardSchema = z.object({
    * 列表封面：无图商品为 `null`（seed 6 条商品里有 3 条无图），前端必须有占位处理。
    *
    * #620 起**列表/卡片返回的是缩略图**（服务端生成的 `listings/{usr}/{med}-thumb.webp`，
-   * 长边 ≤ 400、webp），不是上传原图 —— 卡片封面在端上最大也只有约 345 CSS px，原图
+   * 长边 ≤ 640、webp），不是上传原图 —— PC 卡片在 2x 屏上约 608 设备像素，原图
    * 单张可达 300 KB。需要大图（详情画廊、放大预览、分享海报）请用详情的 `images`；
    * 详情的 `coverUrl` 仍是原图（见 `ListingDetailSchema` 的注记）。
    *

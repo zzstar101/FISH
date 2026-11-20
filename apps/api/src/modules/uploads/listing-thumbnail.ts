@@ -5,7 +5,7 @@ import { listingThumbnailKeyOf, type MediaStorage } from './storage'
  *
  * 商品卡 / 收藏 / 订单 / 会话里显示封面的位置全是小图（最大的他人主页网格与商品卡也只在
  * 300–345 CSS px 量级），却一直原样加载上传原图：6 张公开封面合计 1.5 MiB，单张 1280×857
- * 就有 309 KB。这里在**服务端**把它们压到长边 ≤ 400 的 webp，作为独立对象与写入时的
+ * 就有 309 KB。这里在**服务端**把它们压到长边 ≤ 640 的 webp，作为独立对象与写入时的
  * `listings/{usr}/{med}.{ext}` 并存；列表/卡片的 `coverUrl` 指向缩略图，详情与放大仍用原图。
  *
  * 为什么不用 CDN 的查询参数（`?imageMogr2/...`）：issue #620 实测当前生产配置下它返回的
@@ -16,24 +16,19 @@ import { listingThumbnailKeyOf, type MediaStorage } from './storage'
 /**
  * 缩略图长边。
  *
- * 卡片封面最大约 345 CSS px（商品卡、他人主页半宽网格），400 留出一点余量；再大对 2x/3x 屏的
- * 小图没有可感知收益，却会明显增加列表流量。
+ * 按最费像素的消费点取：PC 商品卡在 4 列布局下约 304 CSS px，2x 屏需要 608；小程序
+ * `COLUMN_WIDTH = 337` rpx 在 3x 屏上约 542 设备像素。640 同时盖住两者，再大对列表里的
+ * 小图没有可感知收益，却会明显增加流量。
  */
-export const LISTING_THUMBNAIL_MAX_EDGE = 400
+export const LISTING_THUMBNAIL_MAX_EDGE = 640
 
 /**
  * webp 质量 75。目前只用本机样本（小程序截图、合成图）量过字节，**没有真实商品照片做主观对比**：
- * 长边 400 时样本落在 4–8 KB，q80 大约多 15%（见 PR 的样本记录）。真实照片会更接近 10–20 KB。
+ * 长边 640 时样本落在 8–14 KB，q80 大约多 15%（见 PR 的样本记录）。真实照片会更接近 15–30 KB。
  */
 export const LISTING_THUMBNAIL_QUALITY = 75
 
 export const LISTING_THUMBNAIL_CONTENT_TYPE = 'image/webp'
-
-export type RenderedListingThumbnail = {
-  bytes: Uint8Array
-  width: number
-  height: number
-}
 
 /** 渲染失败（损坏的图片、超大头像、编解码器拒绝）——调用方据此决定降级还是报错。 */
 export class ListingThumbnailError extends Error {
@@ -44,21 +39,17 @@ export class ListingThumbnailError extends Error {
 }
 
 /**
- * 把一张已经过内容审核的图片渲染成列表缩略图。
+ * 把一张已经过内容审核的图片渲染成列表缩略图（webp 字节）。
  *
  * - **不放大小图**：`withoutEnlargement` 保证 100×100 的头像仍是 100×100（`fit: 'inside'` 单独
- *   使用时会把小图放大到 400，反而更糊、更大）；
- * - **方向**：`Bun.Image` 默认 `autoOrient`，EXIF Orientation 已在解码阶段应用（实测
- *   Orientation=6 的 400×200 JPEG，`metadata()` 返回 200×400，输出像素方向正确、EXIF 被剥离）；
+ *   使用时会把小图放大到长边上限，反而更糊、更大）；
+ * - **方向**：`Bun.Image` 默认 `autoOrient`，EXIF Orientation 在解码阶段就被应用（实现时用
+ *   Orientation=6 的本机样本验证过：输出像素方向正确、EXIF 被剥离；这条没有进自动化用例）；
  * - **格式**：一律 webp；透明通道保留（PNG 商品图/头像不会变黑底）。
  */
-export async function renderListingThumbnail(
-  source: Uint8Array,
-): Promise<RenderedListingThumbnail> {
-  let metadata: Bun.Image.Metadata
+export async function renderListingThumbnail(source: Uint8Array): Promise<Uint8Array> {
   let bytes: Uint8Array
   try {
-    metadata = await new Bun.Image(source).metadata()
     bytes = await new Bun.Image(source)
       .resize(LISTING_THUMBNAIL_MAX_EDGE, LISTING_THUMBNAIL_MAX_EDGE, {
         fit: 'inside',
@@ -72,12 +63,7 @@ export async function renderListingThumbnail(
   if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
     throw new ListingThumbnailError('列表缩略图渲染结果为空')
   }
-  const scale = Math.min(1, LISTING_THUMBNAIL_MAX_EDGE / Math.max(metadata.width, metadata.height))
-  return {
-    bytes,
-    width: Math.max(1, Math.round(metadata.width * scale)),
-    height: Math.max(1, Math.round(metadata.height * scale)),
-  }
+  return bytes
 }
 
 /**
@@ -97,8 +83,8 @@ export async function writeListingThumbnail(
   if (!writeBytes) {
     throw new ListingThumbnailError('媒体存储不支持写入字节，无法生成列表缩略图')
   }
-  const rendered = await renderListingThumbnail(source)
-  await writeBytes.call(storage, thumbnailKey, rendered.bytes, LISTING_THUMBNAIL_CONTENT_TYPE)
+  const bytes = await renderListingThumbnail(source)
+  await writeBytes.call(storage, thumbnailKey, bytes, LISTING_THUMBNAIL_CONTENT_TYPE)
   return true
 }
 

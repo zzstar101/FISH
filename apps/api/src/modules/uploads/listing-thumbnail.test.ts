@@ -47,25 +47,21 @@ async function decodeDimension(bytes: Uint8Array): Promise<{ width: number; heig
 }
 
 describe('renderListingThumbnail', () => {
-  test('把长边压到 400，保持比例，输出 webp', async () => {
-    const source = bmp(500, 400)
-    const rendered = await renderListingThumbnail(source)
+  test('把长边压到 640，保持比例，输出 webp', async () => {
+    const source = bmp(800, 640)
+    const bytes = await renderListingThumbnail(source)
 
-    expect(rendered.width).toBe(400)
-    expect(rendered.height).toBe(320)
-    expect(new TextDecoder().decode(rendered.bytes.subarray(0, 4))).toBe('RIFF')
-    expect(new TextDecoder().decode(rendered.bytes.subarray(8, 12))).toBe('WEBP')
-    expect(await decodeDimension(rendered.bytes)).toEqual({ width: 400, height: 320 })
-    // 原图 600 KB 的未压缩 BMP 换成 1–2 KB 的 webp：列表封面的字节量级由此改变。
-    expect(rendered.bytes.byteLength).toBeLessThan(source.byteLength)
+    expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('RIFF')
+    expect(new TextDecoder().decode(bytes.subarray(8, 12))).toBe('WEBP')
+    expect(await decodeDimension(bytes)).toEqual({ width: 640, height: 512 })
+    // 未压缩 BMP 的 1.9 MB 换成几 KB 的 webp：列表封面的字节量级由此改变。
+    expect(bytes.byteLength).toBeLessThan(source.byteLength)
   })
 
   test('小图不被放大（withoutEnlargement）', async () => {
-    const rendered = await renderListingThumbnail(bmp(120, 80))
+    const bytes = await renderListingThumbnail(bmp(120, 80))
 
-    expect(rendered.width).toBe(120)
-    expect(rendered.height).toBe(80)
-    expect(await decodeDimension(rendered.bytes)).toEqual({ width: 120, height: 80 })
+    expect(await decodeDimension(bytes)).toEqual({ width: 120, height: 80 })
   })
 
   test('解不开的字节抛 ListingThumbnailError（调用方据此降级）', async () => {

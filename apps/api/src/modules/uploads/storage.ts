@@ -1,3 +1,8 @@
+import {
+  isListingThumbnailKey,
+  isPublicListingKey,
+  listingThumbnailKeyOf,
+} from '@fish/shared/listing-media-key'
 import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   DISPUTE_MEDIA_URL_TTL_SECONDS,
@@ -180,51 +185,19 @@ export function isSafeObjectKey(key: string): boolean {
   return key.split('/').every((segment) => segment !== '.' && segment !== '..')
 }
 
-export function isPublicListingKey(key: string): boolean {
-  const match = /^listings\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/.exec(key)
-  return Boolean(
-    match &&
-      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
-      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
-  )
-}
-
 /** Seed illustrations have stable non-resource slugs, never a user/listing UUID. */
 const SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/
 
 /**
- * 列表缩略图的对象键后缀（#620）。
- *
- * 为什么是**独立对象**而不是 CDN 查询参数：issue #620 实测同一张公开封面加
- * `?imageMogr2/thumbnail/320x320/format/webp` 后仍返回原字节、`image/jpeg` 与相同 ETag ——
- * 腾讯云 COS/EdgeOne 的图像处理在本项目当前配置下没有生效，而打开它要改生产 CDN 配置
- * （本 Issue 明确不允许盲改）。服务端在写入时就生成好缩略图字节，只依赖对象存储，
- * 不依赖任何运行时图像处理能力，CDN 也能当作普通静态对象直接缓存。
+ * 公开键 / 缩略图键的规则定义在 `@fish/shared/listing-media-key`（API 与 worker 回收任务共用），
+ * 这里 re-export 维持「键域校验统一从 storage 出口拿」的既有 import 面。
  */
-export const LISTING_THUMBNAIL_SUFFIX = '-thumb.webp'
-
-/** 缩略图键形状：`listings/{usr_…}/{med_…}-thumb.webp`（两段都必须是规范 TypeID）。 */
-const LISTING_THUMBNAIL_KEY = /^listings\/([^/]+)\/([^/.]+)-thumb\.webp$/
-
-export function isListingThumbnailKey(key: string): boolean {
-  const match = LISTING_THUMBNAIL_KEY.exec(key)
-  return Boolean(
-    match &&
-      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
-      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
-  )
-}
-
-/**
- * 公开固化键 → 缩略图键；不是规范公开键时返回 `null`。
- *
- * 只有 `confirm` 固化出来的 `listings/{usr}/{med}.{ext}`（以及历史对象的回填）才有缩略图；
- * legacy UUID 键、审核中的私有键、seed 演示键都**没有**，调用方拿到 `null` 时必须保留原 URL。
- */
-export function listingThumbnailKeyOf(publicKey: string): string | null {
-  if (!isPublicListingKey(publicKey)) return null
-  return `${publicKey.slice(0, publicKey.lastIndexOf('.'))}${LISTING_THUMBNAIL_SUFFIX}`
-}
+export {
+  isListingThumbnailKey,
+  isPublicListingKey,
+  LISTING_THUMBNAIL_SUFFIX,
+  listingThumbnailKeyOf,
+} from '@fish/shared/listing-media-key'
 
 /**
  * 卡片封面地址（#620）：列表/卡片一律给缩略图，详情与放大仍走原图。

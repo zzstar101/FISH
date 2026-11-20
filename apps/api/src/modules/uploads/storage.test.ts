@@ -10,10 +10,8 @@ import { disputeMediaObjectKey, disputeMediaPrefix } from './dispute-media'
 import { createUploadsRouter } from './router'
 import {
   createBunS3MediaStorage,
-  isListingThumbnailKey,
   isSafeObjectKey,
   listingCoverUrl,
-  listingThumbnailKeyOf,
   type MediaStorage,
 } from './storage'
 
@@ -540,16 +538,6 @@ test('列表封面指向缩略图对象；无法生成缩略图的历史键回�
   const mediaKey = encodePublicId(PUBLIC_ID_PREFIX.media, newId())
   const original = `listings/${userKey}/${mediaKey}.jpg`
   const thumbnail = `listings/${userKey}/${mediaKey}-thumb.webp`
-
-  expect(listingThumbnailKeyOf(original)).toBe(thumbnail)
-  expect(isListingThumbnailKey(thumbnail)).toBe(true)
-  // 只有规范公开键有缩略图：seed 演示键、legacy UUID 键、私有审核键、非 TypeID 键都没有。
-  expect(listingThumbnailKeyOf('listings/seed-k380/0.jpg')).toBeNull()
-  expect(
-    listingThumbnailKeyOf(`listings/${USER_ID}/01930000-0000-4000-8000-000000000001.jpg`),
-  ).toBeNull()
-  expect(listingThumbnailKeyOf(`listing-review-media/${userKey}/${mediaKey}.jpg`)).toBeNull()
-  expect(isListingThumbnailKey(`listings/${userKey}/${mediaKey}-thumb.png`)).toBe(false)
 
   // 缩略图键本身也能出公开直链（存储白名单要放行它，否则写入后读不到）。
   expect(media.publicUrl(thumbnail)).toBe(`https://cdn.test/fish/${thumbnail}`)

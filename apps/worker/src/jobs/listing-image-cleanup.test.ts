@@ -5,6 +5,7 @@ import { listingImageDeletions } from '@fish/db/schema/listing-image-deletions'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq, inArray, like } from 'drizzle-orm'
 import type { WorkerMediaStorage } from '../media-storage'
 import { cleanupRemovedListingImages } from './listing-image-cleanup'
@@ -150,6 +151,29 @@ describe('cleanupRemovedListingImages', () => {
     // rowPresent=true 只在"先删对象"的实现下成立：顺序一旦反了，这里会是 false。
     expect(log).toEqual([`deleteObject:${key}:rowPresent=true`])
     expect(await deletionRowCount(key)).toBe(0)
+  })
+
+  test('到期行连同派生的缩略图对象一起回收（#620）', async () => {
+    const sellerId = await createUser()
+    const key = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, sellerId)}/${encodePublicId(
+      PUBLIC_ID_PREFIX.media,
+      newId(),
+    )}.jpg`
+    await registerDeletion(key, removedAt(30))
+
+    const log: string[] = []
+    const result = await cleanupRemovedListingImages({
+      db,
+      storage: recordingStorage(log),
+      now: NOW,
+    })
+
+    expect(result).toEqual({ scanned: 1, deleted: 1, failed: 0 })
+    // 缩略图不在台账里（它是原图键的派生对象），先删缩略图、再删原图与台账行。
+    expect(log).toEqual([
+      `deleteObject:${key.slice(0, -4)}-thumb.webp:rowPresent=false`,
+      `deleteObject:${key}:rowPresent=true`,
+    ])
   })
 
   test('未到期的待删行原样保留', async () => {

@@ -814,7 +814,7 @@ if [ "${bad:-0}" -eq 1 ]; then
 fi
 unset MEETUP_KEY
 
-# 同一理由：#141 起 AI_POLISH_TRANSPORT 也是必填且无默认值，缺了同样在第 6 步进 crash loop。
+# 同一理由：#141 起 AI_POLISH_TRANSPORT 也是必填且无默认值，缺了同样在第 7 步进 crash loop。
 AI_TRANSPORT=$(sed -n 's/^AI_POLISH_TRANSPORT=//p' "$API_ENV" | tail -1 | tr -d '\r')
 AI_BASE_URL=$(sed -n 's/^AI_POLISH_BASE_URL=//p' "$API_ENV" | tail -1 | tr -d '\r')
 AI_API_KEY=$(sed -n 's/^AI_POLISH_API_KEY=//p' "$API_ENV" | tail -1 | tr -d '\r')
@@ -882,7 +882,9 @@ curl -fsS http://127.0.0.1:3000/health
 
 第 6 步（#620 起）回填历史图片的列表缩略图：原图与缩略图是**两个独立对象**（不是给原图拼
 `?imageMogr2/...` 查询参数 —— 实测当前生产 CDN 会忽略它并返回原字节），所以只有上传/人工放行时
-才会生成缩略图，此前已存在的图片必须由这一步补。首次上线（§7.1）没有历史图片，可以跳过；
+才会生成缩略图，此前已存在的图片必须由这一步补。数据源同时包含 `listing_images` 与上传台账里
+已固化的公开键：只扫前者会漏掉「部署前已 confirm、部署后才挂到商品上」的图片（`confirm` 的幂等
+重放不重新渲染缩略图），它们的列表封面会永久 404。首次上线（§7.1）没有历史图片，可以跳过；
 回滚到 #620 之前的 tag 时这一步自动跳过（旧代码不读缩略图，已生成的对象留着也无害）。
 
 先用 `--check` 只看差多少、不写任何对象（有缺失时退出码 1，可放进发布前的检查清单）：
