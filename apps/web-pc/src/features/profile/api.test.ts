@@ -461,6 +461,8 @@ describe('#475 uploadReviewImage（presign → PUT → confirm）', () => {
         return Response.json({
           objectKey: 'reviews/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png',
           url: 'http://cdn.local/reviews/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png',
+          // #694 M5c 起 confirm 响应必带机器结论（BLOCK 不会走到这里），fixture 跟上契约。
+          moderationDecision: 'ALLOW',
         })
       }
       throw new Error(`未预期的请求 ${url}`)

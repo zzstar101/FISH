@@ -28,6 +28,8 @@ import {
   type TransactionReview,
   type TransactionReviewCreateInput,
   TransactionReviewResponseSchema,
+  type TransactionReviewsResponse,
+  TransactionReviewsResponseSchema,
 } from '@fish/contracts/transaction-reviews/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
@@ -225,6 +227,20 @@ export async function fetchMyReview(transactionId: string): Promise<TransactionR
     if (error instanceof ApiError && error.status === 404) return null
     throw error
   }
+}
+
+/**
+ * 一笔交易下**双方**的评价（#694 M7）：仅交易参与者可读，用于订单详情展示「对方的评价」。
+ *
+ * 与 `fetchMyReview` 不同，这里不吞 404 —— 订单详情自身已经证明读取者是参与者，
+ * 真拿到 404 属于状态漂移，应让查询层显式失败而不是渲染成「对方没评」。
+ */
+export async function fetchTransactionReviews(
+  transactionId: string,
+): Promise<TransactionReviewsResponse> {
+  return TransactionReviewsResponseSchema.parse(
+    await apiRequest(TRANSACTION_REVIEW_ROUTES.ofTransaction(transactionId)),
+  )
 }
 
 /**

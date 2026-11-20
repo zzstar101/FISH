@@ -54,8 +54,13 @@ export const ADMIN_ROUTES = {
   reports: '/admin/reports',
   /** GET 举报详情（举报 + 举报人 + 目标摘要 + 同目标其它未决举报）。 */
   reportDetail: (reportId: string) => `/admin/reports/${reportId}`,
-  /** GET 被举报媒体消息的证据快照字节（#694 M2，仅 IMAGE/VOICE，需管理员会话）。 */
-  reportEvidenceMedia: (reportId: string) => `/admin/reports/${reportId}/evidence-media`,
+  /**
+   * GET 被举报媒体证据快照字节（#694 M2 / M7，需管理员会话）。
+   *
+   * MESSAGE：被举报消息的 IMAGE / VOICE；REVIEW：评价的第 `index` 张配图（默认 0）。
+   */
+  reportEvidenceMedia: (reportId: string, index?: number) =>
+    `/admin/reports/${reportId}/evidence-media${index === undefined ? '' : `?index=${index}`}`,
   /** POST 处理举报（result = HANDLED / REJECTED + reason）。只写处理结果，不触发治理动作。 */
   reportHandle: (reportId: string) => `/admin/reports/${reportId}/handle`,
   /** GET 争议队列（游标分页 + 状态 / 类型 / 关键词 / 时间筛选）。 */

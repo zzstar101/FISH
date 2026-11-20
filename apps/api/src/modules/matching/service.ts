@@ -95,7 +95,11 @@ export function createMatchingService(deps: {
           id: encodePublicId(PUBLIC_ID_PREFIX.match, entry.matchId),
           score: entry.score,
           createdAt: entry.createdAt.toISOString(),
-          wish: { ...entry.wish, id: encodePublicId(PUBLIC_ID_PREFIX.wish, entry.wish.id) },
+          wish: {
+            ...entry.wish,
+            id: encodePublicId(PUBLIC_ID_PREFIX.wish, entry.wish.id),
+            userId: encodePublicId(PUBLIC_ID_PREFIX.user, entry.wish.userId),
+          },
         })),
       })
     },

@@ -6,6 +6,7 @@ import {
   type AdminReportListResponse,
   AdminReportListResponseSchema,
   type AdminReportQueueQuery,
+  ReportCommentEvidenceSchema,
   type ReportCreateResponse,
   ReportCreateResponseSchema,
   type ReportErrorCode,
@@ -14,14 +15,23 @@ import {
   ReportListResponseSchema,
   ReportMessageEvidenceSchema,
   type ReportMineQuery,
+  ReportReviewEvidenceSchema,
   ReportSchema,
+  type ReportTargetEvidence,
   type ReportTargetType,
   ReportTargetTypeSchema,
+  ReportWishEvidenceSchema,
 } from '@fish/contracts/reports/schema'
 import type { SystemErrorCode } from '@fish/contracts/system/error'
-import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../admin/cursor'
-import type { AdminReportRow, ReportRow, ReportStore } from './store'
+import type {
+  AdminReportRow,
+  ReportEvidenceSnapshot,
+  ReportRow,
+  ReportStore,
+  TargetSummaryRow,
+} from './store'
 
 /**
  * Reports service（#73 治理半场）：权限校验之后 + 数据层之前的业务编排。
@@ -58,15 +68,24 @@ function invalidCursor(): ReportServiceError {
   return new ReportServiceError('VALIDATION_FAILED', 422, 'cursor 无效')
 }
 
+/** 举报目标公开 ID 前缀（#694 M7 起覆盖全部目标类型）。 */
+const TARGET_ID_PREFIX = {
+  LISTING: PUBLIC_ID_PREFIX.listing,
+  USER: PUBLIC_ID_PREFIX.user,
+  MESSAGE: PUBLIC_ID_PREFIX.message,
+  COMMENT: PUBLIC_ID_PREFIX.comment,
+  REVIEW: PUBLIC_ID_PREFIX.review,
+  WISH: PUBLIC_ID_PREFIX.wish,
+} as const satisfies Record<ReportTargetType, string>
+
 function publicTargetId(type: string, id: string) {
   const targetType = ReportTargetTypeSchema.parse(type)
-  const prefix =
-    targetType === 'LISTING'
-      ? PUBLIC_ID_PREFIX.listing
-      : targetType === 'MESSAGE'
-        ? PUBLIC_ID_PREFIX.message
-        : PUBLIC_ID_PREFIX.user
-  return encodePublicId(prefix, id)
+  return encodePublicId(TARGET_ID_PREFIX[targetType], id)
+}
+
+/** 把用户提交的公开目标 ID 解成内部 uuid；前缀与 targetType 必须匹配。 */
+export function decodeReportTargetId(targetType: ReportTargetType, publicId: string): string {
+  return decodePublicId(TARGET_ID_PREFIX[targetType], publicId)
 }
 
 function toReportDto(row: ReportRow) {
@@ -80,6 +99,64 @@ function toReportDto(row: ReportRow) {
     createdAt: row.createdAt.toISOString(),
     handledAt: row.handledAt ? row.handledAt.toISOString() : null,
   })
+}
+
+function userSummaryOf(id: string, nickname: string) {
+  return { id: encodePublicId(PUBLIC_ID_PREFIX.user, id), nickname }
+}
+
+/** 把 store 的取证快照（内部 uuid）编码成管理端 DTO（公开 ID + 判别字段）。 */
+function toTargetEvidence(snapshot: ReportEvidenceSnapshot | null): ReportTargetEvidence | null {
+  if (!snapshot) return null
+  switch (snapshot.targetType) {
+    case 'MESSAGE':
+      return ReportMessageEvidenceSchema.parse({
+        targetType: 'MESSAGE',
+        kind: snapshot.kind,
+        content: snapshot.content,
+        mimeType: snapshot.mimeType,
+        sizeBytes: snapshot.sizeBytes,
+        hasMedia: snapshot.objectKey !== null,
+        senderNickname: snapshot.senderNickname,
+        createdAt: snapshot.createdAt,
+        recalledAt: snapshot.recalledAt,
+      })
+    case 'COMMENT':
+      return ReportCommentEvidenceSchema.parse({
+        targetType: 'COMMENT',
+        author: userSummaryOf(snapshot.authorId, snapshot.authorNickname),
+        listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, snapshot.listingId),
+        parentId:
+          snapshot.parentId === null
+            ? null
+            : encodePublicId(PUBLIC_ID_PREFIX.comment, snapshot.parentId),
+        content: snapshot.content,
+        createdAt: snapshot.createdAt,
+      })
+    case 'REVIEW':
+      return ReportReviewEvidenceSchema.parse({
+        targetType: 'REVIEW',
+        author: userSummaryOf(snapshot.authorId, snapshot.authorNickname),
+        transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, snapshot.transactionId),
+        rating: snapshot.rating,
+        body: snapshot.body,
+        imageCount: snapshot.imageObjectKeys.length,
+        createdAt: snapshot.createdAt,
+      })
+    case 'WISH':
+      return ReportWishEvidenceSchema.parse({
+        targetType: 'WISH',
+        owner: userSummaryOf(snapshot.ownerId, snapshot.ownerNickname),
+        keyword: snapshot.keyword,
+        description: snapshot.description,
+        category: snapshot.category,
+        budgetMinCents: snapshot.budgetMinCents,
+        budgetMaxCents: snapshot.budgetMaxCents,
+        status: snapshot.status,
+        moderationStatus: snapshot.moderationStatus,
+        createdAt: snapshot.createdAt,
+      })
+  }
 }
 
 function toAdminReportItem(row: AdminReportRow): AdminReportItem {
@@ -110,18 +187,7 @@ function toAdminReportItem(row: AdminReportRow): AdminReportItem {
       moderationStatus: row.target.moderationStatus,
     },
     reportCount: row.reportCount,
-    messageEvidence: row.report.evidenceSnapshot
-      ? ReportMessageEvidenceSchema.parse({
-          kind: row.report.evidenceSnapshot.kind,
-          content: row.report.evidenceSnapshot.content,
-          mimeType: row.report.evidenceSnapshot.mimeType,
-          sizeBytes: row.report.evidenceSnapshot.sizeBytes,
-          hasMedia: row.report.evidenceSnapshot.objectKey !== null,
-          senderNickname: row.report.evidenceSnapshot.senderNickname,
-          createdAt: row.report.evidenceSnapshot.createdAt,
-          recalledAt: row.report.evidenceSnapshot.recalledAt,
-        })
-      : null,
+    evidence: toTargetEvidence(row.report.evidenceSnapshot),
   })
 }
 
@@ -141,6 +207,7 @@ export interface ReportService {
   /** 管理端读取被举报媒体的证据快照（私有对象键）；非媒体/无快照返回 null。 */
   getEvidenceMedia(
     reportId: string,
+    index?: number,
   ): Promise<{ objectKey: string | null; mimeType: string | null } | null>
   handleReport(input: {
     reportId: string
@@ -148,6 +215,67 @@ export interface ReportService {
     result: ReportHandleResult
     reason: AdminReportHandleInput['reason']
   }): Promise<void>
+}
+
+/**
+ * 由服务端解析出的目标行构造取证快照：只取数据库里的原文与归属，不采信客户端；
+ * 目标后续被删除 / 撤回也不清空这张快照。
+ */
+function snapshotOf(target: TargetSummaryRow): ReportEvidenceSnapshot | null {
+  if (target.message) {
+    return {
+      targetType: 'MESSAGE',
+      conversationId: target.message.conversationId,
+      senderId: target.message.senderId,
+      senderNickname: target.message.senderNickname,
+      kind: target.message.kind,
+      content: target.message.content,
+      mimeType: target.message.mimeType,
+      sizeBytes: target.message.sizeBytes,
+      objectKey: target.message.objectKey,
+      createdAt: target.message.createdAt.toISOString(),
+      recalledAt: target.message.recalledAt ? target.message.recalledAt.toISOString() : null,
+    }
+  }
+  if (target.comment) {
+    return {
+      targetType: 'COMMENT',
+      authorId: target.comment.authorId,
+      authorNickname: target.comment.authorNickname,
+      listingId: target.comment.listingId,
+      parentId: target.comment.parentId,
+      content: target.comment.content,
+      createdAt: target.comment.createdAt.toISOString(),
+    }
+  }
+  if (target.review) {
+    return {
+      targetType: 'REVIEW',
+      authorId: target.review.authorId,
+      authorNickname: target.review.authorNickname,
+      transactionId: target.review.transactionId,
+      rating: target.review.rating,
+      body: target.review.body,
+      imageObjectKeys: target.review.imageObjectKeys,
+      createdAt: target.review.createdAt.toISOString(),
+    }
+  }
+  if (target.wish) {
+    return {
+      targetType: 'WISH',
+      ownerId: target.wish.ownerId,
+      ownerNickname: target.wish.ownerNickname,
+      keyword: target.wish.keyword,
+      description: target.wish.description,
+      category: target.wish.category,
+      budgetMinCents: target.wish.budgetMinCents,
+      budgetMaxCents: target.wish.budgetMaxCents,
+      status: target.wish.status,
+      moderationStatus: target.wish.moderationStatus,
+      createdAt: target.wish.createdAt.toISOString(),
+    }
+  }
+  return null
 }
 
 export function createReportService(store: ReportStore): ReportService {
@@ -177,23 +305,49 @@ export function createReportService(store: ReportStore): ReportService {
           throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
         }
       }
-      const evidenceSnapshot =
-        input.targetType === 'MESSAGE' && target.message
-          ? {
-              conversationId: target.message.conversationId,
-              senderId: target.message.senderId,
-              senderNickname: target.message.senderNickname,
-              kind: target.message.kind,
-              content: target.message.content,
-              mimeType: target.message.mimeType,
-              sizeBytes: target.message.sizeBytes,
-              objectKey: target.message.objectKey,
-              createdAt: target.message.createdAt.toISOString(),
-              recalledAt: target.message.recalledAt
-                ? target.message.recalledAt.toISOString()
-                : null,
-            }
-          : null
+      // #694 M7：留言本身公开可读（GET /listings/:id/comments），所以「存在但不可见」
+      // 只剩商品离线一种——离线商品的留言只有卖家还能看到，其他人按不存在处理。
+      if (input.targetType === 'COMMENT') {
+        const comment = target.comment
+        if (!comment) {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+        if (comment.authorId === reporterId) {
+          throw new ReportServiceError('REPORT_SELF_TARGET', 422, '不能举报自己的留言')
+        }
+        if (comment.listingStatus === 'OFFLINE' && reporterId !== comment.listingSellerId) {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+      }
+      // #694 M7：评价只对交易参与者（买家 / 卖家）可见，举报资格同口径；
+      // 非参与者按不存在处理，与 listReviewsOf 一样不泄漏评价是否存在。
+      if (input.targetType === 'REVIEW') {
+        const review = target.review
+        if (!review) {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+        if (review.authorId === reporterId) {
+          throw new ReportServiceError('REPORT_SELF_TARGET', 422, '不能举报自己的评价')
+        }
+        if (reporterId !== review.buyerId && reporterId !== review.sellerId) {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+      }
+      // #694 M7：愿望详情是 owner-scoped，非 owner 只在「我的商品匹配到这条愿望」时
+      // 看得到关键词；举报资格沿用这条可见性，没匹配到的人按不存在处理。
+      if (input.targetType === 'WISH') {
+        const wish = target.wish
+        if (!wish) {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+        if (wish.ownerId === reporterId) {
+          throw new ReportServiceError('REPORT_SELF_TARGET', 422, '不能举报自己的愿望')
+        }
+        if (!(await store.hasWishMatchForSeller(input.targetId, reporterId))) {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+      }
+      const evidenceSnapshot = snapshotOf(target)
       const { row, created } = await store.createReport({
         reporterId,
         targetType: input.targetType,
@@ -260,8 +414,8 @@ export function createReportService(store: ReportStore): ReportService {
       })
     },
 
-    async getEvidenceMedia(reportId) {
-      const media = await store.findEvidenceMedia(reportId)
+    async getEvidenceMedia(reportId, index = 0) {
+      const media = await store.findEvidenceMedia(reportId, index)
       if (!media?.objectKey) return null
       return media
     },

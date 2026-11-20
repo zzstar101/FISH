@@ -1,13 +1,17 @@
 import {
   LISTING_REPORT_REASONS as CONTRACT_LISTING_REASONS,
   MESSAGE_REPORT_REASONS as CONTRACT_MESSAGE_REASONS,
+  UGC_REPORT_REASONS as CONTRACT_UGC_REASONS,
   USER_REPORT_REASONS as CONTRACT_USER_REASONS,
+  type CommentReportReason,
   type ListingReportReason,
   type MessageReportReason,
   type ReportReason,
   type ReportStatus,
   type ReportTargetType,
+  type ReviewReportReason,
   type UserReportReason,
+  type WishReportReason,
 } from '@fish/contracts/reports/schema'
 
 /**
@@ -112,10 +116,103 @@ const MESSAGE_REASON_OPTIONS: ReportReasonOption[] = CONTRACT_MESSAGE_REASONS.ma
   ...MESSAGE_REASON_COPY[key],
 }))
 
+/**
+ * 留言 / 评价 / 愿望三类 UGC 共用契约的 `UGC_REPORT_REASONS`（#694 M7），
+ * 每类只换 hint 的口径；顺序即契约顺序。
+ */
+const COMMENT_REASON_COPY: Record<CommentReportReason, { label: string; hint: string }> = {
+  SPAM: {
+    label: '垃圾广告或引流',
+    hint: '请说明这条留言里的引流方式（外链 / 二维码 / 联系方式）与大致时间',
+  },
+  HARASSMENT: {
+    label: '骚扰',
+    hint: '请说明对方在这条留言里的骚扰言辞与大致时间',
+  },
+  PROHIBITED: {
+    label: '违禁或违法内容',
+    hint: '请说明这条留言涉及的违禁内容，服务端会保留留言取证快照',
+  },
+  ABUSE: {
+    label: '辱骂或恶意攻击',
+    hint: '请指出留言中的辱骂 / 人身攻击内容，服务端会保留留言取证快照',
+  },
+  OTHER: { label: '其他', hint: '请描述这条留言的违规情形，便于人工复核' },
+}
+
+const REVIEW_REASON_COPY: Record<ReviewReportReason, { label: string; hint: string }> = {
+  SPAM: {
+    label: '垃圾广告或引流',
+    hint: '请说明这条评价里的引流内容（外链 / 二维码 / 联系方式）与大致时间',
+  },
+  HARASSMENT: {
+    label: '骚扰',
+    hint: '请说明评价正文或配图中的骚扰内容与大致时间',
+  },
+  PROHIBITED: {
+    label: '违禁或违法内容',
+    hint: '请说明评价正文或配图中的违禁内容，服务端会保留评价取证快照',
+  },
+  ABUSE: {
+    label: '辱骂或恶意攻击',
+    hint: '请指出评价正文 / 配图中的辱骂或人身攻击内容，服务端会保留快照',
+  },
+  OTHER: { label: '其他', hint: '请描述这条评价的违规情形，便于人工复核' },
+}
+
+const WISH_REASON_COPY: Record<WishReportReason, { label: string; hint: string }> = {
+  SPAM: {
+    label: '垃圾广告或引流',
+    hint: '请说明这条愿望里的引流方式（外链 / 二维码 / 联系方式）',
+  },
+  HARASSMENT: {
+    label: '骚扰',
+    hint: '请说明愿望描述中的骚扰言辞与大致时间',
+  },
+  PROHIBITED: {
+    label: '违禁或违法内容',
+    hint: '请说明愿望描述中的违禁内容，服务端会保留愿望取证快照',
+  },
+  ABUSE: { label: '辱骂或恶意攻击', hint: '请指出愿望描述中的辱骂或人身攻击内容' },
+  OTHER: { label: '其他', hint: '请描述这条愿望的违规情形，便于人工复核' },
+}
+
+const COMMENT_REASON_OPTIONS: ReportReasonOption[] = CONTRACT_UGC_REASONS.map((key) => ({
+  key,
+  ...COMMENT_REASON_COPY[key],
+}))
+
+const REVIEW_REASON_OPTIONS: ReportReasonOption[] = CONTRACT_UGC_REASONS.map((key) => ({
+  key,
+  ...REVIEW_REASON_COPY[key],
+}))
+
+const WISH_REASON_OPTIONS: ReportReasonOption[] = CONTRACT_UGC_REASONS.map((key) => ({
+  key,
+  ...WISH_REASON_COPY[key],
+}))
+
+const REASON_OPTIONS_BY_TARGET = {
+  LISTING: LISTING_REASON_OPTIONS,
+  USER: USER_REASON_OPTIONS,
+  MESSAGE: MESSAGE_REASON_OPTIONS,
+  COMMENT: COMMENT_REASON_OPTIONS,
+  REVIEW: REVIEW_REASON_OPTIONS,
+  WISH: WISH_REASON_OPTIONS,
+} satisfies Record<ReportTargetType, ReportReasonOption[]>
+
 export function reasonsOf(target: ReportTargetType): ReportReasonOption[] {
-  if (target === 'LISTING') return LISTING_REASON_OPTIONS
-  if (target === 'MESSAGE') return MESSAGE_REASON_OPTIONS
-  return USER_REASON_OPTIONS
+  return REASON_OPTIONS_BY_TARGET[target]
+}
+
+/** 举报目标类型的中文称呼（队列行、详情标题、弹窗共用一份）。 */
+export const REPORT_TARGET_LABEL: Record<ReportTargetType, string> = {
+  LISTING: '商品',
+  USER: '用户',
+  MESSAGE: '消息',
+  COMMENT: '留言',
+  REVIEW: '评价',
+  WISH: '愿望',
 }
 
 export function reasonLabel(target: ReportTargetType, key: string): string {

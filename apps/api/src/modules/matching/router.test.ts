@@ -53,6 +53,7 @@ const listingResponse: ListingMatchListResponse = {
       createdAt: '2026-09-12T03:40:10.000Z',
       wish: {
         id: WISH_ID,
+        userId: encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID),
         keyword: '机械键盘',
         category: 'DIGITAL',
         budgetMinCents: null,

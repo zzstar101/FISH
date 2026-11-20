@@ -16,11 +16,13 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Textarea } from '@fish/ui/textarea'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ShieldCheck } from 'lucide-react'
+import { Flag, ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
+import { ReportEntry } from '../reports/report-entry'
+import { canReportContent } from '../reports/view'
 import { describeCommentDeleteFailure, describeCommentFailure } from './comments-api'
 import {
   useCommentList,
@@ -43,6 +45,12 @@ export function canDeleteComment(
   viewerId: string | null,
 ): boolean {
   return viewerId !== null && entry.author.id === viewerId
+}
+
+/** 举报弹窗里给这条留言的摘要（正文前 24 个字符），让举报人确认目标。 */
+function snippetOf(content: string): string {
+  const oneLine = content.replace(/\s+/g, ' ').trim()
+  return oneLine.length > 24 ? `${oneLine.slice(0, 24)}…` : oneLine
 }
 
 function SellerBadge() {
@@ -107,10 +115,12 @@ function CommentComposer({
 function ReplyRow({
   reply,
   canDelete,
+  canReport,
   onDelete,
 }: {
   reply: CommentReply
   canDelete: boolean
+  canReport: boolean
   onDelete: () => void
 }) {
   return (
@@ -132,6 +142,17 @@ function ReplyRow({
             >
               删除
             </button>
+          ) : null}
+          {canReport ? (
+            <ReportEntry
+              className="h-auto p-0 text-ink-3 text-xs"
+              size="sm"
+              target={{ type: 'COMMENT', id: reply.id, label: snippetOf(reply.content) }}
+              variant="ghost"
+            >
+              <Flag className="size-3" />
+              举报
+            </ReportEntry>
           ) : null}
         </div>
         <p className="mt-1.5 whitespace-pre-wrap text-ink-2 text-sm leading-6">{reply.content}</p>
@@ -204,6 +225,17 @@ function CommentRow({
                 删除
               </button>
             ) : null}
+            {canReportContent(viewerId, comment.author.id) ? (
+              <ReportEntry
+                className="h-auto p-0 text-ink-3 text-xs"
+                size="sm"
+                target={{ type: 'COMMENT', id: comment.id, label: snippetOf(comment.content) }}
+                variant="ghost"
+              >
+                <Flag className="size-3" />
+                举报
+              </ReportEntry>
+            ) : null}
           </div>
 
           {comment.replies.length > 0 ? (
@@ -211,6 +243,7 @@ function CommentRow({
               {comment.replies.map((reply) => (
                 <ReplyRow
                   canDelete={canDeleteComment(reply, viewerId)}
+                  canReport={canReportContent(viewerId, reply.author.id)}
                   key={reply.id}
                   onDelete={() => onDeleteReply(reply)}
                   reply={reply}
