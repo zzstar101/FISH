@@ -461,6 +461,7 @@ describe('#475 uploadReviewImage（presign → PUT → confirm）', () => {
         return Response.json({
           objectKey: 'reviews/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png',
           url: 'http://cdn.local/reviews/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png',
+          moderationDecision: 'ALLOW',
         })
       }
       throw new Error(`未预期的请求 ${url}`)
