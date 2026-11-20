@@ -85,8 +85,9 @@ const previewPages = pageRoutes(
 
 describe('H5 预览路由表 vs app.config 页面清单', () => {
   test('解析器没取空：两边都解析出了完整清单', () => {
-    // 5 个主包页（4 个 tab 页 + 出物页）+ 39 个分包页（#583：scan-pr / scan-vision 已并入 scan）
-    expect(appPages.length).toBe(44)
+    // 5 个主包页（4 个 tab 页 + 出物页）+ 42 个分包页
+    // （#583：scan-pr / scan-vision 已并入 scan；#706 新增 pkg-rental 的 3 页）
+    expect(appPages.length).toBe(47)
     expect(previewPages.length).toBe(appPages.length)
   })
 

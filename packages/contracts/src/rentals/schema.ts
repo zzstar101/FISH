@@ -177,6 +177,15 @@ export const RentalDetailSchema = RentalCardSchema.extend({
   rules: RentalRulesSchema,
   /** 服务端计算；匿名恒 `false`。前端据此显示「编辑 / 下架」。 */
   isOwner: z.boolean(),
+  /**
+   * 审核态。**只有卖家本人**看得到真实值，他人视角恒 `null`（与出售详情同一取舍：
+   * 平台内部审核态不是租客该看到的信息）。
+   *
+   * 为什么详情必须带它：`REVIEW` 与「卖家自己下架」在库里都是 `status = 'OFFLINE'`，
+   * 但前者不能「重新上架」（服务端要求 `moderation_status = 'APPROVED'`）。
+   * 不带这个字段，端上只能给一个按下去必然 409 的按钮，并把「审核中」误报成「已下架」。
+   */
+  moderationStatus: z.enum(['APPROVED', 'REVIEW', 'BLOCKED']).nullable(),
   updatedAt: z.iso.datetime(),
 })
 

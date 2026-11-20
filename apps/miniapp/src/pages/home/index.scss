@@ -221,6 +221,67 @@ $home-catnav-height: 96px;
   margin: 10px $home-head-inset 0;
 }
 
+/*
+ * 租赁广场二级入口（#706）。
+ *
+ * 一条横向玻璃卡：图标 + 标题/副标题 + 箭头。放在 banner 与分类条之间 ——
+ * banner 是首页唯一的「横向入口带」，用户在这里已经预期「能跳到别的板块」。
+ * 分类条里不放：那里是同一列表的筛选维度，混入跳页会让点击结果不可预期。
+ *
+ * 字号一律走 `var(--fs-*)` 令牌（#628 的阶梯守门：新增页面/组件不许写字面量）。
+ */
+.home__rental-entry {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 16px $home-head-inset 0;
+  padding: 20px 24px;
+  border-radius: 24px;
+  background: linear-gradient(135deg, #eef4ff 0%, #f7faff 100%);
+  box-shadow: 0 4px 16px rgba(66, 133, 255, 0.08);
+}
+
+.home__rental-entry-ic {
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.home__rental-entry-img {
+  width: 40px;
+  height: 40px;
+}
+
+.home__rental-entry-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.home__rental-entry-title {
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  color: #1b2b4b;
+}
+
+.home__rental-entry-sub {
+  font-size: var(--fs-xs);
+  color: #8b9ab8;
+}
+
+.home__rental-entry-arrow {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
 .home__cats {
   width: 100%;
   white-space: nowrap;

@@ -29,6 +29,7 @@ import {
   type FeedTrackingContext,
   useFeedImpressions,
 } from '@/features/recommendation/use-impressions'
+import { RENTAL_ENTRY_ENABLED } from '@/features/rental/flag'
 import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { onSessionChanged } from '@/lib/session'
@@ -594,6 +595,11 @@ export default function Home() {
     }
   }
 
+  /** 进租赁广场（#706）。二级页压栈打开，底栏与顶栏都保留。 */
+  const goRentalSquare = () => {
+    void Taro.navigateTo({ url: '/pkg-rental/pages/rental-square/index' })
+  }
+
   /**
    * 相机热区嵌在整条搜索胶囊里，必须**先掐掉冒泡**：否则同一次点击还会触发胶囊的
    * `goSearch`，用户在识图的同时又被推去文字搜索页。Taro 合成事件的 `stopPropagation`
@@ -884,6 +890,33 @@ export default function Home() {
             ))}
           </View>
         </View>
+
+        {/*
+         * 租赁广场的二级入口（#706）。
+         *
+         * 放在 banner 与分类条之间而不是分类条里：分类条是**同一列表的筛选维度**
+         * （切分类原地换 feed），而租赁是**另一个列表**（独立端点、独立卡片形状）。
+         * 混进分类条会让「点它不换筛选、而是跳页」变成一件不可预期的事。
+         *
+         * 位置选在 banner 下方：这是首页唯一的横向「入口带」，用户已经形成
+         * 「这里有通往其它板块的东西」的预期。
+         */}
+        {RENTAL_ENTRY_ENABLED ? (
+          <View className="home__rental-entry" onClick={goRentalSquare}>
+            <View className="home__rental-entry-ic">
+              <Text className="home__rental-entry-emoji">🔄</Text>
+            </View>
+            <View className="home__rental-entry-body">
+              <Text className="home__rental-entry-title">租赁广场</Text>
+              <Text className="home__rental-entry-sub">数码产品按天租，押金线下面交</Text>
+            </View>
+            <Image
+              className="home__rental-entry-arrow"
+              src={ICONS.chevronRightMuted}
+              mode="aspectFit"
+            />
+          </View>
+        ) : null}
 
         <View className="home__cats-wrap">
           <ScrollView className="home__cats" scrollX enableFlex>

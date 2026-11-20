@@ -133,6 +133,8 @@ export function createRentalService(deps: {
       })),
       rules: entry.terms.rules,
       isOwner,
+      // 审核态只给本人：他人视角恒 null（与出售详情的取舍一致）。
+      moderationStatus: isOwner ? entry.listing.moderationStatus : null,
       updatedAt: entry.listing.updatedAt.toISOString(),
     }
 

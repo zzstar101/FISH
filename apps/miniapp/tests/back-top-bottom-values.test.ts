@@ -224,6 +224,19 @@ describe('回顶钮 bottom：mylist 按本页 FAB 定位', () => {
   })
 })
 
+describe('租赁广场：回顶钮避让发布钮（#706）', () => {
+  test('避让的是本页 `.rs__fab`：fab 距底 + fab 高 + 40rpx 缝', async () => {
+    const style = await Bun.file(
+      new URL('../src/pkg-rental/pages/rental-square/index.scss', import.meta.url),
+    ).text()
+    const fab = ruleBody(style, '.rs__fab')
+    // 与 mylist 同一条公式：fab 距底 + fab 高 + 40rpx 缝。
+    // 漏掉这一步的后果是 88×88 的回顶钮正好压在 104×104 的「+」上、把点击吞掉。
+    const expected = px(fab, 'bottom') + (await pxOrToken(fab, 'height')) + 40
+    expect(await backTopBottom('pkg-rental/pages/rental-square/index.tsx')).toBe(expected)
+  })
+})
+
 describe('回顶钮 bottom 文档口径', () => {
   test('组件注释写明 Tab 页与「自带悬浮钮的页面」是两套取值', async () => {
     const source = await Bun.file(

@@ -1,0 +1,262 @@
+@use "@/styles/mixins" as *;
+
+/**
+ * 租赁广场（#706）。尺寸 = 设计稿 pt × 2。
+ *
+ * 结构：玻璃顶栏 → 筛选区（搜索 + 「能租满 N 天」快捷条）→ 卡片列表 → 右下发布钮。
+ * 根节点不写 `overflow`（页面级滚动与下拉刷新都依赖它，同 `mylist/index.scss`）。
+ */
+
+.rs {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* 让出右下发布钮与安全区。 */
+  padding-bottom: calc(180px + env(safe-area-inset-bottom));
+}
+
+.rs__title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: #1b2b4b;
+}
+
+/* ---------------------------------------------------------------- 筛选 */
+
+.rs__filters {
+  padding: 16px 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rs__search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 16px 24px;
+  box-shadow: 0 4px 16px rgba(27, 43, 75, 0.05);
+}
+
+.rs__search-icon {
+  font-size: var(--fs-body);
+  color: #9fb0cd;
+}
+
+.rs__search-input {
+  flex: 1;
+  font-size: var(--fs-body);
+  color: #1b2b4b;
+}
+
+.rs__days {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rs__day {
+  padding: 10px 22px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #5a6b8c;
+  font-size: var(--fs-sm);
+}
+
+.rs__day.is-on {
+  background: #4285ff;
+  color: #ffffff;
+}
+
+/* ---------------------------------------------------------------- 列表 */
+
+.rs__list {
+  padding: 20px 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.rs__card {
+  display: flex;
+  gap: 20px;
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 20px;
+  box-shadow: 0 4px 20px rgba(27, 43, 75, 0.06);
+}
+
+.rs__cover {
+  width: 180px;
+  height: 180px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #f0f4fd;
+  flex-shrink: 0;
+}
+
+.rs__cover-img {
+  width: 100%;
+  height: 100%;
+}
+
+.rs__cover-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-xs);
+  color: #9fb0cd;
+}
+
+.rs__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rs__name {
+  font-size: var(--fs-lead);
+  font-weight: 600;
+  color: #1b2b4b;
+  /* 两行截断：标题可能很长，撑高会让右侧信息错位。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rs__price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.rs__price {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  color: #ff6b35;
+}
+
+.rs__unit {
+  font-size: var(--fs-xs);
+  color: #ff6b35;
+}
+
+.rs__meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.rs__meta-item {
+  font-size: var(--fs-xs);
+  color: #8b9ab8;
+}
+
+.rs__owner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rs__owner-name {
+  font-size: var(--fs-xs);
+  color: #5a6b8c;
+}
+
+.rs__owner-badge {
+  font-size: var(--fs-2xs);
+  color: #4285ff;
+  background: #eef4ff;
+  border-radius: 6px;
+  padding: 2px 10px;
+}
+
+.rs__more,
+.rs__end {
+  display: block;
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: #9fb0cd;
+  padding: 20px 0;
+}
+
+/* ---------------------------------------------------------------- 空态 / 骨架 */
+
+.rs__empty {
+  padding: 120px 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.rs__empty-title {
+  font-size: var(--fs-title);
+  color: #1b2b4b;
+  font-weight: 600;
+}
+
+.rs__empty-hint {
+  font-size: var(--fs-sm);
+  color: #8b9ab8;
+}
+
+.rs__empty-btn {
+  margin-top: 16px;
+  padding: 20px 60px;
+  border-radius: 999px;
+  background: #4285ff;
+  color: #ffffff;
+  font-size: var(--fs-lead);
+}
+
+.rs__skeleton {
+  padding: 20px 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.rs__skeleton-card {
+  height: 220px;
+  border-radius: 24px;
+  background: linear-gradient(90deg, #f0f4fd 25%, #f7faff 37%, #f0f4fd 63%);
+  background-size: 400% 100%;
+  animation: rs-shimmer 1.4s ease infinite;
+}
+
+@keyframes rs-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* ---------------------------------------------------------------- 发布钮 */
+
+.rs__fab {
+  position: fixed;
+  right: 32px;
+  /* 与 `.ml__fab` 同一坐标口径（44px 距底、L 档高度），回顶钮的避让值按这组数推导。 */
+  bottom: 44px;
+  z-index: 20;
+  width: 96px;
+  height: var(--btn-h-lg);
+  border-radius: 48px;
+  background: #4285ff;
+  color: #ffffff;
+  font-size: var(--fs-h2);
+  line-height: 96px;
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(66, 133, 255, 0.35);
+}

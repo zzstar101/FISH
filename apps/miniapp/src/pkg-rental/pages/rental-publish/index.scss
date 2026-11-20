@@ -1,0 +1,224 @@
+@use "@/styles/mixins" as *;
+
+/**
+ * 出租发布（#706）。尺寸 = 设计稿 pt × 2。
+ *
+ * 结构：玻璃顶栏（返回 + 居中标题）→ 四张卡片（图片 / 基本信息 / 价格与租期 / 规则）
+ * → 底部固定提交条。卡片式分组而不是一整个长表单：字段多达 8 个，分组能让人一眼看出
+ * 「还差哪一块」。
+ *
+ * 根节点**不写 `overflow`**：写了页面自身就成了滚动容器，页面级滚动与
+ * `pageScrollTo` 都会失真（与 `mylist/index.scss` 的同类说明一致）。
+ */
+
+.rp {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* 让出底部固定提交条 + 安全区。 */
+  padding-bottom: calc(140px + env(safe-area-inset-bottom));
+}
+
+.rp__title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: #1b2b4b;
+}
+
+.rp__body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px 24px 0;
+}
+
+.rp__card {
+  background: #ffffff;
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 4px 20px rgba(27, 43, 75, 0.06);
+  display: flex;
+  flex-direction: column;
+}
+
+.rp__label {
+  font-size: var(--fs-body);
+  color: #5a6b8c;
+  margin-bottom: 12px;
+}
+
+/* 卡片内相邻字段之间留白：`label` 自带下间距，这里补「上一块到下一块」的间距 */
+.rp__card > .rp__label:not(:first-child) {
+  margin-top: 24px;
+}
+
+.rp__input,
+.rp__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #f5f8ff;
+  border-radius: 16px;
+  padding: 20px;
+  font-size: var(--fs-lead);
+  color: #1b2b4b;
+}
+
+.rp__textarea {
+  height: 180px;
+}
+
+.rp__row {
+  display: flex;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.rp__row-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.rp__hint {
+  font-size: var(--fs-xs);
+  color: #8b9ab8;
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
+/**
+ * 押金说明。用浅底块而不是普通灰字：这句话是「平台不代收押金」的唯一告知点，
+ * 必须比周围的辅助文字更显眼（与详情页的完整版同一视觉语言）。
+ */
+.rp__notice {
+  display: block;
+  margin-top: 12px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: #fff7e8;
+  color: #8a5a00;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+
+.rp__err {
+  font-size: var(--fs-xs);
+  color: #e5484d;
+  margin-top: 8px;
+}
+
+.rp__footnote {
+  font-size: var(--fs-xs);
+  color: #8b9ab8;
+  text-align: center;
+  padding: 8px 0 0;
+}
+
+/* ---------------------------------------------------------------- 图片网格 */
+
+.rp__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.rp__thumb {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #f0f4fd;
+}
+
+.rp__thumb-img {
+  width: 100%;
+  height: 100%;
+}
+
+.rp__thumb--add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-h2);
+  color: #9fb0cd;
+  border: 2px dashed #c8d6ef;
+  background: #fafcff;
+}
+
+.rp__thumb--busy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-xs);
+  color: #8b9ab8;
+}
+
+.rp__thumb-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  background: rgba(20, 30, 50, 0.55);
+  color: #ffffff;
+  font-size: var(--fs-body);
+  line-height: 36px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- 可选条目 */
+
+.rp__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.rp__chip {
+  padding: 12px 22px;
+  border-radius: 999px;
+  background: #f5f8ff;
+  color: #5a6b8c;
+  font-size: var(--fs-sm);
+}
+
+.rp__chip.is-on {
+  background: #4285ff;
+  color: #ffffff;
+}
+
+.rp__chip--preset {
+  background: #eef4ff;
+  color: #4285ff;
+}
+
+/* ---------------------------------------------------------------- 底部提交条 */
+
+.rp__bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 16px 24px calc(16px + env(safe-area-inset-bottom));
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+}
+
+.rp__submit {
+  height: 88px;
+  border-radius: 44px;
+  background: #4285ff;
+  color: #ffffff;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rp__submit.is-off {
+  background: #c8d6ef;
+}

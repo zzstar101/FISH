@@ -117,6 +117,14 @@ export default defineConfig<'webpack5'>(async (merge) => {
        */
       __DEMO_AUTH__: JSON.stringify(mockEnabled),
       /**
+       * 租赁入口开关（#706 验收项「租赁入口可关闭」）。
+       *
+       * 默认**开**；给 `TARO_APP_RENTAL=0` 关掉后，首页的「租赁广场」二级入口不渲染，
+       * 广场 / 详情 / 发布三个页面仍可直接访问（关闭入口 ≠ 下线页面 —— 已发布的出租
+       * 与在途会话必须继续可读，这是 #713 灰度回滚的要求）。
+       */
+      __RENTAL_ENTRY_ENABLED__: JSON.stringify(process.env.TARO_APP_RENTAL !== '0'),
+      /**
        * AI 润色的 mock 兜底门禁（读取处 `src/features/ai/api.ts`）。
        *
        * **只认显式的 `TARO_APP_MOCK=1`**（与 `__DEMO_AUTH__` 取同一个 `mockEnabled`；

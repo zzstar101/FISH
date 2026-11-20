@@ -42,6 +42,10 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pkg-browse/pages/watchers/index': () => import('@/pkg-browse/pages/watchers/index'),
   '/pkg-browse/pages/comments/index': () => import('@/pkg-browse/pages/comments/index'),
   '/pkg-browse/pages/favorites/index': () => import('@/pkg-browse/pages/favorites/index'),
+  // #706 租赁域（广场 / 详情 / 发布）
+  '/pkg-rental/pages/rental-square/index': () => import('@/pkg-rental/pages/rental-square/index'),
+  '/pkg-rental/pages/rental-detail/index': () => import('@/pkg-rental/pages/rental-detail/index'),
+  '/pkg-rental/pages/rental-publish/index': () => import('@/pkg-rental/pages/rental-publish/index'),
   '/pkg-vision/pages/scan/index': () => import('@/pkg-vision/pages/scan/index'),
   '/pkg-vision/pages/vision-result/index': () => import('@/pkg-vision/pages/vision-result/index'),
   '/pkg-browse/pages/following/index': () => import('@/pkg-browse/pages/following/index'),

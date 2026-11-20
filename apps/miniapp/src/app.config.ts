@@ -78,6 +78,21 @@ export default defineAppConfig({
       root: 'pkg-vision',
       pages: ['pages/vision-result/index', 'pages/scan/index'],
     },
+    {
+      /**
+       * 租赁域（#706）：广场 / 详情 / 发布。
+       *
+       * 单开一个分包而不是塞进 `pkg-browse`：租赁是独立业务域（后续 #707 的预约、
+       * #708 的交接、#710 的争议都会落在这里），放进浏览包会让那个包继续膨胀。
+       * 主包体积不受影响 —— 分包按需加载，首页入口点进去才下载。
+       */
+      root: 'pkg-rental',
+      pages: [
+        'pages/rental-square/index',
+        'pages/rental-detail/index',
+        'pages/rental-publish/index',
+      ],
+    },
   ],
   window: {
     backgroundTextStyle: 'light',
