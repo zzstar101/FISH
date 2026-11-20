@@ -1,6 +1,12 @@
-import { describe, expect, test } from 'bun:test'
-import type { MediaMessageInput, MediaPresignInput } from '@fish/contracts/chat/schema'
+import { describe, expect, spyOn, test } from 'bun:test'
+import type {
+  MediaMessageDto,
+  MediaMessageInput,
+  MediaPresignInput,
+} from '@fish/contracts/chat/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { ChatModerationPolicy } from '../moderation/chat'
+import { ContentModerationError } from '../moderation/providers/types'
 import type { MediaStorage } from '../uploads/storage'
 import {
   MessageIdempotencyConflictError,
@@ -40,6 +46,7 @@ function row(input: MediaMessageInput): MediaRow {
     reply_to_id: null,
     created_at: '2026-09-14T12:00:00.000Z',
     created_at_iso: '2026-09-14T12:00:00.000000Z',
+    visibility: 'DELIVERED',
   }
 }
 
@@ -47,6 +54,11 @@ function setup(
   overrides: Partial<MediaMessageStore> = {},
   storageOverrides: Partial<MediaStorage> = {},
   blocksOverrides: Partial<{ existsBlockBetween: (a: string, b: string) => Promise<boolean> }> = {},
+  policy: ChatModerationPolicy = allowAllChatModeration,
+  onMediaCreated?: (
+    participants: { buyerId: string; sellerId: string },
+    media: MediaMessageDto,
+  ) => void,
 ) {
   const store: MediaMessageStore = {
     legacyIds: async () => [],
@@ -78,8 +90,10 @@ function setup(
     blocks: { existsBlockBetween: async () => false, ...blocksOverrides },
     store,
     storage,
+    chatModeration: policy,
     mediaUrl: (conversation, media) =>
       `https://api.test/conversations/${conversation}/media/${media}`,
+    onMediaCreated,
   })
 }
 
@@ -194,8 +208,30 @@ function webmBytes(durationMs: number): Uint8Array {
   return padded(new Uint8Array([...ebmlHeader, ...segmentId, ...vint(info.length), ...info]), 2048)
 }
 
+const allowAllChatModeration: ChatModerationPolicy = {
+  moderateText: async () => {
+    throw new Error('媒体测试不使用文本审核')
+  },
+  moderateImage: async ({ objectKey }) => ({
+    decision: 'ALLOW',
+    provider: 'LOCAL',
+    transport: 'local',
+    providerRequestId: null,
+    policyVersion: 'test',
+    suggestion: 'Pass',
+    label: null,
+    subLabel: null,
+    score: null,
+    matchedRules: [],
+    matchedTermsMasked: [],
+    objectKey,
+    contentDigest: null,
+    reasonCode: null,
+  }),
+}
+
 describe('media message service', () => {
-  test('presigns only allowed image and voice metadata', async () => {
+  test('presigns only allowed image metadata，语音发送已显式关闭', async () => {
     const service = setup()
     const input: MediaPresignInput = { kind: 'IMAGE', contentType: 'image/webp', sizeBytes: 1024 }
     const presigned = await service.presign(userId, conversationId, input)
@@ -211,6 +247,14 @@ describe('media message service', () => {
         sizeBytes: 1024,
       }),
     ).rejects.toBeInstanceOf(MediaMessageServiceError)
+    // #694 M1：音频审核未接入前连上传地址都不发。
+    await expect(
+      service.presign(userId, conversationId, {
+        kind: 'VOICE',
+        contentType: 'audio/webm',
+        sizeBytes: 2048,
+      }),
+    ).rejects.toMatchObject({ status: 422, code: 'VOICE_SEND_DISABLED' })
   })
 
   test('requires the uploaded object to match the declared metadata', async () => {
@@ -435,43 +479,28 @@ describe('media message service', () => {
     })
   })
 
-  test('parses real voice duration server-side (fix-plan F5 / B1)', async () => {
+  test('语音发送被显式关闭：create 不读存储、不落库（#694 M1）', async () => {
+    let read = 0
     const service = setup(
       {},
       {
         stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
-        readMediaBytes: async () => webmBytes(3500),
-      },
-    )
-    const created = await service.create(userId, conversationId, {
-      kind: 'VOICE',
-      objectKey: `chat-media/${conversationId}/${userId}/voice.webm`,
-      contentType: 'audio/webm',
-      sizeBytes: 2048,
-      durationMs: 3500,
-    })
-    expect(created.durationMs).toBe(3500)
-  })
-
-  test('rejects a voice clip longer than the limit (fix-plan F5 / B1)', async () => {
-    const service = setup(
-      {},
-      {
-        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
-        readMediaBytes: async () => webmBytes(61_000),
+        readMediaBytes: async () => {
+          read += 1
+          return webmBytes(3500)
+        },
       },
     )
     await expect(
       service.create(userId, conversationId, {
         kind: 'VOICE',
-        objectKey: `chat-media/${conversationId}/${userId}/long.webm`,
+        objectKey: `chat-media/${conversationId}/${userId}/voice.webm`,
         contentType: 'audio/webm',
         sizeBytes: 2048,
-        durationMs: 61_000,
+        durationMs: 3500,
       }),
-    ).rejects.toMatchObject({
-      code: 'MEDIA_DURATION_EXCEEDED',
-    })
+    ).rejects.toMatchObject({ status: 422, code: 'VOICE_SEND_DISABLED' })
+    expect(read).toBe(0)
   })
 
   test('fails closed when the object cannot be read (fix-plan F5)', async () => {
@@ -561,47 +590,6 @@ describe('media message service', () => {
     // 每页内部仍是时间正序。
     const times = first.items.map((item) => item.createdAt)
     expect(times).toEqual([...times].sort())
-  })
-
-  // 回归（评审 blocker 2 的第二半 / 真实文件复现）：单 Cluster 的流式 WebM 里，
-  // Cluster Timecode 只是起点。61s 的录音若只按 Timecode 会被算成 32.8s 而绕过 60s 上限。
-  test('rejects a >60s single-cluster WebM whose Cluster Timecode alone would look short', async () => {
-    // Cluster@32781ms + 最大块偏移 +28220ms = 61001ms > 60000ms。
-    const bytes = streamingWebm(32_781, [0, -100, 28_220])
-    const service = setup(
-      {},
-      {
-        stat: async () => ({ size: bytes.length, contentType: 'audio/webm' }),
-        readMediaBytes: async () => bytes,
-      },
-    )
-    await expect(
-      service.create(userId, conversationId, {
-        kind: 'VOICE',
-        objectKey: `chat-media/${conversationId}/${userId}/long.webm`,
-        contentType: 'audio/webm',
-        sizeBytes: bytes.length,
-        durationMs: 61_001,
-      }),
-    ).rejects.toMatchObject({ code: 'MEDIA_DURATION_EXCEEDED' })
-  })
-
-  test('persists server duration despite browser timer drift', async () => {
-    const service = setup(
-      {},
-      {
-        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
-        readMediaBytes: async () => webmBytes(3523),
-      },
-    )
-    const result = await service.create(userId, conversationId, {
-      kind: 'VOICE',
-      objectKey: `chat-media/${conversationId}/${userId}/voice.webm`,
-      contentType: 'audio/webm',
-      sizeBytes: 2048,
-      durationMs: 3500,
-    })
-    expect(result.durationMs).toBe(3523)
   })
 
   test('persists a separate snapshot that cannot be overwritten by the upload URL', async () => {
@@ -733,34 +721,336 @@ describe('media message service: send idempotency (#67)', () => {
     ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' })
   })
 
-  test('指纹取客户端**声明**的元数据，而不是服务端探测出的值', async () => {
-    // 用语音做区分：服务端会探测真实时长并覆盖落库值，但指纹必须仍基于客户端声明的
-    // durationMs。IMAGE 区分不开——服务端会直接拒绝「声明尺寸 ≠ 探测尺寸」的图片。
+  test('媒体幂等指纹取客户端声明元数据', async () => {
     let seenKey: MessageSendKey | null | undefined
-    const service = setup(
-      {
-        create: async (_conversation, _sender, input, key) => {
-          seenKey = key
-          return row(input)
-        },
+    const service = setup({
+      create: async (_conversation, _sender, input, options) => {
+        seenKey = options?.key
+        return row(input)
       },
-      {
-        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
-        readMediaBytes: async () => webmBytes(5000),
-      },
-    )
-    const voice: MediaMessageInput = {
-      kind: 'VOICE',
-      objectKey: `chat-media/${conversationId}/${userId}/voice.webm`,
-      contentType: 'audio/webm',
-      sizeBytes: 2048,
-      durationMs: 1234,
-      clientRequestId,
-    }
-    await service.create(userId, conversationId, voice)
+    })
+    const withKey = { ...image, width: 800, height: 600, clientRequestId }
+    await service.create(userId, conversationId, withKey)
 
-    expect(seenKey).toEqual({ clientRequestId, requestHash: mediaRequestHash(voice) })
-    // 探测出的 5000 与声明的 1234 必须算出不同指纹，上面的断言才有区分力。
-    expect(mediaRequestHash({ ...voice, durationMs: 5000 })).not.toBe(mediaRequestHash(voice))
+    expect(seenKey).toEqual({ clientRequestId, requestHash: mediaRequestHash(withKey) })
+    expect(mediaRequestHash({ ...withKey, sizeBytes: 2048 })).not.toBe(mediaRequestHash(withKey))
+  })
+
+  /*
+   * #694 M1 图片审核：图片必须与文本同一套「先审后投递」语义。
+   * 四种结论分别断言——放行投递、待审只发送者可见、拒绝不落可见行、上游故障 fail-closed。
+   */
+  describe('聊天图片审核（#694 M1）', () => {
+    const imageBytes = webpBytes()
+    const imageDigest = new Bun.CryptoHasher('md5').update(imageBytes).digest('hex')
+    const imageDto = { ...image, width: 800, height: 600 }
+
+    function verdict(
+      overrides: Partial<
+        ChatModerationPolicy['moderateImage'] extends never
+          ? never
+          : Awaited<ReturnType<ChatModerationPolicy['moderateImage']>>
+      > = {},
+    ) {
+      return {
+        decision: 'ALLOW' as const,
+        provider: 'TENCENT_IMS' as const,
+        transport: 'tencent' as const,
+        providerRequestId: 'req-1',
+        policyVersion: 'ims-chat',
+        suggestion: 'Pass' as const,
+        label: null,
+        subLabel: null,
+        score: null,
+        matchedRules: [],
+        matchedTermsMasked: [],
+        objectKey: `chat-media/${conversationId}/${userId}/snapshot`,
+        contentDigest: imageDigest as string | null,
+        reasonCode: null as string | null,
+        ...overrides,
+      }
+    }
+
+    function imagePolicy(result: ReturnType<typeof verdict>): ChatModerationPolicy {
+      return {
+        moderateText: async () => {
+          throw new Error('图片测试不使用文本审核')
+        },
+        moderateImage: async () => result,
+      }
+    }
+
+    test('ALLOW → 投递 DELIVERED + SETTLED 记录 + 实时推送', async () => {
+      let createdOptions: Parameters<MediaMessageStore['create']>[3]
+      let pushed: { buyerId: string; sellerId: string } | undefined
+      const service = setup(
+        {
+          create: async (_conversation, _sender, input, options) => {
+            createdOptions = options
+            return row(input)
+          },
+        },
+        {},
+        {},
+        imagePolicy(verdict({ decision: 'ALLOW' })),
+        (participants) => {
+          pushed = participants
+        },
+      )
+      const created = await service.create(userId, conversationId, imageDto)
+      expect(created.visibility).toBe('DELIVERED')
+      expect(createdOptions?.visibility).toBe('DELIVERED')
+      expect(createdOptions?.moderation).toMatchObject({
+        status: 'SETTLED',
+        decision: 'ALLOW',
+        provider: 'TENCENT_IMS',
+        providerRequestId: 'req-1',
+        policyVersion: 'ims-chat',
+      })
+      expect(pushed).toBeDefined()
+    })
+
+    test('REVIEW → PENDING_REVIEW + PENDING 记录，不推送', async () => {
+      let createdOptions: Parameters<MediaMessageStore['create']>[3]
+      let pushed = 0
+      const service = setup(
+        {
+          create: async (_conversation, _sender, input, options) => {
+            createdOptions = options
+            return { ...row(input), visibility: 'PENDING_REVIEW' }
+          },
+        },
+        {},
+        {},
+        imagePolicy(verdict({ decision: 'REVIEW', suggestion: 'Review' })),
+        () => {
+          pushed += 1
+        },
+      )
+      const created = await service.create(userId, conversationId, imageDto)
+      expect(created.visibility).toBe('PENDING_REVIEW')
+      expect(createdOptions?.visibility).toBe('PENDING_REVIEW')
+      expect(createdOptions?.moderation).toMatchObject({ status: 'PENDING', decision: 'REVIEW' })
+      expect(pushed).toBe(0)
+    })
+
+    test('BLOCK → 422 MESSAGE_CONTENT_BLOCKED，不落行，快照被清理', async () => {
+      let created = 0
+      const deleted: string[] = []
+      const service = setup(
+        {
+          create: async () => {
+            created += 1
+            throw new Error('不应落库')
+          },
+        },
+        { delete: async (key) => void deleted.push(key) },
+        {},
+        imagePolicy(verdict({ decision: 'BLOCK', suggestion: 'Block' })),
+      )
+      await expect(service.create(userId, conversationId, imageDto)).rejects.toMatchObject({
+        status: 422,
+        code: 'MESSAGE_CONTENT_BLOCKED',
+      })
+      expect(created).toBe(0)
+      expect(deleted).toHaveLength(1)
+    })
+
+    test('上游故障 → 503 CONTENT_MODERATION_UNAVAILABLE，不落行，快照被清理', async () => {
+      let created = 0
+      const deleted: string[] = []
+      const service = setup(
+        {
+          create: async () => {
+            created += 1
+            throw new Error('不应落库')
+          },
+        },
+        { delete: async (key) => void deleted.push(key) },
+        {},
+        {
+          moderateText: async () => {
+            throw new Error('不使用')
+          },
+          moderateImage: async () => {
+            throw new ContentModerationError({ reason: 'timeout' })
+          },
+        },
+      )
+      await expect(service.create(userId, conversationId, imageDto)).rejects.toMatchObject({
+        status: 503,
+        code: 'CONTENT_MODERATION_UNAVAILABLE',
+      })
+      expect(created).toBe(0)
+      expect(deleted).toHaveLength(1)
+    })
+
+    test('上游摘要与本地字节不一致 → 503，不落行', async () => {
+      let created = 0
+      const service = setup(
+        {
+          create: async () => {
+            created += 1
+            throw new Error('不应落库')
+          },
+        },
+        { delete: async () => {} },
+        {},
+        imagePolicy(verdict({ contentDigest: '00000000000000000000000000000000' })),
+      )
+      await expect(service.create(userId, conversationId, imageDto)).rejects.toMatchObject({
+        status: 503,
+        code: 'CONTENT_MODERATION_UNAVAILABLE',
+      })
+      expect(created).toBe(0)
+    })
+
+    test('本地 transport 恒 REVIEW：图片只进待审，不冒充已投递', async () => {
+      const service = setup(
+        {
+          create: async (_conversation, _sender, input, options) => {
+            expect(options?.visibility).toBe('PENDING_REVIEW')
+            return { ...row(input), visibility: 'PENDING_REVIEW' }
+          },
+        },
+        {},
+        {},
+        {
+          moderateText: async () => {
+            throw new Error('不使用')
+          },
+          moderateImage: async ({ objectKey }) => ({
+            ...verdict({
+              decision: 'REVIEW',
+              suggestion: 'Review',
+              provider: 'LOCAL',
+              transport: 'local',
+              providerRequestId: null,
+              policyVersion: '2026-11-20-v4',
+            }),
+            objectKey,
+            reasonCode: 'LOCAL_IMAGE_NOT_AUDITED',
+          }),
+        },
+      )
+      const created = await service.create(userId, conversationId, imageDto)
+      expect(created.visibility).toBe('PENDING_REVIEW')
+    })
+
+    test('BLOCK 记录审计元数据，但不含对象键/正文', async () => {
+      const info = spyOn(console, 'info').mockImplementation(() => {})
+      try {
+        const service = setup(
+          {
+            create: async () => {
+              throw new Error('不应落库')
+            },
+          },
+          { delete: async () => {} },
+          {},
+          imagePolicy(verdict({ decision: 'BLOCK', suggestion: 'Block' })),
+        )
+        await expect(service.create(userId, conversationId, imageDto)).rejects.toMatchObject({
+          status: 422,
+          code: 'MESSAGE_CONTENT_BLOCKED',
+        })
+        const blockLog = info.mock.calls.find(([label]) => label === '[chat-moderation] 图片 BLOCK')
+        expect(blockLog).toBeDefined()
+        expect(blockLog?.[1]).toMatchObject({
+          provider: 'TENCENT_IMS',
+          policyVersion: 'ims-chat',
+          requestId: 'req-1',
+          decision: 'BLOCK',
+        })
+        expect(JSON.stringify(blockLog?.[1])).not.toContain('chat-media')
+      } finally {
+        info.mockRestore()
+      }
+    })
+
+    test('审核在途被拉黑：落库前复判，403 且不落行', async () => {
+      let blockedChecks = 0
+      let moderated = 0
+      let created = 0
+      const service = setup(
+        {
+          create: async () => {
+            created += 1
+            throw new Error('不应落库')
+          },
+        },
+        {},
+        {
+          existsBlockBetween: async () => {
+            blockedChecks += 1
+            // 第一次（送审前）无拉黑边，第二次（审核返回后）已有拉黑边。
+            return blockedChecks > 1
+          },
+        },
+        {
+          moderateText: async () => {
+            throw new Error('不使用')
+          },
+          moderateImage: async () => {
+            moderated += 1
+            return verdict()
+          },
+        },
+      )
+      await expect(service.create(userId, conversationId, imageDto)).rejects.toMatchObject({
+        status: 403,
+        code: 'CONVERSATION_UNAVAILABLE',
+      })
+      expect(moderated).toBe(1)
+      expect(blockedChecks).toBe(2)
+      expect(created).toBe(0)
+    })
+
+    test('并发重放命中既有消息：刚写的快照被清理', async () => {
+      let deleted = 0
+      const service = setup(
+        {
+          create: async () => ({
+            ...row(image),
+            object_key: 'chat-media-final/other-request',
+          }),
+        },
+        {
+          delete: async () => {
+            deleted += 1
+          },
+        },
+        {},
+        imagePolicy(verdict()),
+      )
+      const created = await service.create(userId, conversationId, imageDto)
+      expect(created.visibility).toBe('DELIVERED')
+      expect(deleted).toBe(1)
+    })
+
+    test('BLOCK 但同键已投递：重放既有消息而不是 422', async () => {
+      const input = { ...imageDto, clientRequestId: '01930000-0000-7000-8000-00000000beef' }
+      let lookups = 0
+      let created = 0
+      const service = setup(
+        {
+          create: async () => {
+            created += 1
+            throw new Error('不应落库')
+          },
+          findByRequestKey: async () => {
+            lookups += 1
+            // 快速路径未命中；BLOCK 前的并发复查命中已投递的既有行。
+            return lookups === 1 ? null : { row: row(imageDto), matchedHash: true }
+          },
+        },
+        { delete: async () => {} },
+        {},
+        imagePolicy(verdict({ decision: 'BLOCK', suggestion: 'Block' })),
+      )
+      const createdDto = await service.create(userId, conversationId, input)
+      expect(createdDto.visibility).toBe('DELIVERED')
+      expect(created).toBe(0)
+    })
   })
 })

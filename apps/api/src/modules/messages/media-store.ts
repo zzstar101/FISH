@@ -1,13 +1,14 @@
-import type { MediaKind, MediaMessageInput } from '@fish/contracts/chat/schema'
+import type { MediaKind, MediaMessageInput, MessageVisibility } from '@fish/contracts/chat/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { jsonParam } from '@fish/db/json'
 import { type SQL, sql } from 'drizzle-orm'
 import {
   MessageIdempotencyConflictError,
   type MessageSendKey,
   sendKeyLockQuery,
 } from './idempotency'
-import type { ReplyTargetRow } from './store'
+import type { ChatModerationRecordInput, ReplyTargetRow } from './store'
 
 export type MediaRow = {
   message_id: string
@@ -26,6 +27,8 @@ export type MediaRow = {
   /** #359 3c 引用的被引用消息 id；无引用为 null。 */
   reply_to_id: string | null
   created_at: Date | string
+  /** #694 M1：接收者只读 DELIVERED；PENDING_REVIEW 仅发送者可见。 */
+  visibility: MessageVisibility
   /**
    * 微秒精度的 `created_at` 文本（DB 直接 `to_char`）。
    * JS Date 只有毫秒，用它做 `(created_at, id)` 游标会让同一毫秒边界上的行被跳过。
@@ -68,6 +71,7 @@ function toRow(row: Record<string, unknown>): MediaRow {
     recalled_at: (row.recalled_at as Date | string | null) ?? null,
     reply_to_id: (row.reply_to_id as string | null) ?? null,
     created_at: row.created_at as Date | string,
+    visibility: row.visibility as MessageVisibility,
     created_at_iso: row.created_at_iso as string,
   }
 }
@@ -80,7 +84,7 @@ const MEDIA_SELECT = sql`
   m.id AS message_id, m.conversation_id, m.sender_id,
   mm.id AS media_id, mm.kind::text, mm.object_key, mm.mime_type,
   mm.size_bytes, mm.width, mm.height, mm.duration_ms, m.created_at,
-  m.recalled_at, m.reply_to_id,
+  m.recalled_at, m.reply_to_id, m.visibility::text AS visibility,
   to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
 `
 
@@ -111,6 +115,21 @@ function toLookup(result: unknown): MediaRequestLookup | null {
   return row ? { row: toRow(row), matchedHash: row.hash_matches === true } : null
 }
 
+/** #694 M1：媒体消息的可见性与审核记录；与文本路径同一套判别约束。 */
+export type MediaCreateOptions =
+  | {
+      key?: MessageSendKey | null
+      replyToId?: string | null
+      visibility?: 'DELIVERED'
+      moderation?: ChatModerationRecordInput
+    }
+  | {
+      key?: MessageSendKey | null
+      replyToId?: string | null
+      visibility: 'PENDING_REVIEW'
+      moderation: ChatModerationRecordInput
+    }
+
 export interface MediaMessageStore {
   /** 已重键主体的旧对象键仅可由其新 ID 所属用户/会话继续提交。 */
   legacyIds(resourceTable: 'users' | 'conversations', currentId: string): Promise<string[]>
@@ -128,8 +147,7 @@ export interface MediaMessageStore {
     conversationId: string,
     senderId: string,
     input: MediaMessageInput,
-    key?: MessageSendKey | null,
-    replyToId?: string | null,
+    options?: MediaCreateOptions,
   ): Promise<MediaRow>
   list(
     conversationId: string,
@@ -202,7 +220,14 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
       return map
     },
 
-    async create(conversationId, senderId, input, key, replyToId) {
+    async create(conversationId, senderId, input, options = {}) {
+      const { key = null, replyToId = null, visibility = 'DELIVERED', moderation } = options
+      if (visibility !== 'DELIVERED' && !moderation) {
+        throw new Error('待审媒体消息必须同时提供审核记录')
+      }
+      if (moderation && (moderation.status === 'PENDING') !== (visibility === 'PENDING_REVIEW')) {
+        throw new Error('媒体审核记录状态与消息可见性不一致')
+      }
       return db.transaction(async (tx) => {
         if (key) {
           // 与文本路径同一套串行化：先拿键的 advisory lock，再查重；两个并发同键请求里
@@ -222,11 +247,11 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
           WITH msg AS (
             INSERT INTO messages
               (id, conversation_id, sender_id, type, content, created_at,
-               client_request_id, client_request_hash, reply_to_id)
+               client_request_id, client_request_hash, reply_to_id, visibility)
             VALUES (
               ${messageId}::uuid, ${conversationId}::uuid, ${senderId}::uuid, 'MEDIA', '[media]',
               clock_timestamp(), ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null},
-              ${replyToId ?? null}::uuid
+              ${replyToId ?? null}::uuid, ${visibility}
             )
             RETURNING id, conversation_id, sender_id, created_at
           ), media AS (
@@ -240,20 +265,41 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
             )
             RETURNING *
           ), bump AS (
+            /* #694 M1：待审消息不推进会话排序键——否则接收者会从列表顺序看出「有新消息」。 */
             UPDATE conversations c SET
               last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),
               updated_at = now()
-            FROM msg WHERE c.id = msg.conversation_id
+            FROM msg WHERE c.id = msg.conversation_id AND ${visibility} = 'DELIVERED'
           )
           SELECT msg.id AS message_id, msg.conversation_id, msg.sender_id,
                  media.id AS media_id, media.kind::text, media.object_key, media.mime_type,
                  media.size_bytes, media.width, media.height, media.duration_ms, msg.created_at,
                  NULL::timestamptz AS recalled_at, ${replyToId ?? null}::uuid AS reply_to_id,
+                 ${visibility}::text AS visibility,
                  to_char(msg.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
           FROM msg CROSS JOIN media
         `)
         const row = rowsOf(result)[0]
         if (!row) throw new Error('媒体消息创建失败：会话可能已被删除')
+        if (moderation) {
+          await tx.execute(sql`
+            INSERT INTO chat_moderation_records
+              (id, message_id, conversation_id, sender_id, kind, decision, machine_decision,
+               status, provider, provider_request_id, policy_version, suggestion, label,
+               sub_label, score, matched_rules, matched_terms_masked)
+            VALUES (
+              ${newId()}, ${messageId}::uuid, ${conversationId}::uuid, ${senderId}::uuid,
+              ${moderation.kind}::chat_moderation_kind,
+              ${moderation.decision}::moderation_decision,
+              ${moderation.machineDecision}::moderation_decision,
+              ${moderation.status}::chat_moderation_status,
+              ${moderation.provider}, ${moderation.providerRequestId}, ${moderation.policyVersion},
+              ${moderation.suggestion}, ${moderation.label}, ${moderation.subLabel},
+              ${moderation.score}, ${jsonParam(moderation.matchedRules)},
+              ${jsonParam(moderation.matchedTermsMasked)}
+            )
+          `)
+        }
         return toRow(row)
       })
     },

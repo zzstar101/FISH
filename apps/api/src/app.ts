@@ -1,5 +1,6 @@
 import { BLOCK_ROUTES } from '@fish/contracts/blocks/routes'
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
+import { MEDIA_MAX_IMAGE_BYTES } from '@fish/contracts/chat/schema'
 import {
   RECOMMENDATION_EVENT_RATE_LIMIT,
   RECOMMENDATION_FEED_IP_RATE_LIMIT,
@@ -136,7 +137,7 @@ import { createSqlTransactionStore } from './modules/transactions/store'
 import { createSqlListingMediaObjectStore } from './modules/uploads/media-objects'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createUploadService } from './modules/uploads/service'
-import { createBunS3MediaStorage } from './modules/uploads/storage'
+import { CHAT_MEDIA_PREFIX, createBunS3MediaStorage } from './modules/uploads/storage'
 import { createUsersRouter } from './modules/users/router'
 import { createPublicUserService } from './modules/users/service'
 import { createSqlPublicUserStore } from './modules/users/store'
@@ -384,14 +385,27 @@ export function createApp(
   const governanceService = createGovernanceService({ db, store: governanceStore })
   const projectSystemContent = createSystemContentProjector(db)
 
-  // #694 M1：聊天文本用**独立**的腾讯 BizType（禁止复用商品的 TENCENT_TMS_BIZ_TYPE）；
-  // `loadImage` 不会被调用——文本审核不读图片（图片/语音审核在后续批次接线）。
+  // #694 M1：聊天文本/图片各用**独立**的腾讯 BizType（禁止复用商品策略号）；
+  // 语音在音频审核接入前显式关闭发送。
   const chatModeration = createChatModerationPolicy(
     createContentModerationProvider(
       moderationEnv.transport === 'tencent'
-        ? { ...moderationEnv, tmsBizType: moderationEnv.tmsChatBizType }
+        ? {
+            ...moderationEnv,
+            tmsBizType: moderationEnv.tmsChatBizType,
+            imsBizType: moderationEnv.imsChatBizType,
+          }
         : moderationEnv,
-      { loadImage: () => Promise.reject(new Error('聊天文本审核不读取图片')) },
+      {
+        // #694 M1 图片审核：只读服务端已固化的快照（不可被客户端 PUT 覆盖），
+        // 上限沿用聊天图片大小；读取失败让 provider 转成 503 而不是裸异常。
+        loadImage: async (objectKey) => {
+          // 纵深防御：只允许读聊天快照前缀，避免将来误用本回调读桶内任意对象。
+          if (!objectKey.startsWith(CHAT_MEDIA_PREFIX)) return null
+          const bytes = await storage.readMediaBytes?.(objectKey, MEDIA_MAX_IMAGE_BYTES)
+          return bytes ? { bytes } : null
+        },
+      },
     ),
   )
 
@@ -809,6 +823,7 @@ export function createApp(
         store: createSqlMediaMessageStore(db),
         storage,
         blocks: blockStore,
+        chatModeration,
         mediaUrl: (conversationId, mediaId) =>
           `/api/conversations/${conversationId}/media/${mediaId}`,
         onMediaCreated: (participants, media) => {

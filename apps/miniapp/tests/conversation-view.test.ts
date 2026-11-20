@@ -1069,6 +1069,7 @@ const picture = (id: string, createdAt: string): MediaMessageDto => ({
   durationMs: null,
   recalledAt: null,
   replyTo: null,
+  visibility: 'DELIVERED',
   createdAt,
 })
 

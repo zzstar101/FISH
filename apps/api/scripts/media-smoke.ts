@@ -9,6 +9,24 @@ import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSessions } from '../src/modules/auth/session'
 
+function webpBytes(): number[] {
+  const chunk = [...ascii('VP8X'), ...u32le(10), 0x0f, 0, 0, 0, ...u24le(799), ...u24le(599)]
+  const riff = [...ascii('RIFF'), ...u32le(4 + chunk.length), ...ascii('WEBP')]
+  const body = [...riff, ...chunk]
+  return body.length >= 1024
+    ? body.slice(0, 1024)
+    : [...body, ...new Array(1024 - body.length).fill(0)]
+}
+function ascii(value: string): number[] {
+  return [...value].map((char) => char.charCodeAt(0))
+}
+function u32le(value: number): number[] {
+  return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]
+}
+function u24le(value: number): number[] {
+  return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff]
+}
+
 const env = loadServerEnv()
 const scratch = `fish_media_smoke_${process.pid}`
 const url = new URL(env.DATABASE_URL)
@@ -86,19 +104,28 @@ try {
     await Bun.sleep(100)
   }
   assert(ready, 'API readiness')
-  const bytes = new Uint8Array(
-    await Bun.file(
-      new URL('../src/modules/messages/fixtures/voice-fragmented.mp4', import.meta.url),
-    ).arrayBuffer(),
-  )
+  // #694 M1：语音发送已显式关闭（音频审核未接入），连上传地址都不该发。
+  const bytes = new Uint8Array(webpBytes())
   const mediaPath = `/conversations/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversation)}/media`
   const headers = { Cookie: cookie, 'Content-Type': 'application/json' }
+  const voicePresign = await fetch(`${base}${mediaPath}/presign`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ kind: 'VOICE', contentType: 'audio/mp4', sizeBytes: 2048 }),
+  })
+  const voiceText = await voicePresign.text()
+  assert.equal(voicePresign.status, 422, voiceText)
+  assert.equal(
+    (JSON.parse(voiceText) as { error?: { code?: string } }).error?.code,
+    'VOICE_SEND_DISABLED',
+  )
+
   const response = await fetch(`${base}${mediaPath}/presign`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ kind: 'VOICE', contentType: 'audio/mp4', sizeBytes: bytes.length }),
+    body: JSON.stringify({ kind: 'IMAGE', contentType: 'image/webp', sizeBytes: bytes.length }),
   })
-  assert.equal(response.status, 200)
+  assert.equal(response.status, 200, await response.clone().text())
   const signed = (await response.json()) as {
     uploadUrl: string
     objectKey: string
@@ -109,7 +136,7 @@ try {
     (
       await fetch(signed.uploadUrl, {
         method: 'PUT',
-        headers: { ...signed.headers, 'Content-Type': 'audio/mp4' },
+        headers: { ...signed.headers, 'Content-Type': 'image/webp' },
         body: bytes,
       })
     ).status,
@@ -119,16 +146,18 @@ try {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      kind: 'VOICE',
-      contentType: 'audio/mp4',
+      kind: 'IMAGE',
+      contentType: 'image/webp',
       sizeBytes: bytes.length,
+      width: 800,
+      height: 600,
       objectKey: signed.objectKey,
-      durationMs: 1000,
     }),
   })
   assert.equal(created.status, 201, await created.clone().text())
-  const media = (await created.json()) as { mediaId: string; durationMs: number }
-  assert.equal(media.durationMs, 1021)
+  const media = (await created.json()) as { mediaId: string; visibility: string }
+  // local transport 的图片恒为 REVIEW：只对发送者可见，且不能冒充已投递。
+  assert.equal(media.visibility, 'PENDING_REVIEW')
   const saved = await db.execute(
     sql`SELECT object_key FROM message_media WHERE id = ${decodePublicId(PUBLIC_ID_PREFIX.media, media.mediaId)}`,
   )
@@ -169,7 +198,7 @@ try {
   )
   assert.equal((await fetch(objectPath)).status, 401)
   console.log(
-    '[media-smoke] ok: fragmented MP4, server duration, immutable snapshot, Range, authorization',
+    '[media-smoke] ok: voice disabled, image review, immutable snapshot, Range, authorization',
   )
 } finally {
   if (api) {

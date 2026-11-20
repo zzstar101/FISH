@@ -150,8 +150,8 @@ describe('media message store (integration)', () => {
     const key = messageSendKey(clientRequestId, mediaRequestHash(image))
     if (!key) throw new Error('unreachable')
 
-    const first = await mediaStore.create(conversationA, buyer, image, key)
-    const retry = await mediaStore.create(conversationA, buyer, image, key)
+    const first = await mediaStore.create(conversationA, buyer, image, { key: key })
+    const retry = await mediaStore.create(conversationA, buyer, image, { key: key })
 
     expect(retry.message_id).toBe(first.message_id)
     expect(retry.media_id).toBe(first.media_id)
@@ -167,10 +167,10 @@ describe('media message store (integration)', () => {
     const secondKey = messageSendKey(clientRequestId, mediaRequestHash(other))
     if (!firstKey || !secondKey) throw new Error('unreachable')
 
-    await mediaStore.create(conversationA, buyer, image, firstKey)
-    expect(mediaStore.create(conversationA, buyer, other, secondKey)).rejects.toBeInstanceOf(
-      MessageIdempotencyConflictError,
-    )
+    await mediaStore.create(conversationA, buyer, image, { key: firstKey })
+    expect(
+      mediaStore.create(conversationA, buyer, other, { key: secondKey }),
+    ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
     expect(await countByRequestId(clientRequestId, 'messages')).toBe(1)
   })
 
@@ -190,9 +190,9 @@ describe('media message store (integration)', () => {
     expect(lookup).not.toBeNull()
     expect(lookup?.matchedHash).toBe(false)
 
-    expect(mediaStore.create(conversationA, buyer, image, mediaKey)).rejects.toBeInstanceOf(
-      MessageIdempotencyConflictError,
-    )
+    expect(
+      mediaStore.create(conversationA, buyer, image, { key: mediaKey }),
+    ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
     expect(await countByRequestId(clientRequestId, 'messages')).toBe(1)
   })
 
@@ -205,7 +205,7 @@ describe('media message store (integration)', () => {
     // 8 个并发重试。去掉事务里的 advisory lock 后它们会各自查空、各自 INSERT：
     // 只有一个赢，其余撞 messages_sender_conversation_client_request_uq(23505)。
     const results = await Promise.all(
-      Array.from({ length: 8 }, () => mediaStore.create(conversationA, buyer, image, key)),
+      Array.from({ length: 8 }, () => mediaStore.create(conversationA, buyer, image, { key: key })),
     )
 
     expect(new Set(results.map((row) => row.message_id)).size).toBe(1)
@@ -222,8 +222,12 @@ describe('media message store (integration)', () => {
     if (!keyA || !keyB) throw new Error('unreachable')
 
     const settled = await Promise.allSettled([
-      ...Array.from({ length: 4 }, () => mediaStore.create(conversationA, buyer, image, keyA)),
-      ...Array.from({ length: 4 }, () => mediaStore.create(conversationA, buyer, other, keyB)),
+      ...Array.from({ length: 4 }, () =>
+        mediaStore.create(conversationA, buyer, image, { key: keyA }),
+      ),
+      ...Array.from({ length: 4 }, () =>
+        mediaStore.create(conversationA, buyer, other, { key: keyB }),
+      ),
     ])
 
     // 锁把并发压成串行：先到的那份内容落库，它的 4 次全部重放同一条；
@@ -250,7 +254,7 @@ describe('media message store (integration)', () => {
     const textKey = messageSendKey(clientRequestId, textRequestHash('后来的文字'))
     if (!mediaKey || !textKey) throw new Error('unreachable')
 
-    await mediaStore.create(conversationA, buyer, image, mediaKey)
+    await mediaStore.create(conversationA, buyer, image, { key: mediaKey })
     expect(
       messageStore.insertText(conversationA, buyer, '后来的文字', { key: textKey }),
     ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
@@ -271,6 +275,43 @@ describe('media message store (integration)', () => {
     const byBuyer = await mediaStore.list(conversationA, buyer, { limit: 50, cursor: null })
     expect(byBuyer.some((row) => row.media_id === created.media_id)).toBe(true)
     expect(await mediaStore.find(conversationA, created.media_id, buyer)).not.toBeNull()
+  })
+
+  test('待审媒体落库：visibility/记录同事务，且不推进会话语义（#694 M1）', async () => {
+    const image = imageFor('pending-create')
+    const before = await db.execute(
+      sql`SELECT last_message_at FROM conversations WHERE id = ${conversationA}::uuid`,
+    )
+    const created = await mediaStore.create(conversationA, buyer, image, {
+      visibility: 'PENDING_REVIEW',
+      moderation: {
+        ...pendingReviewModeration(),
+        kind: 'IMAGE',
+        provider: 'TENCENT_IMS',
+        providerRequestId: 'req-img',
+        policyVersion: 'ims-chat',
+      },
+    })
+    expect(created.visibility).toBe('PENDING_REVIEW')
+    const records = await db.execute(
+      sql`SELECT kind::text AS kind, status::text AS status, decision::text AS decision,
+            provider::text AS provider, policy_version
+          FROM chat_moderation_records WHERE message_id = ${created.message_id}::uuid`,
+    )
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      kind: 'IMAGE',
+      status: 'PENDING',
+      decision: 'REVIEW',
+      provider: 'TENCENT_IMS',
+      policy_version: 'ims-chat',
+    })
+    const after = await db.execute(
+      sql`SELECT last_message_at FROM conversations WHERE id = ${conversationA}::uuid`,
+    )
+    expect(new Date(after[0]?.last_message_at as string).getTime()).toBe(
+      new Date(before[0]?.last_message_at as string).getTime(),
+    )
   })
 
   test('引用目标只取 DELIVERED：待审消息不参与摘录投射（#694 M1）', async () => {

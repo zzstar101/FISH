@@ -521,6 +521,7 @@ read -rs -p '腾讯云 SecretKey（不回显）: ' TENCENT_CLOUD_SECRET_KEY && e
 read -r  -p 'TMS（文本）BizType: ' TENCENT_TMS_BIZ_TYPE
 read -r  -p 'IMS（图片）BizType: ' TENCENT_IMS_BIZ_TYPE
 read -r  -p 'TMS（聊天文本）BizType: ' TENCENT_TMS_CHAT_BIZ_TYPE
+read -r  -p 'IMS（聊天图片）BizType: ' TENCENT_IMS_CHAT_BIZ_TYPE
 {
   printf 'CONTENT_MODERATION_TRANSPORT=tencent\n'
   printf 'TENCENT_CLOUD_SECRET_ID=%s\n' "$TENCENT_CLOUD_SECRET_ID"
@@ -528,23 +529,30 @@ read -r  -p 'TMS（聊天文本）BizType: ' TENCENT_TMS_CHAT_BIZ_TYPE
   printf 'TENCENT_TMS_BIZ_TYPE=%s\n' "$TENCENT_TMS_BIZ_TYPE"
   printf 'TENCENT_IMS_BIZ_TYPE=%s\n' "$TENCENT_IMS_BIZ_TYPE"
   printf 'TENCENT_TMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_TMS_CHAT_BIZ_TYPE"
+  printf 'TENCENT_IMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_IMS_CHAT_BIZ_TYPE"
 } | sudo tee -a /etc/fish/api-mail.env >/dev/null
 unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
 ```
 
-- 五项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
+- 六项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
   600），轮换后重启 API 生效，不影响存量数据。
 - `TENCENT_CLOUD_REGION` 可选，默认 `ap-guangzhou`；应与存储/会话所在地域一致，跨境调用会明显变慢。
 - `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 是腾讯云控制台按业务创建的两个策略号（文本、图片
   各一），会作为审核结果的 `policyVersion` 记录，便于事后按策略回溯。
-- **聊天必须使用独立的 `TENCENT_TMS_CHAT_BIZ_TYPE`（#694 M1）**：聊天正文是私聊内容，不能套商品的
-  `TENCENT_TMS_BIZ_TYPE` 策略（商品策略会把「加微信」这类正常商品描述话术判成引流）。该变量缺失、
-  或它与 `TENCENT_TMS_BIZ_TYPE` 相同时 API 都会启动失败；聊天审核结论与 `chat_moderation_records` 的
-  `policyVersion` 一一对应，便于按策略回溯。
-  只接文本：`ALLOW` 正常投递，`REVIEW` 落 `PENDING_REVIEW`（仅发送者可见，等待人工队列），`BLOCK`
-  返回 **422 `MESSAGE_CONTENT_BLOCKED`** 且不落消息行；上游超时/失败返回 **503
-  `CONTENT_MODERATION_UNAVAILABLE`** 且不落消息行（fail-closed，不推送、不计未读）。图片/语音审核
-  在后续批次接线，届时同样需要独立策略号。
+- **聊天必须使用独立策略号（#694 M1）**：文本 `TENCENT_TMS_CHAT_BIZ_TYPE`、图片
+  `TENCENT_IMS_CHAT_BIZ_TYPE`。聊天正文/图片是私聊内容，不能套商品策略（商品策略会把「加微信」这类
+  正常商品描述话术判成引流）。任一缺失、或与 `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 相同
+  时 API 都会启动失败；聊天审核结论与 `chat_moderation_records` 的 `policyVersion` 一一对应，便于按
+  策略回溯。
+  文本：`ALLOW` 正常投递，`REVIEW` 落 `PENDING_REVIEW`（仅发送者可见，等待人工队列），`BLOCK` 返回
+  **422 `MESSAGE_CONTENT_BLOCKED`** 且不落消息行；上游超时/失败返回 **503
+  `CONTENT_MODERATION_UNAVAILABLE`** 且不落消息行（fail-closed，不推送、不计未读）。
+  图片：服务端先把上传字节固化为不可覆盖的快照，再把同一份字节交给 IMS，并严格比对本地 MD5 与上游
+  `FileMD5`；不一致按 fail-closed 处理（503），拒绝时清理快照、不生成可见媒体消息；待审图片只对发送者
+  可见。**上线前必须验证聊天 IMS 策略号真实返回 `FileMD5`**：用授权测试环境跑
+  `bun --env-file=.env apps/api/scripts/moderation-live-probe.ts --chat <样例图路径>`，确认输出的
+  `contentDigest` 为 32 位 MD5；若上游不回该字段，所有聊天图片都会 503（不泄漏，但功能不可用）。语音：在接入可验证的音频审核前**显式关闭发送**，`POST /conversations/:id/media/presign` 与
+  `POST …/media` 对 `VOICE` 返回 **422 `VOICE_SEND_DISABLED`**；历史语音仍可正常读取。
 - 日志只允许出现腾讯 `RequestId`：Secret 与完整私密文本（含图片字节）都不进日志。密钥随 §10 备份
   的 `config-*.tar.gz` 进备份，泄漏处置与其它 API 密钥同口径。
 - **接线面（#228）**：商品**文本**（title / description）在 `POST /listings` 与 `PATCH /listings/:id`

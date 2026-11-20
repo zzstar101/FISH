@@ -34,9 +34,25 @@ export interface ChatModerationResult {
   matchedTermsMasked: string[]
 }
 
-export interface ChatModerationPolicy {
+export interface ChatImageModerationResult extends ChatModerationResult {
+  objectKey: string
+  /** 上游对这次字节的摘要（腾讯 `FileMD5`）；本地 transport 为 null。 */
+  contentDigest: string | null
+  /** 上游给出的不可审核原因（如本地调试未接图片审核）；正常判定为 null。 */
+  reasonCode: string | null
+}
+
+export interface ChatTextModerationPolicy {
   /** 文本送审：只审 `content` 字段，不把正文伪装成商品标题/描述。 */
   moderateText(input: { content: string }): Promise<ChatModerationResult>
+}
+
+export interface ChatModerationPolicy extends ChatTextModerationPolicy {
+  /**
+   * 图片送审（#694 M1）：对象必须已固化为不可覆盖的快照；调用方负责把
+   * `contentDigest` 与本地字节摘要严格比对，不一致按 fail-closed 处理。
+   */
+  moderateImage(input: { objectKey: string }): Promise<ChatImageModerationResult>
 }
 
 /**
@@ -77,6 +93,29 @@ export function createChatModerationPolicy(
         score: first?.score ?? null,
         matchedRules,
         matchedTermsMasked: [...new Set(result.fields.flatMap((field) => field.maskedTerms ?? []))],
+      }
+    },
+
+    async moderateImage({ objectKey }) {
+      const result = await provider.moderateImage({
+        dataId: chatDataId(),
+        objectKey,
+      })
+      return {
+        decision: result.decision,
+        provider: result.provider,
+        transport: result.transport,
+        providerRequestId: result.requestId,
+        policyVersion: result.policyVersion,
+        suggestion: result.suggestion,
+        label: result.label,
+        subLabel: result.subLabel,
+        score: result.score,
+        matchedRules: result.subLabel ? [result.subLabel] : [],
+        matchedTermsMasked: [],
+        objectKey: result.objectKey,
+        contentDigest: result.contentDigest,
+        reasonCode: result.reasonCode,
       }
     },
   }

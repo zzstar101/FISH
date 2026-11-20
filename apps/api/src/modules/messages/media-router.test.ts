@@ -4,7 +4,7 @@ import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import type { MediaStorage } from '../uploads/storage'
 import { createMediaRouter } from './media-router'
-import type { MediaMessageService } from './media-service'
+import { type MediaMessageService, MediaMessageServiceError } from './media-service'
 
 const conversationId = encodePublicId(
   PUBLIC_ID_PREFIX.conversation,
@@ -45,6 +45,7 @@ function buildApp(
       durationMs: null,
       recalledAt: null,
       replyTo: null,
+      visibility: 'DELIVERED',
       createdAt: '2026-09-14T12:00:00.000Z',
     }),
     list: async () => ({ items: [], nextCursor: null }),
@@ -190,5 +191,45 @@ describe('media router', () => {
     const app = buildApp({}, { getObject: () => null })
     const response = await app.request(`/conversations/${conversationId}/media/${mediaId}`)
     expect(response.status).toBe(404)
+  })
+
+  // #694 M1：语音关闭与审核不可用都必须是契约里的业务码，不能被路由包成 500。
+  test('maps VOICE_SEND_DISABLED to 422 with the contract error body', async () => {
+    const app = buildApp({
+      presign: async () => {
+        throw new MediaMessageServiceError(422, 'VOICE_SEND_DISABLED', '语音已关闭')
+      },
+    })
+    const response = await app.request(`/conversations/${conversationId}/media/presign`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'IMAGE', contentType: 'image/webp', sizeBytes: 100 }),
+    })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({ error: { code: 'VOICE_SEND_DISABLED' } })
+  })
+
+  test('maps CONTENT_MODERATION_UNAVAILABLE to 503 with the contract error body', async () => {
+    const app = buildApp({
+      create: async () => {
+        throw new MediaMessageServiceError(503, 'CONTENT_MODERATION_UNAVAILABLE', '审核不可用')
+      },
+    })
+    const response = await app.request(`/conversations/${conversationId}/media`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'IMAGE',
+        contentType: 'image/webp',
+        sizeBytes: 100,
+        width: 100,
+        height: 80,
+        objectKey: 'chat-media/key.webp',
+      }),
+    })
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({
+      error: { code: 'CONTENT_MODERATION_UNAVAILABLE' },
+    })
   })
 })

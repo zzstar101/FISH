@@ -137,6 +137,8 @@ export const mediaMessageDtoSchema = z.strictObject({
   recalledAt: z.iso.datetime().nullable(),
   /** 引用块投射（#359 3c）；无引用为 null。 */
   replyTo: messageReplySchema.nullable(),
+  /** #694 M1：DELIVERED 对双方可见；PENDING_REVIEW 仅发送者可见。 */
+  visibility: messageVisibilitySchema,
   createdAt: z.iso.datetime(),
 })
 export type MediaMessageDto = z.infer<typeof mediaMessageDtoSchema>
@@ -531,10 +533,15 @@ export const ChatErrorCodeSchema = z.enum([
   /** 422：被引用的消息不可用（类型不可引用——SYSTEM、已撤回）。 */
   'MESSAGE_REPLY_INVALID',
   /**
-   * 422：文字消息被内容安全策略判 BLOCK（#694 M1）。不落可见消息行，客户端按失败气泡
-   * 渲染并允许用户修改后重发（同一个 clientRequestId 不应重试同一段内容）。
+   * 422：消息被内容安全策略判 BLOCK（#694 M1，文字与聊天图片共用）。不落可见消息行，
+   * 客户端按失败气泡渲染并允许用户修改后重发（同一个 clientRequestId 不应重试同一段内容）。
    */
   'MESSAGE_CONTENT_BLOCKED',
+  /**
+   * 422：语音消息的音频审核上游尚未接入（#694 M1 v1）。服务端显式关闭新语音发送而不是
+   * 未审核直发；历史语音仍可读。接入音频审核后移除本码。
+   */
+  'VOICE_SEND_DISABLED',
   /** 503：审核上游不可用/超时（#694 M1 fail-closed），消息未落库，可原样重试。 */
   'CONTENT_MODERATION_UNAVAILABLE',
   /** 403：撤回者不是消息发送者本人（SYSTEM 不可撤回）。 */

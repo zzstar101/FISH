@@ -78,6 +78,7 @@ function mediaMessage(
     durationMs: kind === 'VOICE' ? 1_500 : null,
     recalledAt: null,
     replyTo: null,
+    visibility: 'DELIVERED',
     createdAt,
   }
 }

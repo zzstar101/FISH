@@ -9,8 +9,10 @@
  *
  * - 第一个参数是待审文本（不给则用内置构造样例）。
  * - 第二个参数是待审图片路径；探针把路径当作 `objectKey` 直接读文件，不做任何存储接线。
- * - 前置：`CONTENT_MODERATION_TRANSPORT=tencent` + 四项腾讯配置齐全，否则本脚本直接拒绝运行
+ * - 前置：`CONTENT_MODERATION_TRANSPORT=tencent` + 六项腾讯配置齐全，否则本脚本直接拒绝运行
  *   （`local` 是本机词表，探它没有意义）。
+ * - 加 `--chat` 时改用**聊天** BizType（TENCENT_TMS_CHAT_BIZ_TYPE / TENCENT_IMS_CHAT_BIZ_TYPE），
+ *   用来验证聊天图片真实返回 `contentDigest`（FileMD5）——线上 digest 比对依赖它。
  * - 每次调用都是真实计费请求；不要喂真实用户内容，用构造样例即可。
  */
 
@@ -38,8 +40,10 @@ function formatError(error: unknown): string {
 }
 
 const args = Bun.argv.slice(2)
-const text = args[0] ?? DEFAULT_TEXT
-const imagePath = args[1]
+const chatMode = args.includes('--chat')
+const positional = args.filter((arg) => !arg.startsWith('--'))
+const text = positional[0] ?? DEFAULT_TEXT
+const imagePath = positional[1]
 
 const env = loadContentModerationEnv()
 if (env.transport !== 'tencent') {
@@ -54,8 +58,8 @@ const provider = createTencentContentModerationProvider(
     secretId: env.secretId,
     secretKey: env.secretKey,
     region: env.region,
-    tmsBizType: env.tmsBizType,
-    imsBizType: env.imsBizType,
+    tmsBizType: chatMode ? env.tmsChatBizType : env.tmsBizType,
+    imsBizType: chatMode ? env.imsChatBizType : env.imsBizType,
   },
   {
     loadImage: async (objectKey): Promise<ModerationImageSource | null> => {
@@ -66,7 +70,10 @@ const provider = createTencentContentModerationProvider(
   },
 )
 
-console.log(`[moderation-probe] region=${env.region} tms=${env.tmsBizType} ims=${env.imsBizType}`)
+console.log(
+  `[moderation-probe] mode=${chatMode ? 'chat' : 'listing'} region=${env.region} ` +
+    `tms=${chatMode ? env.tmsChatBizType : env.tmsBizType} ims=${chatMode ? env.imsChatBizType : env.imsBizType}`,
+)
 
 let failed = false
 

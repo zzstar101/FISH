@@ -43,6 +43,7 @@ const mediaDto: MediaMessageDto = {
   durationMs: null,
   recalledAt: null,
   replyTo: null,
+  visibility: 'DELIVERED',
   createdAt: '2026-01-01T00:00:00.000Z',
 }
 
@@ -154,6 +155,9 @@ describe('chat error helpers', () => {
     )
     expect(describeSendFailure(new ApiError('MEDIA_OBJECT_INVALID', 422, '不一致'))).toBe(
       '媒体文件与声明不一致，请重试',
+    )
+    expect(describeSendFailure(new ApiError('VOICE_SEND_DISABLED', 422, '关闭'))).toBe(
+      '语音消息暂不支持发送，请改用文字或图片',
     )
     expect(describeSendFailure(new ApiError('MEDIA_DURATION_EXCEEDED', 422, '太长'))).toBe(
       '语音不能超过 60 秒',
