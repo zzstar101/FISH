@@ -155,6 +155,16 @@ export const CommentErrorCodeSchema = z.enum([
   'COMMENT_NOT_FOUND',
   /** 422：正文命中服务端敏感词库（判定见 `apps/api/src/modules/moderation`）。 */
   'COMMENT_CONTENT_BLOCKED',
+  /**
+   * 422：正文需要人工复核，本次**未落库、不会公开展示**（#694 M6）。
+   *
+   * 与 `COMMENT_CONTENT_BLOCKED` 必须区分：前者是「确定违规」，这里是「机器给不出确定结论」。
+   * 当前阶段留言没有人工复审队列，因此采用「拒绝创建 + 保留待审语义」的兜底
+   * （#694 M6 明确允许）；接入复审队列后本码应改为随留言进入待审状态、作者可见「审核中」。
+   */
+  'COMMENT_CONTENT_REVIEW_REQUIRED',
+  /** 503：内容安全服务不可用 / 超时 / 限频，留言未落库；可原样重试（#694 M6）。 */
+  'CONTENT_MODERATION_UNAVAILABLE',
 ])
 
 export type CommentErrorCode = z.infer<typeof CommentErrorCodeSchema>

@@ -181,8 +181,18 @@ export const TransactionReviewErrorCodeSchema = z.enum([
   'TRANSACTION_NOT_COMPLETED',
   /** 409：你已评过这笔交易（各方一条；并发撞库唯一索引也归到这里）。 */
   'TRANSACTION_REVIEW_EXISTS',
-  /** 422：评语命中服务端敏感词库（判定同 `comments`，复用 #74 规则库）。 */
+  /** 422：评语命中服务端敏感词库（判定见 `apps/api/src/modules/moderation`）。 */
   'REVIEW_CONTENT_BLOCKED',
+  /**
+   * 422：评语需要人工复核，本次**未落库、不会展示**（#694 M6）。
+   *
+   * 与 `REVIEW_CONTENT_BLOCKED` 必须区分：前者是「确定违规」，这里是「机器给不出确定结论」。
+   * 当前阶段评价没有人工复审队列，因此采用「拒绝创建 + 保留待审语义」的兜底；
+   * 接入复审队列后本码应改为随评价进入待审状态。
+   */
+  'REVIEW_CONTENT_REVIEW_REQUIRED',
+  /** 503：内容安全服务不可用 / 超时 / 限频，评价未落库；可原样重试（#694 M6）。 */
+  'CONTENT_MODERATION_UNAVAILABLE',
   /**
    * 422：配图对象键不可引用（#475）。**一个稳定码覆盖全部不可引用情形**——跨用户键、
    * 他人 listing 键、chat-media 键、未经本上传链 confirm 的键、对象不存在——不区分，

@@ -48,6 +48,24 @@ describe('本地 provider', () => {
     expect(allowed.fields[0]?.subLabel).toBeNull()
   })
 
+  // #694 M6：公开 UGC 用独立的 `publicContent` 字段。联系方式是公开场景的灰区规则，
+  // 不能因为私聊允许（content 字段跳过 EXTERNAL_CONTACT）而在留言/评价里被放过。
+  test('公开 UGC（publicContent 字段）的引流词判 REVIEW，私聊 content 仍放行', async () => {
+    const provider = createLocalContentModerationProvider()
+    const ugc = await provider.moderateText({
+      dataId: 'cmt_1',
+      fields: [{ field: 'publicContent', value: '闲置出售，加微信详聊' }],
+    })
+    const chat = await provider.moderateText({
+      dataId: 'chat_2',
+      fields: [{ field: 'content', value: '闲置出售，加微信详聊' }],
+    })
+    expect(ugc.decision).toBe('REVIEW')
+    expect(ugc.fields[0]).toMatchObject({ field: 'publicContent', decision: 'REVIEW' })
+    expect(ugc.fields[0]?.subLabel).toBe('PUBLIC_EXTERNAL_CONTACT')
+    expect(chat.decision).toBe('ALLOW')
+  })
+
   // #694 M1：聊天正文以 `content` 字段送审。旧实现只认 title/description，会把聊天文本
   // 静默判成 ALLOW —— 这里钉住 content 真的进了词表。
   test('聊天正文（content 字段）同样经过词表，不被静默放行', async () => {

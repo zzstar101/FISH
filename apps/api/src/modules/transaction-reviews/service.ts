@@ -15,7 +15,13 @@ import {
   TransactionReviewsResponseSchema,
 } from '@fish/contracts/transaction-reviews/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { createModerationService, type ModerationService } from '../moderation/service'
+import { createLocalContentModerationProvider } from '../moderation/providers/local'
+import {
+  ContentModerationError,
+  type ContentModerationProvider,
+  type TextModerationResult,
+} from '../moderation/providers/types'
+import { moderatePublicUgcText } from '../moderation/ugc-text'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
 import { isReviewMediaPublicKey, reviewMediaPublicPrefix } from '../uploads/storage'
@@ -201,10 +207,14 @@ export function createTransactionReviewService(deps: {
    * 上传链还需要 presignPut/readMediaBytes/writeMediaBytes）。
    */
   storage: MediaStorage
-  moderation?: ModerationService
+  /**
+   * 公开 UGC 文本审核 provider（#694 M6）。缺省走本地词表（开发/测试）；生产装配在
+   * `app.ts`，与留言共用公开评论策略号（`TENCENT_TMS_UGC_BIZ_TYPE`）。
+   */
+  moderationProvider?: ContentModerationProvider
 }): TransactionReviewService {
   const { store, storage } = deps
-  const moderation = deps.moderation ?? createModerationService()
+  const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
 
   /**
    * 评价边的所有方法都先过这一道：交易存在且我是参与者，否则 404
@@ -246,6 +256,56 @@ export function createTransactionReviewService(deps: {
     }
   }
 
+  /**
+   * 评语送审（#694 M6）：只审正文，字段固定 `content`；评分不是文本，不送审。
+   *
+   * 上游失败必须 fail-closed：超时、限频、网络、配置错误一律 503，不把「没有结论」当通过。
+   * 三档结论分开处理：
+   * - ALLOW：放行；
+   * - BLOCK：确定违规 → 422 `REVIEW_CONTENT_BLOCKED`；
+   * - REVIEW：机器给不出确定结论 → 422 `REVIEW_CONTENT_REVIEW_REQUIRED`，**同样不落库**，
+   *   但错误码 / 文案 / 审计与 BLOCK 区分。评价当前没有人工复审流水线，因此取「拒绝创建
+   *   但保留待审语义」的兜底（#694 M6 允许）；接入队列后应改为随评价进入待审状态。
+   */
+  async function moderateBody(body: string): Promise<TextModerationResult> {
+    try {
+      return await moderatePublicUgcText(moderationProvider, { kind: 'review', content: body })
+    } catch (error) {
+      if (error instanceof ContentModerationError) {
+        // 审计：只记原因与上游请求标识，不记评语正文。
+        console.error('[transaction-reviews] 内容审核不可用，评价未落库', {
+          reason: error.reason,
+          retryable: error.retryable,
+          requestId: error.requestId,
+        })
+        throw new TransactionReviewServiceError(
+          503,
+          'CONTENT_MODERATION_UNAVAILABLE',
+          '内容审核暂时不可用，请稍后重试',
+        )
+      }
+      throw error
+    }
+  }
+
+  async function assertBodyAllowed(body: string): Promise<void> {
+    const result = await moderateBody(body)
+
+    if (result.decision === 'BLOCK') {
+      throw new TransactionReviewServiceError(422, 'REVIEW_CONTENT_BLOCKED', '评价内容未通过审核', [
+        { field: 'body', message: '评价内容未通过审核' },
+      ])
+    }
+    if (result.decision === 'REVIEW') {
+      throw new TransactionReviewServiceError(
+        422,
+        'REVIEW_CONTENT_REVIEW_REQUIRED',
+        '评价内容需要人工复核，暂时无法发布，请修改后重试',
+        [{ field: 'body', message: '评价内容待人工复核' }],
+      )
+    }
+  }
+
   return {
     media,
     async getMyReview(userId, transactionId) {
@@ -271,19 +331,8 @@ export function createTransactionReviewService(deps: {
       // —— service 不该依赖「上游一定解析过 schema」。
       const trimmed = input.body?.trim() ?? ''
       const body = trimmed === '' ? null : trimmed
-      if (body !== null) {
-        // 与 comments 同一规则库（#74）：正文按 `title` 传入，BLOCK 与 REVIEW 都拒绝 ——
-        // 评价没有「人工复审后可见」的流水线，放行 REVIEW 等于让外联文案直接可见。
-        const result = moderation.moderate({ title: body, description: '' })
-        if (result.decision !== 'ALLOW') {
-          throw new TransactionReviewServiceError(
-            422,
-            'REVIEW_CONTENT_BLOCKED',
-            '评价内容未通过审核',
-            [{ field: 'body', message: '评价内容未通过审核' }],
-          )
-        }
-      }
+      // 没有正文的评价只校验所附图片（见下），不送文本审核；评分 / 结构化字段不送审。
+      if (body !== null) await assertBodyAllowed(body)
 
       // #475 配图：契约已限长与去重，service 自兜一遍（不依赖「上游一定解析过 schema」）。
       const imageKeys = input.imageObjectKeys ?? []

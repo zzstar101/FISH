@@ -598,11 +598,22 @@ export function createApp(
     }),
   )
 
+  // 公开 UGC 文本审核（#694 M6）：留言 / 回复 / 交易评价正文共用一套策略号。
+  // 与聊天、商品不同策略号 —— 公开评论走 `TENCENT_TMS_UGC_BIZ_TYPE`；local transport 下
+  // 仍是同一份本地词表。本次只审文本，`loadImage` 不会被调用（评价配图仍按原链路校验）。
+  const publicUgcModerationProvider = createContentModerationProvider(
+    moderationEnv.transport === 'tencent'
+      ? { ...moderationEnv, tmsBizType: moderationEnv.tmsUgcBizType }
+      : moderationEnv,
+    { loadImage: () => Promise.reject(new Error('public UGC moderation does not read images')) },
+  )
+
   // 交易评价 service（#195 PR2）：一个实例两处用 —— 评价边 router 直接挂，
   // comments 的 `/me/comments?kind=review|all` 借道它读评价时间线。
   const transactionReviewService = createTransactionReviewService({
     store: createSqlTransactionReviewStore(db),
     storage,
+    moderationProvider: publicUgcModerationProvider,
   })
 
   // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
@@ -618,6 +629,7 @@ export function createApp(
         store: createSqlCommentStore(db),
         storage,
         reviews: transactionReviewService,
+        moderationProvider: publicUgcModerationProvider,
       }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,

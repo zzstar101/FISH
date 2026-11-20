@@ -1016,6 +1016,7 @@ const MODERATION_FIELD_LABEL: Record<ModerationField, string> = {
   // 商品链路不会产生 content 字段（#694 的聊天正文走 ChatModerationPolicy），
   // 这里只为满足 `Record<ModerationField, string>` 的穷尽性。
   content: '内容',
+  publicContent: '公开内容',
 }
 
 function moderationBlockDetailsOf(result: TextModerationResult): ApiErrorDetail[] | undefined {

@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import {
+  ContentModerationError,
+  type ContentModerationProvider,
+  type ModerationSuggestion,
+  type ModerationTransport,
+} from '../moderation/providers/types'
+import type { ModerationDecision, ModerationField } from '../moderation/types'
 import { encodeCommentCursor } from './cursor'
 import { CommentServiceError, createCommentService } from './service'
 import type { CommentCursor, CommentRow, CommentStore } from './store'
@@ -93,6 +100,49 @@ function fakeStore(
   }
 }
 
+/**
+ * 只实现 `moderateText`：留言只审正文。记录收到的字段，便于断言「正文没有被伪装成 title」
+ * 与 dataId 的业务前缀；`REVIEW` 本地词表对 `content` 字段不产出，必须由它来造。
+ */
+function fakeModerationProvider(
+  outcome: ModerationDecision | ContentModerationError,
+): ContentModerationProvider & {
+  calls: { dataId: string; field: ModerationField; value: string }[]
+} {
+  const calls: { dataId: string; field: ModerationField; value: string }[] = []
+  const transport: ModerationTransport = 'local'
+  return {
+    calls,
+    transport,
+    async moderateText(input) {
+      calls.push(...input.fields.map((field) => ({ dataId: input.dataId, ...field })))
+      if (outcome instanceof ContentModerationError) throw outcome
+      const suggestion: ModerationSuggestion =
+        outcome === 'BLOCK' ? 'Block' : outcome === 'REVIEW' ? 'Review' : 'Pass'
+      return {
+        provider: 'LOCAL',
+        transport,
+        dataId: input.dataId,
+        policyVersion: 'test-policy',
+        decision: outcome,
+        suggestion,
+        fields: input.fields.map((field) => ({
+          field: field.field,
+          decision: outcome,
+          suggestion,
+          label: 'TEST',
+          subLabel: outcome === 'ALLOW' ? null : 'TEST_RULE',
+          score: null,
+          requestId: null,
+        })),
+      }
+    },
+    async moderateImage() {
+      throw new Error('留言不审图片')
+    },
+  }
+}
+
 describe('comment service — list', () => {
   test('marks isSeller from the listing seller, not from the client', async () => {
     const store = fakeStore({
@@ -167,6 +217,65 @@ describe('comment service — write', () => {
       service.createComment(BUYER_ID, LISTING_ID, { content: '我有毒品要卖' }),
     ).rejects.toMatchObject({ status: 422, code: 'COMMENT_CONTENT_BLOCKED' })
     expect(store.inserts).toHaveLength(0)
+  })
+
+  test('ALLOW 放行，且正文以 publicContent 字段、按留言前缀送审', async () => {
+    const store = fakeStore()
+    const provider = fakeModerationProvider('ALLOW')
+    const service = createCommentService({ storage, store, moderationProvider: provider })
+
+    const dto = await service.createComment(BUYER_ID, LISTING_ID, { content: '还在吗' })
+    expect(dto.content).toBe('还在吗')
+    const call = provider.calls[0]
+    expect(call?.field).toBe('publicContent')
+    expect(call?.value).toBe('还在吗')
+    expect(call?.dataId.startsWith('comment-')).toBe(true)
+  })
+
+  test('REVIEW（待人工确认）拒绝创建，但错误码与 BLOCK 不同', async () => {
+    const store = fakeStore()
+    const service = createCommentService({
+      storage,
+      store,
+      moderationProvider: fakeModerationProvider('REVIEW'),
+    })
+
+    await expect(
+      service.createComment(BUYER_ID, LISTING_ID, { content: '加个微信' }),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'COMMENT_CONTENT_REVIEW_REQUIRED',
+      details: [{ field: 'content', message: '留言内容待人工复核' }],
+    })
+    expect(store.inserts).toHaveLength(0)
+  })
+
+  test('审核上游超时 → 503 可重试失败，留言不落库', async () => {
+    const store = fakeStore()
+    const service = createCommentService({
+      storage,
+      store,
+      moderationProvider: fakeModerationProvider(
+        new ContentModerationError({ reason: 'timeout', requestId: 'req-1' }),
+      ),
+    })
+
+    await expect(
+      service.createComment(BUYER_ID, LISTING_ID, { content: '还在吗' }),
+    ).rejects.toMatchObject({ status: 503, code: 'CONTENT_MODERATION_UNAVAILABLE' })
+    expect(store.inserts).toHaveLength(0)
+  })
+
+  test('回复同样送审：REVIEW 拒绝且 dataId 用 reply 前缀', async () => {
+    const store = fakeStore({ byId: { [COMMENT_ID]: row({ id: COMMENT_ID, parentId: null }) } })
+    const provider = fakeModerationProvider('REVIEW')
+    const service = createCommentService({ storage, store, moderationProvider: provider })
+
+    await expect(
+      service.createReply(BUYER_ID, COMMENT_ID, { content: '加个微信' }),
+    ).rejects.toMatchObject({ status: 422, code: 'COMMENT_CONTENT_REVIEW_REQUIRED' })
+    expect(store.inserts).toHaveLength(0)
+    expect(provider.calls[0]?.dataId.startsWith('reply-')).toBe(true)
   })
 
   test('404s a write to a listing that does not exist', async () => {
