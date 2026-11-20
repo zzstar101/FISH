@@ -88,6 +88,8 @@ export type AdminRouterOptions = {
   profileModerationRouter?: Hono<{ Variables: AuthVariables }>
   /** 评价图片待审子路由（#694 M5c），同样必须在 catch-all 之前挂载。 */
   reviewModerationRouter?: Hono<{ Variables: AuthVariables }>
+  /** 存量图片补审子路由（#694 M8），同样必须在 catch-all 之前挂载。 */
+  legacyMediaRouter?: Hono<{ Variables: AuthVariables }>
   /**
    * 私有存储（#694 M2）：管理端读取「消息举报」的证据快照字节。取证对象是服务端在举报
    * 创建时固化的快照，不是用户可以随时覆盖的 staging key。
@@ -706,6 +708,9 @@ export function createAdminRouter(options: AdminRouterOptions) {
   }
   if (options.reviewModerationRouter) {
     router.route('/reviews/moderation', options.reviewModerationRouter)
+  }
+  if (options.legacyMediaRouter) {
+    router.route('/legacy-media/audit', options.legacyMediaRouter)
   }
   router.all('*', (c) => c.json(errorBody('ADMIN_NOT_FOUND', '目标不存在'), 404))
 

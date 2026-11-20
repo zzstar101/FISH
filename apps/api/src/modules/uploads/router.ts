@@ -19,6 +19,23 @@ export type UploadsRouterOptions = {
   storage: MediaStorage
   /** Purpose-separated AES key derived from the existing deployment secret. */
   legacyUrlSecret?: string
+  /**
+   * #694 M8：legacy 图公开代理的可见性闸门。返回 false 时按不存在处理（404），
+   * 用于把未审/REVIEW/BLOCK 的存量对象挡在公开读面之外；缺省表示不启用闸门。
+   */
+  isLegacyMediaReadable?: (objectKey: string) => Promise<boolean>
+  /**
+   * #694 审查 P1-1：可选身份解析（返回登录用户 id，匿名/无效会话返回 null）。
+   *
+   * 刻意不挂 `requireAuth`：同一张旧 URL 既会被浏览器（带 cookie）加载，也会被小程序原生
+   * `<Image>`（不带 cookie）加载。解析得到身份时按请求者判定授权，解析不到仍走匿名闸门。
+   */
+  resolveViewerId?: (c: Context) => Promise<string | null>
+  /**
+   * #694 审查 P1-1：授权读者判定 —— 管理员、该商品卖家、订单/纠纷当事人。
+   * 仅当 `resolveViewerId` 解析出登录用户时调用；结果不成立时回落到匿名闸门。
+   */
+  isLegacyMediaVisibleToViewer?: (objectKey: string, viewerId: string) => Promise<boolean>
   /** 审核中图片的短期签名代理：与 `legacyUrlSecret` 同一个部署 secret、不同用途派生。 */
   reviewUrlSecret?: string
   /** #465 交易争议附件的短期签名代理：同上，用途派生串独立，令牌不能跨域重放。 */
@@ -58,6 +75,32 @@ export function createUploadsRouter(options: UploadsRouterOptions) {
     router.get('/legacy/:token', async (c) => {
       const key = legacyMediaKey(c.req.param('token'), legacySecret)
       if (!key) return c.notFound()
+      // #694 审查 P1-1：认证请求者先按关系判定（卖家/管理员/订单与纠纷当事人）。
+      // 库存闸门只回答「匿名能不能看」，拿它挡授权读者会让卖家自己的页面也裂图。
+      let viewerId: string | null = null
+      if (options.resolveViewerId && options.isLegacyMediaVisibleToViewer) {
+        try {
+          viewerId = await options.resolveViewerId(c)
+        } catch {
+          viewerId = null
+        }
+      }
+      let viewerCanRead = false
+      if (viewerId !== null && options.isLegacyMediaVisibleToViewer) {
+        try {
+          viewerCanRead = await options.isLegacyMediaVisibleToViewer(key, viewerId)
+        } catch {
+          viewerCanRead = false
+        }
+      }
+      // #694 M8：库存里存在该对象且未 ALLOW 时，匿名读一律 404；未进入库存的旧对象保持兼容。
+      if (
+        !viewerCanRead &&
+        options.isLegacyMediaReadable &&
+        !(await options.isLegacyMediaReadable(key))
+      ) {
+        return c.notFound()
+      }
       const stat = await options.storage.stat(key)
       if (
         !stat ||
@@ -72,7 +115,8 @@ export function createUploadsRouter(options: UploadsRouterOptions) {
         headers: {
           'Content-Type': stat.contentType,
           'Content-Length': String(stat.size),
-          'Cache-Control': 'public, max-age=86400',
+          // 授权读者看到的内容与匿名不同：不能被共享缓存留存（否则可能被缓存后发给匿名请求）。
+          'Cache-Control': viewerCanRead ? 'private, no-store' : 'public, max-age=86400',
           'X-Content-Type-Options': 'nosniff',
         },
       })

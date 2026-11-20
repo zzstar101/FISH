@@ -152,9 +152,15 @@ async function generate(
     }
   }
 
-  const bytes = await storage.readBytes(initial.coverObjectKey, MAX_IMAGE_BYTES)
+  let bytes: Uint8Array | null
+  try {
+    bytes = await storage.readBytes(initial.coverObjectKey, MAX_IMAGE_BYTES)
+  } catch {
+    // 读对象失败（含媒体存储抛出的瞬时错误）一律当作可重试：S3 抖动是暂时的，
+    // 队列重试即可；商品被删/封面被删会走上面的分支。
+    throw new EmbeddingProviderError('network', `封面对象读取失败（${initial.coverObjectKey}）`)
+  }
   if (bytes === null) {
-    // 读不到当作可重试：S3 抖动是暂时的，队列重试即可；商品被删/封面被删会走上面的分支。
     throw new EmbeddingProviderError('network', `封面对象读取失败（${initial.coverObjectKey}）`)
   }
   if (bytes.length > MAX_IMAGE_BYTES) {

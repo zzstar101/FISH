@@ -155,6 +155,14 @@ export interface PendingImageDeletions {
   isPending(objectKey: string): Promise<boolean>
 }
 
+/**
+ * #694 M8：批量读取存量图的补审结论。只有 `AUDITED` 的行会出现在 map 里，未审/失败/待审
+ * 统一按 `REVIEW` 处理；没有行 = 历史兼容（不拦），与 `loadLegacyMediaAuditDecisions` 同义。
+ */
+export type LegacyMediaAuditLookup = (
+  objectKeys: readonly string[],
+) => Promise<ReadonlyMap<string, ModerationDecision>>
+
 export function createListingService(deps: {
   store: ListingStore
   storage: MediaStorage
@@ -170,6 +178,11 @@ export function createListingService(deps: {
    */
   pendingImageDeletions?: PendingImageDeletions
   /**
+   * #694 M8：存量图补审结论。未注入时按「没有库存行」处理（历史兼容），生产接线在
+   * `apps/api/src/app.ts` 注入真实查询。
+   */
+  legacyMediaDecisions?: LegacyMediaAuditLookup
+  /**
    * #228：文本审核 provider。app.ts 按 `CONTENT_MODERATION_TRANSPORT` 注入（local / tencent）；
    * 缺省用**本地 provider**（复用同一份词表，与旧同步实现行为一致），生产由 env 保证不会落到 local。
    */
@@ -180,6 +193,8 @@ export function createListingService(deps: {
   const { store, storage } = deps
   const mediaObjects = deps.mediaObjects ?? NO_CONFIRMED_IMAGES
   const pendingDeletions = deps.pendingImageDeletions ?? NO_PENDING_DELETIONS
+  const legacyMediaDecisions: LegacyMediaAuditLookup =
+    deps.legacyMediaDecisions ?? (async () => new Map())
   const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
   const now = deps.now ?? (() => new Date())
 
@@ -283,12 +298,19 @@ export function createListingService(deps: {
     images: readonly ListingImageRow[],
     /** 非 null = 本人视角（调用方已判定）；值是卖家自己的 userId，用于核对台账行归属 */
     ownerId: string | null,
+    /** #694 M8：非本人视角的存量图结论；不存在 = 历史兼容，照旧返回。 */
+    decisions: ReadonlyMap<string, ModerationDecision>,
   ): Promise<ListingDetail['images']> {
     if (ownerId === null) {
-      return images.map((image) => ({
-        url: storage.publicUrl(image.objectKey),
-        sortOrder: image.sortOrder,
-      }))
+      return images
+        .filter((image) => {
+          const decision = decisions.get(image.objectKey)
+          return decision === undefined || decision === 'ALLOW'
+        })
+        .map((image) => ({
+          url: storage.publicUrl(image.objectKey),
+          sortOrder: image.sortOrder,
+        }))
     }
     return Promise.all(
       images.map(async (image) => {
@@ -338,14 +360,18 @@ export function createListingService(deps: {
     views: number
     viewerId: string | null
   }): Promise<ListingDetail> {
-    // 封面只认 0 号图（#6 契约 §1「下标即 sortOrder（0 = 封面）」），与 feed / profile /
-    // matching / conversations / transactions 五处读模型同口径：缺 0 号图 → null。
-    // 不能退化成「最小 sort_order」——store 按 `ORDER BY sort_order ASC` 返回，
-    // `images[0]` 恰好就是最小那张；那条口径分叉会让同一份数据在详情与 feed 上
-    // 给出两个不同结论（#47）。注意 `images[]` 仍返回全部图：详情页画廊读的是它
-    // （detail-page.tsx 按 sortOrder 排序渲染），不受封面口径影响。
-    const cover = input.images.find((image) => image.sortOrder === 0)
     const isOwner = input.viewerId === input.listing.sellerId
+    // #694 M8：非本人视角先批量取存量图结论，再同时决定画廊与封面是否可见。
+    // 本人（含管理员走卖家视角）保留全部图片：历史订单/纠纷的当事人证据不能被补审抹掉。
+    const legacyDecisions = isOwner
+      ? new Map<string, ModerationDecision>()
+      : await legacyMediaDecisions(input.images.map((image) => image.objectKey))
+    const isLegacyVisible = (objectKey: string): boolean => {
+      const decision = legacyDecisions.get(objectKey)
+      return decision === undefined || decision === 'ALLOW'
+    }
+    const cover = input.images.find((image) => image.sortOrder === 0)
+    const coverVisible = cover !== undefined && (isOwner || isLegacyVisible(cover.objectKey))
     const detail = {
       id: encodePublicId(PUBLIC_ID_PREFIX.listing, input.listing.id),
       listingNo: input.listing.listingNo.toString(),
@@ -357,7 +383,7 @@ export function createListingService(deps: {
       urgent: input.listing.urgent,
       negotiable: input.listing.negotiable,
       free: input.listing.free,
-      coverUrl: cover ? storage.publicUrl(cover.objectKey) : null,
+      coverUrl: coverVisible ? storage.publicUrl(cover.objectKey) : null,
       createdAt: input.listing.createdAt.toISOString(),
       // 想要数对**所有**视角都出（不像审核态那样只给本人）：它是公开的市场信号，
       // 买家的详情页也要画「N 人想要」（见契约 `ListingCardSchema.wants`）。
@@ -366,7 +392,11 @@ export function createListingService(deps: {
       // 少一个数那一行就只剩半边。口径与「30 天滚动窗口」的代价见契约 `ListingCardSchema.views`。
       views: input.views,
       description: input.listing.description,
-      images: await toDetailImages(input.images, isOwner ? input.listing.sellerId : null),
+      images: await toDetailImages(
+        input.images,
+        isOwner ? input.listing.sellerId : null,
+        legacyDecisions,
+      ),
       seller: toSeller(input.seller),
       isOwner,
       // 审核态只给卖家本人：买家看到的商品本来就只可能是 APPROVED，
@@ -600,13 +630,23 @@ export function createListingService(deps: {
       const hasMore = rows.length > query.limit
       const page = hasMore ? rows.slice(0, query.limit) : rows
 
+      // #694 M8：封面也属于公开读面。非 ALLOW 的存量封面按「无封面」处理，不能只靠详情页兜底。
+      const coverDecisions = await legacyMediaDecisions(
+        page.flatMap((entry) => (entry.coverObjectKey ? [entry.coverObjectKey] : [])),
+      )
+      const visibleCover = (objectKey: string | null): string | null => {
+        if (objectKey === null) return null
+        const decision = coverDecisions.get(objectKey)
+        return decision === undefined || decision === 'ALLOW' ? objectKey : null
+      }
+
       const items: ListingCard[] = []
       for (const entry of page) {
         // 只有「查自己」的列表带审核态 / 治理标记 / 未通过原因；公开 Feed 与查他人都是 null
         // （见 `toListingCard`）。未通过原因同样只在真的被拒时给（`REVIEW` 是"还没结论"）。
         const card = toCard(
           entry.listing,
-          entry.coverObjectKey,
+          visibleCover(entry.coverObjectKey),
           entry.seller,
           entry.wants,
           entry.views,
@@ -634,6 +674,9 @@ export function createListingService(deps: {
 
       const entries = await store.findCardsByIds(ids, { viewerUserId: viewerId })
       const byId = new Map(entries.map((entry) => [entry.listing.id, entry]))
+      const coverDecisions = await legacyMediaDecisions(
+        entries.flatMap((entry) => (entry.coverObjectKey ? [entry.coverObjectKey] : [])),
+      )
 
       const cards = new Map<string, ListingCard>()
       // 按**调用方给的顺序**（推荐排序结果）输出，不是 DB 返回顺序：快照里的 position 必须与这里
@@ -641,9 +684,11 @@ export function createListingService(deps: {
       for (const id of ids) {
         const entry = byId.get(id)
         if (entry === undefined) continue
+        const decision =
+          entry.coverObjectKey === null ? undefined : coverDecisions.get(entry.coverObjectKey)
         const card = toCard(
           entry.listing,
-          entry.coverObjectKey,
+          decision === undefined || decision === 'ALLOW' ? entry.coverObjectKey : null,
           entry.seller,
           entry.wants,
           entry.views,

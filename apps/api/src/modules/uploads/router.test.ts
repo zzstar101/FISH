@@ -52,7 +52,12 @@ function fakeService(overrides: Partial<UploadService> = {}): FakeService {
   }
 }
 
-function buildApp(options: { storage: MediaStorage; authed?: boolean; service?: UploadService }) {
+function buildApp(options: {
+  storage: MediaStorage
+  authed?: boolean
+  service?: UploadService
+  isLegacyMediaReadable?: (objectKey: string) => Promise<boolean>
+}) {
   const authed = options.authed ?? true
   const requireAuth: MiddlewareHandler<{ Variables: AuthVariables }> = async (c, next) => {
     if (!authed) return c.json(errorBody('UNAUTHENTICATED', '请先登录'), 401)
@@ -66,6 +71,7 @@ function buildApp(options: { storage: MediaStorage; authed?: boolean; service?: 
     createUploadsRouter({
       storage: options.storage,
       legacyUrlSecret: LEGACY_SECRET,
+      isLegacyMediaReadable: options.isLegacyMediaReadable,
       requireAuth,
       guard: allowRestrictionGuard,
       service: options.service ?? fakeService(),
@@ -257,5 +263,25 @@ describe('uploads router', () => {
     expect(seen).toEqual([oldKey, oldKey])
     expect((await app.request('/uploads/legacy/invalid-token')).status).toBe(404)
     expect(seen).toHaveLength(2)
+  })
+
+  // #694 M8：盘点后未出结论（PENDING/FAILED）或 REVIEW/BLOCK 的 legacy 图不得再匿名直读。
+  test('legacy proxy 404s when the audit gate rejects the object', async () => {
+    const oldKey = `listings/${USER_ID}/01930000-0000-4000-8000-00000000000d.jpg`
+    const seen: string[] = []
+    const app = buildApp({
+      storage: fakeStorage({
+        stat: async (key) => {
+          seen.push(key)
+          return { size: 3, contentType: 'image/jpeg' }
+        },
+      }),
+      authed: false,
+      isLegacyMediaReadable: async () => false,
+    })
+    const token = legacyMediaToken(oldKey, LEGACY_SECRET)
+    const response = await app.request(`/uploads/legacy/${token}`)
+    expect(response.status).toBe(404)
+    expect(seen).toEqual([])
   })
 })

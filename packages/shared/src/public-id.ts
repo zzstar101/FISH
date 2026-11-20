@@ -28,6 +28,8 @@ export const PUBLIC_ID_PREFIX = {
   profileModerationRecord: 'pmr',
   /** 交易评价图片待审记录（#694 M5c）。 */
   reviewModerationRecord: 'rmr',
+  /** 存量图片补审记录（#694 M8；管理端人工复核队列）。 */
+  legacyMediaAuditItem: 'lma',
   auditLog: 'aud',
 } as const
 

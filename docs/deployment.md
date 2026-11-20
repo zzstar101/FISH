@@ -252,8 +252,9 @@ mc admin policy attach local fish-app-rw --user fish-app
 
 （桶名出现在策略 JSON 的两处 `arn:aws:s3:::fish`，改 `S3_BUCKET` 时要一起改。）
 
-升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/*`
-允许匿名 GetObject；`reviews/*`（#475 交易评价配图的已确认固化前缀，#483 审查响应起**撤出**
+升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/usr_*/*` 与
+`listings/seed-*/*` 允许匿名 GetObject（#694 M8 起历史 raw-UUID 键 `listings/{uuid}/*` 撤出匿名直读，
+只走 `/api/uploads/legacy/:token` 加密代理）；`reviews/*`（#475 交易评价配图的已确认固化前缀，#483 审查响应起**撤出**
 匿名直读）、`chat-media/*`、`chat-media-final/*`、`listing-media/*`（#286 的上传 staging 前缀）、
 `listing-review-media/*`（#286 的**审核中**固化前缀）与 `transaction-review-media/*`
 （#475 的评价配图 staging 前缀）不能匿名读或列举。

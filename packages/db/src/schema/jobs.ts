@@ -24,6 +24,8 @@ export type JobType =
   | 'REFRESH_USER_INTEREST'
   /** #324 M8：为 Listing 封面生成视觉向量（回填与"换图后重算"共用同一种 job）。 */
   | 'VISUAL_EMBED_LISTING'
+  /** #694 M8：存量图片补审（payload `{objectKey}`，一次一个对象，便于并发与重试）。 */
+  | 'LEGACY_MEDIA_AUDIT'
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
 
@@ -102,5 +104,10 @@ export const jobs = pgTable(
     uniqueIndex('jobs_visual_embed_listing_listing_id_pending_uidx')
       .on(sql`(${table.payload}->>'listingId')`)
       .where(sql`${table.type} = 'VISUAL_EMBED_LISTING' AND ${table.status} = 'PENDING'`),
+    // #694 M8：同一对象键同时只排一条待执行补审 job；失败重试由 inventory 行的
+    // `next_attempt_at` 控制，不能靠 DONE 行占位（否则失败一次就永远不再投）。
+    uniqueIndex('jobs_legacy_media_audit_object_key_pending_uidx')
+      .on(sql`(${table.payload}->>'objectKey')`)
+      .where(sql`${table.type} = 'LEGACY_MEDIA_AUDIT' AND ${table.status} = 'PENDING'`),
   ],
 )

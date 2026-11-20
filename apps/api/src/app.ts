@@ -15,6 +15,11 @@ import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import { VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS } from '@fish/contracts/visual/schema'
 import { createDb } from '@fish/db/client'
 import { countListingEmbeddingsByModel } from '@fish/db/embedding-store'
+import {
+  isLegacyMediaPubliclyReadable,
+  isLegacyMediaReadableByViewer,
+  loadLegacyMediaAuditDecisions,
+} from '@fish/db/legacy-media-audit'
 import { isListingImageKeyPendingDeletion } from '@fish/db/listing-image-deletions'
 import type {
   AiPolishEnv,
@@ -433,6 +438,8 @@ export function createApp(
     pendingImageDeletions: {
       isPending: (objectKey) => isListingImageKeyPendingDeletion(db, objectKey),
     },
+    // #694 M8：详情/卡片的存量图可见性。无库存行 = 历史兼容；未审/REVIEW/BLOCK 一律不出。
+    legacyMediaDecisions: (objectKeys) => loadLegacyMediaAuditDecisions(db, objectKeys),
     // #228：Listing 文本审核走同一份 moderation env（`CONTENT_MODERATION_TRANSPORT=local|tencent`，
     // production 缺腾讯配置时由 env 层 fail-fast）。`loadImage` 不会被调用——图片审核在 uploads 的
     // confirm 里（#286），listings 只用 `moderateText`。
@@ -551,6 +558,13 @@ export function createApp(
     createUploadsRouter({
       storage,
       legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+      // #694 M8：库存中的未审/REVIEW/BLOCK 对象一律不出**匿名**代理；无库存行的旧对象保持兼容。
+      isLegacyMediaReadable: (objectKey) => isLegacyMediaPubliclyReadable(db, objectKey),
+      // #694 审查 P1-1：带会话的请求者按关系放行（管理员 / 卖家 / 订单与纠纷当事人），
+      // 否则卖家自己的「我发布的」、管理端详情与订单页里的旧图会一起裂掉。
+      resolveViewerId: auth.resolveViewerId,
+      isLegacyMediaVisibleToViewer: (objectKey, viewerId) =>
+        isLegacyMediaReadableByViewer(db, objectKey, viewerId),
       reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       // #465：争议附件的只读代理（`GET /uploads/dispute-media/:token`）。与 review 代理
       // 一样刻意不挂 session 鉴权，授权由短期签名令牌承载。
@@ -640,6 +654,7 @@ export function createApp(
     moderationProvider: publicUgcModerationProvider,
     moderationStore: reviewModerationStore,
     reviewImageModeration,
+    legacyMediaDecisions: (objectKeys) => loadLegacyMediaAuditDecisions(db, objectKeys),
   })
 
   // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
