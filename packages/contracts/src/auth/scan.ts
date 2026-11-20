@@ -138,7 +138,7 @@ export const ScanTicketStatusResponseSchema = z.discriminatedUnion('status', [
 export type ScanTicketStatusResponse = z.infer<typeof ScanTicketStatusResponseSchema>
 
 /**
- * 兑换成功 = 登录成功，因此与 `/auth/login`、`/auth/wechat/session` 同构（同一个 `{ user: Me }`），
+ * 兑换成功 = 登录成功，因此与 `/auth/wechat/session` 同构（同一个 `{ user: Me }`），
  * 前端可以直接写进 `auth` 的 `me` 缓存，不必再打一次 `/me`。会话 cookie 由 API 层落 `Set-Cookie`。
  */
 export const ScanExchangeResponseSchema = AuthResponseSchema

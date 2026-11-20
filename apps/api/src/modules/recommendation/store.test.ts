@@ -40,8 +40,6 @@ beforeAll(async () => {
   const [seller] = await db
     .insert(users)
     .values({
-      studentNo: `recommendation-store-${Date.now()}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '推荐快照测试',
     })
     .returning({ id: users.id })

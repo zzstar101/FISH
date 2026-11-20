@@ -219,10 +219,7 @@ try {
   const engine = createMatchEngine(db, { embeddingModel: provider.model })
   const [seller, buyer] = await db
     .insert(users)
-    .values([
-      { studentNo: 'holdout-seller', passwordHash: 'test-not-real', nickname: '独立验证卖家' },
-      { studentNo: 'holdout-buyer', passwordHash: 'test-not-real', nickname: '独立验证买家' },
-    ])
+    .values([{ nickname: '独立验证卖家' }, { nickname: '独立验证买家' }])
     .returning({ id: users.id })
   if (!seller || !buyer) throw new Error('scratch 用户创建失败')
 

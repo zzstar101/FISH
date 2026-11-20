@@ -272,9 +272,10 @@ async function purgeOne(db: Db, userId: string, now: Date): Promise<AccountDelet
 
     // ⑦ 原地去标识化 users 行。这是「历史引用统一显示『已注销用户』」的实现：所有读模型
     //    （商品卡 / 留言 / 聊天 / 评价 / 主页）都只读 nickname，改这里就全覆盖了。
-    //    登录凭据一并断掉：student_no / password_hash / campus_email / phone 全部置空，
-    //    于是学号、校园邮箱、手机号三个唯一键被释放，可以立刻用同一身份重新注册一个全新
-    //    账号（冻结口径 Q9）。role 降级为 USER：已注销账号不该再保有任何管理员权限。
+    //    登录凭据一并断掉：campus_email / phone 置空，校园邮箱、手机号两个唯一键被释放，
+    //    可以立刻用同一身份重新注册一个全新账号（冻结口径 Q9）。`uid` 保留不回收（#703：
+    //    人类可读标识不可变、不复用）；微信映射另行删除。role 降级为 USER：已注销账号
+    //    不该再保有任何管理员权限。
     //    两个时间戳必须置空 —— CHECK 约束要求它们与 `DELETION_REQUESTED` 同进同出，
     //    「什么时候申请的、什么时候执行的」记在下面的审计行里。
     await tx
@@ -283,8 +284,6 @@ async function purgeOne(db: Db, userId: string, now: Date): Promise<AccountDelet
         nickname: DELETED_ACCOUNT_NICKNAME,
         avatarUrl: null,
         signature: null,
-        studentNo: null,
-        passwordHash: null,
         campusEmail: null,
         phone: null,
         authStatus: 'UNVERIFIED',

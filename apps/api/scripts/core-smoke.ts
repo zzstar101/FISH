@@ -90,13 +90,15 @@ import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { recommendationRequestItems } from '@fish/db/schema/recommendation-request-items'
 import { transactions } from '@fish/db/schema/transactions'
-import { users } from '@fish/db/schema/users'
+import { users, wechatIdentities } from '@fish/db/schema/users'
 import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
 import { wishes } from '@fish/db/schema/wishes'
+import { DEMO_WECHAT_CODES } from '@fish/db/seed'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { enqueueVisualEmbedJob } from '../../worker/src/jobs/visual-embedding/enqueue'
+import { createStubWechatIdentityProvider } from '../src/modules/auth/wechat-service'
 import { MEETUP_TOKEN_MAX_ATTEMPTS } from '../src/modules/transactions/service'
 import { VISUAL_SEARCH_MAX_ATTEMPTS } from '../src/modules/visual-search/rate-limit'
 
@@ -104,11 +106,12 @@ import { VISUAL_SEARCH_MAX_ATTEMPTS } from '../src/modules/visual-search/rate-li
 // 常量与断言工具
 // ---------------------------------------------------------------------------
 
-const PASSWORD = 'fish123456'
-/** seed 里 demo 买家的学号（README「演示账号」）。 */
-const DEMO_BUYER_STUDENT_NO = '202101000002'
-/** seed 里第三个演示账号：想要数要两条不同用户的行（`unique(user_id, listing_id)` 不允许同一人重复收藏）。 */
-const DEMO_BUYER_C_STUDENT_NO = '202101000003'
+/**
+ * 微信 stub 身份提供者（#703：`/auth/register` / `/auth/login` 随学号、密码列一起删除，
+ * 微信会话是唯一入口）。`WECHAT_TRANSPORT=stub` 下 code 就是身份种子：同 code 恒得到同一
+ * openid → 同一账号，因此"首次登录即注册"。
+ */
+const stubWechat = createStubWechatIdentityProvider()
 const REPO_ROOT = Bun.fileURLToPath(new URL('../../../', import.meta.url))
 
 /** 1×1 JPEG（合法 SOI/EOI）。用它走真实的 presign → PUT → 匿名 GET 字节回环。 */
@@ -298,20 +301,36 @@ const anonymousPostJson = (base: string, path: string, body: unknown, sessionId:
     },
   })
 
-async function register(base: string, serial: number): Promise<Cookie> {
-  const response = await postJson(base, '/auth/register', {
-    studentNo: `2021000000${String(serial).padStart(2, '0')}`,
-    password: PASSWORD,
-    nickname: `验收用户${serial}`,
-  })
-  assertEqual(response.status, 200, `注册账号 #${serial}`)
-  return cookieOf(response)
+type WechatSignIn = { cookie: Cookie; userId: string; uid: string }
+
+/**
+ * 微信登录（= 注册）：`/auth/wechat/session` 是按 openid 建号或复用的唯一入口，#703 之后
+ * 没有学号/密码可传。同 code 第二次调用就是"登录已存在的账号"。
+ */
+async function wechatSignIn(base: string, code: string): Promise<WechatSignIn> {
+  const response = await postJson(base, '/auth/wechat/session', { code })
+  assertEqual(response.status, 200, `微信登录 code=${code}`)
+  const user = (await readJson(response)).user as { id?: unknown; uid?: unknown }
+  if (typeof user.id !== 'string' || typeof user.uid !== 'string') {
+    throw new Error(`微信登录响应缺少 user.id / user.uid（code=${code}）`)
+  }
+  return { cookie: cookieOf(response), userId: user.id, uid: user.uid }
 }
 
-async function login(base: string, studentNo: string): Promise<Cookie> {
-  const response = await postJson(base, '/auth/login', { studentNo, password: PASSWORD })
-  assertEqual(response.status, 200, `登录 ${studentNo}`)
-  return cookieOf(response)
+/**
+ * seed 把三个演示账号绑在固定微信 stub code 上（`DEMO_WECHAT_CODES`）。#703 没有学号可查，
+ * 改成用**与服务端同一算法**从 code 推出 openid，再按 openid 反查 userId。
+ */
+async function seedDemoUserId(db: Db, code: string): Promise<string> {
+  const { openid } = await stubWechat.exchange(code)
+  const rows = await db
+    .select({ userId: wechatIdentities.userId })
+    .from(wechatIdentities)
+    .where(eq(wechatIdentities.openid, openid))
+    .limit(1)
+  const userId = rows[0]?.userId
+  if (!userId) throw new Error(`seed 里没有绑定 stub code「${code}」的演示账号`)
+  return userId
 }
 
 function spawnChild(entry: string, overrides: Record<string, string>): Child {
@@ -754,14 +773,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
         .from(listings)
         .where(eq(listings.title, '罗技 K380 机械键盘'))
     )[0]
-    const demoBuyer = (
-      await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.studentNo, DEMO_BUYER_STUDENT_NO))
-        .limit(1)
-    )[0]
-    if (!seedListing || !demoBuyer) throw new Error('seed 里没有 demo 的 K380 / 买家')
+    const demoBuyer = { id: await seedDemoUserId(db, DEMO_WECHAT_CODES.buyerB) }
+    if (!seedListing) throw new Error('seed 里没有 demo 的 K380 / 买家')
     // 按 (keyword, userId) 取，并断言唯一：不靠 `.limit(1)` 掩盖“seed 新增了同关键词愿望”这种漂移。
     const seedWishes = await db
       .select({ id: wishes.id })
@@ -860,7 +873,15 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       'demo 样例恰好 1 条首通知',
     )
 
-    const demoCookie = await login(base, DEMO_BUYER_STUDENT_NO)
+    // demo 账号同样只能走微信登录：能登进 seed 里那一个用户，就证明 seed 与 stub 的 openid
+    // 算法一致（#703 前这里验证的是 seed 写进去的 argon2id 哈希）。
+    const demoSession = await wechatSignIn(base, DEMO_WECHAT_CODES.buyerB)
+    assertEqual(
+      decodePublicId(PUBLIC_ID_PREFIX.user, demoSession.userId),
+      demoBuyer.id,
+      'demo 买家能用固定 stub code 登录',
+    )
+    const demoCookie = demoSession.cookie
     const demoWishSide = await readJson(
       await get(
         base,
@@ -883,12 +904,9 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 3. 真实图片上传 + 发布
     step = '上传与发布'
     section('真实图片：presign → PUT → confirm → 匿名读')
-    // 注册即登录，但 `/auth/login` 是文档化入口：显式再登录一次，让 smoke 真的覆盖它
-    //（demo 账号那条只验证了 seed 写进去的哈希，不能替代新账号）。
-    const sellerStudentNo = '202100000001'
-    await register(base, 1)
-    const seller = await login(base, sellerStudentNo)
-    const buyer = await register(base, 2)
+    // #703：注册与登录合流成微信会话，stub 传输下两个不同 code 即两个新账号。
+    const seller = (await wechatSignIn(base, 'smoke-seller')).cookie
+    const buyer = (await wechatSignIn(base, 'smoke-buyer')).cookie
     // #514：发布商品 / 重新上架（seller）与发布求购（buyer）都要求已绑定手机号。
     // stub 传输下 code 即 11 位号码；先断言门禁本身，再各绑一次。
     const unboundPublish = await postJson(base, '/wishes', {}, buyer)
@@ -1300,12 +1318,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 事件侧 GROUP BY / 曝光分布 CTE」三段 SQL 只有真库能证；纯函数测试证不了它们。
     step = 'R6 指标端点（admin 聚合读面）'
     section('R6 指标端点：GET /admin/recommendations/metrics')
-    const adminSerial = 90
-    const adminStudentNo = `2021000000${String(adminSerial).padStart(2, '0')}`
-    await register(base, adminSerial)
-    // 经真实注册口建号后手动提权（同 admin/router.test.ts 的做法）：requireAdmin 只查角色。
-    await db.update(users).set({ role: 'ADMIN' }).where(eq(users.studentNo, adminStudentNo))
-    const adminCookie = await login(base, adminStudentNo)
+    // 经真实微信登录口建号后手动提权（同 admin/router.test.ts 的做法）：requireAdmin 只查角色。
+    // #703 没有学号可查，按登录响应里的 uid（唯一的人类可读标识）定位这一行。
+    const adminSession = await wechatSignIn(base, 'smoke-admin')
+    await db.update(users).set({ role: 'ADMIN' }).where(eq(users.uid, adminSession.uid))
+    const adminCookie = adminSession.cookie
 
     const metricsPath = ADMIN_ROUTES.recommendationMetrics
     assertEqual(
@@ -1955,14 +1972,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const twinBId = decodePublicId(PUBLIC_ID_PREFIX.listing, twinBPublicId)
 
     // 想要数：B 收两条（要两个不同用户），C 收一条，A 零条。
-    const buyerC = (
-      await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.studentNo, DEMO_BUYER_C_STUDENT_NO))
-        .limit(1)
-    )[0]
-    if (!buyerC) throw new Error('seed 里没有 demo 买家 C')
+    // 第三个演示账号（C）：想要数要两条不同用户的行（`unique(user_id, listing_id)` 不允许同一人重复收藏）。
+    const buyerC = { id: await seedDemoUserId(db, DEMO_WECHAT_CODES.buyerC) }
     await db
       .insert(favorites)
       .values([

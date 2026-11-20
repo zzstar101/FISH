@@ -54,10 +54,10 @@ async function sumListedUnread(viewerId: string, limit: number) {
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
-  for (const [i, uid] of [buyer, seller, outsider].entries()) {
+  for (const uid of [buyer, seller, outsider]) {
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${uid}, ${`conv${process.pid}_${i}`}, 'test-hash', '会话测试')
+      INSERT INTO users (id, nickname)
+      VALUES (${uid}, '会话测试')
     `)
   }
   await seedListing(listingA, seller, 'K380 键盘')
@@ -90,8 +90,8 @@ describe('conversations store (integration)', () => {
     const listingId = newId()
     await seedListing(listingId, seller, '卖家的新商品')
     const extra = newId()
-    await db.execute(sql`INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${extra}, ${`watchers-${process.pid}`}, 'test-hash', '新买家')`)
+    await db.execute(sql`INSERT INTO users (id, nickname)
+      VALUES (${extra}, '新买家')`)
     try {
       for (const userId of [buyer, outsider, extra]) {
         await store.insertIfAbsent(listingId, userId, seller)
@@ -133,10 +133,10 @@ describe('conversations store (integration)', () => {
     const lonely = newId()
     const listing1 = newId()
     const listing2 = newId()
-    for (const [i, uid] of [a, b, lonely].entries()) {
+    for (const uid of [a, b, lonely]) {
       await db.execute(sql`
-        INSERT INTO users (id, student_no, password_hash, nickname)
-        VALUES (${uid}, ${`presence${process.pid}_${i}`}, 'test-hash', '在线态测试')
+        INSERT INTO users (id, nickname)
+        VALUES (${uid}, '在线态测试')
       `)
     }
     await seedListing(listing1, b, 'presence 商品 1')
@@ -297,9 +297,9 @@ describe('conversations store (integration)', () => {
     const sellerE = '01990000-0000-7000-8000-0000000000a9'
     const listingE = '01990000-0000-7000-8000-0000000000b4'
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname) VALUES
-        (${buyerE}, ${`conv${process.pid}_e0`}, 'test-hash', '会话测试'),
-        (${sellerE}, ${`conv${process.pid}_e1`}, 'test-hash', '会话测试')
+      INSERT INTO users (id, nickname) VALUES
+        (${buyerE}, '会话测试'),
+        (${sellerE}, '会话测试')
     `)
     await seedListing(listingE, sellerE, '判据商品')
     const inserted = await store.insertIfAbsent(listingE, buyerE, sellerE)
@@ -341,9 +341,9 @@ describe('conversations store (integration)', () => {
     const buyerD = '01990000-0000-7000-8000-0000000000a6'
     const sellerD = '01990000-0000-7000-8000-0000000000a7'
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname) VALUES
-        (${buyerD}, ${`conv${process.pid}_d0`}, 'test-hash', '会话测试'),
-        (${sellerD}, ${`conv${process.pid}_d1`}, 'test-hash', '会话测试')
+      INSERT INTO users (id, nickname) VALUES
+        (${buyerD}, '会话测试'),
+        (${sellerD}, '会话测试')
     `)
 
     // 21 个会话 > 列表默认 limit（20）：把「取一页 unreadCount 再相加」的实现钉死，
@@ -390,9 +390,9 @@ describe('conversations store (integration)', () => {
     const sellerC = '01990000-0000-7000-8000-0000000000a5'
     const listingC = '01990000-0000-7000-8000-0000000000b3'
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname) VALUES
-        (${buyerC}, ${`conv${process.pid}_c0`}, 'test-hash', '会话测试'),
-        (${sellerC}, ${`conv${process.pid}_c1`}, 'test-hash', '会话测试')
+      INSERT INTO users (id, nickname) VALUES
+        (${buyerC}, '会话测试'),
+        (${sellerC}, '会话测试')
     `)
     await seedListing(listingC, sellerC, '降噪耳机')
     const inserted = await store.insertIfAbsent(listingC, buyerC, sellerC)

@@ -19,7 +19,7 @@ export type UsersSearch = {
 
 /**
  * 用户查询页（#467 验收「用户：列表、搜索/分页、详情、治理状态」）。
- * 搜索口径是服务端的：`q` = 学号精确匹配或昵称前缀（`AdminUsersQuerySchema`）。
+ * 搜索口径是服务端的：`q` = UID 精确匹配或昵称前缀（`AdminUsersQuerySchema`）。
  * 条件全部在 URL；条件变化剥 cursor（`withoutCursor`）。
  */
 export function UsersPage({ search }: { search: UsersSearch }) {
@@ -39,7 +39,7 @@ export function UsersPage({ search }: { search: UsersSearch }) {
       <div>
         <h1 className="font-semibold text-[26px] tracking-[-0.03em]">用户</h1>
         <p className="mt-1.5 text-ink-3 text-sm">
-          学号精确匹配或昵称前缀搜索；学号已按服务端口径脱敏。
+          UID 精确匹配或昵称前缀搜索；UID 是用户的对外标识（10 位数字）。
         </p>
       </div>
 
@@ -80,7 +80,7 @@ function UsersFilters({ search }: { search: UsersSearch }) {
     <div className="flex flex-wrap items-center gap-3">
       <KeywordFilter
         onCommit={(q) => update({ q })}
-        placeholder="学号或昵称前缀"
+        placeholder="UID 或昵称前缀"
         value={search.q}
       />
       <FilterChips
@@ -124,8 +124,8 @@ function UserRow({ search, user }: { user: AdminUserSummary; search: UsersSearch
           <Badge variant={roleView.variant}>{roleView.label}</Badge>
         </div>
         <p className="mt-1 text-ink-3 text-xs">
-          {user.studentNoMasked ?? '无学号（微信注册）'} · 注册于{' '}
-          {formatAdminDateTime(user.createdAt)} · 商品 {user.listingCount} 件
+          UID {user.uid} · 注册于 {formatAdminDateTime(user.createdAt)} · 商品 {user.listingCount}{' '}
+          件
           {user.lastActivityAt === null
             ? ' · 从未登录'
             : ` · 最近活跃 ${formatAdminDateTime(user.lastActivityAt)}`}

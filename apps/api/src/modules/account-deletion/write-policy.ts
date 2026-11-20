@@ -30,7 +30,7 @@ import { ACCOUNT_DELETION_ROUTES } from '@fish/contracts/account-deletion/routes
  * ## 未登录路径不受影响
  *
  * 本判据只在身份**已经解析出来**之后被问（执行点 1 在 `requireAuth` 内部，执行点 2 先
- * `read(cookie)` 再解析），所以 `/auth/login`、`/auth/register`、`/auth/logout`、
+ * `read(cookie)` 再解析），所以 `/auth/logout`、
  * `/auth/wechat/scan/ticket/:ticket/exchange` 这些不挂守卫的入口根本走不到这里 ——
  * 冷静期内「登出」「重新登录」自然可用，不需要在白名单里重复列举。唯一需要显式放行的
  * 已认证写入口是**扫码登录确认**（`/auth/wechat/scan/ticket/:ticket/confirm`，挂 requireAuth）：

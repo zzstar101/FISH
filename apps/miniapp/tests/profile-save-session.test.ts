@@ -26,6 +26,8 @@ import type { PickedPhoto } from '../src/features/upload/api'
 
 const U1: Me = {
   id: '11111111-1111-4111-8111-111111111111',
+  // #703：Me 必填 10 位 UID（本用例只关心保存链路，值取演示同款即可）
+  uid: '1000000001',
   nickname: '旧昵称',
   avatarUrl: null,
   authStatus: 'VERIFIED',

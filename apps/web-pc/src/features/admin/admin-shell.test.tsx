@@ -49,6 +49,7 @@ const textOf = (html: string) => html.replace(/<[^>]*>/g, '')
 const ADMIN_ME: AdminMeResponse = {
   admin: {
     id: 'usr_01jc000000e00800000000000a',
+    uid: '1000000009',
     nickname: '管理员甲',
     avatarUrl: null,
     authStatus: 'VERIFIED',

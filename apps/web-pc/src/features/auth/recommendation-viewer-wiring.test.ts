@@ -53,6 +53,7 @@ const originalFetch = globalThis.fetch
 
 const userA: Me = {
   id: 'usr_01jc000000e00800000000000a',
+  uid: '1000000001',
   nickname: 'A',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

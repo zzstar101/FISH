@@ -21,14 +21,8 @@ const store = createSqlCommentStore(db)
 /** 只取 `publicUrl`：「公开 URL 怎么拼」只有一个实现（#6 契约 §7.8）。 */
 const storage = { publicUrl: (key: string) => `https://cdn.example/${key}` }
 
-let seq = 0
-const uniqueStudentNo = () => `comment-${Date.now()}-${seq++}`
-
 async function createUser(client: Db, nickname: string): Promise<string> {
-  const rows = await client
-    .insert(users)
-    .values({ studentNo: uniqueStudentNo(), passwordHash: 'test-not-a-real-hash', nickname })
-    .returning({ id: users.id })
+  const rows = await client.insert(users).values({ nickname }).returning({ id: users.id })
   const row = rows[0]
   if (!row) throw new Error('insert users 未返回行')
   return row.id

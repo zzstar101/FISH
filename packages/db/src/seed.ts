@@ -82,22 +82,33 @@ const listingReferences = [
 ] as const
 
 /**
- * 三个 seed 账号共用的演示密码，用 `Bun.password`（argon2id）真实哈希写入（#3 替换了 #2 的占位值）。
- * 仅本地演示，禁止用于生产；真实用户密码只能经 `POST /auth/register` 写入。
- * 导出是给 `seed.test.ts` 断言「演示密码确实能登录」用的。
+ * 三个 seed 演示账号的微信 stub code（#703：学号/密码登录随凭据列一起删除）。
+ *
+ * 本地 `WECHAT_TRANSPORT=stub` 时，用这些 code 调 `POST /auth/wechat/session` 即可登进
+ * 对应演示账号；openid 由下方 `stubOpenid()` 按与 stub Provider 相同的确定性规则派生。
+ * 导出是给 `seed.test.ts` 断言「演示账号确有微信身份」用的。
  */
-export const DEMO_PASSWORD = 'fish123456'
+export const DEMO_WECHAT_CODES = {
+  sellerA: 'demo-seller-a',
+  buyerB: 'demo-buyer-b',
+  buyerC: 'demo-buyer-c',
+} as const
 
 /**
- * 学号（12 位）与演示密码一起在 issue #3 里冻结，便于前端直接登录调试。
- * #68 后 VERIFIED 只能由真实校园邮箱验证产生（不能在 seed 里伪造），三个演示账号
- * 统一 UNVERIFIED；认证后的徽章演示改由真实验证流程（dev outbox）给出。
+ * 与 `apps/api/src/modules/auth/wechat-service.ts` 的 stub Provider 同一算法：
+ * `sha256('wechat-stub:' + code)` → `o` + 27 位 base 字符。seed 不能依赖 apps/api，
+ * 因此这里重复一份；两边若改算法，`seed.test.ts` 与 api 的微信登录测试会同时失败。
  */
-const demoStudentNos = {
-  sellerA: '202101000001',
-  buyerB: '202101000002',
-  buyerC: '202101000003',
-} as const
+function stubOpenid(code: string): string {
+  const ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'
+  const digest = new Bun.CryptoHasher('sha256').update(`wechat-stub:${code}`).digest('hex')
+  let suffix = ''
+  for (let i = 0; i < 27; i += 1) {
+    const byte = Number.parseInt(digest.slice(i * 2, i * 2 + 2), 16)
+    suffix += ALPHABET[byte % ALPHABET.length]
+  }
+  return `o${suffix}`
+}
 
 /**
  * 生成 #2 验收要求的"首页、愿望、聊天、交易基础数据"。
@@ -144,31 +155,18 @@ export async function seed(tx: SeedTx): Promise<void> {
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
   const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
 
-  // 同一个明文密码只需哈希一次（argon2id 每次哈希都带随机盐，复用同一串不影响正确性）。
-  const passwordHash = await Bun.password.hash(DEMO_PASSWORD)
-
+  // #703：演示账号不再写学号/密码（列已删除）；uid 由数据库默认值生成，这里不传。
   await tx.insert(users).values([
-    {
-      id: ids.sellerA,
-      studentNo: demoStudentNos.sellerA,
-      passwordHash,
-      nickname: '阿岚',
-      createdAt: lastWeek,
-    },
-    {
-      id: ids.buyerB,
-      studentNo: demoStudentNos.buyerB,
-      passwordHash,
-      nickname: '小北',
-      createdAt: lastWeek,
-    },
-    {
-      id: ids.buyerC,
-      studentNo: demoStudentNos.buyerC,
-      passwordHash,
-      nickname: '橙子',
-      createdAt: lastWeek,
-    },
+    { id: ids.sellerA, nickname: '阿岚', createdAt: lastWeek },
+    { id: ids.buyerB, nickname: '小北', createdAt: lastWeek },
+    { id: ids.buyerC, nickname: '橙子', createdAt: lastWeek },
+  ])
+
+  // #703：绑上固定 openid，本地 stub 登录才能用固定 code 登进演示账号。
+  await tx.insert(wechatIdentities).values([
+    { userId: ids.sellerA, openid: stubOpenid(DEMO_WECHAT_CODES.sellerA) },
+    { userId: ids.buyerB, openid: stubOpenid(DEMO_WECHAT_CODES.buyerB) },
+    { userId: ids.buyerC, openid: stubOpenid(DEMO_WECHAT_CODES.buyerC) },
   ])
 
   // The reservation table must not be truncated: historical references remain occupied.

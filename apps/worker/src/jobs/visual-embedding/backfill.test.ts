@@ -36,14 +36,10 @@ const TEST_MODEL = 'visual-backfill-test-model'
 const createdUserIds: string[] = []
 const createdListingIds: string[] = []
 
-let seq = 0
-
 async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `visual-backfill-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '视觉回填测试',
     })
     .returning({ id: users.id })

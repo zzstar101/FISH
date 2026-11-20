@@ -59,10 +59,10 @@ beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
 
-  for (const [i, uid] of [me, other, seller].entries()) {
+  for (const uid of [me, other, seller]) {
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${uid}, ${`fav${process.pid}_${i}`}, 'test-hash', '收藏测试')
+      INSERT INTO users (id, nickname)
+      VALUES (${uid}, '收藏测试')
     `)
   }
   for (const listingId of [listingA, listingB, listingC]) {

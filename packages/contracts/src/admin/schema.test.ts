@@ -8,7 +8,6 @@ import {
   AdminOverviewSchema,
   AdminUserDetailSchema,
   AdminUserSummaryPageSchema,
-  maskStudentNo,
   UserRoleSchema,
 } from './schema'
 
@@ -23,32 +22,12 @@ describe('UserRoleSchema', () => {
   })
 })
 
-describe('maskStudentNo', () => {
-  test('masks the middle of a 12-digit student no', () => {
-    expect(maskStudentNo('202101000001')).toBe('2021****0001')
-  })
-
-  test('never leaks the full number', () => {
-    expect(maskStudentNo('202101000001')).not.toContain('202101000001')
-  })
-
-  test('masks short numbers fully', () => {
-    expect(maskStudentNo('123')).toBe('1*3')
-  })
-
-  test('masks at least four digits for 9-11 digit numbers', () => {
-    // 固定「首 4 + 尾 4」在这几个长度上会露出 8 位（9 位学号几乎等于没脱敏）。
-    expect(maskStudentNo('123456789')).toBe('12*****89')
-    expect(maskStudentNo('1234567890')).toBe('123****890')
-    expect(maskStudentNo('12345678901')).toBe('123*****901')
-  })
-})
-
 describe('AdminMeResponseSchema', () => {
   test('parses an admin me response with capabilities', () => {
     const body = {
       admin: {
         id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        uid: '1000000001',
         nickname: '阿岚',
         avatarUrl: null,
         authStatus: 'VERIFIED',
@@ -70,6 +49,7 @@ describe('AdminMeResponseSchema', () => {
     const parsed = AdminMeResponseSchema.safeParse({
       admin: {
         id: '01930000-0000-7000-8000-0000000000a1',
+        uid: '1000000003',
         nickname: '阿岚',
         avatarUrl: null,
         authStatus: 'UNVERIFIED',
@@ -83,12 +63,12 @@ describe('AdminMeResponseSchema', () => {
 })
 
 describe('AdminUserSummaryPageSchema', () => {
-  test('parses a page with masked student no and nextCursor null', () => {
+  test('parses a page with uid and nextCursor null', () => {
     const body = {
       items: [
         {
           id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
-          studentNoMasked: '2021****0001',
+          uid: '1000000001',
           nickname: '阿岚',
           authStatus: 'VERIFIED',
           role: 'ADMIN',
@@ -103,7 +83,7 @@ describe('AdminUserSummaryPageSchema', () => {
       nextCursor: null,
     }
     const parsed = AdminUserSummaryPageSchema.parse(body)
-    expect(parsed.items[0]?.studentNoMasked).toBe('2021****0001')
+    expect(parsed.items[0]?.uid).toBe('1000000001')
     expect(parsed.nextCursor).toBeNull()
   })
 
@@ -112,7 +92,7 @@ describe('AdminUserSummaryPageSchema', () => {
       items: [
         {
           id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a2'),
-          studentNoMasked: null,
+          uid: '1000000002',
           nickname: '已注销用户',
           authStatus: 'UNVERIFIED',
           role: 'USER',

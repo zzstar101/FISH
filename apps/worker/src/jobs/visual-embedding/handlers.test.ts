@@ -39,14 +39,10 @@ afterAll(async () => {
   await db.$client.close()
 })
 
-let seq = 0
-
 async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `visual-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '视觉向量 handler 测试',
     })
     .returning({ id: users.id })

@@ -31,14 +31,10 @@ const service = createMatchingService({
   storage: { publicUrl: (key) => `https://cdn.test/${key}` },
 })
 
-let seq = 0
-
 async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `matching-read-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '匹配读路径测试',
     })
     .returning({ id: users.id })

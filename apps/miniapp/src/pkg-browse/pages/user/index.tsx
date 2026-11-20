@@ -649,6 +649,22 @@ export default function UserHome() {
   }
 
   /**
+   * 复制 UID（#703）：`setClipboardData` 只写不读（隐私口径见
+   * `features/legal/privacy.ts`）。成功 / 失败都给明确 toast，文案与「我的」页同一套；
+   * 端上刻意不做「按 uid 搜人」的入口（Issue #703 明确排除），复制只为让本人 / 客服
+   * 定位账号。
+   */
+  const copyUid = async (uid: string) => {
+    try {
+      await Taro.setClipboardData({ data: uid })
+      void Taro.showToast({ title: 'UID 已复制', icon: 'none' })
+    } catch (error) {
+      console.warn('[miniapp] 复制 UID 失败', error)
+      void Taro.showToast({ title: '复制失败', icon: 'none' })
+    }
+  }
+
+  /**
    * 拉黑入口（#466 端上批次 / #473）：**真实接线**。
    *
    * - 资格与关注钮同一条（`canFollow`：已登录 且 非本人主页）；读到状态之前不渲染、
@@ -933,7 +949,19 @@ export default function UserHome() {
                         <Image className="uhome__badge-ic" src={BADGE.verified} mode="aspectFit" />
                       ) : null}
                     </View>
-                    {/* 在线态（#359 第五点）：头像右边这一列的第二行。绿点 + 文案；
+                    {/* UID（#703）：昵称 / 认证徽章行的**下一行**，格式严格
+                        `UID 1234567890`（前缀 + 一个空格 + 10 位、不分组），整行可点复制。
+                        位置与「我的」页同一层级：昵称（含徽章）之后、在线态 / 签名等其它
+                        次级信息之前；`PublicUserProfile.uid` 在公开 DTO 里，匿名访客也看得见。 */}
+                    <View
+                      className="uhome__uid"
+                      aria-role="button"
+                      aria-label={`UID ${profile.uid}，点击复制`}
+                      onClick={() => void copyUid(profile.uid)}
+                    >
+                      <Text className="uhome__uid-tx">UID {profile.uid}</Text>
+                    </View>
+                    {/* 在线态（#359 第五点）：头像右边这一列、昵称 / UID 之后的下一行。绿点 + 文案；
                         「多久没上线」由 `presenceView` 折算成「12 分钟前活跃」这类相对时间。
                         「现在」由组件自己订阅；拿不到在线态时它整块不渲染（不画一个假的「离线」）。 */}
                     <PresenceBadge presence={profile.presence} className="uhome__presence" />

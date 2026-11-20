@@ -9,6 +9,7 @@ import { routeTree } from './routeTree.gen'
 
 const USER: Me = {
   id: 'usr_01jc000000e00800000000000a',
+  uid: '1000000001',
   nickname: '审查用户',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

@@ -28,6 +28,7 @@ const { PublishPage } = await import('./publish-page')
 
 const BASE_ME: Me = {
   id: 'usr_01jc000000e00800000000000a',
+  uid: '1000000001',
   nickname: '阿岚',
   avatarUrl: null,
   authStatus: 'VERIFIED',

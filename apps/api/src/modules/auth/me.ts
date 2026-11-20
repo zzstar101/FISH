@@ -11,7 +11,7 @@ export function maskPhone(phone: string): string {
 }
 
 /**
- * DB 行 → 对外 DTO。`student_no` 与 `password_hash` 永不经过这里（#3：不公开完整学号）。
+ * DB 行 → 对外 DTO。密码等凭据列已随 #703 删除；`uid` 是唯一新增的人类可读字段。
  *
  * `avatarUrl` 在库里是无约束 `text`，契约声明它是 `z.url()`；
  * 值域外的历史值一律降级为 `null`，否则前端按 `MeSchema` 解析 `/me` 会直接抛错、登录态全挂。
@@ -20,6 +20,7 @@ export function maskPhone(phone: string): string {
 export function toMe(row: UserRow): Me {
   return {
     id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
+    uid: row.uid,
     nickname: row.nickname,
     avatarUrl: publicAvatarUrl(row.avatarUrl),
     authStatus: row.authStatus,

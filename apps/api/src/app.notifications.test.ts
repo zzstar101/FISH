@@ -8,10 +8,11 @@ import { createDb, type Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
 import { notifications } from '@fish/db/schema/notifications'
 import { loadServerEnv } from '@fish/shared/env'
-import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createTestUser } from './modules/auth/testing'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -48,7 +49,11 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-const PASSWORD = 'fish123456'
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线）。 */
+async function registerUser(serial: string): Promise<{ cookie: string; userId: string }> {
+  const { userId, cookie } = await createTestUser(db, { nickname: `通知用户${serial}` })
+  return { cookie, userId }
+}
 
 /** 两条通知共用的时间戳：用来验「同一 created_at 时按 id DESC」。 */
 const SAME_MOMENT = '2026-09-12T10:00:00Z'
@@ -68,26 +73,6 @@ function fixtureIds(tag: string) {
     /** 他人的通知：created_at 最新，过滤失效时会立刻出现在我的列表首位。 */
     nOther: `0199${tag}-0000-7000-8000-0000000000b4`,
   }
-}
-
-async function registerUser(serial: string): Promise<{ cookie: string; userId: string }> {
-  const response = await app.request('/auth/register', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      studentNo: `2021000000${serial}`,
-      password: PASSWORD,
-      nickname: `通知用户${serial}`,
-    }),
-  })
-  expect(response.status).toBe(200)
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith('fish_session='))
-    ?.split(';')[0]
-  if (!cookie) throw new Error('注册未下发 fish_session cookie')
-  const body = (await response.json()) as { user: { id: string } }
-  return { cookie, userId: decodePublicId(PUBLIC_ID_PREFIX.user, body.user.id) }
 }
 
 /**

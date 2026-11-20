@@ -1,4 +1,4 @@
-import { AuthStatusSchema, MeSchema } from '@fish/contracts/auth/user'
+import { AuthStatusSchema, MeSchema, UidSchema } from '@fish/contracts/auth/user'
 import {
   ListingCategorySchema,
   ListingConditionSchema,
@@ -52,25 +52,6 @@ export type UserRole = z.infer<typeof UserRoleSchema>
 export const AdminAccountStatusSchema = z.enum(['ACTIVE', 'DELETION_REQUESTED', 'DELETED'])
 export type AdminAccountStatus = z.infer<typeof AdminAccountStatusSchema>
 
-/**
- * 脱敏学号：保留首尾、中段以 `*` 掩蔽（12 位学号 → `2021****0001`）。
- *
- * 两条规则：
- * - 8 位及以下只留首位各 1 位，中间全部掩蔽（过短则整体掩蔽）；
- * - 9 位及以上按长度收缩保留位数，保证首尾各不超过 4 位且掩蔽位数不少于 4（12 位仍是首 4 + 尾 4）。
- */
-export function maskStudentNo(studentNo: string): string {
-  if (studentNo.length <= 8) {
-    // 短学号退化为「首 + 掩蔽 + 尾」；过短（≤2）无法保留首尾则整体掩蔽。
-    if (studentNo.length <= 2) return '*'.repeat(studentNo.length)
-    return `${studentNo[0]}${'*'.repeat(studentNo.length - 2)}${studentNo.at(-1)}`
-  }
-  // 9 位以上：固定「首 4 + 尾 4」在 9–11 位上会露出 8 位（9 位学号几乎等于没脱敏，
-  // 输出还比原串长），所以按长度收缩保留位数；12 位仍得到 keep = 4。
-  const keep = Math.min(4, Math.floor((studentNo.length - 4) / 2))
-  return `${studentNo.slice(0, keep)}${'*'.repeat(studentNo.length - keep * 2)}${studentNo.slice(-keep)}`
-}
-
 // ---------------------------------------------------------------------------
 // 当前管理员
 // ---------------------------------------------------------------------------
@@ -110,14 +91,11 @@ export type AdminMeResponse = z.infer<typeof AdminMeResponseSchema>
 // 用户查询
 // ---------------------------------------------------------------------------
 
-/** 管理员视角的用户摘要。不返回密码哈希、完整学号等敏感凭据。 */
+/** 管理员视角的用户摘要。不返回密码哈希、手机号等敏感凭据。 */
 export const AdminUserSummarySchema = z.object({
   id: UserIdSchema,
-  /**
-   * 脱敏学号（`2021****0001`），完整学号不进协议。
-   * #86 后微信注册的用户没有学号 → `null`（不是空串；端上据此显示占位而不是 "n**l"）。
-   */
-  studentNoMasked: z.string().min(1).nullable(),
+  /** 人类可读 UID（#703）：10 位数字字符串，管理端展示为「UID 1234567890」并按它精确定位。 */
+  uid: UidSchema,
   nickname: z.string(),
   authStatus: AuthStatusSchema,
   role: UserRoleSchema,
@@ -561,7 +539,7 @@ export type AdminErrorCode = z.infer<typeof AdminErrorCodeSchema>
 // ---------------------------------------------------------------------------
 
 export const AdminUsersQuerySchema = z.strictObject({
-  /** 学号精确匹配或昵称前缀搜索。 */
+  /** UID 精确匹配或昵称前缀搜索。 */
   q: z.string().trim().min(1).max(50).optional(),
   authStatus: AuthStatusSchema.optional(),
   role: UserRoleSchema.optional(),

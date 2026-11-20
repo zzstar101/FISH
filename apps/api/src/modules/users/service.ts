@@ -87,6 +87,7 @@ function toPublicProfile(
 ): PublicUserProfile {
   return PublicUserProfileSchema.parse({
     id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
+    uid: row.uid,
     nickname: row.nickname,
     // `users.avatar_url` 是无约束 text，值域外的历史脏值降级为 null，
     // 不让一个人的脏头像把整页打成 500（与 comments 的 `toAuthor` 同一取舍）。

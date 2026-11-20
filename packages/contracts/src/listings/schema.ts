@@ -350,8 +350,7 @@ const ObjectKeyListSchema = z
   .max(MAX_LISTING_IMAGES, `最多上传 ${MAX_LISTING_IMAGES} 张图片`)
 
 /**
- * `.strictObject()`：多余字段直接 422 而不是静默丢弃，与认证域的
- * `RegisterRequestSchema` 同一取舍——写请求拼错字段名必须立刻报错。
+ * `.strictObject()`：多余字段直接 422 而不是静默丢弃——写请求拼错字段名必须立刻报错。
  */
 export const ListingCreateInputSchema = z
   .strictObject({

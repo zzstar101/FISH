@@ -22,8 +22,8 @@ export const userRoleEnum = pgEnum('user_role', ['USER', 'ADMIN'])
  * - `ACTIVE`：正常账号。
  * - `DELETION_REQUESTED`：已申请注销，处于 7 天冷静期。写入口全禁（`requireAuth` 单点拦截）、
  *   其他会话已撤销、在架商品已下架；本人仍可读、可登出/重新登录、可撤回。
- * - `DELETED`：冷静期到期、已完成去标识化。凭据全部清空（密码 / 手机 / 校园邮箱 / 学号 /
- *   微信映射），因此无法再登录；公开主页 404。
+ * - `DELETED`：冷静期到期、已完成去标识化。凭据全部清空（手机 / 校园邮箱 / 微信映射；`uid` 保留，公
+ *   开主页 404），因此无法再登录；公开主页 404。
  *
  * 用三态而不是布尔 `isDeleting`：撤回要把 `DELETION_REQUESTED` 写回 `ACTIVE`，而 `DELETED`
  * 是终态、不可回退——「可撤回的申请」与「已完成的注销」必须可区分，否则一次 UPDATE 就能把
@@ -40,16 +40,14 @@ export const users = pgTable(
   {
     ...primaryKey(),
     /**
-     * 学号即账号（#3）。#86（2026-09-22 产品冻结）后微信是 Miniapp 主身份：微信注册的
-     * 用户没有学号（NULL）。学号登录仍保留到 E 期（#86 E 节）迁移完成，此后列退出登录键。
-     * API 不返回该列（`studentNoMasked` 等管理投影除外，见 admin 契约）。
+     * 对外人类可读标识（#703）：10 位数字，随机生成、不可变、不回收。
+     *
+     * 与 `usr_...` TypeID 共存：`usr_` 仍是路由 / 外键 / WS 的协议 ID，本列只负责展示
+     * （小程序「我的」与「他人主页」）与后台精确定位（管理端搜索、`db:promote`）。
+     * 默认值由数据库按行生成，运行时插入不显式传值；迁移用同一个 volatile 默认值回填存量行，
+     * 唯一索引兜底撞号（调用方对 23505 重试）。
      */
-    studentNo: text('student_no').unique(),
-    /**
-     * 密码哈希（#3：argon2id，见 `seed.ts`）。微信注册用户没有密码（NULL），
-     * 学号登录必须校验非空后再比（NULL 哈希意味着该账号不能走密码登录）。
-     */
-    passwordHash: text('password_hash'),
+    uid: text('uid').notNull().default(sql`(floor(random() * 9000000000) + 1000000000)::text`),
     nickname: text('nickname').notNull(),
     avatarUrl: text('avatar_url'),
     /**
@@ -84,6 +82,9 @@ export const users = pgTable(
     ...timestamps(),
   },
   (table) => [
+    uniqueIndex('users_uid_uq').on(table.uid),
+    // 格式兜底：10 位数字、无前导 0（值域 1_000_000_000–9_999_999_999，与 UidSchema 同口径）。
+    check('users_uid_format', sql`${table.uid} ~ '^[1-9][0-9]{9}$'`),
     uniqueIndex('users_campus_email_uq').on(table.campusEmail),
     // worker 到期扫描（#464）：只扫冷静期内的行，按到期时刻取。没有这条部分索引就是每次全表扫。
     index('users_purge_scheduled_at_idx')

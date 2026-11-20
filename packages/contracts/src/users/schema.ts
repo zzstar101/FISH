@@ -7,14 +7,15 @@
  *
  * ## 写进契约的隐私边界（本 Issue 的验收核心）
  *
- * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / signature / joinedDays /
- * activeCount / soldCount / presence` 九个字段（`signature` 是 #179 新增的个性签名，
- * `presence` 是 #359 第五点新增的在线态，见 `UserPresenceSchema` 的 Owner 拍板记录）。
+ * 公开 DTO **只有** `id / uid / nickname / avatarUrl / authStatus / signature / joinedDays /
+ * activeCount / soldCount / presence` 十个字段（`signature` 是 #179 新增的个性签名，
+ * `presence` 是 #359 第五点新增的在线态；`uid` 是 #703 新增的人类可读标识，随机 10 位、
+ * 不可顺序枚举，与公开主页同口径匿名可见）。
  * 以下字段**在任何情况下都不得出现在响应里**（不是"当前没有数据所以为空"，而是**契约里
  * 根本没有这个字段**）：
  *
- * - `studentNo`（学号即账号）、`campusEmail`（校园认证绑定）、`passwordHash`、`role`
- *   —— 表里有，但永远不进公开 DTO；
+ * - `campusEmail`（校园认证绑定）、`role` —— 表里有，但永远不进公开 DTO；
+ *   `studentNo` / `passwordHash` 两列已随 #703 删除，不再存在；
  * - `campus`（校区）：#86（2026-09-22 产品冻结）后**产品整体不采集、不公开校区**，
  *   DB 列已删除，不存在任何「可见性偏好」语义——不是"暂缓公开"，是永久移除（#86 F 节）。
  * - `phone`（明文手机号）：服务端保存，任何 DTO 只出派生态（`auth/user.ts` 的
@@ -31,7 +32,7 @@
  * `joinedAt` 也不出：它和 `joinedDays` 是同一事实的两种表达，两个字段必然漂移。
  * 口径由服务端固定，端上不再自己算（见 `joinedDays` 注释）。
  */
-import { AuthStatusSchema } from '@fish/contracts/auth/user'
+import { AuthStatusSchema, UidSchema } from '@fish/contracts/auth/user'
 import {
   type ListingFeedResponse,
   ListingFeedResponseSchema,
@@ -92,6 +93,8 @@ export type UserPresence = z.infer<typeof UserPresenceSchema>
  */
 export const PublicUserProfileSchema = z.object({
   id: PublicUserIdSchema,
+  /** 人类可读 UID（#703）：10 位数字字符串，展示为「UID 1234567890」；匿名可见。 */
+  uid: UidSchema,
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
   authStatus: AuthStatusSchema,
@@ -110,7 +113,7 @@ export const PublicUserProfileSchema = z.object({
    * `lockedUntil`、`wishes` 的 `poolCache.expiresAt`），没有任何服务端时区约定
    * （全仓无 `Asia/Shanghai` / `TZ`），按日历日算就必须先引入一个"服务端时区"。
    *
-   * 下限 1 是刻意的：注册当天不能显示「加入 0 天」。
+   * 下限 1 是刻意的：加入当天不能显示「加入 0 天」。
    * 副作用（明确接受）：满 24 小时不涨，满 48 小时才从 1 变 2，即「N 天」表示
    * `[ (N-1)*24h, N*24h )` 之外的滞后一天区间——它是"加入满几天"的保守下界，不会虚报。
    */

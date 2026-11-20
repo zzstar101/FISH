@@ -178,36 +178,37 @@ export function createWechatAuthService(deps: {
         return { user: toMe(row), token, expiresAt }
       }
 
-      try {
-        const created = await db.transaction(async (tx) => {
-          const inserted = await tx
-            .insert(users)
-            .values({
-              // #86：微信是主身份，学号 / 密码留空（E 节迁移后列退出登录键）。
-              studentNo: null,
-              passwordHash: null,
-              nickname: placeholderNickname(identity.openid),
-              authStatus: 'UNVERIFIED',
-              verifiedAt: null,
+      // uid 是 10 位随机数（空间 90 亿），撞号由唯一索引兜底；插入时由 DB 默认值生成，
+      // 撞了就整条事务重试（重试会重新取默认值），首插 + 最多 3 次重试。
+      // openid 并发首登走另一条重读路径。
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          const created = await db.transaction(async (tx) => {
+            const inserted = await tx
+              .insert(users)
+              .values({
+                nickname: placeholderNickname(identity.openid),
+                authStatus: 'UNVERIFIED',
+                verifiedAt: null,
+              })
+              .returning()
+            const row = inserted[0]
+            if (!row) throw new Error('INSERT users 未返回行')
+            await tx.insert(wechatIdentities).values({
+              userId: row.id,
+              openid: identity.openid,
+              unionid: identity.unionid,
             })
-            .returning()
-          const row = inserted[0]
-          if (!row) throw new Error('INSERT users 未返回行')
-          await tx.insert(wechatIdentities).values({
-            userId: row.id,
-            openid: identity.openid,
-            unionid: identity.unionid,
+            return { row, ...(await sessions.createWith(tx, row.id)) }
           })
-          return { row, ...(await sessions.createWith(tx, row.id)) }
-        })
-        return { user: toMe(created.row), token: created.token, expiresAt: created.expiresAt }
-      } catch (error) {
-        // 并发首登：另一个请求先建好了映射。重读后按登录处理；用户行也被对方建好。
-        // 败者可能在胜者事务提交前就撞了唯一索引，此时重读为空——短退避重试几次
-        // （真实部署多实例时窗口存在；单机 stub 下最多出现一次）。重试耗尽才降级 401。
-        if (isUniqueViolation(error)) {
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            await Bun.sleep(50 * (attempt + 1))
+          return { user: toMe(created.row), token: created.token, expiresAt: created.expiresAt }
+        } catch (error) {
+          if (!isUniqueViolation(error)) throw error
+
+          // 并发首登：另一个请求先建好了映射。败者可能在胜者事务提交前就撞了唯一索引，
+          // 此时重读为空——短退避重试几次再降级 401。
+          for (let race = 0; race < 3; race += 1) {
+            await Bun.sleep(50 * (race + 1))
             const raced = await findIdentity(db, identity.openid)
             if (!raced) continue
             const row = await loadUser(raced.userId)
@@ -215,10 +216,12 @@ export function createWechatAuthService(deps: {
             const { token, expiresAt } = await sessions.create(row.id)
             return { user: toMe(row), token, expiresAt }
           }
-          throw new AuthError('WECHAT_CODE_INVALID', 401, '微信身份映射冲突')
+
+          // 不是 openid 冲突 → 按 uid 撞号处理，退避后重试整条插入。
+          await Bun.sleep(20 * (attempt + 1))
         }
-        throw error
       }
+      throw new AuthError('WECHAT_CODE_INVALID', 401, '微信身份映射冲突')
     },
   }
 }

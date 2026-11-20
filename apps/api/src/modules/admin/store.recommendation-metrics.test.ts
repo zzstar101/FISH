@@ -74,13 +74,9 @@ beforeAll(async () => {
     .insert(users)
     .values([
       {
-        studentNo: `admin-metrics-a-${Date.now()}`,
-        passwordHash: 'test-not-a-real-hash',
         nickname: '卖家甲',
       },
       {
-        studentNo: `admin-metrics-b-${Date.now()}`,
-        passwordHash: 'test-not-a-real-hash',
         nickname: '卖家乙',
       },
     ])

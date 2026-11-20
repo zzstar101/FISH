@@ -17,6 +17,7 @@ const OWNER = 'usr_01jc000000e00800000000000a'
 
 const ME: Me = {
   id: OWNER,
+  uid: '1000000001',
   nickname: '阿岚',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

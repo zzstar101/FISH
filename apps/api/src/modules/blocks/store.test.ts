@@ -15,14 +15,10 @@ const db = createDb(databaseUrl)
 const store = createSqlBlockStore(db)
 
 const created: string[] = []
-let seq = 0
 
 /** 每个用例自建、自清自己的用户（删用户靠 CASCADE 带走 user_blocks，与 store 的删除语义一致）。 */
 async function newUser(nickname = '拉黑测试'): Promise<string> {
-  const rows = await db
-    .insert(users)
-    .values({ studentNo: `block-${Date.now()}-${seq++}`, passwordHash: 'test-hash', nickname })
-    .returning({ id: users.id })
+  const rows = await db.insert(users).values({ nickname }).returning({ id: users.id })
   const id = rows[0]?.id
   if (!id) throw new Error('insert users 未返回行')
   created.push(id)

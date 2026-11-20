@@ -35,7 +35,6 @@ import {
   AdminUserDetailSchema,
   type AdminUserSummaryPage,
   AdminUserSummaryPageSchema,
-  maskStudentNo,
   type UserRole,
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus, Me } from '@fish/contracts/auth/user'
@@ -205,8 +204,7 @@ function adminMeOf(me: Me): { admin: AdminMe; capabilities: AdminCapability[] } 
 function toUserSummary(row: UserSummaryRow) {
   return AdminUserSummaryPageSchema.shape.items.element.safeParse({
     id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
-    // #86：微信用户没有学号 → null（端上显示占位），不能把 null 喂给 maskStudentNo。
-    studentNoMasked: row.studentNo === null ? null : maskStudentNo(row.studentNo),
+    uid: row.uid,
     nickname: row.nickname,
     authStatus: row.authStatus,
     role: row.role,

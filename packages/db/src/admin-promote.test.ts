@@ -25,19 +25,23 @@ const scratchUrl = (() => {
 const admin = createDb(databaseUrl)
 let scratch: Db
 
-const ADMIN_NO = '202101000901'
-const NORMAL_NO = '202101000902'
-const TARGET_NO = '202101000903'
-const ACTOR_TARGET_NO = '202101000905'
-const SELF_TARGET_NO = '202101000904'
-const RACE_A_NO = '202101000906'
-const RACE_B_NO = '202101000907'
-const PHONE_TARGET_NO = '202101000908'
-const ID_TARGET_NO = '202101000909'
+// #703：学号列已删除，人类可读标识换成 10 位 UID（^[1-9]\d{9}$），与 11 位手机号、
+// UUID 三种形状互不重叠。
+const ADMIN_UID = '2021010001'
+const NORMAL_UID = '2021010002'
+const TARGET_UID = '2021010003'
+const ACTOR_TARGET_UID = '2021010005'
+const SELF_TARGET_UID = '2021010004'
+const RACE_A_UID = '2021010006'
+const RACE_B_UID = '2021010007'
+const PHONE_TARGET_UID = '2021010008'
+const ID_TARGET_UID = '2021010009'
 const PHONE_TARGET_PHONE = '13700000001'
 const EDGE_PHONE = '11012345678'
-const EDGE_PHONE_NO = '202101000910'
-const DELETED_NO = '202101000911'
+const EDGE_PHONE_UID = '2021010010'
+const DELETED_UID = '2021010011'
+/** 12 位学号形状的标识已不被接受：三种合法形状都不匹配。 */
+const LEGACY_STUDENT_NO = '202101000901'
 
 const ids = {
   admin: newId(),
@@ -69,11 +73,8 @@ async function promote(args: string[]): Promise<{ exitCode: number; stderr: stri
   return { exitCode: await proc.exited, stderr }
 }
 
-async function roleOf(studentNo: string): Promise<string | undefined> {
-  const rows = await scratch
-    .select({ role: users.role })
-    .from(users)
-    .where(eq(users.studentNo, studentNo))
+async function roleOf(uid: string): Promise<string | undefined> {
+  const rows = await scratch.select({ role: users.role }).from(users).where(eq(users.uid, uid))
   return rows[0]?.role
 }
 
@@ -82,32 +83,29 @@ beforeAll(async () => {
   scratch = createDb(scratchUrl)
   await migrate(scratch, { migrationsFolder })
   await scratch.insert(users).values([
-    { id: ids.admin, studentNo: ADMIN_NO, passwordHash: 'x', nickname: '管理员', role: 'ADMIN' },
-    { id: ids.normal, studentNo: NORMAL_NO, passwordHash: 'x', nickname: '普通用户' },
-    { id: ids.target, studentNo: TARGET_NO, passwordHash: 'x', nickname: '被提升者' },
-    { id: ids.actorTarget, studentNo: ACTOR_TARGET_NO, passwordHash: 'x', nickname: '被提升者乙' },
-    { id: ids.selfTarget, studentNo: SELF_TARGET_NO, passwordHash: 'x', nickname: '首次引导' },
-    { id: ids.raceA, studentNo: RACE_A_NO, passwordHash: 'x', nickname: '并发甲' },
-    { id: ids.raceB, studentNo: RACE_B_NO, passwordHash: 'x', nickname: '并发乙' },
+    { id: ids.admin, uid: ADMIN_UID, nickname: '管理员', role: 'ADMIN' },
+    { id: ids.normal, uid: NORMAL_UID, nickname: '普通用户' },
+    { id: ids.target, uid: TARGET_UID, nickname: '被提升者' },
+    { id: ids.actorTarget, uid: ACTOR_TARGET_UID, nickname: '被提升者乙' },
+    { id: ids.selfTarget, uid: SELF_TARGET_UID, nickname: '首次引导' },
+    { id: ids.raceA, uid: RACE_A_UID, nickname: '并发甲' },
+    { id: ids.raceB, uid: RACE_B_UID, nickname: '并发乙' },
     {
       id: ids.phoneTarget,
-      studentNo: PHONE_TARGET_NO,
+      uid: PHONE_TARGET_UID,
       phone: PHONE_TARGET_PHONE,
-      passwordHash: 'x',
       nickname: '手机号目标',
     },
-    { id: ids.idTarget, studentNo: ID_TARGET_NO, passwordHash: 'x', nickname: 'ID 目标' },
+    { id: ids.idTarget, uid: ID_TARGET_UID, nickname: 'ID 目标' },
     {
       id: ids.edgePhone,
-      studentNo: EDGE_PHONE_NO,
+      uid: EDGE_PHONE_UID,
       phone: EDGE_PHONE,
-      passwordHash: 'x',
       nickname: '1xx 号段目标',
     },
     {
       id: ids.deleted,
-      studentNo: DELETED_NO,
-      passwordHash: 'x',
+      uid: DELETED_UID,
       nickname: '已注销',
       accountStatus: 'DELETED',
     },
@@ -119,37 +117,37 @@ afterAll(async () => {
 })
 
 test('--actor 不是 ADMIN 时拒绝提升，且不留下审计记录', async () => {
-  const result = await promote([TARGET_NO, '--actor', NORMAL_NO])
+  const result = await promote([TARGET_UID, '--actor', NORMAL_UID])
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toContain('--actor')
-  expect(await roleOf(TARGET_NO)).toBe('USER')
+  expect(await roleOf(TARGET_UID)).toBe('USER')
   expect(await scratch.$count(adminAuditLogs)).toBe(0)
 })
 
 test('系统已有 ADMIN 时，省略 --actor 被拒绝（首次自举不可永久重放）', async () => {
-  // 系统里已存在 seed 插入的 ADMIN_NO，此时无 --actor 的提升必须失败。
-  const result = await promote([TARGET_NO])
+  // 系统里已存在上面的 ADMIN_UID，此时无 --actor 的提升必须失败。
+  const result = await promote([TARGET_UID])
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toContain('--actor')
-  expect(await roleOf(TARGET_NO)).toBe('USER')
+  expect(await roleOf(TARGET_UID)).toBe('USER')
   expect(await scratch.$count(adminAuditLogs)).toBe(0)
 })
 
 test('--reason 缺值时按用法错误退出，不静默回落默认原因', async () => {
-  const result = await promote([TARGET_NO, '--reason'])
+  const result = await promote([TARGET_UID, '--reason'])
 
   expect(result.exitCode).toBe(1)
-  expect(await roleOf(TARGET_NO)).toBe('USER')
+  expect(await roleOf(TARGET_UID)).toBe('USER')
   expect(await scratch.$count(adminAuditLogs)).toBe(0)
 })
 
 test('--actor 是现有 ADMIN 时以其为操作者写入审计', async () => {
-  const result = await promote([ACTOR_TARGET_NO, '--actor', ADMIN_NO])
+  const result = await promote([ACTOR_TARGET_UID, '--actor', ADMIN_UID])
 
   expect(result.exitCode).toBe(0)
-  expect(await roleOf(ACTOR_TARGET_NO)).toBe('ADMIN')
+  expect(await roleOf(ACTOR_TARGET_UID)).toBe('ADMIN')
   const logs = await scratch
     .select({ actorUserId: adminAuditLogs.actorUserId, action: adminAuditLogs.action })
     .from(adminAuditLogs)
@@ -159,11 +157,11 @@ test('--actor 是现有 ADMIN 时以其为操作者写入审计', async () => {
   expect(logs[0]?.action).toBe('ADMIN_PROMOTED')
 })
 
-test('按手机号提升（#180 后微信用户没有学号）', async () => {
-  const result = await promote([PHONE_TARGET_PHONE, '--actor', ADMIN_NO])
+test('按手机号提升（#180 后微信用户没有学号，#703 后人类可读标识是 uid）', async () => {
+  const result = await promote([PHONE_TARGET_PHONE, '--actor', ADMIN_UID])
 
   expect(result.exitCode).toBe(0)
-  expect(await roleOf(PHONE_TARGET_NO)).toBe('ADMIN')
+  expect(await roleOf(PHONE_TARGET_UID)).toBe('ADMIN')
   const logs = await scratch
     .select({ actorUserId: adminAuditLogs.actorUserId })
     .from(adminAuditLogs)
@@ -176,7 +174,7 @@ test('按用户 ID 提升，--actor 也接受用户 ID', async () => {
   const result = await promote([ids.idTarget, '--actor', ids.admin])
 
   expect(result.exitCode).toBe(0)
-  expect(await roleOf(ID_TARGET_NO)).toBe('ADMIN')
+  expect(await roleOf(ID_TARGET_UID)).toBe('ADMIN')
   const logs = await scratch
     .select({ actorUserId: adminAuditLogs.actorUserId })
     .from(adminAuditLogs)
@@ -185,13 +183,40 @@ test('按用户 ID 提升，--actor 也接受用户 ID', async () => {
   expect(logs[0]?.actorUserId).toBe(ids.admin)
 })
 
-test('按手机号提升与绑定端判据一致（1 开头 11 位号也按手机号识别）', async () => {
-  // 绑定端 apps/api/src/modules/auth/router.ts 只校验 /^1\d{10}$/，10/11/12 开头
-  // 的 11 位号也会落库；db:promote 若收口到 1[3-9] 会把这类号码误当学号。
-  const result = await promote([EDGE_PHONE, '--actor', ADMIN_NO])
+test('按 10 位 uid 提升（#703 学号列删除后 uid 是唯一的人类可读标识）', async () => {
+  const result = await promote([TARGET_UID, '--actor', ADMIN_UID])
 
   expect(result.exitCode).toBe(0)
-  expect(await roleOf(EDGE_PHONE_NO)).toBe('ADMIN')
+  expect(await roleOf(TARGET_UID)).toBe('ADMIN')
+  const logs = await scratch
+    .select({ actorUserId: adminAuditLogs.actorUserId, action: adminAuditLogs.action })
+    .from(adminAuditLogs)
+    .where(eq(adminAuditLogs.targetId, ids.target))
+  expect(logs).toHaveLength(1)
+  expect(logs[0]?.actorUserId).toBe(ids.admin)
+  expect(logs[0]?.action).toBe('ADMIN_PROMOTED')
+})
+
+test('12 位学号形状的标识无法识别，按用法拒绝且不改角色 / 不写审计', async () => {
+  // #703：学号列与学号解析一起删除。旧脚本接受 12 位学号，现在必须明确报「无法识别」，
+  // 而不是静默按某个列去查（输错一位就换列查只会给出误导性结果）。
+  const auditsBefore = await scratch.$count(adminAuditLogs)
+
+  const result = await promote([LEGACY_STUDENT_NO, '--actor', ADMIN_UID])
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toContain('无法识别的用户标识')
+  expect(await roleOf(TARGET_UID)).toBe('ADMIN')
+  expect(await scratch.$count(adminAuditLogs)).toBe(auditsBefore)
+})
+
+test('按手机号提升与绑定端判据一致（1 开头 11 位号也按手机号识别）', async () => {
+  // 绑定端 apps/api/src/modules/auth/router.ts 只校验 /^1\d{10}$/，10/11/12 开头
+  // 的 11 位号也会落库；db:promote 若收口到 1[3-9] 会把这类号码误判成无法识别。
+  const result = await promote([EDGE_PHONE, '--actor', ADMIN_UID])
+
+  expect(result.exitCode).toBe(0)
+  expect(await roleOf(EDGE_PHONE_UID)).toBe('ADMIN')
   const logs = await scratch
     .select({ actorUserId: adminAuditLogs.actorUserId })
     .from(adminAuditLogs)
@@ -201,11 +226,11 @@ test('按手机号提升与绑定端判据一致（1 开头 11 位号也按手�
 })
 
 test('已注销（DELETED）账号不能被提升为 ADMIN，且不写审计', async () => {
-  const result = await promote([DELETED_NO, '--actor', ADMIN_NO])
+  const result = await promote([DELETED_UID, '--actor', ADMIN_UID])
 
   expect(result.exitCode).toBe(1)
   expect(result.stderr).toContain('DELETED')
-  expect(await roleOf(DELETED_NO)).toBe('USER')
+  expect(await roleOf(DELETED_UID)).toBe('USER')
   expect(
     await scratch
       .select({ id: adminAuditLogs.id })
@@ -219,10 +244,10 @@ test('省略 --actor 且系统尚无 ADMIN 时自举成功，审计 actor 为 NU
   // 前面用例可能已提升过多名 ADMIN）。
   await scratch.update(users).set({ role: 'USER' })
 
-  const result = await promote([SELF_TARGET_NO])
+  const result = await promote([SELF_TARGET_UID])
 
   expect(result.exitCode).toBe(0)
-  expect(await roleOf(SELF_TARGET_NO)).toBe('ADMIN')
+  expect(await roleOf(SELF_TARGET_UID)).toBe('ADMIN')
   const logs = await scratch
     .select({ actorUserId: adminAuditLogs.actorUserId })
     .from(adminAuditLogs)
@@ -232,10 +257,10 @@ test('省略 --actor 且系统尚无 ADMIN 时自举成功，审计 actor 为 NU
   expect(logs[0]?.actorUserId).toBeNull()
 
   // 自举之后系统再次存在 ADMIN，无 --actor 的重放必须被拒绝。
-  const replay = await promote([TARGET_NO])
+  const replay = await promote([TARGET_UID])
   expect(replay.exitCode).toBe(1)
   expect(replay.stderr).toContain('--actor')
-  expect(await roleOf(TARGET_NO)).toBe('USER')
+  expect(await roleOf(TARGET_UID)).toBe('USER')
 })
 
 test('两个不同目标的并发自举只有一个成功（advisory lock 串行化）', async () => {
@@ -244,7 +269,7 @@ test('两个不同目标的并发自举只有一个成功（advisory lock 串行
 
   // 两个并发进程同时无 --actor 自举，目标不同（target 行锁互不冲突，
   // 只有共享的 advisory lock 能串行化它们）。真并发：Promise.all 同时起。
-  const [a, b] = await Promise.all([promote([RACE_A_NO]), promote([RACE_B_NO])])
+  const [a, b] = await Promise.all([promote([RACE_A_UID]), promote([RACE_B_UID])])
 
   const exitCodes = [a.exitCode, b.exitCode].sort()
   expect(exitCodes).toEqual([0, 1])

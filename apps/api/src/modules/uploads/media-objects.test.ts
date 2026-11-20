@@ -14,14 +14,10 @@ if (!databaseUrl) {
 const db = createDb(databaseUrl)
 const store = createSqlListingMediaObjectStore(db)
 
-let seq = 0
-
 async function createUser(client: Db): Promise<string> {
   const rows = await client
     .insert(users)
     .values({
-      studentNo: `listing-media-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '集成测试',
     })
     .returning({ id: users.id })

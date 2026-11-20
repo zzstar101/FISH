@@ -13,6 +13,7 @@ import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/p
 import { eq, inArray } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import { createSessions } from '../auth/session'
 
 /**
  * 举报闭环端到端（#73）：用户提交 → 管理队列 → 处理 → 审计。
@@ -42,8 +43,6 @@ const admin = createDb(databaseUrl)
 let scratch: Db
 let app: ReturnType<typeof createApp>
 
-const DEMO_PASSWORD = 'fish123456'
-
 const ADMIN_ID = '01930000-0000-7000-8000-000000000091'
 const REPORTER_ID = '01930000-0000-7000-8000-000000000092'
 const SECOND_REPORTER_ID = '01930000-0000-7000-8000-000000000093'
@@ -59,12 +58,9 @@ beforeAll(async () => {
   await migrate(scratch, { migrationsFolder })
   app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
 
-  const passwordHash = await Bun.password.hash(DEMO_PASSWORD)
   await scratch.insert(users).values([
     {
       id: ADMIN_ID,
-      studentNo: '202101000901',
-      passwordHash,
       nickname: '管理员甲',
       authStatus: 'VERIFIED',
       verifiedAt: new Date('2026-09-01T00:00:00Z'),
@@ -73,24 +69,18 @@ beforeAll(async () => {
     },
     {
       id: REPORTER_ID,
-      studentNo: '202101000902',
-      passwordHash,
       nickname: '举报人乙',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
     },
     {
       id: SECOND_REPORTER_ID,
-      studentNo: '202101000903',
-      passwordHash,
       nickname: '举报人丙',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
     },
     {
       id: TARGET_USER_ID,
-      studentNo: '202101000904',
-      passwordHash,
       nickname: '被举报用户丁',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
@@ -129,17 +119,10 @@ const postAs = (cookie: string, body: unknown) => ({
   body: JSON.stringify(body),
 })
 
-function sessionCookie(res: Response): string {
-  const cookies = res.headers.getSetCookie()
-  const session = cookies.find((value) => value.startsWith('fish_session='))
-  if (!session) throw new Error(`响应未下发 fish_session：${cookies.join(' | ')}`)
-  return session.split(';')[0] ?? ''
-}
-
-async function loginAs(studentNo: string): Promise<string> {
-  const res = await app.request('/auth/login', post({ studentNo, password: DEMO_PASSWORD }))
-  expect(res.status).toBe(200)
-  return sessionCookie(res)
+/** 直写 sessions 表签发会话（#703：/auth/login 已下线）。 */
+async function loginAs(userId: string): Promise<string> {
+  const { token } = await createSessions(scratch).create(userId)
+  return `fish_session=${token}`
 }
 
 let adminCookie: string
@@ -148,9 +131,9 @@ let secondReporterCookie: string
 
 describe('举报闭环（#73 用户端）', () => {
   test('setup: login all accounts', async () => {
-    adminCookie = await loginAs('202101000901')
-    reporterCookie = await loginAs('202101000902')
-    secondReporterCookie = await loginAs('202101000903')
+    adminCookie = await loginAs(ADMIN_ID)
+    reporterCookie = await loginAs(REPORTER_ID)
+    secondReporterCookie = await loginAs(SECOND_REPORTER_ID)
   })
 
   test('匿名不能举报，也不能看我的举报（401）', async () => {

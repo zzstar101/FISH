@@ -8,12 +8,14 @@ import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
-import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
 import { createSqlAccountDeletionStore } from './modules/account-deletion/store'
 import { ACCOUNT_DELETION_PENDING_MESSAGE } from './modules/account-deletion/write-policy'
+import { createSessions } from './modules/auth/session'
+import { createTestUser } from './modules/auth/testing'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -53,49 +55,18 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-type Session = { cookie: string; userId: string; studentNo: string }
+type Session = { cookie: string; userId: string }
 
-let studentSerial = 0
-
-/** 学号唯一且必须满 12 位数字（`StudentNoSchema` 是 `/^\d{12}$/`），pid 段补足 4 位。 */
-function nextStudentNo(): string {
-  return `2022${String(process.pid % 10000).padStart(4, '0')}${String(studentSerial++).padStart(4, '0')}`
-}
-
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线）；nickname 由用例传入。 */
 async function register(nickname: string): Promise<Session> {
-  return registerWith(nextStudentNo(), nickname)
+  const { userId, cookie } = await createTestUser(db, { nickname })
+  return { userId, cookie }
 }
 
-async function registerWith(studentNo: string, nickname: string): Promise<Session> {
-  const response = await app.request('/auth/register', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ studentNo, password: 'fish123456', nickname }),
-  })
-  expect(response.status).toBe(200)
-  const body = (await response.json()) as { user: { id: string } }
-  return {
-    cookie: cookieOf(response),
-    userId: decodePublicId(PUBLIC_ID_PREFIX.user, body.user.id),
-    studentNo,
-  }
-}
-
-async function login(studentNo: string): Promise<string> {
-  const response = await app.request('/auth/login', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ studentNo, password: 'fish123456' }),
-  })
-  expect(response.status).toBe(200)
-  return cookieOf(response)
-}
-
-function cookieOf(response: Response): string {
-  return response.headers
-    .getSetCookie()
-    .map((c) => c.split(';')[0])
-    .join('; ')
+/** 同一用户的**第二条**会话：直接由 sessions 表签发（原先靠再登录一次拿到）。 */
+async function openSession(userId: string): Promise<string> {
+  const { token } = await createSessions(db).create(userId)
+  return `fish_session=${token}`
 }
 
 async function createListing(
@@ -263,7 +234,7 @@ describe('完整注销闭环：申请 → 冷静期 → 撤回', () => {
 
   test('申请成功：进冷静期、下架在架商品、撤销其它会话、保留当前会话、写被拦、读不受影响', async () => {
     const session = await register('申请成功')
-    const otherCookie = await login(session.studentNo)
+    const otherCookie = await openSession(session.userId)
     const activeListing = await createListing(session.userId, 'ACTIVE')
     const reservedListing = await createListing(session.userId, 'RESERVED')
     const soldListing = await createListing(session.userId, 'SOLD')
@@ -625,37 +596,6 @@ describe('并发（对抗性审查 D3 / M1）', () => {
   })
 })
 
-describe('去标识化后的重新注册（对抗性审查 D7）', () => {
-  test('同一学号可以走真实注册端点重新注册，旧凭据不再可用', async () => {
-    const first = await registerWith(nextStudentNo(), '旧账号')
-    const studentNo = first.studentNo
-    // 与 worker 的 purge 同款终态：身份字段清空、账号置 DELETED、时间戳清空。
-    await db.execute(sql`
-      UPDATE users
-      SET account_status = 'DELETED', nickname = '已注销用户',
-          student_no = NULL, password_hash = NULL, campus_email = NULL, phone = NULL,
-          deletion_requested_at = NULL, purge_scheduled_at = NULL
-      WHERE id = ${first.userId}
-    `)
-
-    // 旧凭据（学号 + 原密码）不再能登录：purge.test.ts 只在 SQL 层验证唯一键释放，
-    // 这里补的是「端到端仍然如此」。
-    const login = await app.request('/auth/login', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ studentNo, password: 'fish123456' }),
-    })
-    expect(login.status).toBe(401)
-    expect(await errorCodeOf(login)).toBe('INVALID_CREDENTIALS')
-
-    // 同一学号走真实注册端点 → 200，且是**新**账号（旧行原地保留为占位）。
-    const again = await registerWith(studentNo, '重新注册的同学')
-    expect(again.userId).not.toBe(first.userId)
-    const me = await app.request('/me', { headers: { cookie: again.cookie } })
-    expect(me.status).toBe(200)
-  })
-})
-
 describe('管理端只读可见性（对抗性审查 D6）', () => {
   test('GET /admin/users 透出注销状态与冷静期时间戳，且没有删除入口', async () => {
     const target = await register('D6 目标')
@@ -739,8 +679,6 @@ const ALLOWED_WHILE_PENDING = new Set([
  * 403 `ACCOUNT_DELETION_PENDING`），已移出。
  */
 const ANONYMOUS_WRITE_ROUTES = new Set([
-  'POST /auth/login',
-  'POST /auth/register',
   'POST /auth/logout',
   'POST /auth/wechat/session',
   'POST /auth/wechat/scan/ticket',
@@ -861,7 +799,7 @@ describe('写拦截的自维护清单', () => {
 describe('会话与注销态的一致性', () => {
   test('撤回后旧会话不会被复活：被撤销的会话仍然 401', async () => {
     const session = await register('撤销后撤回')
-    const otherCookie = await login(session.studentNo)
+    const otherCookie = await openSession(session.userId)
     expect((await requestDeletion(session.cookie)).status).toBe(200)
     await app.request(DELETION_PATH, { method: 'DELETE', headers: { cookie: session.cookie } })
 

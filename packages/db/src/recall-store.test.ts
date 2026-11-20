@@ -96,8 +96,6 @@ async function createUser(options: { createdAt?: Date } = {}): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `recall-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '召回测试用户',
       ...(options.createdAt === undefined ? {} : { createdAt: options.createdAt }),
     })

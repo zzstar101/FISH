@@ -31,14 +31,10 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
   return []
 }
 
-let seq = 0
-
 async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `moderation-store-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '集成测试',
     })
     .returning({ id: users.id })

@@ -39,8 +39,8 @@ beforeAll(async () => {
   outsiderId = newId()
   listingId = newId()
   await db.insert(users).values([
-    { id: sellerId, studentNo: 'lookup-seller', nickname: '卖家', passwordHash: 'test' },
-    { id: outsiderId, studentNo: 'lookup-buyer', nickname: '买家', passwordHash: 'test' },
+    { id: sellerId, nickname: '卖家' },
+    { id: outsiderId, nickname: '买家' },
   ])
   await db.insert(listingNumbers).values({ listingNo: BigInt(listingNo), listingId })
   await db.insert(listings).values({

@@ -379,6 +379,7 @@ describe('conversation list cache', () => {
     const queryClient = new QueryClient()
     const ownerA: Me = {
       id: 'usr_01jc000000e00800000000000d',
+      uid: '1000000004',
       nickname: '甲',
       avatarUrl: null,
       authStatus: 'UNVERIFIED',

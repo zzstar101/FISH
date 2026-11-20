@@ -32,6 +32,8 @@ const PAGE_OWNER = 'usr_pageowner'
 
 const PROFILE: PublicUserProfile = {
   id: PAGE_OWNER,
+  // #703：公开资料必填人类可读 UID（10 位数字），页面昵称行下方会渲染成「UID 1000000001」
+  uid: '1000000001',
   nickname: '页主',
   avatarUrl: null,
   authStatus: 'VERIFIED',
@@ -497,6 +499,8 @@ describe('他人主页：分段取数失败后的切段与重试（#598 验收 (
 
     // 首屏：「在售」段直接吃 `loadPublicUserHome` 那一份，不额外打列表接口
     expect(textOf(page.tree)).toContain('TA 的在售')
+    // #703：页头昵称（含认证徽章）下方渲染一行 UID，前缀 + 一个空格 + 10 位、不分组
+    expect(textOf(page.tree)).toContain('UID 1000000001')
     expect(textOf(page.tree)).toContain('在售商品')
     expect(harness.segmentCalls).toEqual([])
 

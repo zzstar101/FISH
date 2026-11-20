@@ -25,7 +25,7 @@ export const WechatSessionRequestSchema = z.strictObject({
 
 export type WechatSessionRequest = z.infer<typeof WechatSessionRequestSchema>
 
-/** 与学号登录同构的响应体：`user` + httpOnly 会话 cookie（由 API 层落 Set-Cookie）。 */
+/** 与扫码兑换同构的响应体：`user` + httpOnly 会话 cookie（由 API 层落 Set-Cookie）。 */
 export const WechatSessionResponseSchema = AuthResponseSchema
 
 export type WechatSessionResponse = z.infer<typeof WechatSessionResponseSchema>

@@ -34,15 +34,10 @@ if (!databaseUrl) {
 const db = createDb(databaseUrl)
 const store = createSqlListingStore(db)
 
-let seq = 0
-const uniqueStudentNo = () => `listing-store-${Date.now()}-${seq++}`
-
 async function createUser(client: Db): Promise<string> {
   const rows = await client
     .insert(users)
     .values({
-      studentNo: uniqueStudentNo(),
-      passwordHash: 'test-not-a-real-hash',
       nickname: '集成测试',
     })
     .returning({ id: users.id })

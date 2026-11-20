@@ -12,6 +12,7 @@ const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-
 
 const profile: PublicUserProfile = {
   id: USER_ID,
+  uid: '1234567890',
   nickname: '林一',
   avatarUrl: null,
   authStatus: 'VERIFIED',

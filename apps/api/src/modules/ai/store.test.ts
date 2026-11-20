@@ -21,13 +21,10 @@ const store = createSqlAiPolishStore(db)
 
 const RESERVE_INPUT = { inputChars: 24, model: 'stub', promptVersion: 'test' }
 
-let seq = 0
 async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `ai-polish-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '润色测试用户',
     })
     .returning({ id: users.id })

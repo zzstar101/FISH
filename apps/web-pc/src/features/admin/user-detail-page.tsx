@@ -119,8 +119,7 @@ function UserDetailView({
             <Badge variant={roleView.variant}>{roleView.label}</Badge>
           </h1>
           <p className="mt-1.5 text-ink-3 text-sm">
-            {user.studentNoMasked ?? '无学号（微信注册）'} · 注册于{' '}
-            {formatAdminDateTime(user.createdAt)}
+            UID {user.uid} · 注册于 {formatAdminDateTime(user.createdAt)}
             {user.lastActivityAt === null
               ? ' · 从未登录'
               : ` · 最近活跃 ${formatAdminDateTime(user.lastActivityAt)}`}

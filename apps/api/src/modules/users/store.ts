@@ -13,8 +13,8 @@ import type { ListingCardSeller } from '../listings/card'
  *
  * ## 隐私边界落在**列投影**上，不落在 DTO 上
  *
- * `findPublicUser` 只 SELECT 公开列：`id / nickname / avatar_url / auth_status / created_at`。
- * `student_no` / `campus` / `campus_email` / `password_hash` / `role` **不出现在任何 SELECT 里**
+ * `findPublicUser` 只 SELECT 公开列：`id / uid / nickname / avatar_url / auth_status / created_at`。
+ * `campus_email` / `role` **不出现在任何 SELECT 里**
  * ——契约层就算被人改成 `.passthrough()`，这些列也不会从库里被读出来。这是本域最重要的一行约束：
  * 「不泄漏」靠的是**没查**，不是"查了再删"。
  *
@@ -29,6 +29,8 @@ import type { ListingCardSeller } from '../listings/card'
 /** 公开用户行：**只有**这几列，其余列连查都不查。 */
 export interface PublicUserRow {
   id: string
+  /** 人类可读 UID（#703）：10 位数字字符串，公开主页展示；与 `id` 的协议 ID 并存。 */
+  uid: string
   nickname: string
   avatarUrl: string | null
   authStatus: PublicUserProfile['authStatus']
@@ -131,6 +133,7 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
       const rows = await db
         .select({
           id: users.id,
+          uid: users.uid,
           nickname: users.nickname,
           avatarUrl: users.avatarUrl,
           authStatus: users.authStatus,

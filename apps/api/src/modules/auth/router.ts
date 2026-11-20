@@ -8,7 +8,6 @@ import {
   ScanTicketStatusResponseSchema,
   ScanVerifierSchema,
 } from '@fish/contracts/auth/scan'
-import { LoginRequestSchema, RegisterRequestSchema } from '@fish/contracts/auth/session'
 import {
   SendCodeRequestSchema,
   SendCodeResponseSchema,
@@ -354,44 +353,9 @@ export function createAuthModule(options: {
         ticket: ticket.data,
         verifier: verifier.data,
       })
-      // 与 /auth/login、/auth/wechat/session 同一套 cookie 会话机制。
+      // 与 /auth/wechat/session 同一套 cookie 会话机制。
       cookie.attach(c, token, expiresAt)
       return c.json(ScanExchangeResponseSchema.parse({ user }))
-    } catch (error) {
-      return toErrorResponse(c, error)
-    }
-  })
-
-  // 注册即登录：响应体与 /me 同构，前端不需要再打一次 /auth/login
-  router.post('/register', async (c) => {
-    const parsed = RegisterRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success)
-      return c.json(
-        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
-        422,
-      )
-
-    try {
-      const { user, token, expiresAt } = await service.register(parsed.data)
-      cookie.attach(c, token, expiresAt)
-      return c.json({ user })
-    } catch (error) {
-      return toErrorResponse(c, error)
-    }
-  })
-
-  router.post('/login', async (c) => {
-    const parsed = LoginRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success)
-      return c.json(
-        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
-        422,
-      )
-
-    try {
-      const { user, token, expiresAt } = await service.login(parsed.data)
-      cookie.attach(c, token, expiresAt)
-      return c.json({ user })
     } catch (error) {
       return toErrorResponse(c, error)
     }

@@ -18,9 +18,8 @@ import './index.scss'
  *
  * **契约口径**：只有一条路径 —— 微信 `code` → 会话
  * （`packages/contracts/src/auth/wechat.ts`，#86 A 节的主身份）。
- * 学号 + 密码入口已从小程序端移除（#86 E 线提前到端上执行）；
- * 后端 `POST /auth/login` / `/auth/register` **仍然保留**，因为 web 端还在用，
- * 等 web 也能用微信授权登录后再一起下线。
+ * 学号 + 密码入口已在 #703 连同后端 `POST /auth/login` / `/auth/register` 与凭据列
+ * 一起删除；两端现在都只有微信登录。
  *
  * 与旧版的差异，都按新稿走：
  * - 品牌区 = mark / wordmark 两张图 + 一句 tagline；

@@ -100,6 +100,32 @@
 }
 
 /*
+ * UID 行（#703）：昵称 / 认证徽章行的**下一行**，一行人类可读标识，整行可点复制。
+ * 字号与颜色沿用本页次级文本的既有口径（`--fs-2xs` + `--muted-2`，同数据行 / 页脚那些
+ * 说明文字），不新造颜色；触摸高度 88rpx（44px），与页面其它可点行一致。
+ */
+.uhome__uid {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin-top: 6px;
+  min-height: 44px;
+  box-sizing: border-box;
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+.uhome__uid-tx {
+  font-size: var(--fs-2xs);
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
  * 在线态（#359 第五点）：头像右侧那一列的昵称行下方，一行「绿点 + 文案」。
  *
  * 绿点用系统成功色 `--ok`（认证徽章的描边同款），离线态压成中性灰 `--muted`：

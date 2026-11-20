@@ -74,10 +74,10 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-let seedSerial = 0
-
 type Seeded = {
   userId: string
+  /** #703：uid 由 DB 默认值生成，去标识化时原地保留，用例要断言它没被清掉。 */
+  uid: string
   counterpartyId: string
   listingOwnedActive: string
   listingOwnedSold: string
@@ -91,12 +91,10 @@ async function seed(input: {
   withPendingTransactionAsBuyer?: boolean
   withPendingTransactionAsSeller?: boolean
   nickname?: string
-  studentNo?: string
   campusEmail?: string
   phone?: string
   openid?: string
 }): Promise<Seeded> {
-  const serial = seedSerial++
   const userId = newId()
   const counterpartyId = newId()
   const accountStatus = input.accountStatus ?? 'DELETION_REQUESTED'
@@ -105,23 +103,24 @@ async function seed(input: {
   const purgeScheduledAt =
     accountStatus === 'DELETION_REQUESTED' ? (input.purgeScheduledAt ?? DUE) : null
 
-  await db.insert(users).values({
-    id: userId,
-    studentNo: input.studentNo ?? `2023${String(serial).padStart(4, '0')}0001`,
-    passwordHash: 'test-hash',
-    nickname: input.nickname ?? '注销验收用户',
-    avatarUrl: 'https://cdn.test/avatar.png',
-    signature: '原签名',
-    campusEmail: input.campusEmail ?? null,
-    phone: input.phone ?? null,
-    accountStatus,
-    deletionRequestedAt: requestedAt,
-    purgeScheduledAt,
-  })
+  const targetRows = await db
+    .insert(users)
+    .values({
+      id: userId,
+      nickname: input.nickname ?? '注销验收用户',
+      avatarUrl: 'https://cdn.test/avatar.png',
+      signature: '原签名',
+      campusEmail: input.campusEmail ?? null,
+      phone: input.phone ?? null,
+      accountStatus,
+      deletionRequestedAt: requestedAt,
+      purgeScheduledAt,
+    })
+    .returning({ uid: users.uid })
+  const uid = targetRows[0]?.uid
+  if (!uid) throw new Error('insert users 未返回行')
   await db.insert(users).values({
     id: counterpartyId,
-    studentNo: `2023${String(serial).padStart(4, '0')}0002`,
-    passwordHash: 'test-hash',
     nickname: '对手用户',
   })
 
@@ -153,7 +152,7 @@ async function seed(input: {
     await db.insert(wechatIdentities).values({ id: newId(), userId, openid: input.openid })
   }
 
-  return { userId, counterpartyId, listingOwnedActive, listingOwnedSold, listingOther }
+  return { userId, uid, counterpartyId, listingOwnedActive, listingOwnedSold, listingOther }
 }
 
 async function seedListing(sellerId: string, status: 'ACTIVE' | 'SOLD'): Promise<string> {
@@ -380,12 +379,12 @@ describe('到期去标识化：整份隐私清掉，历史证据留下', () => {
       .where(eq(feedback.userId, userId))
     expect(feedbackRow).toEqual({ contact: null, content: '发布页提交按钮没反应' })
 
-    // ② users 行原地去标识化：昵称是占位串（notNull 不能置空），凭据与唯一键全部释放。
+    // ② users 行原地去标识化：昵称是占位串（notNull 不能置空），联系方式全部清空；
+    // uid 是随机生成、不含个人信息的标识（#703），原地保留 —— 它不构成凭据。
     const [row] = await db.select().from(users).where(eq(users.id, userId))
     expect(row?.nickname).toBe(DELETED_ACCOUNT_NICKNAME)
     expect(row?.accountStatus).toBe('DELETED')
-    expect(row?.studentNo).toBeNull()
-    expect(row?.passwordHash).toBeNull()
+    expect(row?.uid).toBe(seeded.uid)
     expect(row?.campusEmail).toBeNull()
     expect(row?.phone).toBeNull()
     expect(row?.avatarUrl).toBeNull()
@@ -529,18 +528,20 @@ describe('到期时的资格复查', () => {
 })
 
 describe('唯一键释放', () => {
-  test('注销后可以用同一学号 / 校园邮箱 / 手机号 / 微信 openid 重新注册', async () => {
-    const studentNo = `2024${String(process.pid % 10000).padStart(4, '0')}0001`
+  test('uid 原地保留，校园邮箱 / 手机号 / 微信 openid 注销后可以重新占用', async () => {
     const campusEmail = `reuse-${process.pid}@example.com`
     const phone = `138${String(process.pid % 100000000).padStart(8, '0')}`
     const openid = `openid-reuse-${process.pid}`
-    const seeded = await seed({ purgeScheduledAt: DUE, studentNo, campusEmail, phone, openid })
+    const seeded = await seed({ purgeScheduledAt: DUE, campusEmail, phone, openid })
 
-    // 注销前：唯一键被占用，插同一个值必然撞唯一约束。
+    // 注销前：三项都被占用，插同一个值必然撞唯一约束。
     await expectUniqueViolation(
-      () =>
-        db.insert(users).values({ id: newId(), studentNo, passwordHash: 'x', nickname: '重名' }),
-      'users_student_no_unique',
+      () => db.insert(users).values({ id: newId(), nickname: '重名', campusEmail }),
+      'users_campus_email_uq',
+    )
+    await expectUniqueViolation(
+      () => db.insert(users).values({ id: newId(), nickname: '重号', phone }),
+      'users_phone_unique',
     )
     await expectUniqueViolation(
       () =>
@@ -552,19 +553,22 @@ describe('唯一键释放', () => {
       (await outcomeOf(await purgeDueAccountDeletions({ db, now: NOW }), seeded.userId))?.kind,
     ).toBe('purged')
 
-    // 注销后：同一个学号 / 邮箱 / 手机号能拿到新账号（旧行仍留在库里，只是不再占用唯一键）。
+    // 注销后：uid 仍原地占用（不回收 —— 去标识化不换身份，历史外键与审计仍指向同一行）。
+    const [purged] = await db.select().from(users).where(eq(users.id, seeded.userId))
+    expect(purged?.uid).toBe(seeded.uid)
+    await expectUniqueViolation(
+      () => db.insert(users).values({ id: newId(), uid: seeded.uid, nickname: '复用 uid' }),
+      'users_uid_uq',
+    )
+
+    // 三项联系方式释放给新账号：旧行仍留在库里，只是不再占用唯一键。
     const nextUserId = newId()
-    await db.insert(users).values({
-      id: nextUserId,
-      studentNo,
-      passwordHash: 'new-hash',
-      nickname: '重新注册用户',
-      campusEmail,
-      phone,
-    })
+    await db.insert(users).values({ id: nextUserId, nickname: '重新注册用户', campusEmail, phone })
     await db.insert(wechatIdentities).values({ id: newId(), userId: nextUserId, openid })
     const [reborn] = await db.select().from(users).where(eq(users.id, nextUserId))
     expect(reborn?.accountStatus).toBe('ACTIVE')
-    expect(reborn?.studentNo).toBe(studentNo)
+    expect(reborn?.campusEmail).toBe(campusEmail)
+    expect(reborn?.phone).toBe(phone)
+    expect(reborn?.uid).not.toBe(seeded.uid)
   })
 })

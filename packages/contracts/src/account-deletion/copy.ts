@@ -37,7 +37,8 @@ export const DELETION_CONSEQUENCES: readonly DeletionConsequence[] = [
   },
   {
     title: '到期后个人资料不可恢复',
-    detail: '昵称、头像、签名、学号、校园邮箱、手机号与微信绑定会被清除，账号无法再登录。',
+    detail:
+      '昵称、头像、签名、校园邮箱、手机号与微信绑定会被清除，账号无法再登录；UID 保留、不回收。',
   },
   {
     title: '历史记录保留但不显示你的资料',
