@@ -21,6 +21,7 @@ function card(overrides: Partial<ListingCard> = {}): ListingCard {
     category: 'BOOKS',
     condition: 'LIKE_NEW',
     status: 'ACTIVE',
+    listingType: 'SALE',
     urgent: false,
     negotiable: false,
     free: false,

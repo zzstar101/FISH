@@ -172,6 +172,7 @@ export function createRankEvalStore(db: Db): RankEvalStore {
         WHERE l.status = 'ACTIVE'
           AND l.moderation_status = 'APPROVED'
           AND l.governance_delisted_at IS NULL
+          AND l.listing_type = 'SALE'
           AND l.created_at < ${until}
       `)
 

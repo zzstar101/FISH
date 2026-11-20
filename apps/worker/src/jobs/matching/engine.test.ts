@@ -389,6 +389,38 @@ describe('matchListing', () => {
 })
 
 describe('matchWish', () => {
+  /*
+   * #705 RNT-01：许愿匹配是买卖链路，出租商品不进候选集。这条用例是 worker 侧唯一的
+   * RENTAL 覆盖 —— 去掉 `narrowedListings` 里的 `listing_type = 'SALE'` 会在这里红。
+   */
+  test('不匹配 RENTAL 商品（买卖链路只认 SALE）', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const saleId = await createListing(sellerId, keyword)
+      const rentalId = await createListing(sellerId, keyword, { listingType: 'RENTAL' })
+      const wishId = await createWish(buyerId, keyword)
+
+      await engine.matchWish(wishId)
+
+      expect(await matchRows(saleId, wishId)).toHaveLength(1)
+      expect(await matchRows(rentalId, wishId)).toHaveLength(0)
+    })
+  })
+
+  test('#705 matchListing 对 RENTAL 商品是 no-op（不建匹配行、不发通知）', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const rentalId = await createListing(sellerId, keyword, { listingType: 'RENTAL' })
+      const wishId = await createWish(buyerId, keyword)
+
+      const result = await engine.matchListing(rentalId)
+
+      expect(result.skipped).toBe('target-not-active')
+      expect(await matchRows(rentalId, wishId)).toHaveLength(0)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(0)
+    })
+  })
+
   test('只匹配在售商品，且不发通知给卖家', async () => {
     await withFixture(async ({ sellerId, buyerId }) => {
       const keyword = uniqueKeyword()

@@ -62,6 +62,7 @@ function card(over: Partial<ListingCard> = {}): ListingCard {
     category: 'SPORTS',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE',
     urgent: false,
     negotiable: true,
     free: false,

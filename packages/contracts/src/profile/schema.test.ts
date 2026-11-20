@@ -21,6 +21,7 @@ const listingCard = {
   category: 'DIGITAL',
   condition: 'GOOD',
   status: 'OFFLINE', // 本人视角可见非在售状态
+  listingType: 'SALE',
   urgent: false,
   negotiable: true,
   free: false,

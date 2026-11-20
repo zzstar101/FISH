@@ -40,7 +40,12 @@ import type { ListingCardSource } from '../listings/card'
  * 商品建向量（包括未过审的），可见性只在这里把关——这样审核状态变化后不必重算向量。
  */
 function publicListingVisibility() {
-  return and(eq(listings.status, 'ACTIVE'), publicModerationVisibility())
+  // #705：识图搜索是买卖侧功能，只认 SALE —— 与公开 feed 的类型条件同口径。
+  return and(
+    eq(listings.status, 'ACTIVE'),
+    eq(listings.listingType, 'SALE'),
+    publicModerationVisibility(),
+  )
 }
 
 /**
@@ -210,6 +215,7 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
           category: listings.category,
           condition: listings.condition,
           status: listings.status,
+          listingType: listings.listingType,
           urgent: listings.urgent,
           negotiable: listings.negotiable,
           free: listings.free,
@@ -247,6 +253,8 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
           and(
             eq(listings.category, input.category),
             eq(listings.status, 'SOLD'),
+            // #705：成交均价只取出售商品 —— 出租商品的 `price_cents` 是日租价，混进来会把均价拉垮。
+            eq(listings.listingType, 'SALE'),
             publicModerationVisibility(),
             // 与召回侧同一个谓词函数：统计口径与"能不能被本人搜到"不能各写一遍。
             excludeOwnListings(input.excludeSellerId),

@@ -90,6 +90,9 @@ export function createFavoriteService({
   async function requireFavoritableListing(listingId: string): Promise<void> {
     const state = await store.listingState(listingId)
     if (state === null) throw listingNotFound()
+    // #705：收藏是买卖侧的能力，出租商品不在这里收藏（与 `listFavorites` 的 SALE 条件一致，
+    // 否则会出现「收藏成功却永远不在收藏列表里」的幽灵条目）。
+    if (state.listingType !== 'SALE') throw listingNotFound()
     if (state.status !== 'ACTIVE') throw listingNotFound()
     if (state.moderationStatus !== 'APPROVED') throw listingNotFound()
     if (state.governanceDelistedAt !== null) throw listingNotFound()
@@ -107,6 +110,10 @@ export function createFavoriteService({
   async function requireVisibleListing(listingId: string, viewerId: string): Promise<void> {
     const state = await store.listingState(listingId)
     if (state === null) throw listingNotFound()
+    // #705：出租商品在买卖侧没有「收藏态」这一说。与「不可见」同码（404），否则
+    // `GET /me/favorites/:id` 会变成「这个 lst_ id 存在且是出租」的探针 —— 其它不可见原因
+    // （OFFLINE / 未过审 / 治理下架）本来都统一 404。
+    if (state.listingType !== 'SALE') throw listingNotFound()
     const invisible = state.status === 'OFFLINE' || state.moderationStatus !== 'APPROVED'
     if (invisible && state.sellerId !== viewerId) throw listingNotFound()
   }

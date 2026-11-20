@@ -22,6 +22,7 @@ const listing: ListingDetail = {
   category: 'OTHER',
   condition: 'GOOD',
   status: 'ACTIVE',
+  listingType: 'SALE',
   urgent: false,
   negotiable: false,
   free: false,

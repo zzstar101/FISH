@@ -231,8 +231,11 @@ const detailSelect = (viewerId: string) => sql`
 export function createSqlConversationStore(db: Db): ConversationStore {
   return {
     async findListingBrief(listingId) {
+      // #705：会话是买卖域的双人会话，出租商品的会话由租赁域自己建。
+      // 判据落在**读这一行**的地方：`createOrGetConversation` 与 `getWatchers` 都从这里过，
+      // 少了它，出租会拿到一条「售价卡片 + 想要的人」的买卖会话。
       const result = await db.execute(
-        sql`SELECT id, seller_id FROM listings WHERE id = ${listingId}`,
+        sql`SELECT id, seller_id FROM listings WHERE id = ${listingId} AND listing_type = 'SALE'`,
       )
       const row = rowsOf(result)[0]
       return row ? { id: row.id as string, sellerId: row.seller_id as string } : null

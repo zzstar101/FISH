@@ -348,6 +348,7 @@ function feedCard(id: string) {
     category: 'OTHER' as const,
     condition: 'GOOD' as const,
     status: 'ACTIVE' as const,
+    listingType: 'SALE' as const,
     urgent: false,
     negotiable: false,
     free: false,

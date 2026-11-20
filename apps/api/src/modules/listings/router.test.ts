@@ -23,6 +23,7 @@ const detail = {
   category: 'DIGITAL',
   condition: 'GOOD',
   status: 'ACTIVE',
+  listingType: 'SALE' as const,
   urgent: false,
   negotiable: true,
   free: false,

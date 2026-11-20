@@ -393,6 +393,7 @@ describe('createVisualSearchStore', () => {
       category: 'DIGITAL',
       condition: 'GOOD',
       status: 'ACTIVE',
+      listingType: 'SALE',
       urgent: true,
       negotiable: true,
       free: false,

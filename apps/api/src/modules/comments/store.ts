@@ -119,6 +119,8 @@ const myCommentColumns = {
   category: listings.category,
   condition: listings.condition,
   status: listings.status,
+  /** #705：卡片契约必填；「我发过的留言」只查 SALE 商品。 */
+  listingType: listings.listingType,
   urgent: listings.urgent,
   negotiable: listings.negotiable,
   free: listings.free,
@@ -159,10 +161,13 @@ function cursorCondition(cursor: CommentCursor): SQL {
 export function createSqlCommentStore(db: Db): CommentStore {
   return {
     async findListingSellerId(listingId) {
+      // #705：留言是买卖侧的能力，出租商品按「不存在」处理（与 `GET /listings/:id` 对
+      // 出租商品的 404 同口径）。不加这一条的话，`lst_` id 共用空间会让
+      // `/listings/:id/comments` 成为一条可读、可写的出租页面 —— 端上却打不开详情。
       const rows = await db
         .select({ sellerId: listings.sellerId })
         .from(listings)
-        .where(eq(listings.id, listingId))
+        .where(and(eq(listings.id, listingId), eq(listings.listingType, 'SALE')))
         .limit(1)
       return rows[0]?.sellerId ?? null
     },
@@ -213,7 +218,9 @@ export function createSqlCommentStore(db: Db): CommentStore {
     },
 
     async listByAuthor(authorId, limit, cursor) {
-      const conditions: SQL[] = [eq(comments.authorId, authorId)]
+      // #705：这是买卖侧的「我发过的留言」，卡片契约要求 `listingType`；只展示 SALE 商品，
+      // 与 `countByAuthor` 逐字同条件。
+      const conditions: SQL[] = [eq(comments.authorId, authorId), eq(listings.listingType, 'SALE')]
       if (cursor) conditions.push(cursorCondition(cursor))
 
       return db
@@ -227,10 +234,12 @@ export function createSqlCommentStore(db: Db): CommentStore {
     },
 
     async countByAuthor(authorId) {
+      // #705：与 `listByAuthor` 逐字同条件（含 SALE），否则「共 N 条」与列表条数分叉。
       const rows = await db
         .select({ total: sql<number>`count(*)::int` })
         .from(comments)
-        .where(eq(comments.authorId, authorId))
+        .innerJoin(listings, eq(listings.id, comments.listingId))
+        .where(and(eq(comments.authorId, authorId), eq(listings.listingType, 'SALE')))
       return Number(rows[0]?.total ?? 0)
     },
 

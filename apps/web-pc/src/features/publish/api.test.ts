@@ -156,6 +156,7 @@ describe('publish API', () => {
           category: 'BOOKS',
           condition: 'LIKE_NEW',
           status: 'OFFLINE',
+          listingType: 'SALE',
           urgent: false,
           negotiable: false,
           free: false,

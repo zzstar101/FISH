@@ -575,6 +575,9 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           count(*) FILTER (WHERE status = 'OFFLINE')::int  AS offline
         FROM ${listings}
         WHERE seller_id = ${userId}
+          -- #705：这四个计数配的是「该卖家的商品」面板，与出售域同口径，只算 SALE。
+          -- 出租商品的管理视图由租赁域自己的后台承接。
+          AND listing_type = 'SALE'
       `)
       const row = rowsOf(result)[0]
       if (!row) throw new Error('Admin 商品状态统计未返回行')
@@ -587,7 +590,9 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
     },
 
     async listListings(criteria) {
-      const conditions: SQL[] = []
+      // #705：管理端的商品列表是**出售域**列表（价格语义 = 售价，状态机 = 买卖的四态）。
+      // 出租商品的价格是日租价，混进这张表就会以售价样式展示，因此在这里收口。
+      const conditions: SQL[] = [sql`${sql.raw('l.listing_type')} = 'SALE'`]
       if (criteria.q) conditions.push(listingSearchCondition('l', criteria.q))
       if (criteria.status) conditions.push(sql`${sql.raw('l.status')} = ${criteria.status}`)
       if (criteria.sellerId) conditions.push(sql`${sql.raw('l.seller_id')} = ${criteria.sellerId}`)
@@ -665,7 +670,9 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         })
         .from(listings)
         .innerJoin(users, eq(users.id, listings.sellerId))
-        .where(eq(listings.id, listingId))
+        // #705：与 `listListings` 同口径 —— 管理端商品详情只服务出售域，
+        // 出租商品的详情由租赁域的后台承接（避免日租价被当作售价处置）。
+        .where(and(eq(listings.id, listingId), eq(listings.listingType, 'SALE')))
         .limit(1)
 
       const listing = listingRows[0]
@@ -705,7 +712,10 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           (SELECT count(*)::int FROM ${users})                                   AS total_users,
           (SELECT count(*)::int FROM ${users}
             WHERE created_at >= now() - interval '24 hours')                     AS new_users_24h,
-          (SELECT count(*)::int FROM ${listings} WHERE status = 'ACTIVE')        AS active_listings,
+          -- #705：运营概览的「在售商品数」是**出售**口径，不能把日租商品算进来
+          -- （出租的入口与指标由租赁域自己统计）。
+          (SELECT count(*)::int FROM ${listings}
+            WHERE status = 'ACTIVE' AND listing_type = 'SALE')                   AS active_listings,
           (SELECT count(*)::int FROM ${transactions} WHERE status = 'COMPLETED') AS completed_transactions,
           (SELECT count(*)::int FROM ${listings} WHERE moderation_status = 'REVIEW') AS pending_review_records,
           (SELECT count(*)::int FROM ${reports} WHERE status = 'PENDING')      AS pending_reports,

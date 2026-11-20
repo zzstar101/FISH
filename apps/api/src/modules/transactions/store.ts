@@ -34,6 +34,11 @@ export interface TxBrief {
    * 随 `listingStatus` 在同一次 JOIN 里取回，不额外发一次查询。
    */
   listingPriceCents: number
+  /**
+   * #705：商品类型。买卖域只接受 `SALE` —— 出租商品的会话由租赁域自己建，
+   * 交易写路径（提案 / 接单）对它一律按「不可交易」处理，且判据要在事务内重读时才生效。
+   */
+  listingType: 'SALE' | 'RENTAL'
 }
 
 /** 会话定位失败的原因细分：service 据此映射 404 / 403 / 409。 */
@@ -48,6 +53,8 @@ export type ProposalWriteResult =
   | { kind: 'ok'; message: MessageRow }
   | { kind: 'price-mismatch' }
   | { kind: 'listing-gone' }
+  /** #705：商品类型不是 `SALE`（出租商品没有买卖提案语义）。 */
+  | { kind: 'listing-not-sale' }
 
 /**
  * 接受的结果细分：条件更新失败 = 商品已非 ACTIVE（并发输掉或状态漂移）；
@@ -330,7 +337,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
     async findConversation(conversationId, viewerId) {
       const result = await db.execute(sql`
         SELECT c.id, c.buyer_id, c.seller_id, c.listing_id, l.status::text AS listing_status,
-               l.price_cents AS listing_price_cents
+               l.price_cents AS listing_price_cents, l.listing_type::text AS listing_type
         FROM conversations c JOIN listings l ON l.id = c.listing_id
         WHERE c.id = ${conversationId} AND ${viewerId} IN (c.buyer_id, c.seller_id)
       `)
@@ -345,6 +352,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           listingId: row.listing_id as string,
           listingStatus: row.listing_status as string,
           listingPriceCents: row.listing_price_cents as number,
+          listingType: row.listing_type as 'SALE' | 'RENTAL',
         },
       }
     },
@@ -355,13 +363,21 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
          * `FOR SHARE` 给这一行加共享锁：期间并发 `UPDATE listings SET price_cents` 必须等
          * 本事务提交。所以这次读到的挂价就是提案落地瞬间的挂价 —— 「校验完再被改」的
          * 窗口不存在，#676 审查留下的过期提案因此不会出现。
+         *
+         * #705：同一次锁读里把 `listing_type` 也取回来并在锁内判定 —— 类型创建后不可互转，
+         * 但把判据放进事务内能保证「会话读到 SALE → 提案落库」这中间不出现契约漂移；
+         * 出租商品的提案一条 SYSTEM 消息都不写。
          */
         const locked = await tx.execute(sql`
-          SELECT price_cents FROM listings WHERE id = ${brief.listingId} FOR SHARE
+          SELECT price_cents, listing_type::text AS listing_type
+          FROM listings WHERE id = ${brief.listingId} FOR SHARE
         `)
         const row = rowsOf(locked)[0]
         // 商品在两步之间被物理删除（#74 的删除路径）：已无挂价可校验，谈不上「等于」。
         if (!row) return { kind: 'listing-gone' as const }
+        // #705：出租商品不产生买卖提案。与 `listing-gone` 同一分支（服务层映射成 409
+        // `LISTING_NOT_ACTIVE` / 语义上的「不可交易」），一条消息都不写。
+        if (String(row.listing_type) !== 'SALE') return { kind: 'listing-not-sale' as const }
         // `Number(...)` 只为兜住驱动把 integer 解成字符串的实现差异，不改变比较口径
         if (Number(row.price_cents) !== amountCents) return { kind: 'price-mismatch' as const }
         const message = await insertSystemWithin(tx, brief.id, content)
@@ -442,11 +458,15 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             return { kind: 'buyer-account-inactive' }
           }
 
-          // ① 条件更新锁定 Listing：0 行 = 已被并发买家锁定 / 已售 / 已下架。
+          // ① 条件更新锁定 Listing：0 行 = 已被并发买家锁定 / 已售 / 已下架 / 不是出售商品。
           // ② 部分唯一索引 transactions_listing_id_live_uq 兜底同一 listing 的第二笔 live 交易。
+          //
+          // #705：`listing_type = 'SALE'` 写进**条件本身**而不是先查一次再判 —— 判定与占用
+          // 对同一行原子，出租商品永远不会被这笔条件更新命中，因此也不可能走到 `RESERVED`
+          // 或 `SOLD`。这是「RENTAL 无法写入 transactions」的最后一道闸，不依赖 service 的前置校验。
           const lock = await tx.execute(sql`
           UPDATE listings SET status = 'RESERVED', updated_at = clock_timestamp()
-          WHERE id = ${brief.listingId} AND status = 'ACTIVE'
+          WHERE id = ${brief.listingId} AND status = 'ACTIVE' AND listing_type = 'SALE'
           RETURNING id
         `)
           if (rowsOf(lock).length === 0) return { kind: 'listing-not-active' }

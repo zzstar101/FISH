@@ -43,6 +43,7 @@ function listingRow(overrides: Partial<PublicListingRow> = {}): PublicListingRow
     category: 'DAILY',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     urgent: false,
     negotiable: true,
     free: false,

@@ -415,6 +415,11 @@ export function createTransactionService({
       if (brief.listingStatus !== 'ACTIVE') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
+      // #705：出租商品没有买卖提案语义。前置快照先挡一次（省一次事务往返），真正的判据在
+      // `store.propose` 的锁内（见那里的 `listing-not-sale`）。
+      if (brief.listingType !== 'SALE') {
+        throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
+      }
       /*
        * #676：改价权归卖家 —— 提案金额必须等于**该商品当前的挂价**，免费送即 0
        * （契约 §1 的 `free ⟹ priceCents === 0` 由 DB 约束 `listings_free_price_cents_zero`
@@ -445,6 +450,11 @@ export function createTransactionService({
       if (written.kind === 'price-mismatch') throw proposalAmountMismatch()
       // 商品在这两步之间被物理删除：已无挂价可校验，与「不在售」同一语义（409，不新增码）
       if (written.kind === 'listing-gone') {
+        throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
+      }
+      // #705：锁内重读发现类型不是 `SALE` —— 与「不在售」同一语义、同一码（不新增错误码，
+      // 老客户端已能翻译这个码）。一条 SYSTEM 消息都没写。
+      if (written.kind === 'listing-not-sale') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
       onSystemMessage?.({ buyerId: brief.buyerId, sellerId: brief.sellerId }, written.message)
@@ -495,6 +505,11 @@ export function createTransactionService({
           'NOT_CONVERSATION_SELLER',
           '只有卖家可以接受交易确认',
         )
+      }
+      // #705：前置快照挡一次（省一次事务往返）。真正的闸在 `store.accept` 的条件更新里
+      // （`AND listing_type = 'SALE'`）—— 那里对同一行原子，无法被绕过。
+      if (brief.listingType !== 'SALE') {
+        throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
 
       // content 由本层序列化（契约的唯一出口 systemEventContent），但 transactionId 只有

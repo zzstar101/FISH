@@ -60,6 +60,8 @@ export interface PublicListingRow {
   category: ListingCard['category']
   condition: ListingCard['condition']
   status: ListingCard['status']
+  /** #705：卡片契约必填。本读路径只查 SALE，字段直接来自行。 */
+  listingType: ListingCard['listingType']
   urgent: boolean
   negotiable: boolean
   free: boolean
@@ -170,10 +172,12 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
         SELECT
           (SELECT count(*)::int FROM listings
             WHERE seller_id = ${userId} AND status = 'ACTIVE'
-              AND moderation_status = 'APPROVED') AS active_listings,
+              AND moderation_status = 'APPROVED'
+              AND listing_type = 'SALE') AS active_listings,
           (SELECT count(*)::int FROM listings
             WHERE seller_id = ${userId} AND status = 'SOLD'
-              AND governance_delisted_at IS NULL) AS sold_count
+              AND governance_delisted_at IS NULL
+              AND listing_type = 'SALE') AS sold_count
       `)
       const row = firstRowOf(result)
       if (!row) throw new Error('公开用户统计查询未返回行')
@@ -189,6 +193,9 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
         // #565：口径由调用方给（在售 / 已售出）。已售出只认 `status = 'SOLD'`，
         // 与在售一样是"公开可读"的：售出是成交事实，不是下架。
         eq(listings.status, status),
+        // #705：TA 的主页在售/已售段是**买卖侧**读路径，只认 SALE —— 与上面的 stats
+        // 计数逐字同条件，否则段头数字与列表条数会分叉。
+        eq(listings.listingType, 'SALE'),
       ]
 
       // 公开可见性的第二道闸，**只在在售段生效**（与 listings feed 的
@@ -222,6 +229,7 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
           category: listings.category,
           condition: listings.condition,
           status: listings.status,
+          listingType: listings.listingType,
           urgent: listings.urgent,
           negotiable: listings.negotiable,
           free: listings.free,

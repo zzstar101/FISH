@@ -16,6 +16,7 @@ function row(overrides: Partial<ViewHistoryRow> = {}): ViewHistoryRow {
     category: 'DIGITAL',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     urgent: false,
     negotiable: true,
     free: false,

@@ -33,6 +33,12 @@ export type ListingCardSource = {
   category: ListingCard['category']
   condition: ListingCard['condition']
   status: ListingCard['status']
+  /**
+   * #705：商品类型。**必填**——DB 列 `NOT NULL DEFAULT 'SALE'`，任何一条查出来的行都带。
+   * 旧买卖通道自身只查 `SALE`（过滤在 store 的 SQL 里），出租域用自己的投影与读路径，
+   * 所以这里不能给默认值：值来自行本身，不在映射层猜。
+   */
+  listingType: ListingCard['listingType']
   urgent: boolean
   negotiable: boolean
   free: boolean
@@ -87,6 +93,7 @@ export function toListingCard(
     category: listing.category,
     condition: listing.condition,
     status: listing.status,
+    listingType: listing.listingType,
     urgent: listing.urgent,
     negotiable: listing.negotiable,
     free: listing.free,

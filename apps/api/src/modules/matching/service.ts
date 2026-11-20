@@ -76,6 +76,10 @@ export function createMatchingService(deps: {
     async listByListing(userId, listingId, limit) {
       const listing = await store.findListing(listingId)
       if (!listing) throw notFound()
+      // #705：出租商品不参与买卖侧匹配。对所有视角一律 404（连卖家也一样），
+      // 与 `GET /listings/:id` 对出租商品的 404 同口径 —— 而不是给一个空列表，
+      // 空列表会让端上以为「匹配功能正常但恰好没有结果」。
+      if (listing.listingType !== 'SALE') throw notFound()
       if (listing.ownerId !== userId) {
         // #6 的取向：`OFFLINE` 商品对非卖家返 404 而不是 403 —— 403 等于确认"这个 id 存在
         // 且是别人的商品"（`apps/api/src/modules/listings/service.ts:192-193`）。这里保持一致，

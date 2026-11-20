@@ -132,6 +132,7 @@ describe('我的评论 · 真实数据适配器', () => {
     category: 'DAILY',
     condition: 'LIKE_NEW',
     status: 'ACTIVE',
+    listingType: 'SALE',
     urgent: false,
     negotiable: true,
     free: false,

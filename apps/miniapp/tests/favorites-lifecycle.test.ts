@@ -105,6 +105,7 @@ const response = MyFavoritesResponseSchema.parse({
       title: `Favorite ${id}`,
       priceCents: 1000,
       status: 'ACTIVE',
+      listingType: 'SALE',
       category: 'OTHER',
       condition: 'GOOD',
       urgent: false,

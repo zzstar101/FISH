@@ -211,6 +211,7 @@ describe('favorite store (integration)', () => {
     expect(await store.listingState(listingA)).toEqual({
       status: 'ACTIVE',
       moderationStatus: 'APPROVED',
+      listingType: 'SALE',
       governanceDelistedAt: null,
       sellerId: seller,
     })

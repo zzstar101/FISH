@@ -22,6 +22,7 @@ function listing(id: string, overrides: Record<string, unknown> = {}): MockListi
     sub: '',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE',
     urgent: false,
     negotiable: false,
     free: false,

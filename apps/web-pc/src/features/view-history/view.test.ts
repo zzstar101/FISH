@@ -26,6 +26,7 @@ function item(viewedAt: string, title = '商品'): ViewHistoryItem {
       category: 'OTHER',
       condition: 'GOOD',
       status: 'ACTIVE',
+      listingType: 'SALE',
       urgent: false,
       negotiable: false,
       free: false,

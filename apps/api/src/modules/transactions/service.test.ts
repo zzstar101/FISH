@@ -55,6 +55,7 @@ class MemoryTxStore implements TransactionStore {
           sellerId: seller,
           listingId: listingA,
           listingStatus: 'ACTIVE',
+          listingType: 'SALE',
           // 与 listingBriefs 的摘要同价：提案金额必须等于挂价（#676）
           listingPriceCents: 16000,
         },
@@ -420,12 +421,34 @@ describe('transaction service: propose / reject / accept', () => {
         sellerId: seller,
         listingId: listingA,
         listingStatus: 'RESERVED',
+        listingType: 'SALE',
         listingPriceCents: 16000,
       },
     })
     expect(
       service.propose(buyer, { conversationId: conversationA, amountCents: 1 }),
     ).rejects.toMatchObject({ status: 409, code: 'LISTING_NOT_ACTIVE' })
+  })
+
+  test('#705 RENTAL 商品不能提买卖提案：409 LISTING_NOT_ACTIVE，一条 SYSTEM 消息都不写', async () => {
+    const { store, service, messages, notifications } = await build()
+    store.conversations.set(conversationA, {
+      kind: 'ok',
+      brief: {
+        id: conversationA,
+        buyerId: buyer,
+        sellerId: seller,
+        listingId: listingA,
+        listingStatus: 'ACTIVE',
+        listingType: 'RENTAL',
+        listingPriceCents: 16000,
+      },
+    })
+    await expect(
+      service.propose(buyer, { conversationId: conversationA, amountCents: 16000 }),
+    ).rejects.toMatchObject({ status: 409, code: 'LISTING_NOT_ACTIVE' })
+    expect(messages.messages).toHaveLength(0)
+    expect(notifications).toHaveLength(0)
   })
 
   test('#676 提案金额 ≠ 挂价 → 422 PROPOSAL_AMOUNT_MISMATCH（不落消息、不发通知）', async () => {
@@ -448,6 +471,7 @@ describe('transaction service: propose / reject / accept', () => {
         sellerId: seller,
         listingId: listingA,
         listingStatus: 'ACTIVE',
+        listingType: 'SALE',
         listingPriceCents: 0,
       },
     })
