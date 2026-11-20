@@ -463,7 +463,14 @@ export function createAdminRouter(options: AdminRouterOptions) {
   // 暴露给浏览器，只有这一条经 admin 守卫的流式读取。
   router.get('/reports/:reportId/evidence-media', async (c) => {
     try {
-      const media = await reportsService.getEvidenceMedia(requireReportId(c))
+      // M7：评价最多带多张配图，`index` 选择第几张（默认 0）；非法下标按「快照不存在」处理。
+      const indexParam = c.req.query('index')
+      const index = indexParam === undefined ? 0 : Number(indexParam)
+      if (!Number.isInteger(index) || index < 0) {
+        c.status(404)
+        return c.json(errorBody('REPORT_NOT_FOUND', '举报证据快照不存在'))
+      }
+      const media = await reportsService.getEvidenceMedia(requireReportId(c), index)
       const object = media?.objectKey ? options.storage.getObject?.(media.objectKey) : null
       if (!object) {
         c.status(404)

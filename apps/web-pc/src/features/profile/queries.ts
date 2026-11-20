@@ -3,6 +3,7 @@ import type { ListingId } from '@fish/contracts/system/public-id'
 import type {
   TransactionReview,
   TransactionReviewCreateInput,
+  TransactionReviewsResponse,
 } from '@fish/contracts/transaction-reviews/schema'
 import type { QueryClient } from '@tanstack/react-query'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -20,6 +21,7 @@ import {
   fetchMyReview,
   fetchProfile,
   fetchTransaction,
+  fetchTransactionReviews,
   fetchTransactions,
   issueMeetupToken,
   type MyListingStatusFilter,
@@ -53,6 +55,8 @@ export const profileKeys = {
     ['pc', 'profile', 'meetup-token', ownerId, transactionId] as const,
   review: (ownerId: string, transactionId: string) =>
     ['pc', 'profile', 'review', ownerId, transactionId] as const,
+  transactionReviews: (ownerId: string, transactionId: string) =>
+    ['pc', 'profile', 'transaction-reviews', ownerId, transactionId] as const,
 }
 
 type SessionMutationContext = { generation: number }
@@ -252,6 +256,19 @@ export function useMyReview(ownerId: string, transactionId: string) {
   return useQuery({
     queryKey: profileKeys.review(ownerId, transactionId),
     queryFn: () => fetchMyReview(transactionId),
+    enabled: ownerId !== '' && transactionId !== '',
+    staleTime: 15_000,
+  })
+}
+
+/**
+ * 一笔交易下双方的评价（#694 M7）：订单详情展示「对方的评价」并给举报入口。
+ * 与 `useMyReview` 同款 cache key 口径，交易参与者才允许读（服务端 404 兜底）。
+ */
+export function useTransactionReviews(ownerId: string, transactionId: string) {
+  return useQuery<TransactionReviewsResponse>({
+    queryKey: profileKeys.transactionReviews(ownerId, transactionId),
+    queryFn: () => fetchTransactionReviews(transactionId),
     enabled: ownerId !== '' && transactionId !== '',
     staleTime: 15_000,
   })

@@ -1,5 +1,16 @@
 import { z } from 'zod'
-import { ListingIdSchema, MessageIdSchema, ReportIdSchema, UserIdSchema } from '../system/public-id'
+import {
+  CommentIdSchema,
+  ListingIdSchema,
+  MessageIdSchema,
+  ReportIdSchema,
+  ReviewIdSchema,
+  TransactionIdSchema,
+  UserIdSchema,
+  WishIdSchema,
+} from '../system/public-id'
+import { TransactionReviewRatingSchema } from '../transaction-reviews/schema'
+import { wishCategorySchema, wishStatusSchema } from '../wishes/schema'
 
 /**
  * Reports Domain Contract（#73 治理半场）。
@@ -20,10 +31,18 @@ import { ListingIdSchema, MessageIdSchema, ReportIdSchema, UserIdSchema } from '
 // ---------------------------------------------------------------------------
 
 /**
- * 举报对象类型（#73 治理半场 + #694 M2）。
- * `MESSAGE` 只能由会话参与者中的**接收方**举报，正文证据由服务端固化，不采信客户端。
+ * 举报对象类型（#73 治理半场 + #694 M2 / M7）。
+ * `MESSAGE` 只能由会话参与者中的**接收方**举报；`COMMENT` / `REVIEW` / `WISH` 由
+ * 各自的可见性 / 归属决定谁能举报，正文证据一律由服务端固化，不采信客户端。
  */
-export const ReportTargetTypeSchema = z.enum(['LISTING', 'USER', 'MESSAGE'])
+export const ReportTargetTypeSchema = z.enum([
+  'LISTING',
+  'USER',
+  'MESSAGE',
+  'COMMENT',
+  'REVIEW',
+  'WISH',
+])
 export type ReportTargetType = z.infer<typeof ReportTargetTypeSchema>
 
 /**
@@ -81,12 +100,54 @@ export type UserReportReason = z.infer<typeof UserReportReasonSchema>
 export const MessageReportReasonSchema = z.enum(MESSAGE_REPORT_REASONS)
 export type MessageReportReason = z.infer<typeof MessageReportReasonSchema>
 
-const ReportTargetIdSchema = z.union([ListingIdSchema, UserIdSchema, MessageIdSchema])
+/**
+ * 用户生成内容类目标（留言 / 交易评价 / 愿望）共用的原因子集（#694 M7）。
+ * 三者都是「某个用户发布的一段内容或一条诉求」，不新增原因码，复用已有五种。
+ */
+export const UGC_REPORT_REASONS = ['SPAM', 'HARASSMENT', 'PROHIBITED', 'ABUSE', 'OTHER'] as const
+export const CommentReportReasonSchema = z.enum(UGC_REPORT_REASONS)
+export type CommentReportReason = z.infer<typeof CommentReportReasonSchema>
+export const ReviewReportReasonSchema = z.enum(UGC_REPORT_REASONS)
+export type ReviewReportReason = z.infer<typeof ReviewReportReasonSchema>
+export const WishReportReasonSchema = z.enum(UGC_REPORT_REASONS)
+export type WishReportReason = z.infer<typeof WishReportReasonSchema>
+
+/** 每种目标允许的原因子集（按 targetType 判别）。 */
+export const REPORT_REASONS_BY_TARGET = {
+  LISTING: LISTING_REPORT_REASONS,
+  USER: USER_REPORT_REASONS,
+  MESSAGE: MESSAGE_REPORT_REASONS,
+  COMMENT: UGC_REPORT_REASONS,
+  REVIEW: UGC_REPORT_REASONS,
+  WISH: UGC_REPORT_REASONS,
+} as const satisfies Record<ReportTargetType, readonly ReportReason[]>
+
+/** 422 文案里的目标名。 */
+const TARGET_TYPE_LABELS = {
+  LISTING: '商品',
+  USER: '用户',
+  MESSAGE: '消息',
+  COMMENT: '留言',
+  REVIEW: '评价',
+  WISH: '愿望',
+} as const satisfies Record<ReportTargetType, string>
+
+const ReportTargetIdSchema = z.union([
+  ListingIdSchema,
+  UserIdSchema,
+  MessageIdSchema,
+  CommentIdSchema,
+  ReviewIdSchema,
+  WishIdSchema,
+])
 
 const TARGET_ID_SCHEMAS = {
   LISTING: ListingIdSchema,
   USER: UserIdSchema,
   MESSAGE: MessageIdSchema,
+  COMMENT: CommentIdSchema,
+  REVIEW: ReviewIdSchema,
+  WISH: WishIdSchema,
 } as const
 
 function reportTargetMatches(value: {
@@ -113,19 +174,12 @@ export const ReportCreateInputSchema = z
     if (!reportTargetMatches(value)) {
       ctx.addIssue({ code: 'custom', path: ['targetId'], message: '举报目标 ID 前缀不匹配' })
     }
-    const allowed =
-      value.targetType === 'LISTING'
-        ? LISTING_REPORT_REASONS
-        : value.targetType === 'USER'
-          ? USER_REPORT_REASONS
-          : MESSAGE_REPORT_REASONS
+    const allowed = REPORT_REASONS_BY_TARGET[value.targetType]
     if (!(allowed as readonly string[]).includes(value.reason)) {
-      const label =
-        value.targetType === 'LISTING' ? '商品' : value.targetType === 'USER' ? '用户' : '消息'
       ctx.addIssue({
         code: 'custom',
         path: ['reason'],
-        message: `举报${label}时不支持该原因`,
+        message: `举报${TARGET_TYPE_LABELS[value.targetType]}时不支持该原因`,
       })
     }
   })
@@ -215,6 +269,7 @@ export type ReportTargetSummary = z.infer<typeof ReportTargetSummarySchema>
  * 媒体只给出元数据与「有无可读快照」标记，字节必须走带审计的管理端媒体端点，不能伪造 URL。
  */
 export const ReportMessageEvidenceSchema = z.object({
+  targetType: z.literal('MESSAGE'),
   kind: z.enum(['TEXT', 'IMAGE', 'VOICE']),
   content: z.string().nullable(),
   mimeType: z.string().nullable(),
@@ -226,6 +281,59 @@ export const ReportMessageEvidenceSchema = z.object({
 })
 export type ReportMessageEvidence = z.infer<typeof ReportMessageEvidenceSchema>
 
+/**
+ * 留言举报的服务端取证快照（#694 M7）：举报创建时从 comments 行读取作者与正文，
+ * 留言之后被删除也不销毁这张快照。`parentId` 非空表示这是某条留言的回复。
+ */
+export const ReportCommentEvidenceSchema = z.object({
+  targetType: z.literal('COMMENT'),
+  author: ReportUserSummarySchema,
+  listingId: ListingIdSchema,
+  parentId: CommentIdSchema.nullable(),
+  content: z.string(),
+  createdAt: z.iso.datetime(),
+})
+export type ReportCommentEvidence = z.infer<typeof ReportCommentEvidenceSchema>
+
+/**
+ * 交易评价举报的服务端取证快照（#694 M7）：评分 / 正文 / 配图数量在举报时固化；
+ * 配图字节仍走管理端媒体端点（`?index=`），快照里只存对象键，不塞进 DTO。
+ */
+export const ReportReviewEvidenceSchema = z.object({
+  targetType: z.literal('REVIEW'),
+  author: ReportUserSummarySchema,
+  transactionId: TransactionIdSchema,
+  rating: TransactionReviewRatingSchema,
+  body: z.string().nullable(),
+  imageCount: z.number().int().min(0),
+  createdAt: z.iso.datetime(),
+})
+export type ReportReviewEvidence = z.infer<typeof ReportReviewEvidenceSchema>
+
+/** 愿望举报的服务端取证快照（#694 M7）：关键词 / 描述 / 预算与当时状态。 */
+export const ReportWishEvidenceSchema = z.object({
+  targetType: z.literal('WISH'),
+  owner: ReportUserSummarySchema,
+  keyword: z.string(),
+  description: z.string().nullable(),
+  category: wishCategorySchema.nullable(),
+  budgetMinCents: z.number().int().nullable(),
+  budgetMaxCents: z.number().int().nullable(),
+  status: wishStatusSchema,
+  moderationStatus: z.enum(['APPROVED', 'PENDING_REVIEW', 'REJECTED']),
+  createdAt: z.iso.datetime(),
+})
+export type ReportWishEvidence = z.infer<typeof ReportWishEvidenceSchema>
+
+/** 管理端可见的目标取证快照；目标类型判别，旧客户端据 `targetType` 分流。 */
+export const ReportTargetEvidenceSchema = z.discriminatedUnion('targetType', [
+  ReportMessageEvidenceSchema,
+  ReportCommentEvidenceSchema,
+  ReportReviewEvidenceSchema,
+  ReportWishEvidenceSchema,
+])
+export type ReportTargetEvidence = z.infer<typeof ReportTargetEvidenceSchema>
+
 export const AdminReportItemSchema = z.object({
   /** 管理端可见处理原因与处理人；其余字段与用户端 DTO 一致。 */
   report: ReportSchema.safeExtend({
@@ -236,8 +344,8 @@ export const AdminReportItemSchema = z.object({
   target: ReportTargetSummarySchema,
   /** 同一目标收到的举报条数（含本条，不限举报人）：多个人打同一个目标时队列里能看出来。 */
   reportCount: z.number().int().min(0),
-  /** 目标为 MESSAGE 时的服务端取证快照；其它目标为 null。 */
-  messageEvidence: ReportMessageEvidenceSchema.nullable(),
+  /** MESSAGE / COMMENT / REVIEW / WISH 目标的服务端取证快照；LISTING / USER 为 null。 */
+  evidence: ReportTargetEvidenceSchema.nullable(),
 })
 export type AdminReportItem = z.infer<typeof AdminReportItemSchema>
 

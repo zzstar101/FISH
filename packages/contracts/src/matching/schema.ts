@@ -2,7 +2,7 @@ import { z } from 'zod'
 // 包内一律用相对导入（与 `listings/schema.ts` 引 `../auth/user` 同风格）；外部消费者走
 // `@fish/contracts/listings/schema` 这个 subpath。
 import { ListingCardSchema, ListingCategorySchema } from '../listings/schema'
-import { ListingIdSchema, MatchIdSchema, WishIdSchema } from '../system/public-id'
+import { ListingIdSchema, MatchIdSchema, UserIdSchema, WishIdSchema } from '../system/public-id'
 
 /**
  * Matching Domain Contract（Issue #8，2026-09-12 Freeze）。
@@ -107,6 +107,11 @@ export type MatchBase = z.infer<typeof MatchBaseSchema>
  */
 export const WishSummarySchema = z.object({
   id: WishIdSchema,
+  /**
+   * 许愿人公开 ID（#694 M7）：PC 的商品匹配列表要判断「这是不是自己的愿望」，
+   * 是则不展示举报入口；服务端的举报授权仍以 matches 关联自行判定，不信这个字段。
+   */
+  userId: UserIdSchema,
   keyword: z.string(),
   category: ListingCategorySchema.nullable(),
   budgetMinCents: z.number().int().nonnegative().nullable(),

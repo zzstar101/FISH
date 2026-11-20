@@ -37,21 +37,58 @@ export type ReportRow = {
 }
 
 /**
- * 私聊消息取证快照（#694 M2）。由服务端从消息/媒体行读取，客户端无法写入；
- * 消息后续被撤回也不会清掉它，避免「撤回即销毁证据」。
+ * 服务端取证快照（#694 M2 / M7）。由服务端从目标行读取，客户端无法写入；
+ * 目标之后被撤回 / 删除也不会清掉它，避免「撤回即销毁证据」。
+ *
+ * 快照存内部 uuid（管理端 DTO 在 service 层统一编码为公开 id），并带 `targetType`
+ * 判别字段；M2 时期落库的旧行没有该字段，`reportFromRow` 会补成 MESSAGE。
  */
-export type ReportEvidenceSnapshot = {
-  conversationId: string
-  senderId: string
-  senderNickname: string
-  kind: 'TEXT' | 'IMAGE' | 'VOICE'
-  content: string | null
-  mimeType: string | null
-  sizeBytes: number | null
-  objectKey: string | null
-  createdAt: string
-  recalledAt: string | null
-}
+export type ReportEvidenceSnapshot =
+  | {
+      targetType: 'MESSAGE'
+      conversationId: string
+      senderId: string
+      senderNickname: string
+      kind: 'TEXT' | 'IMAGE' | 'VOICE'
+      content: string | null
+      mimeType: string | null
+      sizeBytes: number | null
+      objectKey: string | null
+      createdAt: string
+      recalledAt: string | null
+    }
+  | {
+      targetType: 'COMMENT'
+      authorId: string
+      authorNickname: string
+      listingId: string
+      parentId: string | null
+      content: string
+      createdAt: string
+    }
+  | {
+      targetType: 'REVIEW'
+      authorId: string
+      authorNickname: string
+      transactionId: string
+      rating: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE'
+      body: string | null
+      imageObjectKeys: string[]
+      createdAt: string
+    }
+  | {
+      targetType: 'WISH'
+      ownerId: string
+      ownerNickname: string
+      keyword: string
+      description: string | null
+      category: string | null
+      budgetMinCents: number | null
+      budgetMaxCents: number | null
+      status: string
+      moderationStatus: string
+      createdAt: string
+    }
 
 /** 被举报目标的摘要。`label` 为 null 表示目标不存在。 */
 export type TargetSummaryRow = {
@@ -75,6 +112,42 @@ export type TargetSummaryRow = {
     createdAt: Date
     recalledAt: Date | null
     senderNickname: string
+  } | null
+  /** COMMENT 目标才有：作者 / 所属商品与可见性所需的原始行。 */
+  comment: {
+    authorId: string
+    authorNickname: string
+    listingId: string
+    listingSellerId: string
+    listingStatus: string
+    parentId: string | null
+    content: string
+    createdAt: Date
+  } | null
+  /** REVIEW 目标才有：交易参与者校验与取证所需的原始行。 */
+  review: {
+    authorId: string
+    authorNickname: string
+    transactionId: string
+    buyerId: string
+    sellerId: string
+    rating: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE'
+    body: string | null
+    imageObjectKeys: string[]
+    createdAt: Date
+  } | null
+  /** WISH 目标才有：owner 校验与取证所需的原始行。 */
+  wish: {
+    ownerId: string
+    ownerNickname: string
+    keyword: string
+    description: string | null
+    category: string | null
+    budgetMinCents: number | null
+    budgetMaxCents: number | null
+    status: string
+    moderationStatus: string
+    createdAt: Date
   } | null
 }
 
@@ -142,10 +215,16 @@ export interface ReportStore {
     excludeReportId: string,
     limit: number,
   ): Promise<ReportRow[]>
-  /** 被举报媒体（MESSAGE 举报）的证据快照位置；文本举报/不存在/快照缺 key 返回 null。 */
+  /**
+   * 被举报媒体的证据快照位置；文本举报/不存在/快照缺 key 返回 null。
+   * MESSAGE 取消息媒体，REVIEW 取评价快照里的第 `index` 张配图。
+   */
   findEvidenceMedia(
     reportId: string,
+    index?: number,
   ): Promise<{ objectKey: string | null; mimeType: string | null } | null>
+  /** WISH 举报资格：举报人是否有商品与该愿望匹配（只有匹配到的卖家看得到愿望内容）。 */
+  hasWishMatchForSeller(wishId: string, sellerId: string): Promise<boolean>
   /** 处理举报：业务 UPDATE 与审计写入同事务。 */
   handleReport(input: HandleReportInput): Promise<'applied' | 'not-found' | 'conflict'>
 }
@@ -188,9 +267,18 @@ function reportFromRow(row: Record<string, unknown>): ReportRow {
       : null,
     handlingReason: (row.handling_reason as string | null) ?? null,
     handledBy: (row.handled_by as string | null) ?? null,
-    evidenceSnapshot: (row.evidence_snapshot as ReportEvidenceSnapshot | null) ?? null,
+    evidenceSnapshot: evidenceSnapshotFromRow(row.evidence_snapshot),
     createdAtCursor: String(row.created_at_cursor),
   }
+}
+
+/** M2 落库的 MESSAGE 快照没有 `targetType`；读取时补齐，让新老行共用同一判别联合。 */
+function evidenceSnapshotFromRow(raw: unknown): ReportEvidenceSnapshot | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw !== 'object') return null
+  const snapshot = raw as Record<string, unknown>
+  if (typeof snapshot.targetType === 'string') return snapshot as ReportEvidenceSnapshot
+  return { ...snapshot, targetType: 'MESSAGE' } as ReportEvidenceSnapshot
 }
 
 /**
@@ -205,7 +293,8 @@ const adminReportSelectSql = sql`
     AS report_count,
   ru.id AS reporter_summary_id, ru.nickname AS reporter_nickname,
   hu.id AS handler_summary_id, hu.nickname AS handler_nickname,
-  COALESCE(l.title, tu.nickname, tm_text.label) AS target_label,
+  COALESCE(l.title, tu.nickname, tm_text.label, tc_text.label, tr_text.label, tw_text.label)
+    AS target_label,
   l.status::text AS listing_status,
   l.moderation_status::text AS moderation_status
   FROM reports r
@@ -221,6 +310,18 @@ const adminReportSelectSql = sql`
            END AS label
     FROM messages m WHERE r.target_type = 'MESSAGE' AND m.id = r.target_id
   ) tm_text ON true
+  LEFT JOIN LATERAL (
+    SELECT left(c.content, 120) AS label
+    FROM comments c WHERE r.target_type = 'COMMENT' AND c.id = r.target_id
+  ) tc_text ON true
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(left(rv.body, 120), '[评价]') AS label
+    FROM transaction_reviews rv WHERE r.target_type = 'REVIEW' AND rv.id = r.target_id
+  ) tr_text ON true
+  LEFT JOIN LATERAL (
+    SELECT w.keyword AS label
+    FROM wishes w WHERE r.target_type = 'WISH' AND w.id = r.target_id
+  ) tw_text ON true
 `
 
 function adminReportFromRow(row: Record<string, unknown>): AdminReportRow {
@@ -241,51 +342,107 @@ function adminReportFromRow(row: Record<string, unknown>): AdminReportRow {
       listingStatus: (row.listing_status as string | null) ?? null,
       moderationStatus: (row.moderation_status as string | null) ?? null,
       message: null,
+      comment: null,
+      review: null,
+      wish: null,
     },
     reportCount: Number(row.report_count),
+  }
+}
+
+/**
+ * 每个目标类型一条存在性查询，统一产出 `TargetSummaryRow` 需要的列。
+ * 用裸 SQL 而非 typed builder，与 admin store 取封面 / 计数同口径
+ * （typed builder 的相关子查询在 bun-sql 下会静默算错）。
+ */
+function targetQuery(targetType: ReportTargetType, targetId: string) {
+  switch (targetType) {
+    case 'LISTING':
+      return sql`
+        SELECT ${targetId}::uuid AS target_id,
+               title AS label,
+               status::text AS listing_status,
+               moderation_status::text AS moderation_status
+        FROM listings WHERE id = ${targetId}
+      `
+    case 'USER':
+      return sql`
+        SELECT ${targetId}::uuid AS target_id,
+               nickname AS label,
+               NULL::text AS listing_status,
+               NULL::text AS moderation_status
+        FROM users WHERE id = ${targetId}
+      `
+    case 'MESSAGE':
+      return sql`
+        SELECT ${targetId}::uuid AS target_id,
+               CASE WHEN m.type = 'TEXT' THEN left(m.content, 120)
+                    WHEN m.type = 'MEDIA' THEN '[媒体消息]'
+                    ELSE '[系统消息]' END AS label,
+               NULL::text AS listing_status,
+               NULL::text AS moderation_status,
+               m.conversation_id, m.sender_id, m.visibility::text AS visibility,
+               m.type::text AS kind, m.content, m.created_at, m.recalled_at,
+               c.buyer_id, c.seller_id, u.nickname AS sender_nickname,
+               mm.mime_type, mm.size_bytes, mm.object_key
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        LEFT JOIN users u ON u.id = m.sender_id
+        LEFT JOIN message_media mm ON mm.message_id = m.id
+        WHERE m.id = ${targetId} AND m.type IN ('TEXT', 'MEDIA')
+      `
+    case 'COMMENT':
+      return sql`
+        SELECT c.id AS target_id,
+               left(c.content, 120) AS label,
+               NULL::text AS listing_status,
+               NULL::text AS moderation_status,
+               c.author_id, c.listing_id, c.parent_id, c.content, c.created_at,
+               l.seller_id AS listing_seller_id, l.status::text AS comment_listing_status,
+               u.nickname AS author_nickname
+        FROM comments c
+        JOIN listings l ON l.id = c.listing_id
+        LEFT JOIN users u ON u.id = c.author_id
+        WHERE c.id = ${targetId}
+      `
+    case 'REVIEW':
+      return sql`
+        SELECT rv.id AS target_id,
+               COALESCE(left(rv.body, 120), '[评价]') AS label,
+               NULL::text AS listing_status,
+               NULL::text AS moderation_status,
+               rv.transaction_id, rv.author_id, rv.rating::text AS rating, rv.body, rv.created_at,
+               t.buyer_id, t.seller_id, u.nickname AS author_nickname,
+               string_agg(ri.object_key, ',' ORDER BY ri.sort_order) AS image_object_keys
+        FROM transaction_reviews rv
+        JOIN transactions t ON t.id = rv.transaction_id
+        LEFT JOIN users u ON u.id = rv.author_id
+        LEFT JOIN transaction_review_images ri ON ri.review_id = rv.id
+        WHERE rv.id = ${targetId}
+        GROUP BY rv.id, rv.transaction_id, rv.author_id, rv.rating, rv.body, rv.created_at,
+                 t.buyer_id, t.seller_id, u.nickname
+      `
+    case 'WISH':
+      return sql`
+        SELECT w.id AS target_id,
+               w.keyword AS label,
+               NULL::text AS listing_status,
+               w.moderation_status::text AS moderation_status,
+               w.user_id AS owner_id, u.nickname AS owner_nickname,
+               w.keyword, w.description, w.category::text AS category,
+               w.budget_min_cents, w.budget_max_cents,
+               w.status::text AS status, w.created_at
+        FROM wishes w
+        LEFT JOIN users u ON u.id = w.user_id
+        WHERE w.id = ${targetId}
+      `
   }
 }
 
 export function createSqlReportStore(db: Db): ReportStore {
   return {
     async findTargetSummary(targetType, targetId) {
-      // 多态目标：两段 SQL 分别查。用裸 SQL 而非 typed builder，与 admin store 取封面 /
-      // 计数同口径（typed builder 的相关子查询在 bun-sql 下会静默算错）。
-      const result =
-        targetType === 'LISTING'
-          ? await db.execute(sql`
-              SELECT ${targetId}::uuid AS target_id,
-                     title AS label,
-                     status::text AS listing_status,
-                     moderation_status::text AS moderation_status
-              FROM listings WHERE id = ${targetId}
-            `)
-          : targetType === 'USER'
-            ? await db.execute(sql`
-                SELECT ${targetId}::uuid AS target_id,
-                       nickname AS label,
-                       NULL::text AS listing_status,
-                       NULL::text AS moderation_status
-                FROM users WHERE id = ${targetId}
-              `)
-            : await db.execute(sql`
-                SELECT ${targetId}::uuid AS target_id,
-                       CASE WHEN m.type = 'TEXT' THEN left(m.content, 120)
-                            WHEN m.type = 'MEDIA' THEN '[媒体消息]'
-                            ELSE '[系统消息]' END AS label,
-                       NULL::text AS listing_status,
-                       NULL::text AS moderation_status,
-                       m.conversation_id, m.sender_id, m.visibility::text AS visibility,
-                       m.type::text AS kind, m.content, m.created_at, m.recalled_at,
-                       c.buyer_id, c.seller_id, u.nickname AS sender_nickname,
-                       mm.mime_type, mm.size_bytes, mm.object_key
-                FROM messages m
-                JOIN conversations c ON c.id = m.conversation_id
-                LEFT JOIN users u ON u.id = m.sender_id
-                LEFT JOIN message_media mm ON mm.message_id = m.id
-                WHERE m.id = ${targetId} AND m.type IN ('TEXT', 'MEDIA')
-              `)
-      const row = rowsOf(result)[0]
+      const row = rowsOf(await db.execute(targetQuery(targetType, targetId)))[0]
       if (!row) return null
       const message =
         targetType === 'MESSAGE'
@@ -308,6 +465,50 @@ export function createSqlReportStore(db: Db): ReportStore {
               senderNickname: String(row.sender_nickname ?? '用户'),
             }
           : null
+      const comment =
+        targetType === 'COMMENT'
+          ? {
+              authorId: String(row.author_id),
+              authorNickname: String(row.author_nickname ?? '用户'),
+              listingId: String(row.listing_id),
+              listingSellerId: String(row.listing_seller_id),
+              listingStatus: String(row.comment_listing_status),
+              parentId: row.parent_id === null ? null : String(row.parent_id),
+              content: String(row.content ?? ''),
+              createdAt: new Date(row.created_at as string | Date),
+            }
+          : null
+      const review =
+        targetType === 'REVIEW'
+          ? {
+              authorId: String(row.author_id),
+              authorNickname: String(row.author_nickname ?? '用户'),
+              transactionId: String(row.transaction_id),
+              buyerId: String(row.buyer_id),
+              sellerId: String(row.seller_id),
+              rating: String(row.rating) as 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE',
+              body: (row.body as string | null) ?? null,
+              imageObjectKeys: String(row.image_object_keys ?? '')
+                .split(',')
+                .filter((key) => key !== ''),
+              createdAt: new Date(row.created_at as string | Date),
+            }
+          : null
+      const wish =
+        targetType === 'WISH'
+          ? {
+              ownerId: String(row.owner_id),
+              ownerNickname: String(row.owner_nickname ?? '用户'),
+              keyword: String(row.keyword ?? ''),
+              description: (row.description as string | null) ?? null,
+              category: (row.category as string | null) ?? null,
+              budgetMinCents: row.budget_min_cents === null ? null : Number(row.budget_min_cents),
+              budgetMaxCents: row.budget_max_cents === null ? null : Number(row.budget_max_cents),
+              status: String(row.status),
+              moderationStatus: String(row.moderation_status),
+              createdAt: new Date(row.created_at as string | Date),
+            }
+          : null
       return {
         targetType,
         targetId,
@@ -315,6 +516,9 @@ export function createSqlReportStore(db: Db): ReportStore {
         listingStatus: (row.listing_status as string | null) ?? null,
         moderationStatus: (row.moderation_status as string | null) ?? null,
         message,
+        comment,
+        review,
+        wish,
       }
     },
 
@@ -443,13 +647,17 @@ export function createSqlReportStore(db: Db): ReportStore {
       return rowsOf(result).map(reportFromRow)
     },
 
-    async findEvidenceMedia(reportId) {
+    async findEvidenceMedia(reportId, index = 0) {
       const result = await db.execute(sql`
-        SELECT evidence_snapshot->>'objectKey' AS object_key,
+        SELECT CASE
+                 WHEN target_type = 'MESSAGE' THEN evidence_snapshot->>'objectKey'
+                 WHEN target_type = 'REVIEW'
+                   THEN (evidence_snapshot -> 'imageObjectKeys') ->> (${index}::int)
+               END AS object_key,
                evidence_snapshot->>'mimeType' AS mime_type
         FROM reports
         WHERE id = ${reportId}
-          AND target_type = 'MESSAGE'
+          AND target_type IN ('MESSAGE', 'REVIEW')
           AND evidence_snapshot IS NOT NULL
         LIMIT 1
       `)
@@ -459,6 +667,17 @@ export function createSqlReportStore(db: Db): ReportStore {
         objectKey: (row.object_key as string | null) ?? null,
         mimeType: (row.mime_type as string | null) ?? null,
       }
+    },
+
+    async hasWishMatchForSeller(wishId, sellerId) {
+      const result = await db.execute(sql`
+        SELECT 1
+        FROM matches m
+        JOIN listings l ON l.id = m.listing_id
+        WHERE m.wish_id = ${wishId} AND l.seller_id = ${sellerId}
+        LIMIT 1
+      `)
+      return rowsOf(result).length > 0
     },
 
     async handleReport(input) {

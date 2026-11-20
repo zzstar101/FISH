@@ -17,13 +17,14 @@ import {
   DialogTitle,
 } from '@fish/ui/dialog'
 import { Textarea } from '@fish/ui/textarea'
-import { Star } from 'lucide-react'
+import { Flag, Star } from 'lucide-react'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { imagePreparationMessage, toUploadableFile, validateImageFile } from '../publish/api'
+import { ReportEntry } from '../reports/report-entry'
 import { RATING_OPTIONS, RATING_VIEW } from '../transaction-review/rating'
 import { reviewSubmitError, uploadReviewImage } from './api'
-import { useCreateReview, useMyReview } from './queries'
+import { useCreateReview, useMyReview, useTransactionReviews } from './queries'
 import {
   appendWithinLimit,
   type ReviewFormImage,
@@ -44,6 +45,8 @@ export type OrderReviewCardViewProps = {
   onSubmit: (input: TransactionReviewCreateInput) => void
   /** 配图上传链的授权锚点（#475）；透传给 ReviewForm。 */
   transactionId: string
+  /** 交易另一方写的评价（#694 M7）；还没读到或对方未评价时为 null。 */
+  counterpartReview?: TransactionReview | null
 }
 
 /**
@@ -117,6 +120,8 @@ export function OrderReviewCardView(props: OrderReviewCardViewProps) {
         </div>
       )}
 
+      {props.counterpartReview ? <CounterpartReviewView review={props.counterpartReview} /> : null}
+
       {props.errorMessage !== null ? (
         <p className="mt-3 text-danger text-sm" role="alert">
           {props.errorMessage}
@@ -139,6 +144,60 @@ export function OrderReviewCardView(props: OrderReviewCardViewProps) {
         </DialogContent>
       </Dialog>
     </Card>
+  )
+}
+
+/** 举报弹窗里的评价摘要：有正文取前 24 字，否则用评分文案。 */
+function reviewSnippet(review: TransactionReview): string {
+  const body = review.body?.replace(/\s+/g, ' ').trim() ?? ''
+  if (body === '') return RATING_VIEW[review.rating].label
+  return body.length > 24 ? `${body.slice(0, 24)}…` : body
+}
+
+/**
+ * 「对方的评价」块（#694 M7）：订单详情除了自己的评价，也展示交易另一方的评价，
+ * 并给举报入口。评价契约不含 authorId，举报资格由服务端按交易参与者判定；
+ * 这里只需要知道这是对方写的那条。
+ */
+export function CounterpartReviewView({ review }: { review: TransactionReview }) {
+  return (
+    <div className="mt-4 border-line border-t pt-4" id="counterpart-review">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-sm">对方的评价</span>
+        <Badge variant={RATING_VIEW[review.rating].variant}>
+          {RATING_VIEW[review.rating].label}
+        </Badge>
+        <span className="text-ink-3 text-xs">{formatRelativeTimeAt(review.createdAt)}</span>
+      </div>
+      {review.body ? (
+        <p className="mt-2 whitespace-pre-wrap text-sm">{review.body}</p>
+      ) : (
+        <p className="mt-2 text-ink-3 text-sm">对方只打了分，没有写评语。</p>
+      )}
+      {review.images.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {review.images.map((image, index) => (
+            <img
+              alt={`对方评价配图 ${index + 1}`}
+              className="size-20 rounded-xl border border-line object-cover"
+              key={image.url}
+              src={image.url}
+            />
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-2 flex justify-end">
+        <ReportEntry
+          className="text-ink-3"
+          size="sm"
+          target={{ type: 'REVIEW', id: review.id, label: reviewSnippet(review) }}
+          variant="ghost"
+        >
+          <Flag className="size-3.5" />
+          举报这条评价
+        </ReportEntry>
+      </div>
+    </div>
   )
 }
 
@@ -382,6 +441,7 @@ export function OrderReviewCard({
   transaction: TransactionDto
 }) {
   const review = useMyReview(ownerId, transaction.id)
+  const reviews = useTransactionReviews(ownerId, transaction.id)
   const createReview = useCreateReview(ownerId)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -410,6 +470,9 @@ export function OrderReviewCard({
 
   return (
     <OrderReviewCardView
+      counterpartReview={
+        reviews.data?.items.find((item) => item.authorRole !== transaction.role)?.review ?? null
+      }
       dialogOpen={dialogOpen}
       error={review.isError}
       errorMessage={errorMessage}
