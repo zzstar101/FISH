@@ -66,7 +66,13 @@ import {
 } from './queries'
 import { INITIAL_READ_RECEIPT_STATE, onIncomingMessage, resolveReadReceipt } from './read-receipt'
 import { type ChatRealtimeStatus, useChatRealtime } from './realtime'
-import { buildTimeline, canRecallMessage, excludeCachedMedia, excludeCachedMessages } from './view'
+import {
+  buildTimeline,
+  canRecallMessage,
+  countPendingReview,
+  excludeCachedMedia,
+  excludeCachedMessages,
+} from './view'
 
 /** 服务端硬上限 60s；提前 5s 自动收尾，避免录到一半被 422 拒掉。 */
 const VOICE_AUTO_STOP_MS = MEDIA_MAX_VOICE_DURATION_MS - 5_000
@@ -222,6 +228,22 @@ export function ConversationPage({ conversationId }: { conversationId: string })
         [...mediaMessages, ...visibleLocalMedia],
       ),
     [messages, visibleLocalMessages, mediaMessages, visibleLocalMedia],
+  )
+  /**
+   * 待审条数（#694 M4）：待审消息只对发送者可见，接收者的未读 / 摘要 / 历史都看不到，
+   * 发送者若没有任何提示，会以为消息已经送到。这里把"还在审核"说清楚。
+   *
+   * 只数**本页 timeline 已加载**的消息：更早的分页还没取回来，所以这是下界而不是全量。
+   * 服务端 DTO 没有单独的待审计数字段（`packages/contracts/src/chat`），不为此加接口，
+   * 因此横幅文案必须限定「本页」—— 写成「还有 N 条待审核」会在翻页前低估且不说明。
+   */
+  const pendingReviewCount = useMemo(
+    () =>
+      countPendingReview(
+        timeline.map((entry) => (entry.kind === 'message' ? entry.message : entry.media)),
+        ownerId,
+      ),
+    [timeline, ownerId],
   )
   const hasOlderPages = history.hasNextPage || mediaHistory.hasNextPage
   const counterpartLastReadAt = conversation.data?.counterpartLastReadAt ?? null
@@ -719,6 +741,12 @@ export function ConversationPage({ conversationId }: { conversationId: string })
             </div>
 
             <div className="border-line border-t p-4">
+              {/* 「本页」不是谦辞：计数只覆盖已加载的 timeline（见 pendingReviewCount 注释） */}
+              {pendingReviewCount > 0 ? (
+                <p className="mb-2 text-ink-3 text-xs" role="status">
+                  审核中 · 本页有 {pendingReviewCount} 条消息待审核，通过后对方才能看到
+                </p>
+              ) : null}
               <div className="flex items-end gap-3">
                 <input
                   accept={IMAGE_FILE_ACCEPT}

@@ -851,6 +851,40 @@
   font-weight: 600;
 }
 
+/* 审核失败 / 限流文案（#694 M4）：挂在失败气泡下方，与重试胶囊同列右对齐 */
+.conv__fail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.conv__fail-tx {
+  max-width: 100%;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--danger-ink);
+  text-align: right;
+}
+
+/* 失败尾部的一行操作（#694 M4 审查）：重试与移除并排，避免两个胶囊竖着堆两行 */
+.conv__fail-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* 「移除」只删本地失败草稿，视觉上比重试轻：无底无边，次要文字色 */
+.conv__fail-remove {
+  display: inline-flex;
+  align-items: center;
+  height: var(--btn-h-sm);
+  padding: 0 var(--btn-px-sm);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
 .conv__retry-ic {
   width: 32px;
   height: 32px;

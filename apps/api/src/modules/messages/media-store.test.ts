@@ -2,14 +2,21 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { MediaMessageInput } from '@fish/contracts/chat/schema'
 import { createDb } from '@fish/db/client'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { Hono } from 'hono'
+import type { AuthVariables } from '../auth/middleware'
+import { allowRestrictionGuard } from '../governance/testing'
+import type { MediaStorage } from '../uploads/storage'
 import {
   MessageIdempotencyConflictError,
   mediaRequestHash,
   messageSendKey,
   textRequestHash,
 } from './idempotency'
+import { createMediaRouter } from './media-router'
+import { createMediaMessageService } from './media-service'
 import { createSqlMediaMessageStore } from './media-store'
 import { pendingReviewModeration } from './memory-store.fixture'
 import { createSqlMessageStore } from './store'
@@ -275,6 +282,95 @@ describe('media message store (integration)', () => {
     const byBuyer = await mediaStore.list(conversationA, buyer, { limit: 50, cursor: null })
     expect(byBuyer.some((row) => row.media_id === created.media_id)).toBe(true)
     expect(await mediaStore.find(conversationA, created.media_id, buyer)).not.toBeNull()
+  })
+
+  test('被拒媒体同样是接收者不可读、发送者可读（#694 M4）', async () => {
+    const image = imageFor('rejected')
+    const created = await mediaStore.create(conversationA, buyer, image)
+    await db.execute(
+      sql`UPDATE messages SET visibility = 'REJECTED' WHERE id = ${created.message_id}::uuid`,
+    )
+
+    // 拒绝是终态：接收者的列表里没有、按 mediaId 直取也拿不到（HTTP GET 因此只能 404）。
+    const bySeller = await mediaStore.list(conversationA, seller, { limit: 50, cursor: null })
+    expect(bySeller.some((row) => row.media_id === created.media_id)).toBe(false)
+    expect(await mediaStore.find(conversationA, created.media_id, seller)).toBeNull()
+
+    const byBuyer = await mediaStore.list(conversationA, buyer, { limit: 50, cursor: null })
+    expect(byBuyer.some((row) => row.media_id === created.media_id)).toBe(true)
+    expect(await mediaStore.find(conversationA, created.media_id, buyer)).not.toBeNull()
+  })
+
+  /*
+   * #694 M4：HTTP 层也必须真的走一遍 gate。此前 media-router.test.ts 把 `getObject`
+   * stub 成直接抛 404 —— 那只能证明错误信封的映射，证明不了「接收者拿不到未投递的字节」。
+   * 这里用真实 SQL store + 真实 `createMediaMessageService` + 真实 router：非发送者 404
+   * `MEDIA_NOT_FOUND`（不是 403：403 等于承认「东西存在，只是不给你」），发送者 200 拿到字节。
+   */
+  test('HTTP GET：待审媒体对非发送者 404 MEDIA_NOT_FOUND，发送者仍可读（#694 M4）', async () => {
+    const image = imageFor('http-gate')
+    const created = await mediaStore.create(conversationA, buyer, image)
+    await db.execute(
+      sql`UPDATE messages SET visibility = 'PENDING_REVIEW' WHERE id = ${created.message_id}::uuid`,
+    )
+
+    const storage: MediaStorage = {
+      presignPut: () => ({ url: '', headers: {}, expiresAt: '' }),
+      stat: async () => null,
+      publicUrl: (key) => key,
+      getObject: () => ({
+        stream: new Blob([new Uint8Array(16)]).stream(),
+        contentType: 'image/webp',
+      }),
+    }
+    const service = createMediaMessageService({
+      store: mediaStore,
+      storage,
+      mediaUrl: (conversationId, mediaId) =>
+        `/api/conversations/${conversationId}/media/${mediaId}`,
+      blocks: { existsBlockBetween: async () => false },
+      // GET 不送审；这里只是满足工厂签名，真被调用就说明路径错了。
+      chatModeration: {
+        moderateText: async () => {
+          throw new Error('HTTP GET 不送审文本')
+        },
+        moderateImage: async () => {
+          throw new Error('HTTP GET 不送审图片')
+        },
+      },
+      rateLimit: {
+        takeTextSend: async () => ({ allowed: true }),
+        takeMediaPresign: async () => ({ allowed: true }),
+        takeMediaCreate: async () => ({ allowed: true }),
+        takeNewSellerContact: async () => ({ allowed: true }),
+      },
+    })
+    const app = new Hono<{ Variables: AuthVariables }>()
+    app.route(
+      '/conversations',
+      createMediaRouter({
+        service,
+        storage,
+        requireAuth: async (c, next) => {
+          c.set('userId', c.req.header('x-test-user') ?? buyer)
+          await next()
+        },
+        guard: allowRestrictionGuard,
+      }),
+    )
+    const path = `/conversations/${encodePublicId(
+      PUBLIC_ID_PREFIX.conversation,
+      conversationA,
+    )}/media/${encodePublicId(PUBLIC_ID_PREFIX.media, created.media_id)}`
+
+    const asSeller = await app.request(path, { headers: { 'x-test-user': seller } })
+    expect(asSeller.status).toBe(404)
+    expect(await asSeller.json()).toMatchObject({ error: { code: 'MEDIA_NOT_FOUND' } })
+
+    const asBuyer = await app.request(path, { headers: { 'x-test-user': buyer } })
+    expect(asBuyer.status).toBe(200)
+    expect(asBuyer.headers.get('content-type')).toBe('image/webp')
+    expect((await asBuyer.arrayBuffer()).byteLength).toBe(16)
   })
 
   test('待审媒体落库：visibility/记录同事务，且不推进会话语义（#694 M1）', async () => {

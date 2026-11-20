@@ -13,6 +13,12 @@ type OutboxBase = {
   status: 'sending' | 'failed'
   error: string | null
   errorCode: string | null
+  /**
+   * 429 的冷却截止时间（epoch ms）；非限流失败为 null。
+   *
+   * 存**绝对时间**而不是剩余秒数：重渲染、切走再回来都能继续算，不会越倒越多。
+   */
+  retryAfterAt: number | null
 }
 
 export type OutboxTextMessage = OutboxBase & {
@@ -61,6 +67,7 @@ export function createOutboxMessage(content: string): OutboxTextMessage {
     status: 'sending',
     error: null,
     errorCode: null,
+    retryAfterAt: null,
   }
 }
 
@@ -77,6 +84,7 @@ export function createMediaOutboxMessage(
     status: 'sending',
     error: null,
     errorCode: null,
+    retryAfterAt: null,
   }
 }
 
@@ -106,7 +114,13 @@ export function resetOutboxForRetry(
 ): OutboxMessage[] {
   return current.map((item) =>
     item.clientRequestId === clientRequestId
-      ? { ...item, status: 'sending' as const, error: null, errorCode: null }
+      ? {
+          ...item,
+          status: 'sending' as const,
+          error: null,
+          errorCode: null,
+          retryAfterAt: null,
+        }
       : item,
   )
 }
@@ -123,9 +137,27 @@ function markOutboxFailed(
           status: 'failed' as const,
           error: describeSendFailure(error),
           errorCode: error instanceof ApiError ? error.code : null,
+          retryAfterAt: retryDeadline(error),
         }
       : item,
   )
+}
+
+/**
+ * 429 的 Retry-After 落成绝对截止时间；其它错误没有冷却，直接 null。
+ * 服务端没给 `retryAfterSeconds` 时也不虚构倒计时（`MESSAGE_RATE_LIMITED` 一定带）。
+ */
+function retryDeadline(error: unknown): number | null {
+  if (!(error instanceof ApiError)) return null
+  const seconds = error.retryAfterSeconds
+  if (seconds === undefined || seconds <= 0) return null
+  return Date.now() + seconds * 1000
+}
+
+/** 剩余冷却秒数（向上取整）；0 表示现在就能重试。 */
+export function retryCooldownSeconds(retryAfterAt: number | null, nowMs: number): number {
+  if (retryAfterAt === null) return 0
+  return Math.max(0, Math.ceil((retryAfterAt - nowMs) / 1000))
 }
 
 /**

@@ -139,6 +139,9 @@ import {
   resolveMsgState,
   resolvePanelHeightPx,
   resolveSentinel,
+  reviewStatusLabel,
+  sendCooldownSeconds,
+  sendFailureText,
   settleSend,
   shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
@@ -260,6 +263,53 @@ function touchPoint(event: unknown): { x: number; y: number } {
     x: typeof touch?.clientX === 'number' ? touch.clientX : Number.NaN,
     y: typeof touch?.clientY === 'number' ? touch.clientY : Number.NaN,
   }
+}
+
+/**
+ * 失败气泡下方的一行（#694 M4）：审核 / 限流给的可行动文案 + 重试入口。
+ *
+ * 三种样子：429 冷却中只倒计时（点了也只会再吃一次拒绝）；BLOCK 这类「同一段内容必然
+ * 再被拦」的失败不给重试，但仍留「移除」；其余照旧「发送失败 · 重试」。
+ *
+ * 移除只是删本地草稿（服务端对 BLOCK 根本没有这条记录，重试也只会再被拦一次）。不给这个
+ * 出口的话，BLOCK 的失败气泡会永远留在页面里，而输入框已经清空，用户连改的机会都没有。
+ */
+function PendingFailFooter({
+  cooldown,
+  error,
+  onRemove,
+  onRetry,
+}: {
+  cooldown: number
+  error: string | null
+  onRemove?: (() => void) | undefined
+  onRetry?: (() => void) | undefined
+}) {
+  const cooling = cooldown > 0
+  const text = cooling
+    ? `冷却中 · ${cooldown} 秒后可重试`
+    : (error ?? (onRetry ? null : '发送失败'))
+  const showRetry = !cooling && onRetry !== undefined
+  return (
+    <View className="conv__fail">
+      {text === null ? null : <Text className="conv__fail-tx">{text}</Text>}
+      {showRetry || onRemove !== undefined ? (
+        <View className="conv__fail-actions">
+          {showRetry ? (
+            <View className="conv__retry" onClick={onRetry}>
+              <Image className="conv__retry-ic" src={ICONS.refreshBrand} mode="aspectFit" />
+              <Text>发送失败 · 重试</Text>
+            </View>
+          ) : null}
+          {onRemove === undefined ? null : (
+            <View className="conv__fail-remove" onClick={onRemove}>
+              <Text>移除</Text>
+            </View>
+          )}
+        </View>
+      ) : null}
+    </View>
+  )
 }
 
 export default function Conversation() {
@@ -430,6 +480,19 @@ export default function Conversation() {
   const [mediaCursor, setMediaCursor] = useState<string | null>(null)
   /** 本地乐观媒体（上传中 / 上传失败），永远排在服务端内容之后 */
   const [pendingMedia, setPendingMedia] = useState<PendingMedia[]>([])
+  /**
+   * 429 倒计时的钟（#694 M4）。`retryAfterAt` 是绝对截止时间，渲染时换算剩余秒数；
+   * 只有确实存在「冷却还没走完」的失败气泡时才每秒推一次 —— 平时聊天零额外渲染。
+   */
+  const [cooldownNow, setCooldownNow] = useState(() => Date.now())
+  const cooldownActive =
+    pending.some((item) => sendCooldownSeconds(item.retryAfterAt, cooldownNow) > 0) ||
+    pendingMedia.some((item) => sendCooldownSeconds(item.retryAfterAt, cooldownNow) > 0)
+  useEffect(() => {
+    if (!cooldownActive) return
+    const timer = setInterval(() => setCooldownNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [cooldownActive])
   /**
    * 已下载到本地的媒体路径，按 `mediaId` 索引（**不是**消息 id：鉴权代理端点收的是
    * `mediaId`，`media-api` 的模块级缓存同样按它索引，键不统一则缓存永远命不中）。
@@ -1589,7 +1652,17 @@ export default function Conversation() {
     deferredRef.current = beginSend(deferredRef.current, current)
     setPending((prev) =>
       pendingId
-        ? prev.map((item) => (item.id === id ? { ...item, status: 'sending' } : item))
+        ? prev.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  status: 'sending',
+                  error: null,
+                  errorCode: null,
+                  retryAfterAt: null,
+                }
+              : item,
+          )
         : [...prev, { id, content: text, status: 'sending', replyTo: reply ?? null }],
     )
     void sendMessage(conversationId, text, reply?.id)
@@ -1612,10 +1685,25 @@ export default function Conversation() {
          * 判据见 `./view` 的 `shouldDropReplyOnSendFailure`。
          */
         const dropReply = shouldDropReplyOnSendFailure(code)
+        /**
+         * 429 的 `Retry-After` 落成**绝对时间**（#694 M4）：气泡按它逐秒倒数，重试入口
+         * 冷却结束才出现。存剩余秒数会在重渲染 / 切后台后越倒越多。
+         */
+        const retryAfterAt =
+          isApiError(error) && error.retryAfterSeconds !== undefined
+            ? Date.now() + error.retryAfterSeconds * 1000
+            : null
         setPending((prev) =>
           prev.map((item) =>
             item.id === id
-              ? { ...item, status: 'failed', replyTo: dropReply ? null : item.replyTo }
+              ? {
+                  ...item,
+                  status: 'failed',
+                  replyTo: dropReply ? null : item.replyTo,
+                  error: sendFailureText(code),
+                  errorCode: code ?? null,
+                  retryAfterAt,
+                }
               : item,
           ),
         )
@@ -1703,6 +1791,21 @@ export default function Conversation() {
     if (retryingMediaRef.current.has(item.id)) return
     retryingMediaRef.current.add(item.id)
     runMediaSend(item)
+  }
+
+  /**
+   * 移除一条本地发送失败的文本（#694 M4 审查）：BLOCK 是终态 —— 服务端没有这条记录，
+   * `messages` 也没行可删，重试只会再被同一段内容拦一次。页面此前在终态下没有任何操作，
+   * 而 `send` 已经清空了输入框，用户只能把这条失败气泡永远留在会话里。对齐 PC 站失败尾部
+   * 的「移除」：只删本地草稿，不发请求、不动服务端。
+   */
+  const removePending = (id: string) => {
+    setPending((prev) => prev.filter((item) => item.id !== id))
+  }
+
+  /** 移除一条本地失败的媒体（同上；断点续传的 `uploaded` 也一起丢掉，不会再被引用）。 */
+  const removePendingMedia = (id: string) => {
+    setPendingMedia((prev) => prev.filter((item) => item.id !== id))
   }
 
   /**
@@ -1829,7 +1932,17 @@ export default function Conversation() {
         setPendingMedia((prev) =>
           prev.map((item) =>
             item.id === draft.id
-              ? { ...item, status: 'failed', replyTo: dropReply ? undefined : item.replyTo }
+              ? {
+                  ...item,
+                  status: 'failed',
+                  replyTo: dropReply ? undefined : item.replyTo,
+                  error: sendFailureText(code),
+                  errorCode: code ?? null,
+                  retryAfterAt:
+                    isApiError(error) && error.retryAfterSeconds !== undefined
+                      ? Date.now() + error.retryAfterSeconds * 1000
+                      : null,
+                }
               : item,
           ),
         )
@@ -4160,14 +4273,14 @@ export default function Conversation() {
                           <Text className="conv__bubble-tx">{entry.pending.content}</Text>
                         </View>
                         {failed ? (
-                          <View className="conv__retry" onClick={() => retry(entry.pending)}>
-                            <Image
-                              className="conv__retry-ic"
-                              src={ICONS.refreshBrand}
-                              mode="aspectFit"
-                            />
-                            <Text>发送失败 · 重试</Text>
-                          </View>
+                          <PendingFailFooter
+                            cooldown={sendCooldownSeconds(entry.pending.retryAfterAt, cooldownNow)}
+                            error={entry.pending.error ?? null}
+                            onRemove={() => removePending(entry.pending.id)}
+                            onRetry={
+                              canRetry(entry.pending) ? () => retry(entry.pending) : undefined
+                            }
+                          />
                         ) : (
                           <Text className="conv__time num">发送中…</Text>
                         )}
@@ -4179,12 +4292,16 @@ export default function Conversation() {
                 if (entry.kind === 'media') {
                   const item = entry.media
                   const mine = item.senderId === me?.id
+                  // 接收者兜底（#694 M4）：待审 / 被拒的媒体整行不画，连可播地址都不给。
+                  if (!mine && item.visibility !== 'DELIVERED') return null
                   /**
                    * 媒体消息的逐条读位（2026-11-10 Owner：「图片已读也没有信息」）——
                    * 原先只有文本气泡那条分支渲染 `.conv__rd`，图片 / 语音行只有时间戳，
                    * 自己发的图是否已被对方读到完全看不出来。判据与文本分支同一个
                    * `messageReadLabel`（只对我发出的消息判；判不出来算未读）。
                    */
+                  /** 审核态（#694 M4）：待审 / 被拒只对发送者可见，且盖过读位 */
+                  const mediaReviewLabel = reviewStatusLabel(item.visibility, mine)
                   const mediaReadLabel = messageReadLabel({
                     mine,
                     createdAt: item.createdAt,
@@ -4264,7 +4381,9 @@ export default function Conversation() {
                         )}
                         <Text className="conv__time num">
                           {clockTime(item.createdAt)}
-                          {mediaReadLabel ? (
+                          {mediaReviewLabel !== null ? (
+                            <Text className="conv__rd is-unread">{` · ${mediaReviewLabel}`}</Text>
+                          ) : mediaReadLabel ? (
                             <Text
                               className={`conv__rd${mediaReadLabel === '未读' ? ' is-unread' : ''}`}
                             >
@@ -4317,14 +4436,12 @@ export default function Conversation() {
                           </View>
                         )}
                         {failed ? (
-                          <View className="conv__retry" onClick={() => retryMedia(item)}>
-                            <Image
-                              className="conv__retry-ic"
-                              src={ICONS.refreshBrand}
-                              mode="aspectFit"
-                            />
-                            <Text>发送失败 · 重试</Text>
-                          </View>
+                          <PendingFailFooter
+                            cooldown={sendCooldownSeconds(item.retryAfterAt, cooldownNow)}
+                            error={item.error ?? null}
+                            onRemove={() => removePendingMedia(item.id)}
+                            onRetry={canRetryMedia(item) ? () => retryMedia(item) : undefined}
+                          />
                         ) : (
                           <Text className="conv__time num">发送中…</Text>
                         )}
@@ -4338,6 +4455,11 @@ export default function Conversation() {
                 if (message.type === 'LISTING') return renderListing(message)
 
                 const mine = message.senderId === me?.id
+                /*
+                  接收者不该看到待审 / 被拒内容（#694 M4）：服务端已按 `DELIVERED` 过滤，
+                  这里只是最后一道兜底（实时迟到帧 / 旧状态残留），宁可整行不画。
+                */
+                if (!mine && message.visibility !== 'DELIVERED') return null
                 /**
                  * 逐条读位（#359 四）：只对我发出的消息判，对方发来的为 null 不渲染。
                  * 读位来自详情的 `counterpartLastReadAt`，所以它随 `load` 一起刷新。
@@ -4349,6 +4471,13 @@ export default function Conversation() {
                 })
                 /** 撤回碑（#359 3c）：双方一致、刷新后一致 —— 正文已由服务端清空 */
                 const recalled = message.recalledAt !== null
+                /**
+                 * 审核态（#694 M4）：待审 / 被拒只对发送者可见，且不参与读位展示。
+                 * **撤回碑不挂审核标签** —— `conv__time` 在撤回分支外仍会渲染，若不在这里
+                 * 置空，一条「未通过审核」后被撤回的消息会显示成「撤回了一条消息 · 未通过
+                 * 审核」，像是撤回又触发了一次审核。
+                 */
+                const reviewLabel = reviewStatusLabel(message.visibility, mine, recalled)
                 return (
                   <View
                     key={message.id}
@@ -4389,7 +4518,9 @@ export default function Conversation() {
                       )}
                       <Text className="conv__time num">
                         {clockTime(message.createdAt)}
-                        {readLabel ? (
+                        {reviewLabel !== null ? (
+                          <Text className="conv__rd is-unread">{` · ${reviewLabel}`}</Text>
+                        ) : readLabel ? (
                           <Text className={`conv__rd${readLabel === '未读' ? ' is-unread' : ''}`}>
                             {` · ${readLabel}`}
                           </Text>

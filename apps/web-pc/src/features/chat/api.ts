@@ -284,6 +284,15 @@ export function describeSendFailure(error: unknown): string {
     }
     // #694 M1 fail-closed：审核未给出结论，消息未落库，可原样重试。
     if (error.code === 'CONTENT_MODERATION_UNAVAILABLE') return '内容审核暂不可用，请稍后重试'
+    // #694 M3 限流：三条路由各自的 429 码语义相同。具体等多久由 outbox 的
+    // `retryAfterAt`（Retry-After 落成的绝对时间）在失败气泡上逐秒倒数，这里只说原因。
+    if (
+      error.code === 'MESSAGE_RATE_LIMITED' ||
+      error.code === 'MEDIA_RATE_LIMITED' ||
+      error.code === 'CONVERSATION_RATE_LIMITED'
+    ) {
+      return '发送太频繁，请稍后重试'
+    }
     // #67 媒体链路：上传未完成 / 内容与声明不符 / 超限 / 越权读取，逐条给明确反馈。
     if (error.code === 'MEDIA_OBJECT_NOT_FOUND') return '媒体上传未完成，请重试'
     if (error.code === 'MEDIA_OBJECT_INVALID') return '媒体文件与声明不一致，请重试'

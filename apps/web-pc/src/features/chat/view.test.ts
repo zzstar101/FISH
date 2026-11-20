@@ -3,9 +3,11 @@ import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import {
   buildTimeline,
   canRecallMessage,
+  countPendingReview,
   excludeCachedMedia,
   excludeCachedMessages,
   formatMessageTime,
+  reviewStatusLabel,
   systemMessageText,
 } from './view'
 
@@ -180,5 +182,29 @@ describe('canRecallMessage', () => {
     expect(canRecallMessage(media, ME, AT + 1_000, WINDOW)).toBe(true)
     expect(canRecallMessage({ ...media, recalledAt: CREATED }, ME, AT + 1_000, WINDOW)).toBe(false)
     expect(canRecallMessage(media, OTHER, AT + 1_000, WINDOW)).toBe(false)
+  })
+})
+
+describe('审核态展示（#694 M4）', () => {
+  test('待审与拒绝各有稳定文案，且只给发送者', () => {
+    expect(reviewStatusLabel('PENDING_REVIEW', true)).toBe('审核中')
+    expect(reviewStatusLabel('REJECTED', true)).toBe('未通过审核')
+    expect(reviewStatusLabel('DELIVERED', true)).toBeNull()
+    // 接收者视角：服务端本该过滤掉这些行，视图层不再给任何标签（兜底见 next 用例）。
+    expect(reviewStatusLabel('PENDING_REVIEW', false)).toBeNull()
+    expect(reviewStatusLabel('REJECTED', false)).toBeNull()
+  })
+
+  test('输入区待审计数只算自己发出的 PENDING_REVIEW，DELIVERED / 拒绝都不计', () => {
+    const items = [
+      { senderId: 'me', visibility: 'PENDING_REVIEW' as const },
+      { senderId: 'me', visibility: 'PENDING_REVIEW' as const },
+      { senderId: 'me', visibility: 'DELIVERED' as const },
+      { senderId: 'me', visibility: 'REJECTED' as const },
+      { senderId: 'other', visibility: 'PENDING_REVIEW' as const },
+    ]
+    expect(countPendingReview(items, 'me')).toBe(2)
+    expect(countPendingReview(items, 'other')).toBe(1)
+    expect(countPendingReview(items, null)).toBe(0)
   })
 })

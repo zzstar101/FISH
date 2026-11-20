@@ -517,6 +517,82 @@ describe('conversations store: 聊天可见性（#694 M1）', () => {
     }
   })
 
+  test('被拒消息与待审同口径：接收者三个读侧都不可见，发送者摘要保留稳定状态', async () => {
+    const listingId = newId()
+    await seedListing(listingId, seller, '被拒消息商品')
+    const inserted = await store.insertIfAbsent(listingId, outsider, seller)
+    if (!inserted) throw new Error('unreachable')
+    const conversationId = inserted.id
+    try {
+      const before = await store.findDetail(conversationId, seller)
+      if (!before) throw new Error('unreachable')
+      const beforeSortKey = new Date(before.conversation.last_message_at).getTime()
+
+      await db.execute(sql`
+        INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at, visibility)
+        VALUES (${crypto.randomUUID()}, ${conversationId}, ${outsider}, 'TEXT', '加微信聊', now(), 'REJECTED')
+      `)
+
+      const receiverView = await store.findDetail(conversationId, seller)
+      expect(receiverView?.unreadCount).toBe(0)
+      expect(receiverView?.lastMessage).toBeNull()
+      expect(new Date(receiverView?.conversation.last_message_at ?? 0).getTime()).toBe(
+        beforeSortKey,
+      )
+
+      // 拒绝是终态：发送者仍能读到自己那条（界面标「未通过审核」），但永远不会计未读。
+      const senderView = await store.findDetail(conversationId, outsider)
+      expect(senderView?.unreadCount).toBe(0)
+      expect(senderView?.lastMessage).toMatchObject({
+        type: 'TEXT',
+        content: '加微信聊',
+        senderId: outsider,
+      })
+    } finally {
+      await db.execute(sql`DELETE FROM conversations WHERE id = ${conversationId}`)
+      await db.execute(sql`DELETE FROM listings WHERE id = ${listingId}`)
+    }
+  })
+
+  /*
+   * #694 M1 的摘要回退：接收者视角里最新一条若是待审，LATERAL 子查询会把它滤掉，
+   * 摘要必须落到**上一条已投递**的消息，而不是变成「打个招呼吧」。
+   */
+  test('接收者摘要回退到上一条 DELIVERED；发送者摘要仍是最新的待审气泡', async () => {
+    const listingId = newId()
+    await seedListing(listingId, seller, '摘要回退商品')
+    const inserted = await store.insertIfAbsent(listingId, outsider, seller)
+    if (!inserted) throw new Error('unreachable')
+    const conversationId = inserted.id
+    try {
+      await db.execute(sql`
+        INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at, visibility, delivered_at)
+        VALUES (${crypto.randomUUID()}, ${conversationId}, ${outsider}, 'TEXT', '先送到的一条',
+                now() - interval '1 minute', 'DELIVERED', now() - interval '1 minute')
+      `)
+      await db.execute(sql`
+        INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at, visibility)
+        VALUES (${crypto.randomUUID()}, ${conversationId}, ${outsider}, 'TEXT', '加微信聊',
+                now(), 'PENDING_REVIEW')
+      `)
+
+      const receiverView = await store.findDetail(conversationId, seller)
+      expect(receiverView?.lastMessage).toMatchObject({
+        content: '先送到的一条',
+        senderId: outsider,
+      })
+
+      const senderView = await store.findDetail(conversationId, outsider)
+      expect(senderView?.lastMessage).toMatchObject({
+        content: '加微信聊',
+        senderId: outsider,
+      })
+    } finally {
+      await db.execute(sql`DELETE FROM conversations WHERE id = ${conversationId}`)
+      await db.execute(sql`DELETE FROM listings WHERE id = ${listingId}`)
+    }
+  })
+
   test('人工放行按 delivered_at 计一次未读：created_at 早于已读水位也不漏', async () => {
     const listingId = newId()
     await seedListing(listingId, seller, '放行未读商品')

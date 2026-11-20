@@ -1,4 +1,4 @@
-import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { MediaMessageDto, MessageDto, MessageVisibility } from '@fish/contracts/chat/schema'
 import { transactionSystemEventSchema } from '@fish/contracts/transactions/schema'
 
 function parseSystemEvent(content: string): { type: string } | null {
@@ -101,4 +101,32 @@ export function buildTimeline(
     if (byTime !== 0) return byTime
     return a.id.localeCompare(b.id)
   })
+}
+
+/**
+ * 审核态标签（#694 M4）。三种 visibility 里只有 `PENDING_REVIEW` / `REJECTED` 需要额外说明：
+ * 它们**只对发送者可见** —— 接收者视角里服务端根本不下发这些行（未读、摘要、历史、媒体 GET
+ * 一律按 `visibility='DELIVERED'` 过滤），所以标签也只给 mine。
+ *
+ * 非 mine 且非 DELIVERED 属于"不该发生"（例如实时缓存里残留的旧行），返回 null 让气泡
+ * 自己兜底隐藏，避免把待审内容读给接收者。
+ */
+export function reviewStatusLabel(
+  visibility: MessageVisibility,
+  isMine: boolean,
+): '审核中' | '未通过审核' | null {
+  if (!isMine) return null
+  if (visibility === 'PENDING_REVIEW') return '审核中'
+  if (visibility === 'REJECTED') return '未通过审核'
+  return null
+}
+
+/** 我发出的、仍在审核中的条数（文本 + 媒体），用于输入区顶部提示。 */
+export function countPendingReview(
+  items: readonly { senderId: string | null; visibility: MessageVisibility }[],
+  viewerId: string | null,
+): number {
+  if (viewerId === null) return 0
+  return items.filter((item) => item.senderId === viewerId && item.visibility === 'PENDING_REVIEW')
+    .length
 }

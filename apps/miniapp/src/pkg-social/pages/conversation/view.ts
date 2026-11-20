@@ -1,4 +1,9 @@
-import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type {
+  ConversationDto,
+  MediaMessageDto,
+  MessageDto,
+  MessageVisibility,
+} from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import type { UserPresence } from '@fish/contracts/users/schema'
 import { currentTxOf } from '@/features/chat/capsule'
@@ -658,6 +663,69 @@ export type PendingMessage = {
    * 发送成功前服务端还没给投射，气泡里的摘引只能先用本地这份画。
    */
   replyTo?: { id: string; excerpt: string } | null
+  /**
+   * 最近一次失败的展示信息（#694 M4）：`error` 直接画在失败气泡下方，`errorCode` 决定
+   * 还能不能重试（见 `canRetry`），`retryAfterAt` 是 429 的冷却截止时间（epoch ms）。
+   */
+  error?: string | null
+  errorCode?: string | null
+  retryAfterAt?: number | null
+}
+
+/**
+ * 这些失败拿**同一份内容**重试必然再失败（#694 M4）：`MESSAGE_CONTENT_BLOCKED` 是审核对内容
+ * 的确定结论（契约要求客户端让用户「修改后重发」），另两个是幂等键冲突与账号限制。
+ * 不给重试入口，避免用户白点 —— 与 web-pc 的 `TERMINAL_SEND_FAILURES` 同一口径。
+ */
+const TERMINAL_SEND_FAILURE_CODES: ReadonlySet<string> = new Set([
+  'MESSAGE_CONTENT_BLOCKED',
+  'IDEMPOTENCY_KEY_REUSED',
+  'USER_RESTRICTED',
+])
+
+/**
+ * 审核态标签（#694 M4）：`PENDING_REVIEW` / `REJECTED` 只对发送者可见 —— 接收者视角里
+ * 服务端根本不下发这些行（列表、未读、摘要、历史、媒体 GET 都按 `DELIVERED` 过滤）。
+ */
+export function reviewStatusLabel(
+  visibility: MessageVisibility,
+  mine: boolean,
+  recalled = false,
+): '审核中' | '未通过审核' | null {
+  // 撤回碑压过审核标签：撤回后正文已由服务端清空，再挂「审核中/未通过审核」只会让发送者
+  // 以为撤回起了个新的审核态。可见性本身仍按服务端下发，只影响这块标签。
+  if (recalled || !mine) return null
+  if (visibility === 'PENDING_REVIEW') return '审核中'
+  if (visibility === 'REJECTED') return '未通过审核'
+  return null
+}
+
+/**
+ * 发送失败的用户可行动文案（#694 M4）。返回 null 表示「这条码没有专属说法」，
+ * 调用方退回服务端 message / 「发送失败，请重试」—— 不在这里虚构原因。
+ */
+export function sendFailureText(code: string | null | undefined): string | null {
+  if (code === 'MESSAGE_CONTENT_BLOCKED') return '内容被拦下了，请修改后重新发送'
+  if (code === 'CONTENT_MODERATION_UNAVAILABLE') return '内容审核暂时不可用，请稍后重试'
+  if (
+    code === 'MESSAGE_RATE_LIMITED' ||
+    code === 'MEDIA_RATE_LIMITED' ||
+    code === 'CONVERSATION_RATE_LIMITED'
+  ) {
+    return '发送太频繁，请稍后重试'
+  }
+  if (code === 'VOICE_SEND_DISABLED') return '语音消息暂不支持发送，请改用文字或图片'
+  if (code === 'CONVERSATION_UNAVAILABLE') return '会话当前不可用，暂时无法发送消息'
+  return null
+}
+
+/** 429 的剩余冷却秒数（向上取整）；0 表示现在就能重试。 */
+export function sendCooldownSeconds(
+  retryAfterAt: number | null | undefined,
+  nowMs: number,
+): number {
+  if (retryAfterAt === null || retryAfterAt === undefined) return 0
+  return Math.max(0, Math.ceil((retryAfterAt - nowMs) / 1000))
 }
 
 /**
@@ -666,7 +734,9 @@ export type PendingMessage = {
  * 这条规则有测试直接锁在真实调用点上。
  */
 export function canRetry(message: PendingMessage): boolean {
-  return message.status === 'failed'
+  if (message.status !== 'failed') return false
+  const code = message.errorCode ?? null
+  return code === null || !TERMINAL_SEND_FAILURE_CODES.has(code)
 }
 
 /* ------------------------------------------------------------------ 媒体（#359 3b） */
@@ -743,11 +813,17 @@ export type PendingMedia = PendingMediaDraft & {
   /** 已直传成功的结果（重试时只重发 create）；还没传成功为 null */
   uploaded: PendingMediaUpload | null
   status: 'uploading' | 'failed'
+  /** 失败信息（#694 M4），口径与 `PendingMessage` 的三件套相同 */
+  error?: string | null
+  errorCode?: string | null
+  retryAfterAt?: number | null
 }
 
 /** 上传失败的媒体才能重试（与文本的 `canRetry` 同一口径） */
 export function canRetryMedia(pending: PendingMedia): boolean {
-  return pending.status === 'failed'
+  if (pending.status !== 'failed') return false
+  const code = pending.errorCode ?? null
+  return code === null || !TERMINAL_SEND_FAILURE_CODES.has(code)
 }
 
 /**
@@ -757,7 +833,7 @@ export function canRetryMedia(pending: PendingMedia): boolean {
  * `canRetryMedia` 渲染成失败态、重试按钮还挂在上面 —— 用户看不出点了有没有反应。
  */
 export function startMediaRetry(pending: PendingMedia): PendingMedia {
-  return { ...pending, status: 'uploading' }
+  return { ...pending, status: 'uploading', error: null, errorCode: null, retryAfterAt: null }
 }
 
 /**
@@ -905,12 +981,26 @@ export function mergePushedMedia(
    * `media.new` 不只会推新消息 —— 服务端的媒体创建幂等重放（`media-service.ts` 的
    * 快速路径）会拿**已撤回的那一行**重建 DTO 再推一次，那条带着 `recalledAt`。
    * 只按 id 去重会把这次撤回态丢掉（虽然 `message.recalled` 通常会先到，但那是
-   * 两条独立事件，不构成保证）。
+   * 两条独立事件，不构成保证）。撤回优先于可见性升级：整体换成推送的那条。
    */
-  if (media.recalledAt === null || existing.recalledAt !== null) return previous
-  const next = [...previous]
-  next[index] = media
-  return next
+  if (media.recalledAt !== null && existing.recalledAt === null) {
+    const next = [...previous]
+    next[index] = media
+    return next
+  }
+  /**
+   * 审核状态必须前进（#694 M4）：管理端把一张 `PENDING_REVIEW` 的图放行为 `DELIVERED` 时，
+   * 服务端推的是**同 id** 的 DTO（`chat-service.ts` 的 `onDelivered`）。只按撤回处理会丢掉
+   * 这次可见性升级，发送者的气泡会一直停在「审核中」。这里只认 `PENDING_REVIEW → DELIVERED`
+   * 这一种前进，且只改 `visibility` —— 其余字段仍以本地已存在的为准。
+   */
+  if (existing.visibility === 'PENDING_REVIEW' && media.visibility === 'DELIVERED') {
+    const next = [...previous]
+    next[index] = { ...existing, visibility: 'DELIVERED' }
+    return next
+  }
+  // 既没有新撤回、也没有可见性升级：无新信息，保持原引用
+  return previous
 }
 
 /**
@@ -930,11 +1020,25 @@ export function mergePushedMessage(previous: MessageDto[], message: MessageDto):
   if (index === -1) return sortMessages([...previous, message])
   const existing = previous[index]
   if (existing === undefined) return previous
-  // 本地已是撤回碑 / 推送也没带撤回：无新信息，保持原引用
-  if (message.recalledAt === null || existing.recalledAt !== null) return previous
-  const next = [...previous]
-  next[index] = message
-  return next
+  // 撤回优先：推送带着本地还没有的撤回时刻时整体换掉，撤回碑不能因可见性升级被跳过
+  if (message.recalledAt !== null && existing.recalledAt === null) {
+    const next = [...previous]
+    next[index] = message
+    return next
+  }
+  /**
+   * 审核状态必须前进（#694 M4）：管理端把一条 `PENDING_REVIEW` 放行为 `DELIVERED` 时，服务端
+   * 推的是**同 id** 的 DTO（`chat-service.ts` 的 `onDelivered`）。只按撤回处理会丢掉这次可见性
+   * 升级，发送者的气泡会一直停在「审核中」。这里只认 `PENDING_REVIEW → DELIVERED` 这一种前进，
+   * 且只改 `visibility` —— 其余字段仍以本地已存在的为准。
+   */
+  if (existing.visibility === 'PENDING_REVIEW' && message.visibility === 'DELIVERED') {
+    const next = [...previous]
+    next[index] = { ...existing, visibility: 'DELIVERED' }
+    return next
+  }
+  // 本地已是撤回碑 / 推送也没带撤回 / 没有升级：无新信息，保持原引用
+  return previous
 }
 
 /**

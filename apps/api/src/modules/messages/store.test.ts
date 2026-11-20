@@ -418,4 +418,51 @@ describe('messages store: 聊天可见性（#694 M1）', () => {
     const recordRows = Array.isArray(records) ? records : (records as { rows: unknown[] }).rows
     expect(recordRows).toEqual([{ status: 'PENDING' }])
   })
+
+  test('REJECTED：同样是接收者不可见、发送者可见，且不推进 last_message_at', async () => {
+    const lastMessageAt = async () => {
+      const result = await db.execute(
+        sql`SELECT last_message_at FROM conversations WHERE id = ${conversationA}`,
+      )
+      const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+        last_message_at: Date | string
+      }
+      return new Date(row.last_message_at).getTime()
+    }
+    const before = await lastMessageAt()
+    const row = await store.insertText(conversationA, seller, '私下交易加我微信', {
+      visibility: 'REJECTED',
+      moderation: {
+        kind: 'TEXT',
+        decision: 'BLOCK',
+        machineDecision: 'REVIEW',
+        status: 'SETTLED',
+        provider: 'LOCAL',
+        providerRequestId: null,
+        policyVersion: 'test',
+        suggestion: 'Block',
+        label: 'EXTERNAL_CONTACT',
+        subLabel: null,
+        score: null,
+        matchedRules: ['EXTERNAL_CONTACT'],
+        matchedTermsMasked: ['微**'],
+      },
+    })
+    expect(row.visibility).toBe('REJECTED')
+
+    // 拒绝是终态：接收者的历史里没有这一行，发送者翻自己的历史仍是同一行。
+    const receiver = await store.listByConversation(conversationA, {
+      limit: 50,
+      before: null,
+      viewerId: buyer,
+    })
+    expect(receiver.kind === 'ok' && receiver.rows.map((item) => item.id)).not.toContain(row.id)
+    const sender = await store.listByConversation(conversationA, {
+      limit: 50,
+      before: null,
+      viewerId: seller,
+    })
+    expect(sender.kind === 'ok' && sender.rows.map((item) => item.id)).toContain(row.id)
+    expect(await lastMessageAt()).toBe(before)
+  })
 })

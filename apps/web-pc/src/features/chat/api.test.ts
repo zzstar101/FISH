@@ -149,6 +149,19 @@ describe('chat error helpers', () => {
     ).toBe('内容审核暂不可用，请稍后重试')
   })
 
+  test('describes rate limits by cause, leaving the wait to the Retry-After countdown', () => {
+    // #694 M3：三条路由的 429 码各管一段链路，文案只解释「为什么」，秒数由 outbox 倒计时。
+    for (const code of [
+      'MESSAGE_RATE_LIMITED',
+      'MEDIA_RATE_LIMITED',
+      'CONVERSATION_RATE_LIMITED',
+    ]) {
+      expect(describeSendFailure(new ApiError(code, 429, '太频繁', undefined, 9))).toBe(
+        '发送太频繁，请稍后重试',
+      )
+    }
+  })
+
   test('describes media failures with their own messages', () => {
     expect(describeSendFailure(new ApiError('MEDIA_OBJECT_NOT_FOUND', 422, '未上传'))).toBe(
       '媒体上传未完成，请重试',
