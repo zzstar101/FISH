@@ -379,6 +379,13 @@
       "when": 1795175477785,
       "tag": "20261120195117_mute_talon",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1795177628564,
+      "tag": "20261120202708_tan_blindfold",
+      "breakpoints": true
     }
   ]
 }

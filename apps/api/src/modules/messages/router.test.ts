@@ -270,3 +270,25 @@ describe('messages router', () => {
     expect(called).toBe(false)
   })
 })
+
+describe('messages router: 限流响应（#694 M3）', () => {
+  test('429 带 Retry-After 头与 retryAfterSeconds 字段', async () => {
+    const app = buildApp({
+      sendTextMessage: async () => {
+        throw new MessageServiceError(429, 'MESSAGE_RATE_LIMITED', '发送过于频繁，请稍后再试', 7)
+      },
+    })
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '在吗' }),
+    })
+    expect(response.status).toBe(429)
+    expect(response.headers.get('retry-after')).toBe('7')
+    const body = (await response.json()) as {
+      error: { code: string; retryAfterSeconds?: number }
+    }
+    expect(body.error.code).toBe('MESSAGE_RATE_LIMITED')
+    expect(body.error.retryAfterSeconds).toBe(7)
+  })
+})

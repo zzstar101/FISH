@@ -11,6 +11,7 @@ import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { BlockRelationCheck } from '../blocks/store'
 import type { PresenceReader } from '../presence/presence'
+import type { ChatRateLimiter } from '../rate-limit/service'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -20,9 +21,11 @@ import type { ConversationDetailRow, ConversationStore } from './store'
 export class ConversationServiceError extends Error {
   constructor(
     /** HTTP 状态码；code 取值域由契约的 ChatErrorCodeSchema 收窄。 */
-    readonly status: 403 | 404 | 409 | 422,
+    readonly status: 403 | 404 | 409 | 422 | 429,
     readonly code: string,
     message: string,
+    /** 429 时的建议等待秒数（router 会写 `Retry-After`）。 */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message)
     this.name = 'ConversationServiceError'
@@ -119,6 +122,7 @@ export function createConversationService({
   storage,
   presence,
   blocks,
+  rateLimit,
   onRead,
   projectContent = async (_type: string, content: string) => content,
 }: {
@@ -135,6 +139,8 @@ export function createConversationService({
    * 漏接线等于守卫失效，所以在类型层要求装配方显式提供（presence 同款取舍）。
    */
   blocks: BlockRelationCheck
+  /** #694 M3：同一买家 10 分钟内最多主动联系 10 个新卖家。 */
+  rateLimit: ChatRateLimiter
   projectContent?: (type: string, content: string) => Promise<string>
   /**
    * 读位推进成功后调用（先落库再推送，与 messages 的 `onMessageCreated` 同语义）；
@@ -179,6 +185,20 @@ export function createConversationService({
       // 对双方同码同文案，不暴露「谁拉黑了谁」（验收：报错不暴露对方黑名单）。
       if (await blocks.existsBlockBetween(userId, listing.sellerId)) {
         throw new ConversationServiceError(403, 'CONVERSATION_UNAVAILABLE', '会话当前不可用')
+      }
+
+      // #694 M3：只有真正要新建会话时才计「新卖家」额度；重复点同一商品复用会话不消耗。
+      const existingId = await store.findIdByListingAndBuyer(input.listingId, userId)
+      if (!existingId) {
+        const rate = await rateLimit.takeNewSellerContact(userId, listing.sellerId)
+        if (!rate.allowed) {
+          throw new ConversationServiceError(
+            429,
+            'CONVERSATION_RATE_LIMITED',
+            '联系新卖家过于频繁，请稍后再试',
+            rate.retryAfterSeconds,
+          )
+        }
       }
 
       // 商品在「查存在 → 建会话」之间被卖家物理删除时，INSERT 会撞复合外键

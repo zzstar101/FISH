@@ -17,7 +17,13 @@ export type MessagesRouterOptions = {
 
 function toErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof MessageServiceError) {
-    return c.json(errorBody(error.code, error.message), error.status)
+    if (error.retryAfterSeconds !== undefined) {
+      c.header('Retry-After', String(error.retryAfterSeconds))
+    }
+    return c.json(
+      errorBody(error.code, error.message, undefined, error.retryAfterSeconds),
+      error.status,
+    )
   }
   throw error
 }

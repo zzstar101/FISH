@@ -22,6 +22,7 @@ import {
 import type { BlockRelationCheck } from '../blocks/store'
 import type { ChatModerationResult, ChatTextModerationPolicy } from '../moderation/chat'
 import { ContentModerationError } from '../moderation/providers/types'
+import type { ChatRateLimiter } from '../rate-limit/service'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -40,12 +41,24 @@ import type {
   ReplyTargetRow,
 } from './store'
 
+/** #694 M3：限流拒绝；`retryAfterSeconds` 由服务端窗口算出，端上据此倒计时。 */
+function rateLimited(retryAfterSeconds: number): MessageServiceError {
+  return new MessageServiceError(
+    429,
+    'MESSAGE_RATE_LIMITED',
+    '发送过于频繁，请稍后再试',
+    retryAfterSeconds,
+  )
+}
+
 export class MessageServiceError extends Error {
   constructor(
     /** 503 只用于审核上游不可用（#694 M1 fail-closed）：消息未落库，可原样重试。 */
-    readonly status: 403 | 404 | 409 | 422 | 503,
+    readonly status: 403 | 404 | 409 | 422 | 429 | 503,
     readonly code: string,
     message: string,
+    /** 429 时的建议等待秒数（router 会写 `Retry-After`）。 */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message)
     this.name = 'MessageServiceError'
@@ -351,6 +364,7 @@ export function createMessageService({
    * 所以在类型层要求装配方显式提供（与 `blocks` 同一取舍）。
    */
   chatModeration,
+  rateLimit,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
   /** 撤回落库后推送（#359 3c）：与 `message.new` 同一条「先落库再推送」语义。 */
@@ -361,6 +375,8 @@ export function createMessageService({
   storage: MediaStorage
   blocks: BlockRelationCheck
   chatModeration: ChatTextModerationPolicy
+  /** #694 M3：真实新请求的滑动窗口限流（重放路径在计数之前返回）。 */
+  rateLimit: ChatRateLimiter
   projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
@@ -454,6 +470,11 @@ export function createMessageService({
       await assertNotBlocked(conversation, userId)
       // 引用目标先校验（#359 3c）：不可用直接 422，不落库。
       const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
+
+      // #694 M3：先过拉黑/封禁（上面），再计限流——被守卫拒绝的写入不消耗额度。
+      // 幂等重放已在函数开头返回，重试不会重复计数。
+      const rate = await rateLimit.takeTextSend(userId, conversationId)
+      if (!rate.allowed) throw rateLimited(rate.retryAfterSeconds)
 
       /*
        * #694 M1：文字在**写可见消息之前**送审。
