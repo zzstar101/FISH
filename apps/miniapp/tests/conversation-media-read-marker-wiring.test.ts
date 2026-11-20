@@ -68,8 +68,14 @@ describe('媒体消息读位 · 接线', () => {
       "if (entry.kind === 'pending-media')",
     )
 
-    // 只算不渲染 = 端上照样看不到，必须真的进 JSX
-    expect(media).toContain('{mediaReadLabel ? (')
+    // 只算不渲染 = 端上照样看不到，必须真的进 JSX。
+    // 审核态（#694 M4）优先占了三元的前一支，读位退到 else —— 这里钉 else 那一支仍在，
+    // 而不是要求读位还是第一个分支：后者会把「审核中 / 未通过审核」的合法插入判成回归。
+    expect(media).toContain(': mediaReadLabel ? (')
+    // 位置也不能漂：必须仍在媒体行的时间文本之后（挪到别处、只剩死代码都不算接线）
+    const timeAt = media.lastIndexOf('{clockTime(item.createdAt)}')
+    expect(timeAt).toBeGreaterThanOrEqual(0)
+    expect(timeAt).toBeLessThan(media.indexOf(': mediaReadLabel ? ('))
     expect(media).toContain(`${RD_CLASS}mediaReadLabel === '未读' ? ' is-unread' : ''}\`}`)
     expect(media).toMatch(/\{` · \$\{mediaReadLabel\}`\}/)
     // 撤回碑那条 `conv__time` 保持原样：撤回后没有可读性语义，别给它套读位

@@ -104,7 +104,9 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
 
   test('停留在页面时靠详情轮询刷新：PENDING 按 id 查详情，失败则自动重试整份查询', async () => {
     const code = await source()
-    const poll = sliceFrom(code, 'timer = setInterval(', 'presenceSeq.current += 1')
+    // 起点必须带 `() => {`：页面上另有 429 倒计时的 `setInterval`（#694 M4），
+    // 只按 `timer = setInterval(` 切会把冷却计时器到本段之间的所有代码都卷进来。
+    const poll = sliceFrom(code, 'timer = setInterval(() => {', 'presenceSeq.current += 1')
     expect(poll).toContain('txLoadRef.current')
     expect(poll).toContain("txState.status === 'failed'")
     // 重试也要带消息里的 id：列表被 500 条上限截断时，只有精确查询能把状态找回来
@@ -148,7 +150,7 @@ describe('#551 会话页页头交易状态条 · 接线', () => {
     expectEachCallbackGuarded(load, 'load')
 
     // 20s 轮询两条路径（失败重试列表 / PENDING 按 id 查详情）：各自取号，四个回调各自守
-    const poll = sliceFrom(code, 'timer = setInterval(', 'presenceSeq.current += 1')
+    const poll = sliceFrom(code, 'timer = setInterval(() => {', 'presenceSeq.current += 1')
     expect(takes(poll)).toHaveLength(2)
     expectEachCallbackGuarded(poll, 'poll')
 

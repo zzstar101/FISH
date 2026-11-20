@@ -4,12 +4,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@fish/ui/dialo
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
 import { AlertCircle, RotateCcw, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { formatVoiceDuration } from './media'
 import type { OutboxMediaMessage, OutboxTextMessage } from './outbox'
-import { formatMessageTime, systemMessageText } from './view'
+import { retryCooldownSeconds } from './outbox'
+import { formatMessageTime, reviewStatusLabel, systemMessageText } from './view'
 
 /** 与 `conversation-page.tsx` 同源的文案（那边是会话头商品卡用的同一套）。 */
 const STATUS_LABEL: Record<ListingStatus, string> = {
@@ -109,6 +110,26 @@ function RecallButton({ onRecall }: { onRecall: () => void }) {
   )
 }
 
+/** 接收者视角下不该出现的行（服务端过滤的兜底）：只留一句提示，不泄漏内容。 */
+function HiddenBubble() {
+  return (
+    <div className="my-3 flex justify-center">
+      <span className="rounded-full bg-surface-2 px-3.5 py-1.5 text-center text-ink-3 text-xs leading-5">
+        该消息暂不可见
+      </span>
+    </div>
+  )
+}
+
+/** 审核态标签：待审「审核中」，被拒「未通过审核」（只对发送者渲染，见 `reviewStatusLabel`）。 */
+function ReviewLabel({ label }: { label: '审核中' | '未通过审核' }) {
+  return (
+    <span className={label === '未通过审核' ? 'text-danger' : 'text-ink-3'} role="status">
+      {label}
+    </span>
+  )
+}
+
 export function MessageBubble({
   message,
   isMine,
@@ -149,6 +170,16 @@ export function MessageBubble({
     )
   }
 
+  /*
+    接收者不该看到待审 / 被拒内容（#694 M4）。服务端已经按 `visibility='DELIVERED'` 过滤掉
+    这些行，这里是最后一道兜底：实时通道的迟到帧、断线前的旧缓存、或将来某个查询漏了过滤时，
+    宁可只剩一行提示，也不能把未通过审核的正文画给接收者。
+  */
+  if (!isMine && message.visibility !== 'DELIVERED') {
+    return <HiddenBubble />
+  }
+
+  const reviewLabel = reviewStatusLabel(message.visibility, isMine)
   const senderName = message.sender?.nickname ?? '用户'
   return (
     <div className={`flex gap-2.5 ${isMine ? 'justify-end' : 'justify-start'}`}>
@@ -163,14 +194,15 @@ export function MessageBubble({
               isMine
                 ? 'rounded-br-md bg-brand text-white'
                 : 'rounded-bl-md border border-line bg-surface text-ink'
-            }`}
+            }${reviewLabel === null ? '' : ' opacity-60'}`}
           >
             <p className="whitespace-pre-wrap break-words">{message.content}</p>
           </div>
         )}
         <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-3">
           <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
-          {isMine && isRead ? <span>已读</span> : null}
+          {reviewLabel === null ? null : <ReviewLabel label={reviewLabel} />}
+          {isMine && isRead && reviewLabel === null ? <span>已读</span> : null}
           {canRecall ? <RecallButton onRecall={onRecall} /> : null}
           {!isMine && onReport ? <ReportButton onReport={onReport} /> : null}
         </div>
@@ -212,13 +244,24 @@ export function MediaBubble({
       </div>
     )
   }
+  // 与文本同一道兜底：待审 / 被拒的媒体在接收者视角不该出现，更不能给可播放的地址。
+  if (!isMine && media.visibility !== 'DELIVERED') {
+    return <HiddenBubble />
+  }
+
+  const reviewLabel = reviewStatusLabel(media.visibility, isMine)
   return (
     <div className={`flex gap-2.5 ${isMine ? 'justify-end' : 'justify-start'}`}>
-      <div className={`group flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
+      <div
+        className={`group flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}${
+          reviewLabel === null ? '' : ' opacity-60'
+        }`}
+      >
         {media.kind === 'IMAGE' ? <ImageBubble media={media} /> : <VoiceBubble media={media} />}
         <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-3">
           <time dateTime={media.createdAt}>{formatMessageTime(media.createdAt)}</time>
-          {isMine && isRead ? <span>已读</span> : null}
+          {reviewLabel === null ? null : <ReviewLabel label={reviewLabel} />}
+          {isMine && isRead && reviewLabel === null ? <span>已读</span> : null}
           {canRecall ? <RecallButton onRecall={onRecall} /> : null}
           {!isMine && onReport ? <ReportButton onReport={onReport} /> : null}
         </div>
@@ -293,20 +336,56 @@ function VoiceBubble({ media }: { media: MediaMessageDto }) {
   )
 }
 
-/** 发送中 / 失败态共用的尾部：状态文案、重试、仅移除本地记录。 */
+/**
+ * 这些失败用同一条内容重试必然再失败：`MESSAGE_CONTENT_BLOCKED` 是审核对内容的确定结论
+ * （只能改内容后重发），另两个分别是幂等键冲突与账号限制。不给按钮，避免用户白点。
+ */
+const TERMINAL_SEND_FAILURES = new Set([
+  'IDEMPOTENCY_KEY_REUSED',
+  'USER_RESTRICTED',
+  'MESSAGE_CONTENT_BLOCKED',
+])
+
+function isTerminalSendFailure(errorCode: string | null): boolean {
+  return errorCode !== null && TERMINAL_SEND_FAILURES.has(errorCode)
+}
+
+/**
+ * 429 的 Retry-After 倒计时（#694 M4）：冷却期内不给「重试」—— 点了只会再吃一次 429。
+ * 秒数归零后定时器自行停掉，不会在这个气泡的整个生命周期里空转。
+ */
+function useRetryCountdown(retryAfterAt: number | null): number {
+  const [remaining, setRemaining] = useState(() => retryCooldownSeconds(retryAfterAt, Date.now()))
+  useEffect(() => {
+    setRemaining(retryCooldownSeconds(retryAfterAt, Date.now()))
+    if (retryAfterAt === null) return
+    const timer = setInterval(() => {
+      const next = retryCooldownSeconds(retryAfterAt, Date.now())
+      setRemaining(next)
+      if (next === 0) clearInterval(timer)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [retryAfterAt])
+  return remaining
+}
+
+/** 发送中 / 失败态共用的尾部：状态文案、限流倒计时、重试、仅移除本地记录。 */
 function PendingFooter({
   failed,
   error,
   errorCode,
+  retryAfterAt,
   onRetry,
   onDismiss,
 }: {
   failed: boolean
   error: string | null
   errorCode: string | null
+  retryAfterAt: number | null
   onRetry: () => void
   onDismiss: () => void
 }) {
+  const cooldown = useRetryCountdown(retryAfterAt)
   return (
     <div className="mt-1 flex items-center gap-2 text-[11px]">
       {failed ? null : <span className="text-ink-3">发送中…</span>}
@@ -316,7 +395,11 @@ function PendingFooter({
             <AlertCircle className="size-3" />
             {error}
           </span>
-          {errorCode === 'IDEMPOTENCY_KEY_REUSED' || errorCode === 'USER_RESTRICTED' ? null : (
+          {cooldown > 0 ? (
+            <span className="text-ink-3" role="status">
+              冷却中 · {cooldown} 秒后可重试
+            </span>
+          ) : isTerminalSendFailure(errorCode) ? null : (
             <button
               className="inline-flex items-center gap-0.5 text-brand hover:underline"
               onClick={onRetry}
@@ -367,6 +450,7 @@ export function PendingMessageBubble({
           failed={failed}
           onDismiss={onDismiss}
           onRetry={onRetry}
+          retryAfterAt={item.retryAfterAt}
         />
       </div>
     </div>
@@ -412,6 +496,7 @@ export function PendingMediaBubble({
           failed={failed}
           onDismiss={onDismiss}
           onRetry={onRetry}
+          retryAfterAt={item.retryAfterAt}
         />
       </div>
     </div>

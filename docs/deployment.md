@@ -544,6 +544,27 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
 - `TENCENT_CLOUD_REGION` 可选，默认 `ap-guangzhou`；应与存储/会话所在地域一致，跨境调用会明显变慢。
 - `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 是腾讯云控制台按业务创建的两个策略号（文本、图片
   各一），会作为审核结果的 `policyVersion` 记录，便于事后按策略回溯。
+- **私聊策略号缺失时怎么补（#694 M4）**：`CONTENT_MODERATION_TRANSPORT=tencent` 下八个策略号是**一起**
+  校验的（`packages/shared/src/env.ts`），所以「只补私聊」也得和另外六项同时出现在同一份 env 文件里。
+  控制台按「内容安全 → 策略 → 自定义策略」分别建**私聊文本**与**私聊图片**两个策略，场景选「社交-私聊」，
+  记录 BizType 后按下述步骤追加，**不要**把 BizType 或密钥写进仓库：
+
+  ```bash
+  read -r -p 'TMS（聊天文本）BizType: ' TENCENT_TMS_CHAT_BIZ_TYPE
+  read -r -p 'IMS（聊天图片）BizType: ' TENCENT_IMS_CHAT_BIZ_TYPE
+  {
+    printf 'TENCENT_TMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_TMS_CHAT_BIZ_TYPE"
+    printf 'TENCENT_IMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_IMS_CHAT_BIZ_TYPE"
+  } | sudo tee -a /etc/fish/api-mail.env >/dev/null
+  sudo systemctl restart fish-api
+  journalctl -u fish-api --since '2 minutes ago'   # 有「环境变量校验失败」就是没补齐或复用了商品策略号
+  ```
+
+  这两项必须与商品（`TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE`）、公开 UGC 的策略号都不同，
+  复用会直接启动失败（`环境变量校验失败：TENCENT_TMS_CHAT_BIZ_TYPE 必须与 … 不同`）。
+  staging 上仍可用 `CONTENT_MODERATION_TRANSPORT=local`（不需要这两项）：本地词表对私聊文本只做
+  联系方式引流判定（命中即 REVIEW），图片一律 REVIEW，**它不是内容安全审核**，生产环境会被拒绝启动。
+
 - **公开 UGC 必须使用独立策略号（#694 M5）**：许愿墙 `keyword`/`description` 与商品、聊天策略号都不同；`CONTENT_MODERATION_TRANSPORT=local` 时走本地词表，仅是开发兜底。商品留言、回复与交易评价正文（#694 M6）同样走该策略号，审核字段为 `publicContent`：联系方式类灰区规则使用公开场景专配的 `PUBLIC_EXTERNAL_CONTACT`（REVIEW），不复用商品 `EXTERNAL_CONTACT`，也不是私聊的 `content` 判定；BLOCK/REVIEW 都在落库前拒绝（`COMMENT_CONTENT_*` / `REVIEW_CONTENT_*` 错误码区分违规与待人工确认），上游故障 503 且可原样重试。无正文评价目前只校验图片结构与归属，图片内容审核见评价图片批次。许愿墙 BLOCK 直接 422 `WISH_CONTENT_BLOCKED`，REVIEW 落 `PENDING_REVIEW` 不进需求池、不投递匹配，由 `/admin/wishes/moderation` 人工放行/拒绝；编辑命中 REVIEW 只写 pending 字段，公开内容保持不变；上游故障 503 `CONTENT_MODERATION_UNAVAILABLE`（fail-closed，不落库）。
 
 - **昵称 / 个性签名同样走公开 UGC 策略号（#694 M5）**：`PATCH /profile` 在写库**之前**把变化的文本字段送
@@ -1103,6 +1124,131 @@ journalctl -u fish-api -p err
 
 对外监控直接探 `https://fish.example.com/api/health`：DB 断开时它返回 **503 + `status: degraded`**
 （`apps/api/src/app.ts` 的 `/health`），这是唯一现成的健康信号。
+
+### 私聊内容审核（#694）：灰度、回滚与可观测
+
+M4 不含新的契约字段与迁移，改动全在私聊的「读/写可见性 + 双端提示」上。灰度主要是**策略号切真**与
+**队列消化能力**两件事。
+
+**灰度顺序**
+
+1. staging 把 `CONTENT_MODERATION_TRANSPORT` 从 `local` 切到 `tencent`，补上私聊两个 BizType（见 §4），
+   重启 API，按下面的「真实 TMS/IMS 联调」跑完四条样本。
+2. 生产先发 API（队列、可见性、鉴权代理都在服务端），再发 PC 静态产物，最后发小程序。
+   M4 **没有**新增契约必填字段（`visibility` 自 M1 起就在 DTO 里），所以顺序不强制；但仍建议 API 先行，
+   否则端上刚上线的「审核中」文案没有可对的真实数据。
+3. 灰度期盯两件事：待审队列有没有堆积（管理员能不能当天清空）、以及 503 比例。切真后的第一小时
+   建议有人在管理端待审页（`/admin/chat-moderation`）值守。
+
+**回滚**
+
+- 首选：只回滚 API 二进制到上一个含 M1–M3 的版本。`chat_moderation_records` 与 `messages.visibility`
+  都是 M1 起就有的结构，回滚**不需要**动数据库；已经在 `PENDING_REVIEW` 的消息继续对发送者可见、
+  对接收者不可见，重新发回 M4 就能接着处理。
+- 若回滚目标连 `/admin/chat-moderation` 都没有（即回到 M1 之前），必须先清空待审队列：那些行会永远
+  停在 `PENDING_REVIEW`，接收者永远看不到。把队列处理完后按下面这条**应急** SQL 一次性放行（会曝光
+  未经人工看过内容，只在 Owner 明确同意时执行，并先 `pg_dump` 备份）：
+
+  ```sql
+  BEGIN;
+  UPDATE messages SET visibility = 'DELIVERED', delivered_at = now()
+   WHERE visibility = 'PENDING_REVIEW' AND recalled_at IS NULL
+   RETURNING id;
+  UPDATE chat_moderation_records SET status = 'SETTLED', decision = 'ALLOW',
+         reviewed_at = now(), version = version + 1
+   WHERE status = 'PENDING';
+  COMMIT;
+  ```
+
+  已撤回（`recalled_at IS NOT NULL`）的待审消息不在这条 SQL 里，保持隐藏即可。
+
+**指标与告警（当前能测什么）**
+
+本仓库**没有**为审核单独打点：provider 调用耗时既不入库也不进日志，429/503 也只是响应码。能直接量到的
+只有审核台账，以及反代访问日志。下面的 SQL 建议做成只读巡检（例如每 5 分钟一次接 node_exporter
+textfile，与备份指标同一条通道）：
+
+```sql
+-- 1) 队列量与该最老一条的等待时长（kind: TEXT / IMAGE；VOICE 目前不可发送）
+SELECT kind, count(*) AS pending, max(now() - created_at) AS oldest
+FROM chat_moderation_records WHERE status = 'PENDING' GROUP BY kind;
+
+-- 2) 近 24h 机器结论分布：REVIEW 比例突然抬升通常意味着策略变严或有人在刷
+SELECT kind, machine_decision, decision, status, count(*)
+FROM chat_moderation_records
+WHERE created_at > now() - interval '24 hours'
+GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC;
+
+-- 3) 误杀率：人工把机器 REVIEW/BLOCK 改判 ALLOW 的比例
+SELECT count(*) FILTER (WHERE decision = 'ALLOW' AND machine_decision <> 'ALLOW')::float
+       / nullif(count(*), 0) AS human_allow_rate
+FROM chat_moderation_records
+WHERE status = 'SETTLED' AND reviewed_at > now() - interval '24 hours';
+
+-- 4) 放行时延 p95（秒）：队列消化速度
+SELECT percentile_disc(0.95) WITHIN GROUP (
+         ORDER BY extract(epoch FROM reviewed_at - created_at)) AS p95_seconds
+FROM chat_moderation_records
+WHERE status = 'SETTLED' AND reviewed_at > now() - interval '24 hours';
+
+-- 5) 成本量级：近 24h 送审条数，按 kind/provider 拆（腾讯账单按调用次数与 QPS 档位计费）
+SELECT kind, provider, count(*) FROM chat_moderation_records
+WHERE created_at > now() - interval '24 hours' GROUP BY 1, 2;
+```
+
+建议阈值（数值待 Owner 按人手与预算确认，先在低峰期观察一周再收紧）：
+
+| 信号                                            | 阈值          | 说明                                                          |
+| ----------------------------------------------- | ------------- | ------------------------------------------------------------- |
+| `oldest`（待审最老一条）                        | > 30 分钟     | 队列开始堆积，接收者那边是「消息一直不出现」                  |
+| `pending` 总数                                  | > 50          | 一个人一天的复核能力上限附近，需要拉人                        |
+| `human_allow_rate`                              | > 0.3         | 误杀偏多，策略太严或规则误配（先看 `matched_rules`）          |
+| 反代 `/api/conversations/*/messages` 的 **503** | 5 分钟内 > 1% | 审核上游不可用，用户看到「稍后再试」                          |
+| 反代同上路径的 **429**                          | 5 分钟内 > 5% | 限流误伤；对照 `MESSAGE_RATE_LIMITED` 与 `MEDIA_RATE_LIMITED` |
+| API 启动失败（env 校验）                        | 任意一次      | 八项策略号缺失/复用，见 §4                                    |
+
+**已知观测盲点**（不要假装有）：文本/图片被判 BLOCK 时消息不落库、也不写审核记录，因此「机器拦了多少条」
+在台账里**查不到**；provider 单次耗时与 429/503 计数也没有进程内指标。唯一能直接数的是 API 日志里的两条
+`console.info`——文本 `[chat-moderation] BLOCK`（`apps/api/src/modules/messages/service.ts`）、图片
+`[chat-moderation] 图片 BLOCK`（`apps/api/src/modules/messages/media-service.ts`），可临时用 journalctl
+按前缀计数：
+
+```bash
+journalctl -u fish-api --since '24 hours ago' | grep -cF '[chat-moderation] BLOCK'
+journalctl -u fish-api --since '24 hours ago' | grep -cF '[chat-moderation] 图片 BLOCK'
+```
+
+需要 provider 耗时、429/503 比例这类更细的数字时，仍走反代访问日志，或新开 Issue 补计数器——M4 不顺手
+改观测层，别把上面两条日志当成指标。
+
+**真实 TMS / IMS 联调（staging，禁止在生产拿真实用户试）**
+
+前置：staging API 已 `CONTENT_MODERATION_TRANSPORT=tencent`，八项策略号齐全，两个账号 A（买家）/ B（卖家）
+已有一条会话。以下每条都要留证据（命令输出 + 时间 + `provider_request_id`），贴进 #694 的评论里。
+
+1. **文本 ALLOW**：A 发「周末下午三点老地方见」。期望 201、`visibility=DELIVERED`；`chat_moderation_records`
+   一行 `decision=ALLOW`、`provider=TENCENT_TMS`、`policy_version` 等于 `TENCENT_TMS_CHAT_BIZ_TYPE`、
+   `provider_request_id` 非空。B 的列表/未读/历史都能看到这条。
+2. **文本 REVIEW**：A 发「加我微信 abc123」。期望 201 但 `visibility=PENDING_REVIEW`；B 的任何读侧
+   （列表摘要、未读、历史、引用）都没有它，媒体 GET 也不适用；`/admin/chat-moderation` 能看到待审项，
+   放行后 B 收到一次 `message.new`、未读 +1，再放行一次不重复投递（接口回 `replayed: true`）。
+3. **文本 BLOCK**：用控制台语料库里的一条确定违规文本。期望 **422 `MESSAGE_CONTENT_BLOCKED`**，
+   `messages` 不新增行，端上提示「修改后重新发送」且不给原地重试。
+4. **图片 ALLOW**：A 上传一张正常图 → ALLOW 后 B 能通过
+   `GET /api/conversations/:conversationId/media/:mediaId` 拿到字节。
+5. **图片 REVIEW → 管理端 BLOCK**：A 上传一张控制台样例违规图，机器判 REVIEW、进入待审。放行前该
+   `mediaId` 对 B 是 **404 `MEDIA_NOT_FOUND`**（不是 403），A 自己的历史里是「审核中」；管理员在
+   `/admin/chat-moderation` 判 BLOCK 后，A 的历史保留该气泡、改标「未通过审核」，B 仍是 404。
+6. **图片机器 BLOCK**：A 上传一张机器直接判 BLOCK 的违规图。期望 **422 `MESSAGE_CONTENT_BLOCKED`**，
+   API 丢弃已暂存对象，`messages` / `message_media` 都不新增行——**没有 mediaId 可查**，A 的历史里也
+   不会出现这一条；端上提示「内容被拦下了，请修改后重新发送」。不要拿第 5 步的表现套这一步。
+7. **上游故障**：临时把 SecretKey 改错一位重启（或断网），发一条消息，期望 **503
+   `CONTENT_MODERATION_UNAVAILABLE`** 且消息不落库；改回后重启恢复。这一步同时验证「fail-closed」。
+8. **日志 PII**：`journalctl -u fish-api --since '10 minutes ago' | grep -F '加我微信'` 应为空；审核记录里
+   `matched_terms_masked` 只有打码词，`matched_rules` 只有规则码，没有正文与对象键。
+
+联调完成后把 `CONTENT_MODERATION_TRANSPORT` 与策略号留在 staging 的 env 文件里（600、root:root），
+**不要**提交任何 BizType、SecretId/SecretKey 或截图里的密钥字段。
 
 ### 常用排查
 

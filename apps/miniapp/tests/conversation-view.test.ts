@@ -1240,6 +1240,22 @@ describe('mergePushedMedia —— 实时推送的媒体并入媒体流（#67 第
       tombstone,
     )
   })
+
+  test('管理端放行推来同 id 的 DELIVERED 时认可可见性升级，其余字段仍以本地为准', () => {
+    const pending = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '/local-preview',
+      visibility: 'PENDING_REVIEW' as const,
+    }
+    const delivered = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '/api/conversations/c-1/media/media-m1',
+    }
+    const merged = mergePushedMedia([pending], delivered)
+    expect(merged).toHaveLength(1)
+    expect(merged[0]?.visibility).toBe('DELIVERED')
+    expect(merged[0]?.url).toBe('/local-preview')
+  })
 })
 
 describe('mergePushedMessage —— 实时推送的消息并入消息流', () => {
@@ -1290,6 +1306,23 @@ describe('mergePushedMessage —— 实时推送的消息并入消息流', () =>
     expect(mergePushedMessage([tombstone], text('a', '2026-09-21T10:00:00.000Z'))[0]).toBe(
       tombstone,
     )
+  })
+
+  test('管理端放行推来同 id 的 DELIVERED 时认可可见性升级，正文仍以本地为准', () => {
+    const pending = {
+      ...text('a', '2026-09-21T10:00:00.000Z'),
+      content: '本地的正文',
+      visibility: 'PENDING_REVIEW' as const,
+    }
+    const delivered = {
+      ...text('a', '2026-09-21T10:00:00.000Z'),
+      content: '推送的正文',
+      visibility: 'DELIVERED' as const,
+    }
+    const merged = mergePushedMessage([pending], delivered)
+    expect(merged).toHaveLength(1)
+    expect(merged[0]?.visibility).toBe('DELIVERED')
+    expect(merged[0]?.content).toBe('本地的正文')
   })
 })
 

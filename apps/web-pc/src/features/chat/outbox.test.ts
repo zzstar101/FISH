@@ -10,6 +10,7 @@ import {
   type OutboxMessage,
   type OutboxTextMessage,
   resetOutboxForRetry,
+  retryCooldownSeconds,
 } from './outbox'
 import type { SendMediaVariables, SendTextVariables } from './queries'
 
@@ -362,5 +363,49 @@ describe('dispatchOutboxSend', () => {
     fake.resolve(item.clientRequestId, message('msg_01jc000000e00800000000001v', '重试我'))
     await flush()
     expect(store.outbox).toEqual([])
+  })
+})
+
+describe('限流冷却（#694 M4）', () => {
+  test('429 把 Retry-After 落成截止时间，重试时清掉', async () => {
+    const fake = createMutationFake()
+    const item = createOutboxMessage('太频繁')
+    const store = createStore([item])
+    const before = Date.now()
+
+    void dispatchOutboxSend({
+      item,
+      conversationId: 'cnv_01jc000000e00800000000001a',
+      mutation: fake.mutation,
+      setOutbox: store.setOutbox,
+      onSent: () => undefined,
+    })
+    fake.reject(
+      item.clientRequestId,
+      new ApiError('MESSAGE_RATE_LIMITED', 429, '发送过于频繁，请稍后再试', undefined, 9),
+    )
+    await flush()
+
+    const failed = store.outbox[0] as OutboxTextMessage
+    expect(failed.status).toBe('failed')
+    expect(failed.errorCode).toBe('MESSAGE_RATE_LIMITED')
+    expect(failed.error).toBe('发送太频繁，请稍后重试')
+    // 绝对截止时间 = 失败时刻 + Retry-After，不随重渲染漂移。
+    expect(failed.retryAfterAt).not.toBeNull()
+    expect(failed.retryAfterAt ?? 0).toBeGreaterThanOrEqual(before + 8_000)
+    expect(failed.retryAfterAt ?? 0).toBeLessThanOrEqual(Date.now() + 9_000)
+    expect(retryCooldownSeconds(failed.retryAfterAt, before)).toBe(9)
+
+    // 重试只清失败态：冷却截止时间一起归零，否则按钮会被上一轮的倒计时挡住。
+    const retried = resetOutboxForRetry(store.outbox, item.clientRequestId)[0] as OutboxTextMessage
+    expect(retried.status).toBe('sending')
+    expect(retried.retryAfterAt).toBeNull()
+    expect(retried.error).toBeNull()
+  })
+
+  test('非限流失败没有冷却（不虚构倒计时）', () => {
+    expect(retryCooldownSeconds(null, 1_000)).toBe(0)
+    expect(retryCooldownSeconds(2_000, 1_000)).toBe(1)
+    expect(retryCooldownSeconds(1_000, 1_000)).toBe(0)
   })
 })
