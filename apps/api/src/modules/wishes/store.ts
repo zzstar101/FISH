@@ -2,6 +2,7 @@ import type { WishCategory, WishStatus } from '@fish/contracts/wishes/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { type SQL, sql } from 'drizzle-orm'
+import { insertWishModerationRecord } from './moderation-store'
 
 /** 愿望持久化接口。DB schema/migration 由 Dev A 通过 DB CHANGE REQUEST 落地。 */
 export interface WishRow {
@@ -14,6 +15,11 @@ export interface WishRow {
   description: string | null
   accept_similar: boolean
   status: string
+  moderation_status?: string
+  content_version?: number
+  pending_keyword?: string | null
+  pending_description?: string | null
+  pending_version?: number | null
   created_at: Date | string
   updated_at: Date | string
   /** 匹配数（来自 matches 表）。仅 findById / listByUser 填充，缺省视为 0。 */
@@ -28,6 +34,20 @@ export interface WishRow {
  * 都是应用钟，且测试靠回拨它把行挪到窗口外（`store.test.ts` 的 `oldRow`）。
  */
 export type NewWishRow = Omit<WishRow, 'updated_at'>
+
+export interface ModerationRecordDraft {
+  machineDecision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+  decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+  provider: 'LOCAL' | 'TENCENT_TMS' | 'TENCENT_IMS'
+  providerRequestId: string | null
+  policyVersion: string
+  suggestion: 'Pass' | 'Review' | 'Block'
+  label: string | null
+  subLabel: string | null
+  score: number | null
+  matchedRules: string[]
+  matchedTermsMasked: string[]
+}
 
 export interface PoolRow {
   keyword: string
@@ -55,14 +75,30 @@ export interface WishStore {
     row: NewWishRow,
     activeLimit: number,
     createdAfter: Date,
+    options?: {
+      moderationStatus?: 'APPROVED' | 'PENDING_REVIEW'
+      enqueueJobs?: boolean
+      /** 与愿望同事务写入的待审记录（仅 PENDING_REVIEW 时提供）。 */
+      moderation?: ModerationRecordDraft
+    },
   ): Promise<CreateWishResult>
   findById(id: string): Promise<WishRow | null>
   listByUser(
     userId: string,
     filter: { status?: WishStatus; limit: number; offset: number },
   ): Promise<{ rows: WishRow[]; total: number }>
-  update(id: string, fields: EditableWishFields): Promise<WishRow | null>
+  update(
+    id: string,
+    fields: EditableWishFields,
+    options?: { advanceContentVersion?: boolean; clearPending?: boolean },
+  ): Promise<WishRow | null>
   updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED'): Promise<WishRow | null>
+  /** 编辑进入人工复审：只写 pending_*，公开字段保持不变；与审核记录同事务。 */
+  setPending(
+    id: string,
+    input: { keyword: string; description: string | null; version: number },
+    moderation?: ModerationRecordDraft,
+  ): Promise<WishRow | null>
   aggregatePool(minCount: number, limit: number): Promise<PoolRow[]>
 }
 
@@ -86,6 +122,11 @@ function toWishRow(row: Record<string, unknown>): WishRow {
       row.description === null || row.description === undefined ? null : String(row.description),
     accept_similar: Boolean(row.accept_similar),
     status: String(row.status),
+    moderation_status: String(row.moderation_status ?? 'APPROVED'),
+    content_version: Number(row.content_version ?? 1),
+    pending_keyword: row.pending_keyword == null ? null : String(row.pending_keyword),
+    pending_description: row.pending_description == null ? null : String(row.pending_description),
+    pending_version: row.pending_version == null ? null : Number(row.pending_version),
     created_at: row.created_at as Date | string,
     updated_at: row.updated_at as Date | string,
     match_count: row.match_count === undefined ? undefined : Number(row.match_count),
@@ -99,7 +140,7 @@ function firstWishRow(result: unknown): WishRow | null {
 
 export function createSqlWishStore(db: Db): WishStore {
   return {
-    async createOrGetRecent(row, activeLimit, createdAfter) {
+    async createOrGetRecent(row, activeLimit, createdAfter, options) {
       return db.transaction(async (tx) => {
         // 同一 user_id 的短事务串行化，令查重、ACTIVE 配额与插入成为原子操作。
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${row.user_id}))`)
@@ -136,23 +177,35 @@ export function createSqlWishStore(db: Db): WishStore {
         const created = firstWishRow(
           await tx.execute(sql`
           INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents,
-                              description, accept_similar, status, created_at, updated_at)
+                              description, accept_similar, status, moderation_status, created_at, updated_at)
           VALUES (${row.id}, ${row.user_id}, ${row.keyword}, ${row.category}, ${row.budget_min_cents},
                   ${row.budget_max_cents}, ${row.description}, ${row.accept_similar}, ${row.status},
-                  ${row.created_at}, now())
+                  ${options?.moderationStatus ?? 'APPROVED'}, ${row.created_at}, now())
           RETURNING *
         `),
         )
         if (!created) throw new Error('创建愿望后未返回记录')
 
-        await tx.execute(sql`
-          INSERT INTO jobs (id, type, payload)
-          VALUES (${newId()}, 'EMBED_WISH', jsonb_build_object('wishId', ${created.id}::text))
-        `)
-        await tx.execute(sql`
-          INSERT INTO jobs (id, type, payload)
-          VALUES (${newId()}, 'MATCH_WISH', jsonb_build_object('wishId', ${created.id}::text))
-        `)
+        if (options?.moderation) {
+          await insertWishModerationRecord(tx, created.id, row.user_id, {
+            ...options.moderation,
+            keyword: created.keyword,
+            description: created.description,
+            version: 1,
+          })
+        }
+
+        // 待审内容不投递匹配/向量 Job：未通过审核的内容不得出现在需求池、匹配结果或推荐里。
+        if (options?.enqueueJobs !== false) {
+          await tx.execute(sql`
+            INSERT INTO jobs (id, type, payload)
+            VALUES (${newId()}, 'EMBED_WISH', jsonb_build_object('wishId', ${created.id}::text))
+          `)
+          await tx.execute(sql`
+            INSERT INTO jobs (id, type, payload)
+            VALUES (${newId()}, 'MATCH_WISH', jsonb_build_object('wishId', ${created.id}::text))
+          `)
+        }
 
         return { kind: 'created', row: created } as const
       })
@@ -186,7 +239,7 @@ export function createSqlWishStore(db: Db): WishStore {
       }
     },
 
-    async update(id, fields) {
+    async update(id, fields, options) {
       const sets: (SQL | undefined)[] = [
         fields.keyword !== undefined ? sql`keyword = ${fields.keyword}` : undefined,
         fields.category !== undefined ? sql`category = ${fields.category}` : undefined,
@@ -200,18 +253,77 @@ export function createSqlWishStore(db: Db): WishStore {
         fields.acceptSimilar !== undefined
           ? sql`accept_similar = ${fields.acceptSimilar}`
           : undefined,
+        options?.advanceContentVersion ? sql`content_version = content_version + 1` : undefined,
+        options?.clearPending
+          ? sql`pending_keyword = NULL, pending_description = NULL, pending_version = NULL`
+          : undefined,
         sql`updated_at = clock_timestamp()`,
       ]
-      return firstWishRow(
-        await db.execute(sql`
-        UPDATE wishes SET ${sql.join(
-          sets.filter((fragment): fragment is SQL => fragment !== undefined),
-          sql`, `,
-        )}
-        WHERE id = ${id} AND status = 'ACTIVE'
-        RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
-      `),
-      )
+      const run = async (executor: Pick<Db, 'execute'>) =>
+        firstWishRow(
+          await executor.execute(sql`
+          UPDATE wishes SET ${sql.join(
+            sets.filter((fragment): fragment is SQL => fragment !== undefined),
+            sql`, `,
+          )}
+          WHERE id = ${id} AND status = 'ACTIVE'
+          RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
+        `),
+        )
+      if (!options?.clearPending) return run(db)
+      return db.transaction(async (tx) => {
+        const row = await run(tx)
+        if (row) {
+          // 通过的编辑取代了任何在途待审版本：旧记录已经没有可结算的对象。
+          await tx.execute(
+            sql`DELETE FROM wish_moderation_records WHERE wish_id = ${id}::uuid AND status = 'PENDING'`,
+          )
+        }
+        return row
+      })
+    },
+
+    async setPending(id, input, moderation) {
+      return db.transaction(async (tx) => {
+        const current = toRows(
+          await tx.execute(sql`
+            SELECT status, moderation_status, content_version, pending_version
+            FROM wishes WHERE id = ${id}::uuid
+            FOR UPDATE
+          `),
+        )[0]
+        if (!current) return null
+        const contentVersion = Number(current.content_version ?? 1)
+        // 已有在途待审版本时复用它：重复编辑只替换待审内容，不制造第二个版本号。
+        const version =
+          current.pending_version === null || current.pending_version === undefined
+            ? contentVersion + 1
+            : Number(current.pending_version)
+        const updated = firstWishRow(
+          await tx.execute(sql`
+            UPDATE wishes
+            SET pending_keyword = ${input.keyword},
+                pending_description = ${input.description},
+                pending_version = ${version},
+                updated_at = clock_timestamp()
+            WHERE id = ${id} AND status = 'ACTIVE' AND moderation_status <> 'REJECTED'
+            RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
+          `),
+        )
+        if (!updated) return null
+        if (moderation) {
+          await tx.execute(
+            sql`DELETE FROM wish_moderation_records WHERE wish_id = ${id}::uuid AND status = 'PENDING'`,
+          )
+          await insertWishModerationRecord(tx, id, updated.user_id, {
+            ...moderation,
+            keyword: input.keyword,
+            description: input.description,
+            version,
+          })
+        }
+        return updated
+      })
     },
 
     async updateStatusIfActive(id, status) {
@@ -231,7 +343,9 @@ export function createSqlWishStore(db: Db): WishStore {
         FROM wishes
         -- category / budget_max_cents 在 #2 的 schema 里可空（为 #8 的「不限分类」预留）；
         -- 需求池输出契约要求二者非空，这里显式过滤，避免 NULL 经 String(null) 变成 "null" 后让整个 /pool 400。
-        WHERE status = 'ACTIVE' AND category IS NOT NULL AND budget_max_cents IS NOT NULL
+        WHERE status = 'ACTIVE'
+          AND moderation_status = 'APPROVED'
+          AND category IS NOT NULL AND budget_max_cents IS NOT NULL
         GROUP BY keyword, category
         -- 隐私门槛按「去重用户数」而非行数：同一用户刷多条不得把小组抬进需求池。
         HAVING count(DISTINCT user_id) >= ${minCount}

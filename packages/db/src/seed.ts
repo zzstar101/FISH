@@ -40,6 +40,7 @@ import { listingViewHistory } from './schema/view-history'
 import { listingVisualEmbeddings } from './schema/visual-embeddings'
 import { visualQueryImages } from './schema/visual-query-images'
 import { visualSearchAttempts } from './schema/visual-search-attempts'
+import { wishModerationRecords } from './schema/wish-moderation'
 import { wishes } from './schema/wishes'
 
 /** 事务内的写入句柄；seed 既能在 CLI 里跑，也能被测试包在事务里回滚。 */
@@ -152,7 +153,7 @@ export async function seed(tx: SeedTx): Promise<void> {
   // `chat_moderation_records`（#694 M1，引用 messages / conversations / users）必须在内：
   // 它引用 messages，不一起 TRUNCATE 会直接撞外键（0A000）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${chatModerationRecords}, ${rateLimitEvents}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${chatModerationRecords}, ${wishModerationRecords}, ${rateLimitEvents}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
   )
 
   const now = new Date()

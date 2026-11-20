@@ -40,6 +40,7 @@ import { Route as AdminModerationRouteImport } from './routes/admin.moderation'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
 import { Route as AdminTransactionsRouteImport } from './routes/admin.transactions'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
+import { Route as AdminWishesModerationRouteImport } from './routes/admin.wishes-moderation'
 import { Route as DisputesIndexRouteImport } from './routes/disputes.index'
 import { Route as DisputesDisputeIdRouteImport } from './routes/disputes.$disputeId'
 import { Route as ListingListingIdRouteImport } from './routes/listing.$listingId'
@@ -220,6 +221,11 @@ const AdminUsersRoute = AdminUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminWishesModerationRoute = AdminWishesModerationRouteImport.update({
+  id: '/wishes-moderation',
+  path: '/wishes-moderation',
+  getParentRoute: () => AdminRoute,
+} as any)
 const DisputesIndexRoute = DisputesIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -372,6 +378,7 @@ export interface FileRoutesByFullPath {
   '/admin/reports': typeof AdminReportsRouteWithChildren
   '/admin/transactions': typeof AdminTransactionsRouteWithChildren
   '/admin/users': typeof AdminUsersRouteWithChildren
+  '/admin/wishes-moderation': typeof AdminWishesModerationRoute
   '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
@@ -416,6 +423,7 @@ export interface FileRoutesByTo {
   '/verify': typeof VerifyRoute
   '/admin/chat-moderation': typeof AdminChatModerationRoute
   '/admin/metrics': typeof AdminMetricsRoute
+  '/admin/wishes-moderation': typeof AdminWishesModerationRoute
   '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
@@ -474,6 +482,7 @@ export interface FileRoutesById {
   '/admin/reports': typeof AdminReportsRouteWithChildren
   '/admin/transactions': typeof AdminTransactionsRouteWithChildren
   '/admin/users': typeof AdminUsersRouteWithChildren
+  '/admin/wishes-moderation': typeof AdminWishesModerationRoute
   '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
@@ -533,6 +542,7 @@ export interface FileRouteTypes {
     | '/admin/reports'
     | '/admin/transactions'
     | '/admin/users'
+    | '/admin/wishes-moderation'
     | '/disputes/$disputeId'
     | '/listing/$listingId'
     | '/messages/$conversationId'
@@ -577,6 +587,7 @@ export interface FileRouteTypes {
     | '/verify'
     | '/admin/chat-moderation'
     | '/admin/metrics'
+    | '/admin/wishes-moderation'
     | '/disputes/$disputeId'
     | '/listing/$listingId'
     | '/messages/$conversationId'
@@ -634,6 +645,7 @@ export interface FileRouteTypes {
     | '/admin/reports'
     | '/admin/transactions'
     | '/admin/users'
+    | '/admin/wishes-moderation'
     | '/disputes/$disputeId'
     | '/listing/$listingId'
     | '/messages/$conversationId'
@@ -903,6 +915,13 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/admin/users'
       preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/wishes-moderation': {
+      id: '/admin/wishes-moderation'
+      path: '/wishes-moderation'
+      fullPath: '/admin/wishes-moderation'
+      preLoaderRoute: typeof AdminWishesModerationRouteImport
       parentRoute: typeof AdminRoute
     }
     '/disputes/': {
@@ -1194,6 +1213,7 @@ interface AdminRouteChildren {
   AdminReportsRoute: typeof AdminReportsRouteWithChildren
   AdminTransactionsRoute: typeof AdminTransactionsRouteWithChildren
   AdminUsersRoute: typeof AdminUsersRouteWithChildren
+  AdminWishesModerationRoute: typeof AdminWishesModerationRoute
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
@@ -1208,6 +1228,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminReportsRoute: AdminReportsRouteWithChildren,
   AdminTransactionsRoute: AdminTransactionsRouteWithChildren,
   AdminUsersRoute: AdminUsersRouteWithChildren,
+  AdminWishesModerationRoute: AdminWishesModerationRoute,
   AdminIndexRoute: AdminIndexRoute,
 }
 

@@ -521,6 +521,7 @@ read -rs -p '腾讯云 SecretKey（不回显）: ' TENCENT_CLOUD_SECRET_KEY && e
 read -r  -p 'TMS（文本）BizType: ' TENCENT_TMS_BIZ_TYPE
 read -r  -p 'IMS（图片）BizType: ' TENCENT_IMS_BIZ_TYPE
 read -r  -p 'TMS（聊天文本）BizType: ' TENCENT_TMS_CHAT_BIZ_TYPE
+read -r  -p 'TMS（公开 UGC）BizType: ' TENCENT_TMS_UGC_BIZ_TYPE
 read -r  -p 'IMS（聊天图片）BizType: ' TENCENT_IMS_CHAT_BIZ_TYPE
 {
   printf 'CONTENT_MODERATION_TRANSPORT=tencent\n'
@@ -529,16 +530,19 @@ read -r  -p 'IMS（聊天图片）BizType: ' TENCENT_IMS_CHAT_BIZ_TYPE
   printf 'TENCENT_TMS_BIZ_TYPE=%s\n' "$TENCENT_TMS_BIZ_TYPE"
   printf 'TENCENT_IMS_BIZ_TYPE=%s\n' "$TENCENT_IMS_BIZ_TYPE"
   printf 'TENCENT_TMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_TMS_CHAT_BIZ_TYPE"
+  printf 'TENCENT_TMS_UGC_BIZ_TYPE=%s\n' "$TENCENT_TMS_UGC_BIZ_TYPE"
   printf 'TENCENT_IMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_IMS_CHAT_BIZ_TYPE"
 } | sudo tee -a /etc/fish/api-mail.env >/dev/null
 unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
 ```
 
-- 六项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
+- 七项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
   600），轮换后重启 API 生效，不影响存量数据。
 - `TENCENT_CLOUD_REGION` 可选，默认 `ap-guangzhou`；应与存储/会话所在地域一致，跨境调用会明显变慢。
 - `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 是腾讯云控制台按业务创建的两个策略号（文本、图片
   各一），会作为审核结果的 `policyVersion` 记录，便于事后按策略回溯。
+- **公开 UGC 必须使用独立策略号（#694 M5）**：许愿墙 `keyword`/`description` 与商品、聊天策略号都不同；`CONTENT_MODERATION_TRANSPORT=local` 时走本地词表，仅是开发兜底。许愿墙 BLOCK 直接 422 `WISH_CONTENT_BLOCKED`，REVIEW 落 `PENDING_REVIEW` 不进需求池、不投递匹配，由 `/admin/wishes/moderation` 人工放行/拒绝；编辑命中 REVIEW 只写 pending 字段，公开内容保持不变；上游故障 503 `CONTENT_MODERATION_UNAVAILABLE`（fail-closed，不落库）。
+
 - **聊天必须使用独立策略号（#694 M1）**：文本 `TENCENT_TMS_CHAT_BIZ_TYPE`、图片
   `TENCENT_IMS_CHAT_BIZ_TYPE`。聊天正文/图片是私聊内容，不能套商品策略（商品策略会把「加微信」这类
   正常商品描述话术判成引流）。任一缺失、或与 `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 相同

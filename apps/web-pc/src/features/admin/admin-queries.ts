@@ -47,6 +47,7 @@ import {
   fetchAdminUserDetail,
   fetchAdminUsers,
   fetchChatModerationQueue,
+  fetchWishModerationQueue,
   liftUserRestriction,
   restoreListing,
   restrictUserPublish,
@@ -55,6 +56,7 @@ import {
   submitFeedbackHandle,
   submitModerationDecision,
   submitReportHandle,
+  submitWishModerationDecision,
 } from './admin-api'
 
 /**
@@ -86,6 +88,7 @@ export const adminKeys = {
   reports: (filters: AdminReportsFilters) => [...adminKeys.all(), 'reports', filters] as const,
   reportDetail: (reportId: string) => [...adminKeys.all(), 'report', reportId] as const,
   chatModerationQueue: () => [...adminKeys.all(), 'chat-moderation-queue'] as const,
+  wishModerationQueue: () => [...adminKeys.all(), 'wish-moderation-queue'] as const,
   feedback: (filters: AdminFeedbackFilters) => [...adminKeys.all(), 'feedback', filters] as const,
   feedbackDetail: (feedbackId: string) =>
     [...adminKeys.all(), 'feedback-detail', feedbackId] as const,
@@ -219,6 +222,30 @@ export function useChatModerationDecision(): UseMutationResult<
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ recordId, input }) => submitChatModerationDecision(recordId, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: adminKeys.all() })
+    },
+  })
+}
+
+export function useWishModerationQueue() {
+  return useInfiniteQuery({
+    queryKey: adminKeys.wishModerationQueue(),
+    queryFn: ({ pageParam }) => fetchWishModerationQueue(pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 0,
+  })
+}
+
+export function useWishModerationDecision(): UseMutationResult<
+  void,
+  Error,
+  { recordId: string; input: { decision: 'ALLOW' | 'BLOCK'; reason: string; version: number } }
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ recordId, input }) => submitWishModerationDecision(recordId, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: adminKeys.all() })
     },

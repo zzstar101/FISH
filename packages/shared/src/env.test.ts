@@ -156,7 +156,7 @@ describe('loadContentModerationEnv', () => {
     )
   })
 
-  test('tencent 六项必填，缺任一项都失败（错误信息只报变量名）', () => {
+  test('tencent 七项必填，缺任一项都失败（错误信息只报变量名）', () => {
     const complete = {
       CONTENT_MODERATION_TRANSPORT: 'tencent',
       TENCENT_CLOUD_SECRET_ID: 'secret-id-value',
@@ -165,6 +165,7 @@ describe('loadContentModerationEnv', () => {
       TENCENT_IMS_BIZ_TYPE: 'ims-biz',
       TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-chat-biz',
       TENCENT_IMS_CHAT_BIZ_TYPE: 'ims-chat-biz',
+      TENCENT_TMS_UGC_BIZ_TYPE: 'tms-ugc-biz',
     }
     expect(loadContentModerationEnv(complete)).toEqual({
       transport: 'tencent',
@@ -174,6 +175,7 @@ describe('loadContentModerationEnv', () => {
       imsBizType: 'ims-biz',
       tmsChatBizType: 'tms-chat-biz',
       imsChatBizType: 'ims-chat-biz',
+      tmsUgcBizType: 'tms-ugc-biz',
       region: DEFAULT_TENCENT_CLOUD_REGION,
     })
 
@@ -184,6 +186,7 @@ describe('loadContentModerationEnv', () => {
       'TENCENT_IMS_BIZ_TYPE',
       'TENCENT_TMS_CHAT_BIZ_TYPE',
       'TENCENT_IMS_CHAT_BIZ_TYPE',
+      'TENCENT_TMS_UGC_BIZ_TYPE',
     ] as const) {
       const source: Record<string, string | undefined> = { ...complete, [key]: ' ' }
       let message = ''
@@ -218,6 +221,7 @@ describe('loadContentModerationEnv', () => {
       TENCENT_IMS_BIZ_TYPE: 'ims-biz',
       TENCENT_TMS_CHAT_BIZ_TYPE: 'tms-biz',
       TENCENT_IMS_CHAT_BIZ_TYPE: 'ims-chat-biz',
+      TENCENT_TMS_UGC_BIZ_TYPE: 'tms-ugc-biz',
     }
     expect(() => loadContentModerationEnv(complete)).toThrow(
       /TENCENT_TMS_CHAT_BIZ_TYPE 必须与 TENCENT_TMS_BIZ_TYPE 不同/,
@@ -242,6 +246,7 @@ describe('loadContentModerationEnv', () => {
       TENCENT_IMS_BIZ_TYPE: ' ims ',
       TENCENT_TMS_CHAT_BIZ_TYPE: ' chat ',
       TENCENT_IMS_CHAT_BIZ_TYPE: ' ims-chat ',
+      TENCENT_TMS_UGC_BIZ_TYPE: ' ugc ',
       TENCENT_CLOUD_REGION: ' ap-shanghai ',
     })
     expect(env).toEqual({
@@ -252,6 +257,7 @@ describe('loadContentModerationEnv', () => {
       imsBizType: 'ims',
       tmsChatBizType: 'chat',
       imsChatBizType: 'ims-chat',
+      tmsUgcBizType: 'ugc',
       region: 'ap-shanghai',
     })
   })

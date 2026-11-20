@@ -23,6 +23,7 @@ export const PUBLIC_ID_PREFIX = {
   moderationRecord: 'mdr',
   /** 聊天机器审核记录（#694 M2），与商品审核记录分属不同表，公开 ID 前缀也分开。 */
   chatModerationRecord: 'cmr',
+  wishModerationRecord: 'wmr',
   auditLog: 'aud',
 } as const
 

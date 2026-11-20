@@ -10,6 +10,7 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
 import { createNoopWishMatchQueue, type WishMatchQueue } from './match-queue'
+import type { WishModerationPolicy } from './moderation-policy'
 import { createWishService, type WishService, WishServiceError } from './service'
 import { createSqlWishStore, type WishStore } from './store'
 
@@ -22,6 +23,8 @@ export type WishesRouterOptions = {
   matchQueue?: WishMatchQueue
   getUserId: WishUserIdResolver
   service?: WishService
+  /** 公开 UGC 文本审核（#694 M5）；省略时不做内容审核（仅测试/离线装配）。 */
+  moderation?: WishModerationPolicy
   /**
    * #73 治理守卫：写愿望前检查封禁 / 限制发布。
    *
@@ -44,6 +47,12 @@ function jsonError(message: string, code = 'BAD_REQUEST') {
 
 function serviceErrorResponse(c: WishesContext, error: unknown) {
   if (error instanceof WishServiceError) {
+    if (error.status === 422) return c.json(jsonError(error.message, error.code), 422)
+    if (error.status === 503) {
+      return c.json(jsonError(error.message, error.code), 503, {
+        'Retry-After': '30',
+      })
+    }
     const code =
       error.status === 403 ? 'FORBIDDEN' : error.status === 404 ? 'NOT_FOUND' : 'CONFLICT'
     switch (error.status) {
@@ -63,7 +72,7 @@ function serviceErrorResponse(c: WishesContext, error: unknown) {
   if (error instanceof SyntaxError) return c.json(jsonError('请求体不是有效 JSON'), 400)
   // 并发 PATCH 可能让组合后的预算区间违反 DB CHECK（SQLSTATE 23514）：数据由约束兜住，
   // 语义上是"与当前状态冲突"，应映射 409 而不是 500。
-  if (isCheckViolation(error)) {
+  if (isCheckViolation(error) || isUniqueViolation(error)) {
     return c.json(jsonError('愿望已被其他修改更新，请重试', 'CONFLICT'), 409)
   }
   console.error('[wishes] unhandled error', describeError(error))
@@ -72,6 +81,12 @@ function serviceErrorResponse(c: WishesContext, error: unknown) {
 
 async function parseJson<T>(c: WishesContext, parse: (input: unknown) => T) {
   return parse(await c.req.json())
+}
+
+/** Postgres 唯一约束违例：并发重复提交同一待审版本时按冲突处理，不暴露 500。 */
+function isUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('errno' in error)) return false
+  return (error as { errno?: unknown }).errno === '23505'
 }
 
 /** Postgres CHECK 约束违例（bun-sql 把 SQLSTATE 放在 errno 上）。 */
@@ -97,7 +112,9 @@ function parseWishId(raw: string): string | null {
  */
 export function createWishesRouter(options: WishesRouterOptions) {
   const matchQueue = options.matchQueue ?? createNoopWishMatchQueue()
-  const service = options.service ?? createWishService({ store: options.store, matchQueue })
+  const service =
+    options.service ??
+    createWishService({ store: options.store, matchQueue, moderation: options.moderation })
   const app = new Hono<{ Variables: WishesVariables }>()
 
   app.use('*', async (c, next) => {

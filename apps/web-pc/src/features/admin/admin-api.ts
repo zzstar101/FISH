@@ -69,6 +69,13 @@ import {
   AdminReportListResponseSchema,
   type AdminReportQueueQuery,
 } from '@fish/contracts/reports/schema'
+import {
+  WISH_MODERATION_ROUTES,
+  type WishModerationDecisionInput,
+  type WishModerationQueueResponse,
+  wishModerationDecisionResponseSchema,
+  wishModerationQueueResponseSchema,
+} from '@fish/contracts/wishes/moderation'
 import { apiRequest } from '../../lib/api-client'
 
 /**
@@ -282,6 +289,35 @@ export async function submitChatModerationDecision(
 export function adminChatModerationMediaPath(recordId: string): string {
   // 契约路径不带 /api 前缀（apiRequest 才拼）；但这里直接给 <img src> 用，必须补上同源前缀。
   return `/api${CHAT_MODERATION_ROUTES.media(recordId)}`
+}
+
+// ---------------------------------------------------------------------------
+// 许愿待审（#694 M5）
+// ---------------------------------------------------------------------------
+
+export async function fetchWishModerationQueue(
+  cursor?: string,
+): Promise<WishModerationQueueResponse> {
+  return wishModerationQueueResponseSchema.parse(
+    await apiRequest(
+      adminQueryPath(WISH_MODERATION_ROUTES.queue, {
+        ...(cursor ? { cursor } : {}),
+        limit: ADMIN_PAGE_LIMIT,
+      }),
+    ),
+  )
+}
+
+export async function submitWishModerationDecision(
+  recordId: string,
+  input: WishModerationDecisionInput,
+): Promise<void> {
+  wishModerationDecisionResponseSchema.parse(
+    await apiRequest(WISH_MODERATION_ROUTES.decision(recordId), {
+      body: JSON.stringify(input),
+      method: 'POST',
+    }),
+  )
 }
 
 // ---------------------------------------------------------------------------

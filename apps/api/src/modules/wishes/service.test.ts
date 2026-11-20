@@ -12,8 +12,18 @@ const testUser = (index: number) =>
 
 class MemoryWishStore implements WishStore {
   rows: WishRow[] = []
+  records: { id: string; version: number }[] = []
 
-  async createOrGetRecent(row: WishRow, activeLimit: number, createdAfter: Date) {
+  async createOrGetRecent(
+    row: WishRow,
+    activeLimit: number,
+    createdAfter: Date,
+    options?: {
+      moderationStatus?: 'APPROVED' | 'PENDING_REVIEW'
+      enqueueJobs?: boolean
+      moderation?: { decision: string }
+    },
+  ) {
     const duplicate = this.rows.find(
       (item) =>
         item.user_id === row.user_id &&
@@ -31,7 +41,16 @@ class MemoryWishStore implements WishStore {
     }
     // 真实 store 的 `updated_at` 由数据库 `now()` 生成（`INSERT ... now()`，见 `store.ts` 的
     // `NewWishRow` 说明），内存替身在这里补上"数据库生成"的那一半。
-    const created: WishRow = { ...row, updated_at: new Date() }
+    if (options?.moderation) this.records.push({ id: row.id, version: 1 })
+    const created: WishRow = {
+      ...row,
+      moderation_status: options?.moderationStatus ?? 'APPROVED',
+      content_version: 1,
+      pending_keyword: null,
+      pending_description: null,
+      pending_version: null,
+      updated_at: new Date(),
+    }
     this.rows.push(created)
     return { kind: 'created' as const, row: { ...created } }
   }
@@ -51,9 +70,42 @@ class MemoryWishStore implements WishStore {
     }
   }
 
-  async update(id: string, fields: EditableWishFields) {
+  async setPending(
+    id: string,
+    input: { keyword: string; description: string | null; version: number },
+    moderation?: { decision: string },
+  ) {
     const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
     if (!row) return null
+    if (moderation) {
+      const version = row.pending_version ?? (row.content_version ?? 1) + 1
+      this.records = this.records.filter((record) => record.id !== id)
+      this.records.push({ id, version })
+      row.pending_version = version
+      row.pending_keyword = input.keyword
+      row.pending_description = input.description
+      return { ...row }
+    }
+    row.pending_keyword = input.keyword
+    row.pending_description = input.description
+    row.pending_version = input.version
+    return { ...row }
+  }
+
+  async update(
+    id: string,
+    fields: EditableWishFields,
+    options?: { advanceContentVersion?: boolean; clearPending?: boolean },
+  ) {
+    const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
+    if (!row) return null
+    if (options?.advanceContentVersion) row.content_version = (row.content_version ?? 1) + 1
+    if (options?.clearPending) {
+      row.pending_keyword = null
+      row.pending_description = null
+      row.pending_version = null
+      this.records = this.records.filter((record) => record.id !== id)
+    }
     Object.assign(row, {
       ...(fields.keyword === undefined ? {} : { keyword: fields.keyword }),
       ...(fields.category === undefined ? {} : { category: fields.category }),
@@ -274,5 +326,99 @@ describe('wish service', () => {
     }
     await service.getPool()
     expect(calls).toBe(0)
+  })
+})
+
+describe('wish moderation (#694 M5)', () => {
+  const allow = {
+    decision: 'ALLOW' as const,
+    provider: 'LOCAL' as const,
+    policyVersion: 'test',
+    providerRequestId: null,
+    suggestion: 'Pass' as const,
+    label: null,
+    subLabel: null,
+    score: null,
+    matchedRules: [],
+    matchedTermsMasked: [],
+  }
+  const review = { ...allow, decision: 'REVIEW' as const, suggestion: 'Review' as const }
+  const block = { ...allow, decision: 'BLOCK' as const, suggestion: 'Block' as const }
+  const policyOf = (results: unknown[]) => ({
+    calls: 0,
+    async moderateWish() {
+      const result = results[Math.min(this.calls, results.length - 1)]
+      this.calls += 1
+      if (result instanceof Error) throw result
+      return result as typeof allow
+    },
+  })
+  const setupWith = (policy: { moderateWish: () => Promise<typeof allow> }) => {
+    const store = new MemoryWishStore()
+    const queued: string[] = []
+    const service = createWishService({
+      store,
+      matchQueue: { enqueue: async (id) => void queued.push(id) },
+      moderation: policy,
+    })
+    return { store, queued, service }
+  }
+
+  test('REVIEW 新建：落待审愿望与记录，不投递匹配', async () => {
+    const { store, queued, service } = setupWith(policyOf([review]))
+    const wish = await service.createWish(userA, createInput)
+    expect(wish.moderationStatus).toBe('PENDING_REVIEW')
+    expect(store.records).toEqual([{ id: internalWish(wish.id), version: 1 }])
+    expect(queued).toEqual([])
+  })
+
+  test('BLOCK 新建：422 且不落库、不投递', async () => {
+    const { store, queued, service } = setupWith(policyOf([block]))
+    await expect(service.createWish(userA, createInput)).rejects.toMatchObject({
+      status: 422,
+      code: 'WISH_CONTENT_BLOCKED',
+    })
+    expect(store.rows).toHaveLength(0)
+    expect(queued).toEqual([])
+  })
+
+  test('审核上游故障 fail-closed：503 不落库', async () => {
+    const failure = Object.assign(new Error('timeout'), {
+      name: 'ContentModerationError',
+      reason: 'timeout',
+    })
+    const { store, service } = setupWith(policyOf([failure]))
+    await expect(service.createWish(userA, createInput)).rejects.toMatchObject({
+      status: 503,
+      code: 'CONTENT_MODERATION_UNAVAILABLE',
+    })
+    expect(store.rows).toHaveLength(0)
+  })
+
+  test('REVIEW 编辑：公开内容不变，只写 pending 与版本记录', async () => {
+    const policy = policyOf([allow, review])
+    const { store, queued, service } = setupWith(policy)
+    const created = await service.createWish(userA, createInput)
+    queued.length = 0
+    const updated = await service.updateWish(userA, internalWish(created.id), {
+      keyword: '静音键盘',
+    })
+    expect(updated.keyword).toBe(createInput.keyword)
+    expect(updated.pendingReview).toBe(true)
+    expect(store.rows[0]?.pending_keyword).toBe('静音键盘')
+    expect(store.records).toHaveLength(1)
+    expect(store.records[0]?.version).toBe(2)
+    expect(queued).toEqual([])
+  })
+
+  test('BLOCK 编辑：旧公开内容保留且不写 pending', async () => {
+    const policy = policyOf([allow, block])
+    const { store, service } = setupWith(policy)
+    const created = await service.createWish(userA, createInput)
+    await expect(
+      service.updateWish(userA, internalWish(created.id), { keyword: '赌博' }),
+    ).rejects.toMatchObject({ status: 422, code: 'WISH_CONTENT_BLOCKED' })
+    expect(store.rows[0]?.keyword).toBe(createInput.keyword)
+    expect(store.rows[0]?.pending_keyword).toBeNull()
   })
 })

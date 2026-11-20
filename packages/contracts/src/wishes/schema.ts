@@ -76,6 +76,13 @@ export const wishDtoSchema = z.object({
   description: z.string().nullable(),
   acceptSimilar: z.boolean(),
   status: wishStatusSchema,
+  /**
+   * 审核可见性（#694 M5）：PENDING_REVIEW 只回给作者本人，不进入需求池/公开列表；
+   * REJECTED 表示新建即被拒、永远不会公开。与 status 生命周期正交。
+   */
+  moderationStatus: z.enum(['APPROVED', 'PENDING_REVIEW', 'REJECTED']).optional(),
+  /** 编辑进入人工复审、公开字段尚未替换时为 true（仅作者与管理端可见）。 */
+  pendingReview: z.boolean().optional(),
   /** 匹配数，读取 matches 表实时计数（#8 产出匹配结果）。 */
   matchCount: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),

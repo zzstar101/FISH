@@ -25,6 +25,7 @@ export const UserRestrictionIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.userRestr
 export const MediaIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.media)
 export const ModerationRecordIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.moderationRecord)
 export const ChatModerationRecordIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.chatModerationRecord)
+export const WishModerationRecordIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.wishModerationRecord)
 export const AuditLogIdSchema = publicIdSchema(PUBLIC_ID_PREFIX.auditLog)
 
 export type UserId = z.infer<typeof UserIdSchema>
@@ -44,4 +45,5 @@ export type UserRestrictionId = z.infer<typeof UserRestrictionIdSchema>
 export type MediaId = z.infer<typeof MediaIdSchema>
 export type ModerationRecordId = z.infer<typeof ModerationRecordIdSchema>
 export type ChatModerationRecordId = z.infer<typeof ChatModerationRecordIdSchema>
+export type WishModerationRecordId = z.infer<typeof WishModerationRecordIdSchema>
 export type AuditLogId = z.infer<typeof AuditLogIdSchema>
