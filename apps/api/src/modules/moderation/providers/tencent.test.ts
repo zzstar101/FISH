@@ -196,9 +196,14 @@ describe('腾讯 provider · 文本判定', () => {
       'lst_5-title': 'Pass',
       'lst_5-description': 'Block',
     }
-    const upstream = startMockUpstream((call) =>
-      tencentOk({ Suggestion: byField[String(call.body.DataId)] ?? 'Pass' }),
-    )
+    const upstream = startMockUpstream((call) => {
+      const suggestion = byField[String(call.body.DataId)] ?? 'Pass'
+      // 自动拦截只对明确严重标签生效，这里的 Block 用例用一个应当真拦的标签（#726）。
+      return tencentOk({
+        Suggestion: suggestion,
+        Label: suggestion === 'Block' ? 'Porn' : 'Normal',
+      })
+    })
     const provider = createProvider(upstream)
 
     const reviewed = await provider.moderateText({
@@ -227,6 +232,47 @@ describe('腾讯 provider · 文本判定', () => {
       'lst_5-title',
       'lst_5-description',
     ])
+  })
+
+  test('Block 只对明确严重标签自动拦截；文本广告放行，其余降级人工审核（#726）', async () => {
+    // 二手教材封面会被判 Polity、封底二维码会被判 Ad：文字类广告标签直接放行，
+    // 其余非严重标签降级人工审核（拿不准的人工看）。
+    for (const [label, expected] of [
+      ['Polity', 'REVIEW'],
+      ['Ad', 'ALLOW'],
+      ['Normal', 'REVIEW'],
+      ['未知标签', 'REVIEW'],
+    ] as const) {
+      const upstream = startMockUpstream(() => tencentOk({ Suggestion: 'Block', Label: label }))
+      const result = await createProvider(upstream).moderateText({
+        dataId: 'lst_policy',
+        fields: [{ field: 'title', value: TITLE }],
+      })
+
+      expect(result.decision).toBe(expected)
+      expect(result.fields[0]?.decision).toBe(expected)
+      // 决策被策略改写，但字段上仍保留上游原始 Suggestion / Label，供后台人工审核时对照。
+      expect(result.fields[0]?.suggestion).toBe('Block')
+      expect(result.fields[0]?.label).toBe(label)
+    }
+
+    // 上游连 Label 都没给：属于「拿不准」，同样进人工审核而不是自动放行/自动拦截。
+    const unlabeled = startMockUpstream(() => tencentOk({ Suggestion: 'Block', Label: undefined }))
+    const unlabeledResult = await createProvider(unlabeled).moderateText({
+      dataId: 'lst_unlabeled',
+      fields: [{ field: 'title', value: TITLE }],
+    })
+    expect(unlabeledResult.decision).toBe('REVIEW')
+    expect(unlabeledResult.fields[0]?.label).toBeNull()
+
+    // 明确的严重违规仍然自动拦截，不让人工队列成为色情/暴恐内容的必经通道。
+    const hard = startMockUpstream(() => tencentOk({ Suggestion: 'Block', Label: 'Terror' }))
+    const hardResult = await createProvider(hard).moderateText({
+      dataId: 'lst_hard_block',
+      fields: [{ field: 'title', value: TITLE }],
+    })
+    expect(hardResult.decision).toBe('BLOCK')
+    expect(hardResult.fields[0]?.suggestion).toBe('Block')
   })
 
   test('Content 是 base64 后的原文，请求不带 Secret', async () => {
@@ -484,9 +530,13 @@ describe('腾讯 provider · 图片判定', () => {
     expect(upstream.calls[0]?.body.BizType).toBe(IMS_BIZ_TYPE)
   })
 
-  test('IMS Block → BLOCK；Review → REVIEW', async () => {
+  test('IMS Block → BLOCK；Review → REVIEW；非严重标签的 Block 降级 REVIEW（#726）', async () => {
     const blocked = startMockUpstream(() => tencentOk({ Suggestion: 'Block', Label: 'Porn' }))
     const reviewed = startMockUpstream(() => tencentOk({ Suggestion: 'Review' }))
+    // 二手教材封面「教育部…规划教材」→ Polity，封底二维码 → Ad，图片里这两类都降级人工审核
+    // （文本的 Ads 已放行，但图片可能是二维码/站外引流，仍需人工看，见 #726）。
+    const softBlocked = startMockUpstream(() => tencentOk({ Suggestion: 'Block', Label: 'Polity' }))
+    const adBlocked = startMockUpstream(() => tencentOk({ Suggestion: 'Block', Label: 'Ad' }))
 
     const blockResult = await createProvider(blocked).moderateImage({
       dataId: 'img_2',
@@ -496,10 +546,24 @@ describe('腾讯 provider · 图片判定', () => {
       dataId: 'img_3',
       objectKey: 'listings/c.jpg',
     })
+    const softResult = await createProvider(softBlocked).moderateImage({
+      dataId: 'img_4',
+      objectKey: 'listings/d.jpg',
+    })
+    const adResult = await createProvider(adBlocked).moderateImage({
+      dataId: 'img_5',
+      objectKey: 'listings/e.jpg',
+    })
 
     expect(blockResult.decision).toBe('BLOCK')
     expect(reviewResult.decision).toBe('REVIEW')
     expect(reviewResult.subLabel).toBeNull()
+    expect(softResult.decision).toBe('REVIEW')
+    expect(softResult.label).toBe('Polity')
+    expect(softResult.suggestion).toBe('Block')
+    // 图片的广告标签不放行：图片里可能是二维码或站外引流。
+    expect(adResult.decision).toBe('REVIEW')
+    expect(adResult.label).toBe('Ad')
     // 上游没回 FileMD5：摘要为 null（调用方不得把 null 当通过），而不是编造一个。
     expect(blockResult.contentDigest).toBeNull()
   })

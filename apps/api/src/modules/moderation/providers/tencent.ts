@@ -12,7 +12,7 @@
  */
 import { ims } from 'tencentcloud-sdk-nodejs-ims'
 import { tms } from 'tencentcloud-sdk-nodejs-tms'
-import type { ModerationField } from '../types'
+import type { ModerationDecision, ModerationField } from '../types'
 import { withBoundedRetry } from './retry'
 import {
   aggregateModerationDecision,
@@ -115,7 +115,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 入参按 `unknown` 收：SDK 理论上必返回对象，但若它返回 `null`/字符串，这里也必须变成
  * `ContentModerationError`（否则会漏出一个裸 `TypeError`，调用方按统一错误类型处理时会落空）。
  */
-function verdictFromPayload(payload: unknown, provider: ModerationProviderName): ModerationVerdict {
+/**
+ * 自动拦截只对明确的严重违规类别生效（#726）。
+ *
+ * 二手教材是平台上最普通的商品，但它的封面会印「教育部大学计算机课程改革项目规划教材」，
+ * 封底会印图书二维码与出版方网址——IMS 稳定判成 `Polity / NationalInstitution` 与
+ * `Ad / Contact` 并给 `Block`。按人群经验，这两类标签的 `Block` 误伤率很高，而真正的
+ * 色情/违法/暴恐/辱骂不该指望商家申辩。因此：
+ *
+ * - 命中 {@link AUTO_BLOCK_LABELS} → 保持 `BLOCK`；
+ * - 其余标签（含上游未给 `Label`）→ 降级为 `REVIEW`，进人工审核队列。
+ *
+ * 只改 `decision`，`suggestion` 仍回带上游原值：后台需要看到「机器本来判了什么」。
+ */
+const AUTO_BLOCK_LABELS: ReadonlySet<string> = new Set([
+  'porn',
+  'sexy',
+  'illegal',
+  'abuse',
+  'terror',
+])
+
+/**
+ * 文本里的「广告」标签直接放行（#726）：二手商品的规格清单、品牌型号、屏幕参数都会被判广告，
+ * 而广告本身不是危险内容；图片里的广告标签仍进人工审核——图片可能是二维码或站外引流，
+ * 风险高于文字。
+ */
+const TEXT_ALLOW_LABELS: ReadonlySet<string> = new Set(['ad'])
+
+/** 把上游 `Suggestion` 映射成决策后，按媒体类型收窄自动拦截 / 人工审核范围。 */
+function applyModerationPolicy(
+  decision: ModerationDecision,
+  label: string | null,
+  media: 'text' | 'image',
+): ModerationDecision {
+  const normalized = label?.trim().toLowerCase() ?? ''
+  if (media === 'text' && TEXT_ALLOW_LABELS.has(normalized)) return 'ALLOW'
+  if (decision !== 'BLOCK') return decision
+  return AUTO_BLOCK_LABELS.has(normalized) ? 'BLOCK' : 'REVIEW'
+}
+
+function verdictFromPayload(
+  payload: unknown,
+  provider: ModerationProviderName,
+  media: 'text' | 'image',
+): ModerationVerdict {
   if (!isRecord(payload)) {
     throw new ContentModerationError({ reason: 'invalid_response', provider, detail: 'payload' })
   }
@@ -130,10 +174,11 @@ function verdictFromPayload(payload: unknown, provider: ModerationProviderName):
       detail: 'suggestion',
     })
   }
+  const label = nonEmpty(payload.Label)
   return {
-    decision: decisionFromSuggestion(suggestion),
+    decision: applyModerationPolicy(decisionFromSuggestion(suggestion), label, media),
     suggestion,
-    label: nonEmpty(payload.Label),
+    label,
     subLabel: nonEmpty(payload.SubLabel),
     score: typeof payload.Score === 'number' ? payload.Score : null,
     requestId,
@@ -271,7 +316,7 @@ export function createTencentContentModerationProvider(
     } catch (error) {
       throw classifyTencentFailure(error, 'TENCENT_TMS')
     }
-    return verdictFromPayload(payload, 'TENCENT_TMS')
+    return verdictFromPayload(payload, 'TENCENT_TMS', 'text')
   }
 
   async function callImageModeration(
@@ -289,7 +334,7 @@ export function createTencentContentModerationProvider(
       throw classifyTencentFailure(error, 'TENCENT_IMS')
     }
     return {
-      verdict: verdictFromPayload(payload, 'TENCENT_IMS'),
+      verdict: verdictFromPayload(payload, 'TENCENT_IMS', 'image'),
       contentDigest: digestFromPayload(payload),
     }
   }
