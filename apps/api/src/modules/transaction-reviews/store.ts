@@ -1,3 +1,4 @@
+import type { ModerationDecision } from '@fish/contracts/moderation/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { transactionReviewImages, transactionReviews } from '@fish/db/schema/transaction-reviews'
@@ -37,6 +38,11 @@ export interface ReviewRow {
 
 export interface MyReviewRow extends ReviewRow {
   imageKeys: string[]
+  /**
+   * 可选：读侧已批量解析的图片有效结论（objectKey → 结论）。
+   * 列表接口一次查完整页的台账后挂在行上，避免 DTO 映射层做同步 IO。
+   */
+  imageModeration?: Record<string, ModerationDecision>
 }
 
 /**
@@ -74,6 +80,8 @@ export interface ReviewTimelineRow extends MyReviewRow {
 
 /** 一笔交易下的一条评价 + 谁写的（`GET /transactions/:id/reviews`，≤2 行不分页）。 */
 export interface TransactionReviewRow extends MyReviewRow {
+  /** 作者 uuid：图片待审时只有作者能看非 ALLOW 的图，读侧要靠它区分视角。 */
+  authorId: string
   authorRole: 'buyer' | 'seller'
 }
 
@@ -242,6 +250,7 @@ export function createSqlTransactionReviewStore(db: Db): TransactionReviewsStore
     async listReviewsOf(transactionId) {
       const result = await db.execute(sql`
         SELECT ${REVIEW_COLUMNS},
+               r.author_id AS author_id,
                (r.author_id = t.buyer_id) AS is_buyer
         FROM transaction_reviews r
         JOIN transactions t ON t.id = r.transaction_id
@@ -255,6 +264,7 @@ export function createSqlTransactionReviewStore(db: Db): TransactionReviewsStore
       )
       return rows.map((row) => ({
         ...myReviewRowOf(row, images.get(row.id as string) ?? []),
+        authorId: row.author_id as string,
         authorRole: row.is_buyer ? ('buyer' as const) : ('seller' as const),
       }))
     },

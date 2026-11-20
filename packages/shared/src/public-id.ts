@@ -26,6 +26,8 @@ export const PUBLIC_ID_PREFIX = {
   wishModerationRecord: 'wmr',
   /** 用户资料（昵称 / 签名 / 头像）待审记录（#694 M5）。 */
   profileModerationRecord: 'pmr',
+  /** 交易评价图片待审记录（#694 M5c）。 */
+  reviewModerationRecord: 'rmr',
   auditLog: 'aud',
 } as const
 

@@ -523,6 +523,7 @@ read -r  -p 'IMS（图片）BizType: ' TENCENT_IMS_BIZ_TYPE
 read -r  -p 'TMS（聊天文本）BizType: ' TENCENT_TMS_CHAT_BIZ_TYPE
 read -r  -p 'TMS（公开 UGC）BizType: ' TENCENT_TMS_UGC_BIZ_TYPE
 read -r  -p 'IMS（聊天图片）BizType: ' TENCENT_IMS_CHAT_BIZ_TYPE
+read -r  -p 'IMS（公开 UGC 图片）BizType: ' TENCENT_IMS_UGC_BIZ_TYPE
 {
   printf 'CONTENT_MODERATION_TRANSPORT=tencent\n'
   printf 'TENCENT_CLOUD_SECRET_ID=%s\n' "$TENCENT_CLOUD_SECRET_ID"
@@ -532,11 +533,12 @@ read -r  -p 'IMS（聊天图片）BizType: ' TENCENT_IMS_CHAT_BIZ_TYPE
   printf 'TENCENT_TMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_TMS_CHAT_BIZ_TYPE"
   printf 'TENCENT_TMS_UGC_BIZ_TYPE=%s\n' "$TENCENT_TMS_UGC_BIZ_TYPE"
   printf 'TENCENT_IMS_CHAT_BIZ_TYPE=%s\n' "$TENCENT_IMS_CHAT_BIZ_TYPE"
+  printf 'TENCENT_IMS_UGC_BIZ_TYPE=%s\n' "$TENCENT_IMS_UGC_BIZ_TYPE"
 } | sudo tee -a /etc/fish/api-mail.env >/dev/null
 unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
 ```
 
-- 七项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
+- 八项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
   600），轮换后重启 API 生效，不影响存量数据。
 - `TENCENT_CLOUD_REGION` 可选，默认 `ap-guangzhou`；应与存储/会话所在地域一致，跨境调用会明显变慢。
 - `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 是腾讯云控制台按业务创建的两个策略号（文本、图片
@@ -558,6 +560,17 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
     `admin_audit_logs`（action `PROFILE_MODERATION_DECISION`、target `PROFILE_MODERATION_RECORD`）；
     记录带乐观版本，重复放行不会二次切换公开值，版本过期返回 **409 `PROFILE_MODERATION_CONFLICT`**。
     头像只在 IMS 判定 ALLOW 时才会进入待审 payload 或直接生效，文字与头像不会出现「文字失败但头像换了」的部分提交。
+
+- **交易评价配图使用独立的公开 UGC 图片策略号（#694 M5c）**：`TENCENT_IMS_UGC_BIZ_TYPE` 必须与商品、
+  聊天图片策略号都不同；缺项或复用都会让 API 启动失败。confirm 时服务端读取全量字节，校验 staging 键域、
+  大小、MIME、魔数与 sha256 后，把这**同一份**字节交给 IMS（不回读 staging，防 TOCTOU）；腾讯 transport
+  还必须比对本地 MD5 与上游 `FileMD5`，缺失或不一致按 fail-closed 返回 503。结论：
+  `ALLOW` 才写 `reviews/` 公开键并签发代理 URL；`REVIEW` 写私有 `review-moderation-media/`（仅作者本人与
+  管理员可读，作者端显示待审），进入 `/admin/reviews/moderation` 队列；`BLOCK` 不产生公开 final 对象、
+  删除 staging 并返回 **422 `REVIEW_IMAGE_BLOCKED`**。评价提交只接受本人台账中有效结论非 `BLOCK` 的键；
+  公开评价列表隐藏含未放行图片的整条评价，管理员放行后自动恢复公开。管理端放行/拒绝写 `admin_audit_logs`
+  （action `REVIEW_MODERATION_DECISION`、target `REVIEW_MODERATION_RECORD`），带乐观版本，过期或重复冲突
+  返回 **409 `REVIEW_MODERATION_CONFLICT`**；放行前会重读私有对象并校验 sha256，字节被替换则拒绝放行。
 
 - **聊天必须使用独立策略号（#694 M1）**：文本 `TENCENT_TMS_CHAT_BIZ_TYPE`、图片
   `TENCENT_IMS_CHAT_BIZ_TYPE`。聊天正文/图片是私聊内容，不能套商品策略（商品策略会把「加微信」这类

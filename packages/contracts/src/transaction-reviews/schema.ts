@@ -10,10 +10,11 @@
  * - 评价**不可修改**；本人可物理删除（删除幂等）；
  * - 评价时间用服务端 `created_at`，端上不本地造假时间。
  *
- * 配图（#475 起）：读模型 `images[{url}]`，写契约收**可选**的 `imageObjectKeys`。键**只能**来自
- * `POST /transactions/:id/review/media/confirm` 固化的 final 键（`reviews/{usr_…}/…`，见下方
- * `ReviewMediaPresignRequestSchema` 一段），服务端按前缀与归属复核 —— 直接接受任意 `objectKey`
- * 等于允许引用别人的对象。数组下标即 `sort_order`（0 = 第一张）。读侧形状未变，不用改。
+ * 配图（#475 起，审核见 #694 M5c）：读模型 `images[{url, moderationDecision?}]`，写契约收**可选**的
+ * `imageObjectKeys`。键**只能**来自 `POST /transactions/:id/review/media/confirm` 固化的 final 键
+ * （机器 `ALLOW` 的 `reviews/{usr_…}/…` 或待审的 `review-moderation-media/{usr_…}/…`），服务端按
+ * 前缀、归属与审核台账复核 —— 直接接受任意 `objectKey` 等于允许引用别人的对象。数组下标即
+ * `sort_order`（0 = 第一张）。
  */
 
 import { ALLOWED_IMAGE_MIME, MAX_IMAGE_BYTES } from '@fish/contracts/listings/schema'
@@ -70,7 +71,9 @@ export type TransactionReviewCreateInput = z.infer<typeof TransactionReviewCreat
  *
  * 与 listing 的上传链同形但**独立成链**（票内决策：不动 `/uploads/*` 的既有 listing 语义）：
  * - presign 只签 staging 前缀 `transaction-review-media/{usr_…}/{med_…}.{ext}`（服务端生成键）；
- * - confirm 校验（形状/归属/存在/大小/MIME/真实图片）后写入公开的 `reviews/{usr_…}/{med_…}.{ext}`；
+ * - confirm 读全量字节送 IMS：`ALLOW` 固化到公开的 `reviews/{usr_…}/{med_…}.{ext}`，
+ *   `REVIEW` 固化到私有的 `review-moderation-media/{usr_…}/{med_…}.{ext}` 并进管理员待审队列，
+ *   `BLOCK` 不产生任何 final 键（422）；
  * - 客户端直传 `PUT` 用 presign 返回的 `uploadUrl`，`objectKey` 视为不透明字符串。
  */
 export const ReviewMediaPresignRequestSchema = z.strictObject({
@@ -98,15 +101,28 @@ export const ReviewMediaConfirmRequestSchema = z.strictObject({
 export type ReviewMediaConfirmRequest = z.infer<typeof ReviewMediaConfirmRequestSchema>
 
 export const ReviewMediaConfirmResponseSchema = z.object({
-  /** 固化后的 final 键（`reviews/{usr_…}/{med_…}.{ext}`）——这才是能进 `imageObjectKeys` 的值。 */
+  /**
+   * 固化后的 final 键——这才是能进 `imageObjectKeys` 的值。
+   * `ALLOW` 为 `reviews/{usr_…}/{med_…}.{ext}`；`REVIEW` 为私有的
+   * `review-moderation-media/{usr_…}/{med_…}.{ext}`（只能本人/管理员读，评价对外隐藏）。
+   */
   objectKey: z.string().min(1),
+  /** 作者可读的短期签名 URL；`REVIEW` 时也是私有对象的签名地址（仅返回给作者）。 */
   url: z.url(),
+  /** 机器结论：`BLOCK` 不会走到这里（422 REVIEW_IMAGE_BLOCKED）。 */
+  moderationDecision: z.enum(['ALLOW', 'REVIEW']),
 })
 
 export type ReviewMediaConfirmResponse = z.infer<typeof ReviewMediaConfirmResponseSchema>
 
 export const TransactionReviewImageSchema = z.object({
   url: z.url(),
+  /**
+   * 图片的当前有效审核结论。`REVIEW` 表示仅作者与管理员可见、公开评价被隐藏；
+   * `BLOCK` 与非台账键（无法判定）的图片不会出现在读模型里（fail-closed）。
+   * 字段保留 optional 只为兼容既有客户端 fixture，服务端输出时总会带上。
+   */
+  moderationDecision: z.enum(['ALLOW', 'REVIEW', 'BLOCK']).optional(),
 })
 
 export type TransactionReviewImage = z.infer<typeof TransactionReviewImageSchema>
@@ -199,6 +215,11 @@ export const TransactionReviewErrorCodeSchema = z.enum([
    * 避免把「别人的对象是否存在」变成可探测的侧信道。
    */
   'REVIEW_IMAGE_INVALID',
+  /**
+   * 422：图片被 IMS 判定为确定违规（#694 M5c）。**不产生可公开的 final 键**，
+   * staging 对象会被清理；端上应提示作者换图，不能重试同一张图。
+   */
+  'REVIEW_IMAGE_BLOCKED',
   /**
    * 429：上传链请求过于频繁（#475 审查采纳——confirm 无上限等于开放不限量公开图床，
    * 按用户令牌桶兜底）。响应带 `retryAfterSeconds`。

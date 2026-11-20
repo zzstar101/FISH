@@ -8,6 +8,7 @@ import {
 } from '../moderation/providers/types'
 import type { ModerationDecision, ModerationField } from '../moderation/types'
 import type { MediaStorage } from '../uploads/storage'
+import type { ReviewModerationLookupRow, ReviewModerationStore } from './moderation-store'
 import { createTransactionReviewService, TransactionReviewServiceError } from './service'
 import type { MyReviewRow, ReviewTimelineRow, TransactionReviewsStore } from './store'
 
@@ -27,6 +28,36 @@ const storage: MediaStorage = {
   stat: async () => null,
   readMediaBytes: async () => null,
   writeMediaBytes: async () => {},
+}
+
+/** 审核台账假实现：只看 finalKeys；其余方法在单测里不会走到。 */
+function fakeModerationStore(
+  decisions: Record<string, ModerationDecision> = {},
+): ReviewModerationStore {
+  const rows: ReviewModerationLookupRow[] = Object.entries(decisions).map(
+    ([finalKey, moderationDecision]) => ({
+      finalKey,
+      userId: BUYER_ID,
+      moderationDecision,
+      settledDecision: null,
+      contentDigest: '0'.repeat(64),
+    }),
+  )
+  const unused = async () => {
+    throw new Error('unused in service tests')
+  }
+  return {
+    async findByFinalKeys(keys) {
+      return rows.filter((row) => keys.includes(row.finalKey))
+    },
+    findByStagingKey: unused,
+    findByDigest: unused,
+    findByFinalKey: unused,
+    insert: unused,
+    listPending: unused,
+    findMediaSnapshot: unused,
+    decide: unused,
+  }
 }
 
 function reviewRow(overrides: Partial<MyReviewRow> = {}): MyReviewRow {
@@ -292,13 +323,30 @@ describe('评价边（favorites 同款单资源三方法）', () => {
     const miss = await serviceErrorOf(none.getMyReview(BUYER_ID, TXN_ID))
     expect(miss.code).toBe('REVIEW_NOT_FOUND')
 
+    const imageKey = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, BUYER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, uuid(0xd1))}.png`
     const mine = createTransactionReviewService({
-      store: fakeStore({ existing: reviewRow({ imageKeys: ['transaction-review-media/k.jpg'] }) }),
+      store: fakeStore({ existing: reviewRow({ imageKeys: [imageKey] }) }),
       storage,
+      moderationStore: fakeModerationStore({ [imageKey]: 'ALLOW' }),
     })
     const dto = await mine.getMyReview(BUYER_ID, TXN_ID)
     expect(dto.transactionId).toBe(TXN_PUBLIC_ID)
-    expect(dto.images[0]?.url).toBe('https://cdn.example/transaction-review-media/k.jpg')
+    expect(dto.images).toEqual([
+      { url: `https://cdn.example/${imageKey}`, moderationDecision: 'ALLOW' },
+    ])
+  })
+
+  test('#475 遗留公开键没有台账 → 读侧按 ALLOW 兼容（写侧仍要求台账）', async () => {
+    const legacyKey = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, BUYER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, uuid(0xd2))}.png`
+    const service = createTransactionReviewService({
+      store: fakeStore({ existing: reviewRow({ imageKeys: [legacyKey] }) }),
+      storage,
+      moderationStore: fakeModerationStore(),
+    })
+    const dto = await service.getMyReview(BUYER_ID, TXN_ID)
+    expect(dto.images).toEqual([
+      { url: `https://cdn.example/${legacyKey}`, moderationDecision: 'ALLOW' },
+    ])
   })
 
   test('DELETE 幂等：store 的删除行数原样回传（0 = 本来就没有）', async () => {
@@ -363,12 +411,15 @@ describe('#475 配图写入口', () => {
     const service = createTransactionReviewService({
       store: fakeStore(),
       storage: imageStorage,
+      moderationStore: fakeModerationStore({ [keyOf(MEDIA)]: 'ALLOW' }),
     })
     const dto = await service.createReview(BUYER_ID, TXN_ID, {
       rating: 'POSITIVE',
       imageObjectKeys: [keyOf(MEDIA)],
     })
-    expect(dto.images).toEqual([{ url: `https://cdn.example/${keyOf(MEDIA)}` }])
+    expect(dto.images).toEqual([
+      { url: `https://cdn.example/${keyOf(MEDIA)}`, moderationDecision: 'ALLOW' },
+    ])
   })
 
   test('引用校验 stat 抛运行错误 → 503 REVIEW_MEDIA_UNAVAILABLE（#483 审查响应）', async () => {
@@ -381,6 +432,7 @@ describe('#475 配图写入口', () => {
     const service = createTransactionReviewService({
       store: fakeStore(),
       storage: outageStorage,
+      moderationStore: fakeModerationStore({ [keyOf(MEDIA)]: 'ALLOW' }),
     })
     const error = await serviceErrorOf(
       service.createReview(BUYER_ID, TXN_ID, {
@@ -396,6 +448,7 @@ describe('#475 配图写入口', () => {
     const service = createTransactionReviewService({
       store: fakeStore(),
       storage: imageStorage,
+      moderationStore: fakeModerationStore({ [keyOf(MEDIA)]: 'ALLOW' }),
     })
     const otherPublic = encodePublicId(
       PUBLIC_ID_PREFIX.user,
@@ -416,8 +469,28 @@ describe('#475 配图写入口', () => {
     }
   })
 
+  test('台账结论 BLOCK → 422 REVIEW_IMAGE_BLOCKED（换图，不是重试）', async () => {
+    const service = createTransactionReviewService({
+      store: fakeStore(),
+      storage: imageStorage,
+      moderationStore: fakeModerationStore({ [keyOf(MEDIA)]: 'BLOCK' }),
+    })
+    const error = await serviceErrorOf(
+      service.createReview(BUYER_ID, TXN_ID, {
+        rating: 'POSITIVE',
+        imageObjectKeys: [keyOf(MEDIA)],
+      }),
+    )
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('REVIEW_IMAGE_BLOCKED')
+  })
+
   test('重复键 → 422 VALIDATION_FAILED（details 指向 imageObjectKeys）', async () => {
-    const service = createTransactionReviewService({ store: fakeStore(), storage: imageStorage })
+    const service = createTransactionReviewService({
+      store: fakeStore(),
+      storage: imageStorage,
+      moderationStore: fakeModerationStore({ [keyOf(MEDIA)]: 'ALLOW' }),
+    })
     const error = await serviceErrorOf(
       service.createReview(BUYER_ID, TXN_ID, {
         rating: 'POSITIVE',

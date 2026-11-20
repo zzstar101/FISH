@@ -30,6 +30,7 @@ import { recommendationEvents } from './schema/recommendation-events'
 import { recommendationRequestItems } from './schema/recommendation-request-items'
 import { recommendationRequests } from './schema/recommendation-requests'
 import { reports } from './schema/reports'
+import { reviewModerationRecords } from './schema/review-moderation'
 import { sessions } from './schema/sessions'
 import { subscribeMessageDeliveries, subscribeMessageGrants } from './schema/subscribe-messages'
 import { transactionReviewImages, transactionReviews } from './schema/transaction-reviews'
@@ -155,8 +156,9 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 它引用 messages，不一起 TRUNCATE 会直接撞外键（0A000）。
   // `wish_moderation_records` 与 `profile_moderation_records`（#694 M5，均引用 users）同理：
   // 待审记录由真实提交产生，seed 不预置，但必须一起清空。
+  // `review_moderation_records`（#694 M5c，引用 users 与 transactions）同理。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${chatModerationRecords}, ${wishModerationRecords}, ${profileModerationRecords}, ${rateLimitEvents}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${chatModerationRecords}, ${wishModerationRecords}, ${profileModerationRecords}, ${reviewModerationRecords}, ${rateLimitEvents}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
   )
 
   const now = new Date()

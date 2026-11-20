@@ -39,6 +39,7 @@ import { Route as AdminMetricsRouteImport } from './routes/admin.metrics'
 import { Route as AdminModerationRouteImport } from './routes/admin.moderation'
 import { Route as AdminProfileModerationRouteImport } from './routes/admin.profile-moderation'
 import { Route as AdminReportsRouteImport } from './routes/admin.reports'
+import { Route as AdminReviewsModerationRouteImport } from './routes/admin.reviews-moderation'
 import { Route as AdminTransactionsRouteImport } from './routes/admin.transactions'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminWishesModerationRouteImport } from './routes/admin.wishes-moderation'
@@ -217,6 +218,11 @@ const AdminReportsRoute = AdminReportsRouteImport.update({
   path: '/reports',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminReviewsModerationRoute = AdminReviewsModerationRouteImport.update({
+  id: '/reviews-moderation',
+  path: '/reviews-moderation',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminTransactionsRoute = AdminTransactionsRouteImport.update({
   id: '/transactions',
   path: '/transactions',
@@ -383,6 +389,7 @@ export interface FileRoutesByFullPath {
   '/admin/moderation': typeof AdminModerationRouteWithChildren
   '/admin/profile-moderation': typeof AdminProfileModerationRoute
   '/admin/reports': typeof AdminReportsRouteWithChildren
+  '/admin/reviews-moderation': typeof AdminReviewsModerationRoute
   '/admin/transactions': typeof AdminTransactionsRouteWithChildren
   '/admin/users': typeof AdminUsersRouteWithChildren
   '/admin/wishes-moderation': typeof AdminWishesModerationRoute
@@ -431,6 +438,7 @@ export interface FileRoutesByTo {
   '/admin/chat-moderation': typeof AdminChatModerationRoute
   '/admin/metrics': typeof AdminMetricsRoute
   '/admin/profile-moderation': typeof AdminProfileModerationRoute
+  '/admin/reviews-moderation': typeof AdminReviewsModerationRoute
   '/admin/wishes-moderation': typeof AdminWishesModerationRoute
   '/disputes/$disputeId': typeof DisputesDisputeIdRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -489,6 +497,7 @@ export interface FileRoutesById {
   '/admin/moderation': typeof AdminModerationRouteWithChildren
   '/admin/profile-moderation': typeof AdminProfileModerationRoute
   '/admin/reports': typeof AdminReportsRouteWithChildren
+  '/admin/reviews-moderation': typeof AdminReviewsModerationRoute
   '/admin/transactions': typeof AdminTransactionsRouteWithChildren
   '/admin/users': typeof AdminUsersRouteWithChildren
   '/admin/wishes-moderation': typeof AdminWishesModerationRoute
@@ -550,6 +559,7 @@ export interface FileRouteTypes {
     | '/admin/moderation'
     | '/admin/profile-moderation'
     | '/admin/reports'
+    | '/admin/reviews-moderation'
     | '/admin/transactions'
     | '/admin/users'
     | '/admin/wishes-moderation'
@@ -598,6 +608,7 @@ export interface FileRouteTypes {
     | '/admin/chat-moderation'
     | '/admin/metrics'
     | '/admin/profile-moderation'
+    | '/admin/reviews-moderation'
     | '/admin/wishes-moderation'
     | '/disputes/$disputeId'
     | '/listing/$listingId'
@@ -655,6 +666,7 @@ export interface FileRouteTypes {
     | '/admin/moderation'
     | '/admin/profile-moderation'
     | '/admin/reports'
+    | '/admin/reviews-moderation'
     | '/admin/transactions'
     | '/admin/users'
     | '/admin/wishes-moderation'
@@ -920,6 +932,13 @@ declare module '@tanstack/react-router' {
       path: '/reports'
       fullPath: '/admin/reports'
       preLoaderRoute: typeof AdminReportsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/reviews-moderation': {
+      id: '/admin/reviews-moderation'
+      path: '/reviews-moderation'
+      fullPath: '/admin/reviews-moderation'
+      preLoaderRoute: typeof AdminReviewsModerationRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/transactions': {
@@ -1231,6 +1250,7 @@ interface AdminRouteChildren {
   AdminModerationRoute: typeof AdminModerationRouteWithChildren
   AdminProfileModerationRoute: typeof AdminProfileModerationRoute
   AdminReportsRoute: typeof AdminReportsRouteWithChildren
+  AdminReviewsModerationRoute: typeof AdminReviewsModerationRoute
   AdminTransactionsRoute: typeof AdminTransactionsRouteWithChildren
   AdminUsersRoute: typeof AdminUsersRouteWithChildren
   AdminWishesModerationRoute: typeof AdminWishesModerationRoute
@@ -1247,6 +1267,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminModerationRoute: AdminModerationRouteWithChildren,
   AdminProfileModerationRoute: AdminProfileModerationRoute,
   AdminReportsRoute: AdminReportsRouteWithChildren,
+  AdminReviewsModerationRoute: AdminReviewsModerationRoute,
   AdminTransactionsRoute: AdminTransactionsRouteWithChildren,
   AdminUsersRoute: AdminUsersRouteWithChildren,
   AdminWishesModerationRoute: AdminWishesModerationRoute,

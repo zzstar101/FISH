@@ -27,6 +27,8 @@ export const adminAuditActionEnum = pgEnum('admin_audit_action', [
   'WISH_MODERATION_DECISION',
   /** #694 M5：人工处理用户资料（昵称 / 签名 / 头像）待审。 */
   'PROFILE_MODERATION_DECISION',
+  /** #694 M5c：人工处理交易评价图片待审（放行 / 拒绝）。 */
+  'REVIEW_MODERATION_DECISION',
 ])
 
 /** 审计目标类型。审核决定以 moderation record 为审计目标。 */
@@ -41,6 +43,7 @@ export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
   'CHAT_MODERATION_RECORD',
   'WISH_MODERATION_RECORD',
   'PROFILE_MODERATION_RECORD',
+  'REVIEW_MODERATION_RECORD',
 ])
 
 /**

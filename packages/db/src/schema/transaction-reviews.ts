@@ -98,6 +98,8 @@ export const transactionReviewImages = pgTable(
       table.reviewId,
       table.sortOrder,
     ),
+    // 待审队列按 object_key 反查评价、放行时按 object_key 改写引用，都要走索引。
+    index('transaction_review_images_object_key_idx').on(table.objectKey),
     check('transaction_review_images_sort_order_non_negative', sql`${table.sortOrder} >= 0`),
   ],
 )
