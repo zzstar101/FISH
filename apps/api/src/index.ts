@@ -55,7 +55,7 @@ if (wechatEnv.transport === 'stub') {
 // 图片仍然可以确认（会固化），但结论恒为 REVIEW，商品会进人工队列，不会被当成审核通过。
 if (moderationEnv.transport === 'local') {
   console.warn(
-    '[api] CONTENT_MODERATION_TRANSPORT=local：文本走本地词表、图片不做内容审核（一律进人工队列），不是内容安全审核',
+    '[api] CONTENT_MODERATION_TRANSPORT=local：文本走本地词表、图片不做内容审核（一律进人工队列），不是内容安全审核；聊天图片会长期停在待审、不会投递给接收者',
   )
 }
 

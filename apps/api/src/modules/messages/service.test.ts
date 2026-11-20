@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import type { ChatModerationPolicy, ChatModerationResult } from '../moderation/chat'
+import type { ChatModerationResult, ChatTextModerationPolicy } from '../moderation/chat'
 import { ContentModerationError } from '../moderation/providers/types'
 import type { MediaStorage } from '../uploads/storage'
 import { messageSendKey, textRequestHash } from './idempotency'
@@ -50,7 +50,7 @@ const neverBlocked = { existsBlockBetween: async () => false }
  * 默认放行的聊天审核：既有用例都在验证发送/幂等/推送语义，不该被词表命中干扰。
  * 审核分支由本文件末尾的专门用例注入自定义 policy 覆盖。
  */
-const allowAllChatModeration: ChatModerationPolicy = {
+const allowAllChatModeration: ChatTextModerationPolicy = {
   moderateText: async () => ({
     decision: 'ALLOW',
     provider: 'LOCAL',
@@ -849,7 +849,10 @@ const chatVerdict = (overrides: Partial<ChatModerationResult>): ChatModerationRe
   ...overrides,
 })
 
-function policyReturning(result: ChatModerationResult, calls = { count: 0 }): ChatModerationPolicy {
+function policyReturning(
+  result: ChatModerationResult,
+  calls = { count: 0 },
+): ChatTextModerationPolicy {
   return {
     moderateText: async () => {
       calls.count += 1

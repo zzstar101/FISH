@@ -20,7 +20,7 @@ import {
   type PublicId,
 } from '@fish/shared/public-id'
 import type { BlockRelationCheck } from '../blocks/store'
-import type { ChatModerationPolicy, ChatModerationResult } from '../moderation/chat'
+import type { ChatModerationResult, ChatTextModerationPolicy } from '../moderation/chat'
 import { ContentModerationError } from '../moderation/providers/types'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
@@ -360,7 +360,7 @@ export function createMessageService({
   store: MessageStore
   storage: MediaStorage
   blocks: BlockRelationCheck
-  chatModeration: ChatModerationPolicy
+  chatModeration: ChatTextModerationPolicy
   projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },

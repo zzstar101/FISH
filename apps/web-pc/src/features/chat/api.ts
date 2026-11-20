@@ -288,6 +288,8 @@ export function describeSendFailure(error: unknown): string {
     if (error.code === 'MEDIA_OBJECT_NOT_FOUND') return '媒体上传未完成，请重试'
     if (error.code === 'MEDIA_OBJECT_INVALID') return '媒体文件与声明不一致，请重试'
     if (error.code === 'MEDIA_DURATION_EXCEEDED') return '语音不能超过 60 秒'
+    // #694 M1：音频审核未接入前语音发送被显式关闭；历史语音仍可播放。
+    if (error.code === 'VOICE_SEND_DISABLED') return '语音消息暂不支持发送，请改用文字或图片'
     if (error.code === 'MEDIA_DIMENSION_EXCEEDED') return '图片尺寸超过限制'
     if (error.code === 'MEDIA_NOT_FOUND') return '媒体不存在或不可访问'
     // #73 治理守卫：被封禁的账号在 media 路由上被 403 挡下，重试不会变成成功。

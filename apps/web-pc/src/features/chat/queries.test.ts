@@ -102,6 +102,7 @@ function media(
     durationMs: kind === 'VOICE' ? 2_000 : null,
     recalledAt: null,
     replyTo: null,
+    visibility: 'DELIVERED',
     createdAt,
   }
 }
