@@ -356,6 +356,22 @@ export default function Profile() {
     void Taro.showToast({ title, icon: 'none' })
   }
 
+  /**
+   * 复制 UID（#703）：`setClipboardData` 只写不读（隐私口径见 `features/legal/privacy.ts`）。
+   *
+   * 微信复制成功时自己会弹「内容已复制」，这里按 Issue #703 定的文案口径再给一次
+   * 「UID 已复制」；失败必须说出来 —— 静默失败等于让用户拿着空剪贴板离开。
+   */
+  const copyUid = async (uid: string) => {
+    try {
+      await Taro.setClipboardData({ data: uid })
+      toast('UID 已复制')
+    } catch (error) {
+      console.warn('[miniapp] 复制 UID 失败', error)
+      toast('复制失败')
+    }
+  }
+
   /** 格子 / 行的统一去向：有 url 就跳（区分 tab 页），没有就是页面未落地 */
   const go = (label: string, url?: string, tab?: boolean) => {
     if (!url) {
@@ -720,6 +736,19 @@ export default function Profile() {
                   />
                 </View>
               )}
+              {/* UID（#703）：人类可读标识，格式严格 `UID 1234567890`（前缀 + 一个空格 +
+                10 位、不分组），整行可点复制。位置在**昵称 / 认证徽章之后**：#534 定的
+                「徽章紧贴昵称下方」不动，与「他人主页」的「昵称（含徽章）→ UID」层级一致。
+                数据来自 `Me.uid`（`useAuth()` 的 authUser / `loadProfile()` 同源），
+                字号与颜色沿用本页次级文本（同签名行那一档 token）。 */}
+              <View
+                className="profile__uid"
+                aria-role="button"
+                aria-label={`UID ${user.uid}，点击复制`}
+                onClick={() => void copyUid(user.uid)}
+              >
+                <Text className="profile__uid-txt">UID {user.uid}</Text>
+              </View>
               {/* 签名行（3版稿 .psig）：**点击可编辑**，真值在服务端（`PATCH /profile` 的
                 `signature` 字段），本页弹窗保存成功后即时回显。
                 只展示**首行** —— 多行输入的其余行不显示，过长由 CSS 省略号收尾；

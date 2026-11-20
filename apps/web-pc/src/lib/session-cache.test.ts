@@ -5,6 +5,7 @@ import { AUTH_ME_QUERY_KEY, resetPcSession } from './session-cache'
 
 const user: Me = {
   id: 'usr_01jc000000e00800000000000a',
+  uid: '1000000001',
   nickname: '阿岚',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

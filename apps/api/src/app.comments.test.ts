@@ -4,9 +4,10 @@ import { newId } from '@fish/db/ids'
 import { listings } from '@fish/db/schema/listings'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
-import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createTestUser } from './modules/auth/testing'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -46,31 +47,16 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-const PASSWORD = 'fish123456'
-
 const post = (body: unknown, cookie?: string) => ({
   method: 'POST' as const,
   headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
   body: JSON.stringify(body),
 })
 
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线）。 */
 async function registerUser(serial: string): Promise<{ id: string; cookie: string }> {
-  const response = await app.request(
-    '/auth/register',
-    post({
-      studentNo: `2021000000${serial}`,
-      password: PASSWORD,
-      nickname: `留言验收${serial}`,
-    }),
-  )
-  expect(response.status).toBe(200)
-  const body = (await response.json()) as { user: { id: string } }
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith('fish_session='))
-    ?.split(';')[0]
-  if (!cookie) throw new Error('注册未下发 fish_session cookie')
-  return { id: decodePublicId(PUBLIC_ID_PREFIX.user, body.user.id), cookie }
+  const { userId, cookie } = await createTestUser(db, { nickname: `留言验收${serial}` })
+  return { id: userId, cookie }
 }
 
 async function createListing(sellerId: string): Promise<string> {

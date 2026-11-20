@@ -25,7 +25,7 @@ function generateToken(): string {
 }
 
 /**
- * 会话写入可用的句柄：普通连接，或事务句柄（注册要在同一事务里写 users + sessions）。
+ * 会话写入可用的句柄：普通连接，或事务句柄（微信首登要在同一事务里写 users + sessions）。
  * Drizzle 的 `PgTransaction` 与 `PgDatabase` 共享 `insert` / `delete`。
  */
 type SessionExecutor = Db | Parameters<Parameters<Db['transaction']>[0]>[0]
@@ -48,7 +48,7 @@ export function createSessions(db: Db) {
   return {
     create: (userId: string) => insertSession(db, userId),
 
-    /** 在给定事务里创建会话（注册路径用它保证与用户插入同生共死）。 */
+    /** 在给定事务里创建会话（微信首登用它保证与用户插入同生共死）。 */
     createWith: (executor: Parameters<Parameters<Db['transaction']>[0]>[0], userId: string) =>
       insertSession(executor, userId),
 

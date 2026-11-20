@@ -257,7 +257,26 @@
   flex: 0 0 auto;
 }
 
-.profile__sig-txt {
+/* UID 行（#703）：昵称 / 认证徽章下方的一行人类可读标识，整行可点复制。
+   文字样式与签名行同一档（见下 `.profile__sig-txt` 的分组选择器），只补一行的高度与
+   按压反馈；触摸高度 88rpx（44px）与签名行同口径，不额外制造颜色。 */
+.profile__uid {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  max-width: 100%;
+  margin-top: 6px;
+  min-height: 44px;
+  box-sizing: border-box;
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+/* 次级文本（签名 / UID）共用同一档：字号 --fs-xs、颜色取稿 .psig 的预计算值。 */
+.profile__sig-txt,
+.profile__uid-txt {
   font-size: var(--fs-xs);
   color: #36435d; /* 稿 .psig：muted 34% + --fg，预计算 */
   white-space: nowrap;

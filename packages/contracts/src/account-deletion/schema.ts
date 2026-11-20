@@ -100,7 +100,7 @@ export type AccountDeletionRequestResponse = z.infer<typeof AccountDeletionReque
 /**
  * `POST /me/account-deletion` 的请求体。
  *
- * `.strict()`：多余字段直接 422（与 `RegisterRequestSchema` 同口径）。
+ * `.strict()`：多余字段直接 422（与其它写请求同一口径）。
  */
 export const RequestAccountDeletionSchema = z.strictObject({
   /** 固定词二次确认，必须逐字等于 {@link ACCOUNT_DELETION_CONFIRMATION_PHRASE}。 */

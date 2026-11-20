@@ -30,13 +30,9 @@ const db = createDb(databaseUrl)
 const store = createSqlSubscribeMessageStore(db)
 
 const created: string[] = []
-let seq = 0
 
 async function newUser(nickname = '订阅测试'): Promise<string> {
-  const rows = await db
-    .insert(users)
-    .values({ studentNo: `sub-${Date.now()}-${seq++}`, passwordHash: 'test-hash', nickname })
-    .returning({ id: users.id })
+  const rows = await db.insert(users).values({ nickname }).returning({ id: users.id })
   const id = rows[0]?.id
   if (!id) throw new Error('insert users 未返回行')
   created.push(id)

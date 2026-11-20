@@ -4,6 +4,7 @@ import { loadServerEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createTestUser } from './modules/auth/testing'
 
 /**
  * #514 验收：发布商品 / 重新上架 / 发布求购前必须已绑定手机号。
@@ -58,22 +59,9 @@ const post = (body: unknown, cookie: string) => ({
   body: JSON.stringify(body),
 })
 
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线）；未绑手机号。 */
 async function registerUser(): Promise<string> {
-  const response = await app.request('/auth/register', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      studentNo: '202100009901',
-      password: 'fish123456',
-      nickname: '绑号验收',
-    }),
-  })
-  expect(response.status).toBe(200)
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith('fish_session='))
-    ?.split(';')[0]
-  if (!cookie) throw new Error('注册未下发 fish_session cookie')
+  const { cookie } = await createTestUser(db, { nickname: '绑号验收' })
   return cookie
 }
 

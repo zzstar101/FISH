@@ -7,6 +7,7 @@ import { applyReviewCreated, invalidateTransactionSurfaces, profileKeys } from '
 
 const oldUser: Me = {
   id: 'usr_01jc000000e00800000000000a',
+  uid: '1000000001',
   nickname: '旧用户',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

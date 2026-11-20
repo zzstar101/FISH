@@ -892,6 +892,12 @@ sudo FISH_REF=<tag|sha> /usr/local/bin/fish-deploy
 因此更准确的说法是：**服务器上的 ref 回退只用于应急**；需要长期生效的回退应该在 `main` 上
 `git revert` 后重新发布一个前进版本。
 
+**破坏性迁移发布前必须先备份**（`pg_dump --schema-only` + 目标表数据快照）。例如 `#703`
+删除了 `users.student_no` / `users.password_hash`，并用随机默认值回填 `users.uid`：回填
+撞号概率随用户数增长（1 万约 0.5%、5 万约 13%、10 万约 43%），而迁移在一个事务里执行，
+`CREATE UNIQUE INDEX` 因撞号失败会整体回滚、重跑用新的随机值重新回填，不会留下半成品。
+生产数据量接近 5 万时，建议先在备份库完整演练一次再正式发布。
+
 ## 8. 上线验收
 
 ```bash

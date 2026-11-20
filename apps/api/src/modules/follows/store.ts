@@ -16,7 +16,7 @@ import { and, desc, eq, lt, or, type SQL, sql } from 'drizzle-orm'
  * ## 公开投影落在**列投影**上
  *
  * `listFollowing` 只 SELECT `users` 的公开列（`nickname / avatar_url / auth_status`）——
- * `student_no` / `campus_email` / `password_hash` / `role` 连查都不查。与 `users/store.ts`
+ * `campus_email` / `phone` / `role` 连查都不查。与 `users/store.ts`
  * 同一条约束：「不泄漏」靠的是没查，不是查了再删。
  *
  * ## 排序与索引

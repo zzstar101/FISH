@@ -81,10 +81,10 @@ async function currentWishVersion(wishId: string): Promise<Date> {
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
-  for (const [i, uid] of [userId, ...otherUserIds].entries()) {
+  for (const uid of [userId, ...otherUserIds]) {
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${uid}, ${`wish${process.pid}_${i}`}, 'test-hash', '愿望测试')
+      INSERT INTO users (id, nickname)
+      VALUES (${uid}, '愿望测试')
     `)
   }
 })

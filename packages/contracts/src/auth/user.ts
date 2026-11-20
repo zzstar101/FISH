@@ -11,11 +11,20 @@ export const AuthStatusSchema = z.enum(['UNVERIFIED', 'VERIFIED'])
 export type AuthStatus = z.infer<typeof AuthStatusSchema>
 
 /**
- * 对外可见的用户资料：`GET /me` 与登录 / 注册响应共用同一份，
+ * 对外人类可读标识（#703）：10 位数字字符串，值域 `1000000000`–`9999999999`。
+ *
+ * 与 `UserIdSchema`（`usr_...` TypeID）共存：`usr_` 是协议 ID，本字段只做展示与后台
+ * 精确定位，端上不提供按它搜人。
+ */
+export const UidSchema = z.string().regex(/^[1-9]\d{9}$/, 'UID 必须是首位非 0 的 10 位数字')
+
+export type Uid = z.infer<typeof UidSchema>
+
+/**
+ * 对外可见的用户资料：`GET /me` 与登录响应共用同一份，
  * 前端登录后无需再打 `/me`。
  *
- * 刻意不含 `studentNo`、真实姓名、班级——#3 验收要求不公开完整学号等敏感字段；
- * 表里的 `student_no` / `password_hash` 永远不进入这个类型。
+ * 刻意不含真实姓名、班级等敏感字段；学号 / 密码凭据列已随 #703 删除，不再存在。
  *
  * #86（2026-09-22 产品冻结）：
  * - `campus` 已整体移除——产品不采集、不公开校区，无可见性开关（#86 F 节）；
@@ -23,6 +32,8 @@ export type AuthStatus = z.infer<typeof AuthStatusSchema>
  */
 export const MeSchema = z.object({
   id: UserIdSchema,
+  /** 人类可读 UID（10 位数字字符串），展示为「UID 1234567890」。 */
+  uid: UidSchema,
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
   authStatus: AuthStatusSchema,

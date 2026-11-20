@@ -156,8 +156,6 @@ beforeAll(async () => {
   const [user] = await db
     .insert(users)
     .values({
-      studentNo: `rank-eval-store-${Date.now()}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '离线评估取数测试',
     })
     .returning({ id: users.id })

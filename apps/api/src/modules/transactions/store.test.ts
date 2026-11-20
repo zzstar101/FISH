@@ -56,10 +56,10 @@ async function seedConversation(id: string, listingId: string, buyerId: string) 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
-  for (const [i, uid] of [buyer1, buyer2, seller].entries()) {
+  for (const uid of [buyer1, buyer2, seller]) {
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${uid}, ${`tx${process.pid}_${i}`}, 'test-hash', '交易测试')
+      INSERT INTO users (id, nickname)
+      VALUES (${uid}, '交易测试')
     `)
   }
   await seedListing(listingA)

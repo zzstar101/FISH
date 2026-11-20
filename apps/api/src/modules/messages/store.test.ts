@@ -42,10 +42,10 @@ const conversationA = '01990000-0000-7000-8000-0000000000c1'
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
-  for (const [i, uid] of [buyer, seller, outsider].entries()) {
+  for (const uid of [buyer, seller, outsider]) {
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${uid}, ${`msg${process.pid}_${i}`}, 'test-hash', '消息测试')
+      INSERT INTO users (id, nickname)
+      VALUES (${uid}, '消息测试')
     `)
   }
   const listingNo = await reserveTestListingNo(db, listingA)

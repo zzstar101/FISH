@@ -9,6 +9,7 @@ const LISTING_ID = 'lst_01jc000000e00800000000000t'
 
 const profile = {
   id: USER_ID,
+  uid: '1000000001',
   nickname: '阿岚',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

@@ -28,6 +28,7 @@ describe('profileStats', () => {
   test('exposes exactly the three contract-backed stats', () => {
     const stats = profileStats({
       id: USER_ID,
+      uid: '1000000001',
       nickname: '阿岚',
       avatarUrl: null,
       authStatus: 'UNVERIFIED',

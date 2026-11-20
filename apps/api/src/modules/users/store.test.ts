@@ -20,9 +20,6 @@ if (!databaseUrl) {
 const db = createDb(databaseUrl)
 const store = createSqlPublicUserStore(db)
 
-let seq = 0
-const uniqueStudentNo = () => `public-user-${Date.now()}-${seq++}`
-
 type ListingSpec = {
   status?: ListingStatus
   moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
@@ -47,8 +44,6 @@ async function withSeller(
   const sellerRows = await db
     .insert(users)
     .values({
-      studentNo: uniqueStudentNo(),
-      passwordHash: 'test-not-a-real-hash',
       nickname: '卖家',
     })
     .returning({ id: users.id })
@@ -58,8 +53,6 @@ async function withSeller(
   const buyerRows = await db
     .insert(users)
     .values({
-      studentNo: uniqueStudentNo(),
-      passwordHash: 'test-not-a-real-hash',
       nickname: '买家',
     })
     .returning({ id: users.id })
@@ -113,8 +106,8 @@ test('findPublicUser 只 SELECT 公开列，不返回任何私有列', async () 
   await withSeller([{}], async ({ sellerId }) => {
     const row = await store.findPublicUser(sellerId)
 
-    // 键集合就是"没查私有列"的可验证形式：student_no / campus / campus_email /
-    // password_hash / role 一旦被人写进 SELECT，这条会立刻失败。
+    // 键集合就是"没查私有列"的可验证形式：campus / campus_email / phone / role /
+    // account_status 一旦被人写进 SELECT，这条会立刻失败（#703 起 uid 是公开列，必须带出）。
     expect(Object.keys(row ?? {}).sort()).toEqual([
       'authStatus',
       'avatarUrl',
@@ -122,6 +115,7 @@ test('findPublicUser 只 SELECT 公开列，不返回任何私有列', async () 
       'id',
       'nickname',
       'signature',
+      'uid',
     ])
   })
 })

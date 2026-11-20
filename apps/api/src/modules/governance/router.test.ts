@@ -23,6 +23,7 @@ import { SQL } from 'bun'
 import { desc, eq, like, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import { createSessions } from '../auth/session'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -43,8 +44,6 @@ const migrationsFolder = Bun.fileURLToPath(
 const admin = createDb(databaseUrl)
 let scratch: Db
 let app: ReturnType<typeof createApp>
-
-const DEMO_PASSWORD = 'fish123456'
 
 const ADMIN_A = '01940000-0000-7000-8000-0000000000a1'
 const ADMIN_B = '01940000-0000-7000-8000-0000000000a2'
@@ -90,12 +89,9 @@ beforeAll(async () => {
   await migrate(scratch, { migrationsFolder })
   app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
 
-  const passwordHash = await Bun.password.hash(DEMO_PASSWORD)
   await scratch.insert(users).values([
     {
       id: ADMIN_A,
-      studentNo: '202401000901',
-      passwordHash,
       nickname: '管理员甲',
       authStatus: 'VERIFIED',
       verifiedAt: new Date('2026-10-01T00:00:00Z'),
@@ -104,8 +100,6 @@ beforeAll(async () => {
     },
     {
       id: ADMIN_B,
-      studentNo: '202401000902',
-      passwordHash,
       nickname: '管理员乙',
       authStatus: 'VERIFIED',
       verifiedAt: new Date('2026-10-01T00:00:00Z'),
@@ -114,8 +108,6 @@ beforeAll(async () => {
     },
     {
       id: SELLER,
-      studentNo: '202401000903',
-      passwordHash,
       nickname: '卖家',
       // 已绑手机号：#514 的手机号门禁挂在治理守卫之前，未绑定会先回 403 PHONE_REQUIRED，
       // 下面「重新上架被挡 409」「受限后建商品 403 USER_RESTRICTED」就测不到治理本身了
@@ -125,40 +117,30 @@ beforeAll(async () => {
     },
     {
       id: OTHER,
-      studentNo: '202401000904',
-      passwordHash,
       nickname: '另一位用户',
       createdAt: new Date('2026-10-01T00:00:00Z'),
       role: 'USER',
     },
     {
       id: ROLLBACK,
-      studentNo: '202401000905',
-      passwordHash,
       nickname: '回滚用例用户',
       createdAt: new Date('2026-10-01T00:00:00Z'),
       role: 'USER',
     },
     {
       id: RESTRICTED,
-      studentNo: '202401000906',
-      passwordHash,
       nickname: '媒体入口用例用户',
       createdAt: new Date('2026-10-01T00:00:00Z'),
       role: 'USER',
     },
     {
       id: EXPIRY,
-      studentNo: '202401000907',
-      passwordHash,
       nickname: '到期用例用户',
       createdAt: new Date('2026-10-01T00:00:00Z'),
       role: 'USER',
     },
-    ...[LOCK_BAN, LOCK_LIFT, RACE_USER].map((id, index) => ({
+    ...[LOCK_BAN, LOCK_LIFT, RACE_USER].map((id) => ({
       id,
-      studentNo: `2024010009${String(index + 8).padStart(2, '0')}`,
-      passwordHash,
       nickname: '跨锁到期用例用户',
       createdAt: new Date('2026-10-01T00:00:00Z'),
       role: 'USER' as const,
@@ -225,16 +207,10 @@ const post = (body: unknown, cookie: string) => ({
   body: JSON.stringify(body),
 })
 
-async function loginAs(studentNo: string): Promise<string> {
-  const res = await app.request('/auth/login', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ studentNo, password: DEMO_PASSWORD }),
-  })
-  expect(res.status).toBe(200)
-  const cookie = res.headers.getSetCookie().find((value) => value.startsWith('fish_session='))
-  if (!cookie) throw new Error('登录未下发 fish_session')
-  return cookie.split(';')[0] ?? ''
+/** 直写 sessions 表签发会话（#703：/auth/login 已下线）。 */
+async function loginAs(userId: string): Promise<string> {
+  const { token } = await createSessions(scratch).create(userId)
+  return `fish_session=${token}`
 }
 
 let adminACookie: string
@@ -279,13 +255,13 @@ async function setAuditFailure(enabled: boolean): Promise<void> {
 
 describe('服务端治理（#73 治理半场 PR3）', () => {
   test('setup: login 五个账号', async () => {
-    adminACookie = await loginAs('202401000901')
-    adminBCookie = await loginAs('202401000902')
-    sellerCookie = await loginAs('202401000903')
-    otherCookie = await loginAs('202401000904')
-    restrictedCookie = await loginAs('202401000906')
-    expiryCookie = await loginAs('202401000907')
-    raceCookie = await loginAs('202401000910')
+    adminACookie = await loginAs(ADMIN_A)
+    adminBCookie = await loginAs(ADMIN_B)
+    sellerCookie = await loginAs(SELLER)
+    otherCookie = await loginAs(OTHER)
+    restrictedCookie = await loginAs(RESTRICTED)
+    expiryCookie = await loginAs(EXPIRY)
+    raceCookie = await loginAs(RACE_USER)
     expect(adminACookie.length).toBeGreaterThan(0)
     expect(sellerCookie.length).toBeGreaterThan(0)
     expect(otherCookie.length).toBeGreaterThan(0)

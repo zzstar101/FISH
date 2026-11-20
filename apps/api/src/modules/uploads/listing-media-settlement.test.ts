@@ -47,8 +47,6 @@ async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `listing-media-settle-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '集成测试',
     })
     .returning({ id: users.id })

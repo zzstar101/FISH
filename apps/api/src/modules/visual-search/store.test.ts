@@ -46,14 +46,10 @@ afterAll(async () => {
   await db.$client.close()
 })
 
-let seq = 0
-
 async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `visual-store-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '视觉搜索 store 测试',
     })
     .returning({ id: users.id })

@@ -7,6 +7,7 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createTestUser } from './modules/auth/testing'
 import { reviewMediaKey } from './modules/uploads/review-media'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -34,8 +35,6 @@ let serverEnv: ReturnType<typeof loadServerEnv>
 let meetupEnv: ReturnType<typeof loadMeetupTokenEnv>
 
 const sellerId = '01990000-0000-7000-8000-0000000000e9'
-/** 卖家是 beforeAll 直插的用户（不注册），评价行按「双方各一条」约束直插。 */
-const SELLER_STUDENT_NO = `2026${String(process.pid % 10000).padStart(4, '0')}9999`
 
 let seq = 0
 
@@ -61,8 +60,8 @@ beforeAll(async () => {
   app = createApp({ ...serverEnv, DATABASE_URL: scratchUrl })
 
   await db.execute(sql`
-    INSERT INTO users (id, student_no, password_hash, nickname)
-    VALUES (${sellerId}, ${SELLER_STUDENT_NO}, 'test-hash', '评价验收卖家')
+    INSERT INTO users (id, nickname)
+    VALUES (${sellerId}, '评价验收卖家')
   `)
 })
 
@@ -72,19 +71,10 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-/** 走真实注册拿会话 cookie：证明的是 app 级接线，而不是 router 的单测。 */
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线）：证明的是 app 级接线，而不是 router 的单测。 */
 async function signUp(): Promise<string> {
-  const studentNo = `2026${String(process.pid % 10000).padStart(4, '0')}${String(seq++).padStart(4, '0')}`
-  const response = await app.request('/auth/register', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ studentNo, password: 'fish123456', nickname: '评价验收买家' }),
-  })
-  expect(response.status).toBe(200)
-  return response.headers
-    .getSetCookie()
-    .map((c) => c.split(';')[0])
-    .join('; ')
+  const { cookie } = await createTestUser(db, { nickname: '评价验收买家' })
+  return cookie
 }
 
 function json(body: unknown, cookie?: string) {

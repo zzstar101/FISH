@@ -5,6 +5,7 @@ import { AUTH_ME_QUERY_KEY, currentSessionGeneration, resetPcSession } from './s
 
 const newUser: Me = {
   id: 'usr_01jc000000e00800000000000b',
+  uid: '1000000001',
   nickname: '新用户',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

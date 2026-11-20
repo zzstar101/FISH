@@ -6,6 +6,7 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createTestUser } from './modules/auth/testing'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -44,8 +45,8 @@ beforeAll(async () => {
 
   const sellerId = '01990000-0000-7000-8000-0000000000a9'
   await db.execute(sql`
-    INSERT INTO users (id, student_no, password_hash, nickname)
-    VALUES (${sellerId}, ${`favapp${process.pid}`}, 'test-hash', '收藏验收卖家')
+    INSERT INTO users (id, nickname)
+    VALUES (${sellerId}, '收藏验收卖家')
   `)
   const listingNo = await reserveTestListingNo(db, listingId)
   await db.execute(sql`
@@ -60,23 +61,10 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-/** 走真实注册拿会话 cookie：证明的是 app 级接线，而不是 router 的单测。 */
-let signUpSerial = 0
-
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线）：证明的是 app 级接线，而不是 router 的单测。 */
 async function signUp(): Promise<string> {
-  // 学号在库里唯一：每个用例都要一个新账号，否则第二次注册会撞唯一约束。
-  // pid 段必须补足 4 位：`StudentNoSchema` 是 `/^\d{12}$/`，pid 只有 3 位时整串会少一位 → 422。
-  const studentNo = `2021${String(process.pid % 10000).padStart(4, '0')}${String(signUpSerial++).padStart(4, '0')}`
-  const response = await app.request('/auth/register', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ studentNo, password: 'fish123456', nickname: '收藏验收' }),
-  })
-  expect(response.status).toBe(200)
-  return response.headers
-    .getSetCookie()
-    .map((c) => c.split(';')[0])
-    .join('; ')
+  const { cookie } = await createTestUser(db, { nickname: '收藏验收' })
+  return cookie
 }
 
 describe('app 级接线：收藏两条路径都要求登录', () => {

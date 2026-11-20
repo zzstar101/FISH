@@ -23,6 +23,8 @@ const storage = { publicUrl: (objectKey: string) => `https://cdn.test/${objectKe
 function userRow(overrides: Partial<PublicUserRow> = {}): PublicUserRow {
   return {
     id: USER_ID,
+    // #703：uid 是公开列（`PublicUserRow` 的必填字段），他人主页要能把它带出来。
+    uid: '1000000001',
     nickname: '林一',
     avatarUrl: null,
     authStatus: 'VERIFIED',
@@ -115,9 +117,10 @@ function catchError(error: unknown): PublicUserServiceError {
 }
 
 describe('公开资料', () => {
-  test('DTO 的键集合恰好是契约里的八个字段（不多一个）', async () => {
+  test('DTO 的键集合恰好是契约里的字段（不多一个）', async () => {
     const profile = await service(fakeStore()).getPublicProfile(USER_ID)
 
+    // #703：uid 是新增的公开列（10 位随机数），排在末尾（`sort()` 按字典序）。
     expect(Object.keys(profile).sort()).toEqual([
       'activeCount',
       'authStatus',
@@ -128,6 +131,7 @@ describe('公开资料', () => {
       'presence',
       'signature',
       'soldCount',
+      'uid',
     ])
   })
 

@@ -64,8 +64,8 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
 
 export interface UserSummaryRow {
   id: string
-  /** #86 后微信注册的用户没有学号 → `null`。 */
-  studentNo: string | null
+  /** 人类可读 UID（#703）：10 位数字字符串。 */
+  uid: string
   nickname: string
   authStatus: string
   role: string
@@ -412,10 +412,10 @@ export interface ActiveRestrictionSummaryRow {
 }
 
 function userSearchCondition(alias: string, q: string): SQL {
-  // 学号精确匹配或昵称前缀搜索。LIKE 通配符 `% _ \` 先转义，
+  // UID（10 位数字）精确匹配或昵称前缀搜索。LIKE 通配符 `% _ \` 先转义，
   // 否则昵称里的 `_` 会被当成单字符通配（与 #6 的 ILIKE 同一取舍）。
   const escaped = q.replace(/[\\%_]/g, '\\$&')
-  return sql`(${sql.raw(`${alias}.student_no`)} = ${q} OR ${sql.raw(`${alias}.nickname`)} ILIKE ${`${escaped}%`})`
+  return sql`(${sql.raw(`${alias}.uid`)} = ${q} OR ${sql.raw(`${alias}.nickname`)} ILIKE ${`${escaped}%`})`
 }
 
 /** 关键词搜索：title / description 子串（与 #6 feed 同口径 ILIKE，`%_\` 转义）。 */
@@ -426,7 +426,7 @@ function listingSearchCondition(alias: string, q: string): SQL {
 
 /** 用户摘要共用的 SQL SELECT 实体（列表 / 详情都取同一套列，避免口径漂移）。 */
 const userSummarySelectSql = sql`
-  u.id AS id, u.student_no AS student_no, u.nickname AS nickname,
+  u.id AS id, u.uid AS uid, u.nickname AS nickname,
   u.auth_status::text AS auth_status, u.role::text AS role,
   u.created_at AS created_at,
   ${createdAtCursorText(sql`u.created_at`)} AS created_at_cursor,
@@ -441,8 +441,7 @@ const userSummarySelectSql = sql`
 function rowsToUserSummaries(rows: Record<string, unknown>[]): UserSummaryRow[] {
   return rows.map((row) => ({
     id: String(row.id),
-    // NULL（微信用户）必须保持 null：String(null) 会得到 "null" 再被脱敏成 "n**l"。
-    studentNo: (row.student_no as string | null) ?? null,
+    uid: String(row.uid),
     nickname: String(row.nickname),
     authStatus: String(row.auth_status),
     role: String(row.role),

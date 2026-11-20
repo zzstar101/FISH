@@ -19,20 +19,15 @@ const db = createDb(databaseUrl)
 type User = typeof users.$inferSelect
 type Listing = typeof listings.$inferSelect
 
-let seq = 0
-const uniqueStudentNo = () => `t-${Date.now()}-${seq++}`
-
 function required<T>(rows: T[], table: string): T {
   const row = rows[0]
   if (!row) throw new Error(`insert ${table} 未返回行`)
   return row
 }
 
-async function createUser(client: Db, studentNo: string): Promise<User> {
-  const rows = await client
-    .insert(users)
-    .values({ studentNo, passwordHash: 'test-not-a-real-hash', nickname: studentNo })
-    .returning()
+// #703：uid 由 DB 默认值生成（10 位随机数），应用插入不再传任何标识符 / 口令。
+async function createUser(client: Db, nickname = '集成测试用户'): Promise<User> {
+  const rows = await client.insert(users).values({ nickname }).returning()
   return required(rows, 'users')
 }
 
@@ -97,8 +92,8 @@ async function createMessage(
 async function withFixture(
   run: (fixture: { seller: User; buyer: User; listing: Listing }) => Promise<void>,
 ) {
-  const seller = await createUser(db, uniqueStudentNo())
-  const buyer = await createUser(db, uniqueStudentNo())
+  const seller = await createUser(db, '卖家')
+  const buyer = await createUser(db, '买家')
   const listing = await createListing(db, seller.id)
 
   try {
@@ -147,7 +142,7 @@ test('并发接受交易时只有一个能占用 ACTIVE 商品', async () => {
 
 test('会话与交易的 seller_id 必须等于商品所有者', async () => {
   await withFixture(async ({ seller, buyer, listing }) => {
-    const stranger = await createUser(db, uniqueStudentNo())
+    const stranger = await createUser(db, '陌生人')
     try {
       await expect(createConversation(db, listing.id, buyer.id, stranger.id)).rejects.toThrow()
       await expect(createTransaction(db, listing.id, buyer.id, stranger.id)).rejects.toThrow()
@@ -217,4 +212,22 @@ test('不存在 Offer 表', async () => {
     sql`select table_name from information_schema.tables where table_schema = 'public' and table_name ilike '%offer%'`,
   )
   expect(rows.map((row) => row.table_name)).toEqual([])
+})
+
+test('users 以 uid 作为公开标识符，student_no / password_hash 两列已删除（#703）', async () => {
+  const rows = await db.execute<{ column_name: string }>(
+    sql`select column_name from information_schema.columns where table_schema = 'public' and table_name = 'users'`,
+  )
+  const columns = rows.map((row) => row.column_name)
+  expect(columns).toContain('uid')
+  expect(columns).not.toContain('student_no')
+  expect(columns).not.toContain('password_hash')
+
+  // 不传 uid 时由 DB 默认值生成；格式约束见 `users_uid_format`（10 位数字）。
+  const user = await createUser(db, 'uid 默认值')
+  try {
+    expect(user.uid).toMatch(/^[0-9]{10}$/)
+  } finally {
+    await db.delete(users).where(eq(users.id, user.id))
+  }
 })

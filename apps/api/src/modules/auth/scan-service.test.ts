@@ -65,8 +65,6 @@ async function createUser(nickname: string): Promise<string> {
   const rows = await scratch
     .insert(users)
     .values({
-      studentNo: null,
-      passwordHash: null,
       nickname,
       authStatus: 'UNVERIFIED',
       verifiedAt: null,
@@ -228,8 +226,6 @@ describe('查状态（只有持正确 verifier 才看得到）', () => {
     const rows = await scratch
       .insert(users)
       .values({
-        studentNo: null,
-        passwordHash: null,
         nickname: '脏头像',
         // 历史脏值：契约声明是 URL，库里却是裸 text。
         avatarUrl: 'not-a-url',

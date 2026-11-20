@@ -266,7 +266,8 @@ export default function AccountDeletion() {
               <Text className="ad__state-title">注销申请已提交</Text>
               <Text className="ad__state-days">{coolingOffLabel(purgeAt, Date.now())}</Text>
               <Text className="ad__state-text">
-                到期后昵称、头像、学号、校园邮箱、手机号与微信绑定会被清除，账号无法再登录。
+                到期后昵称、头像、校园邮箱、手机号与微信绑定会被清除，账号无法再登录（UID
+                保留、不回收）。
               </Text>
               {offlined !== null && offlined > 0 ? (
                 <Text className="ad__state-text">

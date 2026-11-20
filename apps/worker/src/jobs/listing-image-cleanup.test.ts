@@ -44,8 +44,6 @@ async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `image-cleanup-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '集成测试',
     })
     .returning({ id: users.id })

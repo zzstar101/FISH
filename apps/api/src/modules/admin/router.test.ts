@@ -31,6 +31,7 @@ import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/p
 import { desc, eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import { createSessions } from '../auth/session'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -52,8 +53,6 @@ const migrationsFolder = Bun.fileURLToPath(
 const admin = createDb(databaseUrl)
 let scratch: Db
 let app: ReturnType<typeof createApp>
-
-const DEMO_PASSWORD = 'fish123456'
 
 // Fixtures use internal UUIDs for DB setup; requests must use public path IDs.
 const ADMIN_ROUTES = {
@@ -88,13 +87,10 @@ beforeAll(async () => {
   await migrate(scratch, { migrationsFolder })
   app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
 
-  // 用户经真实注册口创建（保证 session / cookie 链路是"真"的），随后手动提升为 ADMIN。
-  const passwordHash = await Bun.password.hash(DEMO_PASSWORD)
+  // 用户直接 INSERT（#703 后注册口已下线），会话由 sessions 表签发，随后手动提升为 ADMIN。
   await scratch.insert(users).values([
     {
       id: ADMIN_TARGET_ID,
-      studentNo: '202101000901',
-      passwordHash,
       nickname: '管理员甲',
       authStatus: 'VERIFIED',
       verifiedAt: new Date('2026-09-01T00:00:00Z'),
@@ -103,8 +99,6 @@ beforeAll(async () => {
     },
     {
       id: USER_ID,
-      studentNo: '202101000902',
-      passwordHash,
       nickname: '普通用户乙',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
@@ -220,17 +214,10 @@ const post = (body: unknown) => ({
   body: JSON.stringify(body),
 })
 
-function sessionCookie(res: Response): string {
-  const cookies = res.headers.getSetCookie()
-  const session = cookies.find((value) => value.startsWith('fish_session='))
-  if (!session) throw new Error(`响应未下发 fish_session：${cookies.join(' | ')}`)
-  return session.split(';')[0] ?? ''
-}
-
-async function loginAs(studentNo: string): Promise<string> {
-  const res = await app.request('/auth/login', post({ studentNo, password: DEMO_PASSWORD }))
-  expect(res.status).toBe(200)
-  return sessionCookie(res)
+/** 直写 sessions 表签发会话（#703：/auth/login 已下线）。 */
+async function loginAs(userId: string): Promise<string> {
+  const { token } = await createSessions(scratch).create(userId)
+  return `fish_session=${token}`
 }
 
 let adminCookie: string
@@ -238,8 +225,8 @@ let userCookie: string
 
 describe('Admin HTTP 权限边界', () => {
   test('setup: login both accounts', async () => {
-    adminCookie = await loginAs('202101000901')
-    userCookie = await loginAs('202101000902')
+    adminCookie = await loginAs(ADMIN_TARGET_ID)
+    userCookie = await loginAs(USER_ID)
     expect(adminCookie.length).toBeGreaterThan(0)
     expect(userCookie.length).toBeGreaterThan(0)
   })
@@ -281,45 +268,26 @@ describe('Admin HTTP 权限边界', () => {
 })
 
 describe('Admin 查询端到端', () => {
-  test('GET /admin/users returns masked student no and listing count', async () => {
+  test('GET /admin/users returns uid and listing count', async () => {
     const res = await app.request(ADMIN_ROUTES.users, { headers: { cookie: adminCookie } })
     expect(res.status).toBe(200)
     const body = AdminUserSummaryPageSchema.parse(await res.json())
     expect(body.items).toHaveLength(2)
     const byId = new Map(body.items.map((item) => [item.id, item]))
-    expect(byId.get(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))?.studentNoMasked).toBe(
-      '2021****0902',
-    )
+    // #703：学号被 uid 取代，管理端不再有任何学号派生字段。
+    expect(byId.get(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))?.uid).toMatch(/^\d{10}$/)
     expect(byId.get(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))?.listingCount).toBe(2)
   })
 
-  test('GET /admin/users：微信用户（student_no 为 NULL）的 studentNoMasked 是 null，不是 "n**l"', async () => {
-    // #86 A 的微信注册路径：users 行 student_no/password_hash 都是 NULL。
-    // 用独立的 q 前缀搜索隔离这条数据，测完即删，不影响其他用例的计数断言。
-    await scratch.insert(users).values({
-      id: '01930000-0000-7000-8000-0000000000c1',
-      studentNo: null,
-      passwordHash: null,
-      nickname: '微信用户丙',
-      createdAt: new Date('2026-09-03T00:00:00Z'),
-      role: 'USER',
-    })
-    const res = await app.request(`${ADMIN_ROUTES.users}?q=微信用户丙`, {
+  test('GET /admin/users supports q (exact uid, nickname prefix) and role filter', async () => {
+    const [userRow] = await scratch
+      .select({ uid: users.uid })
+      .from(users)
+      .where(eq(users.id, USER_ID))
+    const byUid = await app.request(`${ADMIN_ROUTES.users}?q=${userRow?.uid ?? ''}`, {
       headers: { cookie: adminCookie },
     })
-    expect(res.status).toBe(200)
-    const body = AdminUserSummaryPageSchema.parse(await res.json())
-    expect(body.items).toHaveLength(1)
-    expect(body.items[0]?.nickname).toBe('微信用户丙')
-    expect(body.items[0]?.studentNoMasked).toBeNull()
-    await scratch.delete(users).where(eq(users.id, '01930000-0000-7000-8000-0000000000c1'))
-  })
-
-  test('GET /admin/users supports q (exact student no, nickname prefix) and role filter', async () => {
-    const byNo = await app.request(`${ADMIN_ROUTES.users}?q=202101000902`, {
-      headers: { cookie: adminCookie },
-    })
-    expect(AdminUserSummaryPageSchema.parse(await byNo.json()).items[0]?.id).toBe(
+    expect(AdminUserSummaryPageSchema.parse(await byUid.json()).items[0]?.id).toBe(
       encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID),
     )
 
@@ -374,6 +342,7 @@ describe('Admin 查询端到端', () => {
     expect(res.status).toBe(200)
     const body = AdminUserDetailSchema.parse(await res.json())
     expect(body.user.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
+    expect(body.user.uid).toMatch(/^[1-9]\d{9}$/)
     expect(body.listingStats.ACTIVE).toBe(1)
   })
 

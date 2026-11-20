@@ -53,6 +53,7 @@ const { ProfilePage } = await import('./profile-page')
 
 const BASE_USER: Me = {
   id: 'usr_01jc000000e00800000000000a',
+  uid: '1000000001',
   nickname: '阿岚',
   avatarUrl: null,
   authStatus: 'VERIFIED',

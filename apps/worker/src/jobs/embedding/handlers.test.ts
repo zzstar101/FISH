@@ -53,8 +53,6 @@ afterAll(async () => {
   await db.$client.close()
 })
 
-let seq = 0
-
 /**
  * `EmbedRunResult.contentHash` 在实体已被删除时是 null。断言落库指纹前先收紧类型，
  * 否则 bun:test 的 `toBe` 会因为 received 是 `string | undefined` 而拒绝 `string | null`。
@@ -68,8 +66,6 @@ async function createUser(): Promise<string> {
   const rows = await db
     .insert(users)
     .values({
-      studentNo: `embed-${Date.now()}-${seq++}`,
-      passwordHash: 'test-not-a-real-hash',
       nickname: '向量 handler 测试',
     })
     .returning({ id: users.id })

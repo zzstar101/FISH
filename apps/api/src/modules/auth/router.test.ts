@@ -6,15 +6,15 @@ import { users, wechatIdentities } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
 import { loadServerEnv, loadWechatEnv } from '@fish/shared/env'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 import { allowRestrictionGuard } from '../governance/testing'
 import { legacyMediaKey } from '../uploads/legacy-url'
 import { createDevEmailVerificationProvider } from './email-providers'
 import { createAuthModule } from './router'
-import { createAuthService } from './service'
 import { createSessions } from './session'
+import { createTestUser } from './testing'
 import { createVerificationService } from './verification-service'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -68,19 +68,10 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-const DEMO_PASSWORD = 'fish123456'
-
 const post = (body: unknown) => ({
   method: 'POST' as const,
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body),
-})
-
-const registerBody = (overrides: Record<string, unknown> = {}) => ({
-  studentNo: '202101000101',
-  password: DEMO_PASSWORD,
-  nickname: '测试甲',
-  ...overrides,
 })
 
 /** 从 Set-Cookie 里取出会话 cookie，用于后续带 cookie 的请求。 */
@@ -101,142 +92,35 @@ const postWith = (cookie: string, body: unknown) => ({
   headers: { ...post(body).headers, cookie },
 })
 
-const register = (overrides: Record<string, unknown> = {}) =>
-  app.request('/auth/register', post(registerBody(overrides)))
+/**
+ * #703 起 `/auth/register` 与 `/auth/login` 已下线：登录态一律由 users + sessions 直写签发。
+ * 昵称仍用于在断言里认人（每个用例自己造号，跨用例不共享）。
+ */
+async function signIn(nickname: string) {
+  return createTestUser(scratch, { nickname })
+}
 
-const login = (studentNo: string, password: string = DEMO_PASSWORD) =>
-  app.request('/auth/login', post({ studentNo, password }))
+/** 再给同一用户开一条会话（模拟「另一处登录」），返回可直接放进请求头的 cookie。 */
+async function openSession(userId: string): Promise<string> {
+  const { token } = await createSessions(scratch).create(userId)
+  return `fish_session=${token}`
+}
 
-/** 该用户的会话行，用于断言「登出只吊销当前这一行」「过期行被顺手删除」。 */
-async function sessionRows(studentNo: string) {
-  const owner = await scratch
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.studentNo, studentNo))
-    .limit(1)
-  const userId = owner[0]?.id
-  if (!userId) throw new Error(`用户 ${studentNo} 不存在`)
+/** 该用户当前的会话行，用于断言「登出只吊销当前这一行」「过期行被顺手删除」。 */
+async function sessionRows(userId: string) {
   return scratch.select().from(sessions).where(eq(sessions.userId, userId))
 }
 
-describe('POST /auth/register', () => {
-  test('注册成功即登录，但一律 UNVERIFIED（#68：注册不再认证）', async () => {
-    const res = await register()
-    expect(res.status).toBe(200)
-
-    const body = AuthResponseSchema.parse(await res.json())
-    expect(body.user).toMatchObject({
-      nickname: '测试甲',
-      authStatus: 'UNVERIFIED',
-    })
-    expect(body.user.verifiedAt).toBeNull()
-
-    const setCookie = res.headers.getSetCookie().join(' | ')
-    expect(setCookie).toContain('fish_session=')
-    expect(setCookie).toContain('HttpOnly')
-    // 本地是 http：加了 Secure 浏览器会直接丢掉 cookie
-    expect(setCookie).not.toContain('Secure')
-  })
-
-  test('WEB_ORIGIN 为 https 时会话 cookie 带 Secure', async () => {
-    const secureApp = createApp(
-      { ...loadServerEnv(), DATABASE_URL: scratchUrl, WEB_ORIGIN: 'https://fish.example.com' },
-      undefined,
-      undefined,
-      undefined,
-      { transport: 'stub' },
-    )
-
-    const res = await secureApp.request(
-      '/auth/login',
-      post({ studentNo: '202101000101', password: DEMO_PASSWORD }),
-    )
-    expect(res.status).toBe(200)
-    expect(res.headers.getSetCookie().join(' | ')).toContain('Secure')
-  })
-
-  test('任意合法学号注册后都保持未认证', async () => {
-    const res = await register({ studentNo: '199901000102', nickname: '测试乙' })
-    expect(res.status).toBe(200)
-
-    const body = AuthResponseSchema.parse(await res.json())
-    expect(body.user.authStatus).toBe('UNVERIFIED')
-    expect(body.user.verifiedAt).toBeNull()
-  })
-
-  test('学号已存在：409 STUDENT_NO_TAKEN（含并发同号）', async () => {
-    expect((await register({ studentNo: '202101000103', nickname: '测试丙' })).status).toBe(200)
-
-    const again = await register({ studentNo: '202101000103', nickname: '测试丙二号' })
-    expect(again.status).toBe(409)
-    expect(await again.json()).toMatchObject({ error: { code: 'STUDENT_NO_TAKEN' } })
-
-    // 并发下两个请求都可能通过「先查一次」的快速路径，必须由唯一约束兜底成 409
-    const concurrent = await Promise.all([
-      register({ studentNo: '202101000104', nickname: '并发一号' }),
-      register({ studentNo: '202101000104', nickname: '并发二号' }),
-    ])
-    expect(concurrent.map((res) => res.status).sort()).toEqual([200, 409])
-  })
-
-  test('非法入参：422 VALIDATION_FAILED（密码过短 / 学号含字母 / 多余字段 / 已删除的 campus）', async () => {
-    const bodies = [
-      registerBody({ password: 'short' }),
-      registerBody({ studentNo: '20210100010a' }),
-      { ...registerBody(), extra: 'nope' },
-      // #86 F：campus 字段已随产品决定整体移除，strictObject 必须显式拒绝而不是静默丢弃
-      { ...registerBody(), campus: '肇庆' },
-    ]
-
-    for (const body of bodies) {
-      const res = await app.request('/auth/register', post(body))
-      expect(res.status).toBe(422)
-
-      const payload = (await res.json()) as {
-        error: { code: string; details?: Array<{ field: string; message: string }> }
-      }
-      expect(payload.error.code).toBe('VALIDATION_FAILED')
-      expect(payload.error.details?.length).toBeGreaterThan(0)
-      expect(payload.error.details?.[0]?.message).not.toBe('')
-    }
-  })
-})
-
-describe('POST /auth/login', () => {
-  test('学号密码正确：返回与 /me 同构的用户资料并下发 cookie', async () => {
-    await register({ studentNo: '202101000105', nickname: '测试丁' })
-
-    const res = await login('202101000105')
-    expect(res.status).toBe(200)
-
-    const body = AuthResponseSchema.parse(await res.json())
-    expect(body.user).toMatchObject({ nickname: '测试丁', authStatus: 'UNVERIFIED' })
-    expect(sessionCookie(res).startsWith('fish_session=')).toBe(true)
-  })
-
-  test('密码错误与学号不存在都返回 401 INVALID_CREDENTIALS（不泄漏账号是否存在）', async () => {
-    await register({ studentNo: '202101000106', nickname: '测试戊' })
-
-    for (const res of [
-      await login('202101000106', 'wrong-password'),
-      await login('202101000107'),
-    ]) {
-      expect(res.status).toBe(401)
-      expect(await res.json()).toMatchObject({ error: { code: 'INVALID_CREDENTIALS' } })
-    }
-  })
-})
-
 describe('GET /me', () => {
-  test('返回昵称/头像/认证状态/手机派生态，且响应体不含学号与密码哈希', async () => {
-    const studentNo = '202101000108'
-    await register({ studentNo, nickname: '测试己' })
+  test('返回昵称/头像/认证状态/UID/手机派生态，且响应体不含密码哈希', async () => {
+    const { uid, cookie } = await signIn('测试己')
 
-    const res = await app.request('/me', withCookie(sessionCookie(await login(studentNo))))
+    const res = await app.request('/me', withCookie(cookie))
     expect(res.status).toBe(200)
 
     const text = await res.text()
-    expect(Object.keys(AuthResponseSchema.parse(JSON.parse(text)).user).sort()).toEqual([
+    const user = AuthResponseSchema.parse(JSON.parse(text)).user
+    expect(Object.keys(user).sort()).toEqual([
       'authStatus',
       'avatarUrl',
       'id',
@@ -244,53 +128,48 @@ describe('GET /me', () => {
       'nickname',
       'phoneBound',
       'signature',
+      'uid',
       'verifiedAt',
     ])
-    // 「不公开完整学号」的硬断言：学号、哈希、列名都不允许出现在响应里
-    expect(text).not.toContain(studentNo)
+    expect(user.uid).toBe(uid)
+    // #703：uid 是 10 位数字，且不再有学号这种可直接登录的凭据
+    expect(user.uid).toMatch(/^\d{10}$/)
     expect(text).not.toContain('passwordHash')
     expect(text).not.toContain('password_hash')
   })
 
   test('库里是非法 avatarUrl 时降级为 null，而不是让前端解析 /me 抛错', async () => {
-    const studentNo = '202101000112'
-    await register({ studentNo, nickname: '测试癸' })
-    const cookie = sessionCookie(await login(studentNo))
+    const { userId, cookie } = await signIn('测试癸')
 
     // #6 可能把 object key（而非绝对 URL）写进 users.avatar_url，而契约声明是 z.url()
     await scratch
       .update(users)
       .set({ avatarUrl: 'listings/avatar.jpg' })
-      .where(eq(users.studentNo, studentNo))
+      .where(eq(users.id, userId))
 
     const res = await app.request('/me', withCookie(cookie))
     expect(res.status).toBe(200)
     expect(AuthResponseSchema.parse(await res.json()).user.avatarUrl).toBeNull()
   })
 
-  test('历史 UUID 头像的登录与 /me URL 仅公开加密代理，不泄漏对象键', async () => {
-    const studentNo = '202101000170'
-    const registered = AuthResponseSchema.parse(await (await register({ studentNo })).json())
-    const id = decodePublicId(PUBLIC_ID_PREFIX.user, registered.user.id)
-    const key = `listings/${id}/avatar.webp`
+  test('历史 UUID 头像的 /me URL 仅公开加密代理，不泄漏对象键', async () => {
+    const { userId, cookie } = await signIn('测试甲')
+    const key = `listings/${userId}/avatar.webp`
     await scratch
       .update(users)
       .set({ avatarUrl: `${loadServerEnv().S3_PUBLIC_URL}/${key}` })
-      .where(eq(users.id, id))
+      .where(eq(users.id, userId))
 
-    const loginRes = await login(studentNo)
-    const cookie = sessionCookie(loginRes)
-    for (const res of [loginRes, await app.request('/me', withCookie(cookie))]) {
-      const body = AuthResponseSchema.parse(await res.json())
-      expect(body.user.avatarUrl).toMatch(/\/api\/uploads\/legacy\//)
-      expect(body.user.avatarUrl).not.toContain(id)
-      expect(
-        legacyMediaKey(
-          body.user.avatarUrl?.split('/').at(-1) ?? '',
-          process.env.MEETUP_TOKEN_SECRET ?? '',
-        ),
-      ).toBe(key)
-    }
+    const res = await app.request('/me', withCookie(cookie))
+    const body = AuthResponseSchema.parse(await res.json())
+    expect(body.user.avatarUrl).toMatch(/\/api\/uploads\/legacy\//)
+    expect(body.user.avatarUrl).not.toContain(userId)
+    expect(
+      legacyMediaKey(
+        body.user.avatarUrl?.split('/').at(-1) ?? '',
+        process.env.MEETUP_TOKEN_SECRET ?? '',
+      ),
+    ).toBe(key)
   })
 
   test('无 cookie 与伪造令牌都是 401 UNAUTHENTICATED', async () => {
@@ -304,76 +183,30 @@ describe('GET /me', () => {
   })
 
   test('会话过期：401，且只删掉被访问的过期行', async () => {
-    const studentNo = '202101000109'
-    await register({ studentNo, nickname: '测试庚' })
-    const cookie = sessionCookie(await login(studentNo))
+    const { userId, cookie } = await signIn('测试庚')
+    // 同一用户两条会话：访问哪条就删哪条，另一条不受影响
+    const second = await openSession(userId)
+    expect(second).not.toBe(cookie)
 
-    const before = await sessionRows(studentNo)
-    expect(before.length).toBe(2) // 注册顺带登录 + 这次登录
+    const before = await sessionRows(userId)
+    expect(before).toHaveLength(2)
 
-    const owner = before[0]
-    if (!owner) throw new Error('未找到会话行')
     await scratch
       .update(sessions)
       .set({ expiresAt: new Date(Date.now() - 1000) })
-      .where(eq(sessions.userId, owner.userId))
+      .where(eq(sessions.userId, userId))
 
     const res = await app.request('/me', withCookie(cookie))
     expect(res.status).toBe(401)
 
-    const after = await sessionRows(studentNo)
+    const after = await sessionRows(userId)
     expect(after).toHaveLength(1)
   })
 })
 
-describe('Provider 边界', () => {
-  test('register 不再依赖 Provider：service 装配不传 provider 也能用（#68 移除 Campus Provider）', async () => {
-    const service = createAuthService({ db: scratch, sessions: createSessions(scratch) })
-    const { user } = await service.register({
-      studentNo: '202101000113',
-      password: DEMO_PASSWORD,
-      nickname: '测试无Provider',
-    })
-    expect(user.authStatus).toBe('UNVERIFIED')
-  })
-})
-
-describe('注册原子性', () => {
-  test('会话写入失败时回滚已创建的用户，不留下无法登录的账号', async () => {
-    // 造一个「有 users 表、没有 sessions 表」的库，逼会话插入失败
-    const partialDatabase = `${scratchDatabase}_partial`
-    await admin.$client.unsafe(`create database "${partialDatabase}"`)
-    const partial = createDb(databaseUrlFor(partialDatabase))
-
-    try {
-      await migrate(partial, { migrationsFolder })
-      await partial.execute(sql`drop table "sessions"`)
-
-      const partialApp = createApp({
-        ...loadServerEnv(),
-        DATABASE_URL: databaseUrlFor(partialDatabase),
-      })
-      const studentNo = '202101000116'
-      const res = await partialApp.request(
-        '/auth/register',
-        post(registerBody({ studentNo, nickname: '原子性' })),
-      )
-      expect(res.status).toBe(500)
-
-      // 用户插入与会话插入必须同属一个事务：否则会留下一个已占用学号、但登不进去的账号
-      expect(await partial.select().from(users).where(eq(users.studentNo, studentNo))).toHaveLength(
-        0,
-      )
-    } finally {
-      await partial.$client.close()
-      await admin.$client.unsafe(`drop database if exists "${partialDatabase}" with (force)`)
-    }
-  })
-})
-
 describe('未捕获异常', () => {
-  test('走同一个错误信封，且日志不泄漏请求里的密码与学号', async () => {
-    // 指向一个没有任何表的空库：注册必然抛未捕获异常，从而走到 app.onError
+  test('走同一个错误信封，且日志不泄漏请求里的敏感参数', async () => {
+    // 指向一个没有任何表的空库：微信登录必然抛未捕获异常，从而走到 app.onError
     const brokenDatabase = `${scratchDatabase}_broken`
     await admin.$client.unsafe(`create database "${brokenDatabase}"`)
 
@@ -382,23 +215,27 @@ describe('未捕获异常', () => {
     console.error = (...args: unknown[]) => logged.push(args.map(String).join(' '))
 
     try {
-      const brokenApp = createApp({
-        ...loadServerEnv(),
-        DATABASE_URL: databaseUrlFor(brokenDatabase),
-      })
+      const brokenApp = createApp(
+        { ...loadServerEnv(), DATABASE_URL: databaseUrlFor(brokenDatabase) },
+        undefined,
+        undefined,
+        undefined,
+        { transport: 'stub' },
+      )
+      // stub 传输把 code 当 openid 用，落库时才炸；code 里带哨兵串，用来证明
+      // Drizzle 包装错误里的 params 行没有被原样打进日志。
       const res = await brokenApp.request(
-        '/auth/register',
-        post(registerBody({ studentNo: '202101000115', password: 'probe-secret-pw' })),
+        '/auth/wechat/session',
+        post({ code: 'probe-secret-code' }),
       )
 
       expect(res.status).toBe(500)
       expect(await res.json()).toMatchObject({ error: { code: 'INTERNAL_ERROR' } })
 
-      // Drizzle 的包装错误 message 第二行是 `params: [...]`（含 password_hash），
+      // Drizzle 的包装错误 message 第二行是 `params: [...]`（含 code），
       // 日志只允许取第一行；这条断言就是防止后人去掉那个 split
       const text = logged.join('\n')
-      expect(text).not.toContain('probe-secret-pw')
-      expect(text).not.toContain('202101000115')
+      expect(text).not.toContain('probe-secret-code')
       expect(text).not.toContain('params:')
       expect(text).toContain('at ') // 仍然保留调用帧，否则 500 无法定位
     } finally {
@@ -410,9 +247,7 @@ describe('未捕获异常', () => {
 
 describe('POST /auth/logout', () => {
   test('清除 cookie 并吊销会话，重复调用仍是 204', async () => {
-    const studentNo = '202101000110'
-    await register({ studentNo, nickname: '测试辛' })
-    const cookie = sessionCookie(await login(studentNo))
+    const { cookie } = await signIn('测试辛')
 
     const res = await app.request('/auth/logout', { ...withCookie(cookie), method: 'POST' })
     expect(res.status).toBe(204)
@@ -426,20 +261,19 @@ describe('POST /auth/logout', () => {
   })
 
   test('每次登录一行会话，登出只吊销当前这一行', async () => {
-    const studentNo = '202101000111'
-    await register({ studentNo, nickname: '测试壬' })
-    const before = (await sessionRows(studentNo)).length
+    const { userId } = await signIn('测试壬')
+    const before = (await sessionRows(userId)).length
 
-    const first = sessionCookie(await login(studentNo))
-    const second = sessionCookie(await login(studentNo))
+    const first = await openSession(userId)
+    const second = await openSession(userId)
     expect(first).not.toBe(second)
-    expect(await sessionRows(studentNo)).toHaveLength(before + 2)
+    expect(await sessionRows(userId)).toHaveLength(before + 2)
 
     await app.request('/auth/logout', { ...withCookie(first), method: 'POST' })
 
     expect((await app.request('/me', withCookie(first))).status).toBe(401)
     expect((await app.request('/me', withCookie(second))).status).toBe(200)
-    expect(await sessionRows(studentNo)).toHaveLength(before + 1)
+    expect(await sessionRows(userId)).toHaveLength(before + 1)
   })
 })
 
@@ -469,12 +303,13 @@ async function lastCodeFor(email: string): Promise<string> {
 
 let verificationUserSeq = 0
 
-/** 每次调用都造一个全新用户：学号复用会撞 409，且前一测试可能已把它认证成 VERIFIED。 */
+/** 每次调用都造一个全新用户：前一测试可能已把它认证成 VERIFIED，复用一个 cookie 会 409。 */
 async function verificationCookie(): Promise<string> {
   verificationUserSeq += 1
-  const studentNo = `2021010003${String(verificationUserSeq).padStart(2, '0')}`
-  await register({ studentNo, nickname: `验证码用户${verificationUserSeq}` })
-  return sessionCookie(await login(studentNo))
+  const { cookie } = await createTestUser(scratch, {
+    nickname: `验证码用户${verificationUserSeq}`,
+  })
+  return cookie
 }
 
 describe('POST /auth/verification/code', () => {
@@ -536,9 +371,7 @@ describe('POST /auth/verification/code', () => {
   })
 
   test('邮箱已被其他账号绑定：409 EMAIL_ALREADY_BOUND（发码与验证两处都拦）', async () => {
-    const owner = '202101000202'
-    await register({ studentNo: owner, nickname: '占用者' })
-    const ownerCookie = sessionCookie(await login(owner))
+    const ownerCookie = await verificationCookie()
     const email = 'taken68@gzasc.edu.cn'
 
     // 先让占用者完成认证
@@ -551,9 +384,7 @@ describe('POST /auth/verification/code', () => {
     expect(verified.status).toBe(200)
 
     // 另一个账号对同一邮箱发起验证
-    const other = '202101000203'
-    await register({ studentNo: other, nickname: '挑战者' })
-    const otherCookie = sessionCookie(await login(other))
+    const otherCookie = await verificationCookie()
 
     const send = await app.request('/auth/verification/code', postWith(otherCookie, { email }))
     expect(send.status).toBe(409)
@@ -1034,7 +865,7 @@ describe('绑定原子性（评审二轮 P2-3）', () => {
 })
 
 describe('POST /auth/wechat/session（#86 A：微信登录 stub）', () => {
-  test('新 code 自动建号并登录：UNVERIFIED、无学号、无校区，响应不含任何微信凭据', async () => {
+  test('新 code 自动建号并登录：UNVERIFIED、无密码凭据、无校区，响应不含任何微信凭据', async () => {
     const res = await app.request('/auth/wechat/session', post({ code: 'wechat-test-code-1' }))
     expect(res.status).toBe(200)
 
@@ -1048,19 +879,14 @@ describe('POST /auth/wechat/session（#86 A：微信登录 stub）', () => {
     expect(text).not.toContain('openid')
     expect(text).not.toContain('session_key')
 
-    // DB 侧：wechat_identities 有一条映射，users 行 student_no / password_hash 为 NULL
+    // DB 侧：wechat_identities 有一条映射；uid 由 DB 默认值生成，仍是 10 位数字
     const identity = await scratch
-      .select({
-        studentNo: users.studentNo,
-        passwordHash: users.passwordHash,
-        openid: wechatIdentities.openid,
-      })
+      .select({ uid: users.uid, openid: wechatIdentities.openid })
       .from(wechatIdentities)
       .innerJoin(users, eq(users.id, wechatIdentities.userId))
     const mine = identity.find((row) => row.openid !== null)
     expect(mine).toBeDefined()
-    expect(mine?.studentNo).toBeNull()
-    expect(mine?.passwordHash).toBeNull()
+    expect(mine?.uid).toMatch(/^\d{10}$/)
   })
 
   test('同一 code 重复登录：幂等返回同一用户，不重复建号', async () => {
@@ -1109,9 +935,7 @@ describe('POST /auth/wechat/session（#86 A：微信登录 stub）', () => {
 
 describe('POST /auth/phone/bind（#86 C：手机号绑定 stub）', () => {
   test('登录后绑定：200 返回脱敏号；/me 出 phoneBound + maskedPhone，不出明文', async () => {
-    const studentNo = '202101000201'
-    await register({ studentNo, nickname: '绑手机用户' })
-    const cookie = sessionCookie(await login(studentNo))
+    const { cookie } = await signIn('绑手机用户')
 
     const res = await app.request('/auth/phone/bind', postWith(cookie, { code: '19912345678' }))
     expect(res.status).toBe(200)
@@ -1127,16 +951,12 @@ describe('POST /auth/phone/bind（#86 C：手机号绑定 stub）', () => {
   })
 
   test('同一手机号绑到第二个账号：409 PHONE_ALREADY_BOUND', async () => {
-    const studentNoA = '202101000202'
-    await register({ studentNo: studentNoA, nickname: '手机占用者' })
-    const cookieA = sessionCookie(await login(studentNoA))
+    const { cookie: cookieA } = await signIn('手机占用者')
 
     const bindA = await app.request('/auth/phone/bind', postWith(cookieA, { code: '19888887777' }))
     expect(bindA.status).toBe(200)
 
-    const studentNoB = '202101000203'
-    await register({ studentNo: studentNoB, nickname: '抢号者' })
-    const cookieB = sessionCookie(await login(studentNoB))
+    const { cookie: cookieB } = await signIn('抢号者')
 
     const bindB = await app.request('/auth/phone/bind', postWith(cookieB, { code: '19888887777' }))
     expect(bindB.status).toBe(409)
@@ -1151,9 +971,7 @@ describe('POST /auth/phone/bind（#86 C：手机号绑定 stub）', () => {
     const anon = await app.request('/auth/phone/bind', post({ code: '19912345678' }))
     expect(anon.status).toBe(401)
 
-    const studentNo = '202101000204'
-    await register({ studentNo, nickname: '格式校验用户' })
-    const cookie = sessionCookie(await login(studentNo))
+    const { cookie } = await signIn('格式校验用户')
     const bad = await app.request('/auth/phone/bind', postWith(cookie, { code: '12345' }))
     expect(bad.status).toBe(422)
     expect(await bad.json()).toMatchObject({ error: { code: 'PHONE_CODE_INVALID' } })
@@ -1178,9 +996,7 @@ describe('WECHAT_TRANSPORT=off（#86 评审 P1：stub 与生产隔离）', () =>
   })
 
   test('手机号绑定入口关闭：503 WECHAT_DISABLED（已登录也不可绑）', async () => {
-    const studentNo = '202101000205'
-    await register({ studentNo, nickname: '关闭态用户' })
-    const cookie = sessionCookie(await login(studentNo))
+    const { cookie } = await signIn('关闭态用户')
     const res = await offApp.request('/auth/phone/bind', postWith(cookie, { code: '19912345678' }))
     expect(res.status).toBe(503)
     expect(await res.json()).toMatchObject({ error: { code: 'WECHAT_DISABLED' } })
@@ -1190,9 +1006,7 @@ describe('WECHAT_TRANSPORT=off（#86 评审 P1：stub 与生产隔离）', () =>
   })
 
   test('已有会话在关闭态仍可用：off 只挡新入口，不吊销存量登录', async () => {
-    const studentNo = '202101000206'
-    await register({ studentNo, nickname: '存量会话用户' })
-    const cookie = sessionCookie(await login(studentNo))
+    const { cookie } = await signIn('存量会话用户')
     const meRes = await offApp.request('/me', withCookie(cookie))
     expect(meRes.status).toBe(200)
   })
@@ -1269,9 +1083,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
         ),
     )
     try {
-      const studentNo = '202101000301'
-      await register({ studentNo, nickname: 'live 换号用户' })
-      const cookie = sessionCookie(await login(studentNo))
+      const { cookie } = await signIn('live 换号用户')
 
       const res = await liveApp().request(
         '/auth/phone/bind',
@@ -1299,10 +1111,8 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
   })
 
   test('换号途中账号进入冷静期：403 ACCOUNT_DELETION_PENDING，号码一行都没写', async () => {
-    // 学号必须独占：这条用例会把账号留在注销申请态，撞上后面的「code 无效」用例会让它 403
-    const studentNo = '202101000306'
-    await register({ studentNo, nickname: '冷静期竞争用户' })
-    const cookie = sessionCookie(await login(studentNo))
+    // 账号必须独占：这条用例会把账号留在注销申请态，撞上后面的「code 无效」用例会让它 403
+    const { userId, cookie } = await signIn('冷静期竞争用户')
 
     // 冷静期拦截（#464）问的是**请求进入时**的账号状态，而这条链路中间要等微信上游。
     // 这里在换号那一步把账号改成注销申请态，复现「守卫已放行、写库还没发生」的那个 20s 窗口。
@@ -1315,7 +1125,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
           deletionRequestedAt: new Date(),
           purgeScheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         })
-        .where(eq(users.studentNo, studentNo))
+        .where(eq(users.id, userId))
       return new Response(
         JSON.stringify({
           errcode: 0,
@@ -1335,7 +1145,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
       const rows = await scratch
         .select({ phone: users.phone })
         .from(users)
-        .where(eq(users.studentNo, studentNo))
+        .where(eq(users.id, userId))
       expect(rows[0]?.phone ?? null).toBeNull()
     } finally {
       restore()
@@ -1351,9 +1161,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
         ),
     )
     try {
-      const studentNo = '202101000305'
-      await register({ studentNo, nickname: 'live 幂等' })
-      const cookie = sessionCookie(await login(studentNo))
+      const { cookie } = await signIn('live 幂等')
 
       const app = liveApp()
       const first = await app.request('/auth/phone/bind', postWith(cookie, { code: 'c1' }))
@@ -1372,9 +1180,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
         new Response(JSON.stringify({ errcode: 40029, errmsg: 'invalid code' }), { status: 200 }),
     )
     try {
-      const studentNo = '202101000302'
-      await register({ studentNo, nickname: 'live 无效 code' })
-      const cookie = sessionCookie(await login(studentNo))
+      const { cookie } = await signIn('live 无效 code')
 
       const app = liveApp()
       const res = await app.request('/auth/phone/bind', postWith(cookie, { code: 'bad-code' }))
@@ -1402,9 +1208,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
         ),
     )
     try {
-      const studentNo = '202101000304'
-      await register({ studentNo, nickname: 'live 港号' })
-      const cookie = sessionCookie(await login(studentNo))
+      const { cookie } = await signIn('live 港号')
 
       const res = await liveApp().request('/auth/phone/bind', postWith(cookie, { code: 'hk-code' }))
       expect(res.status).toBe(422)
@@ -1417,9 +1221,7 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
   test('上游故障：502 PHONE_UPSTREAM_FAILED（不当成用户 code 错误）', async () => {
     const { restore } = stubWechat(() => new Response('upstream boom', { status: 500 }))
     try {
-      const studentNo = '202101000303'
-      await register({ studentNo, nickname: 'live 上游炸' })
-      const cookie = sessionCookie(await login(studentNo))
+      const { cookie } = await signIn('live 上游炸')
 
       const res = await liveApp().request('/auth/phone/bind', postWith(cookie, { code: 'any' }))
       expect(res.status).toBe(502)
@@ -1428,4 +1230,35 @@ describe('POST /auth/phone/bind（#204：live 换取）', () => {
       restore()
     }
   })
+})
+
+describe('uid 撞号重试（#703）', () => {
+  test('uid 唯一冲突：有界重试后 401，且不留孤儿用户 / 身份映射', async () => {
+    // 把 DB 默认值钉成常量，模拟两次登录拿到同一个 uid。
+    await scratch.$client.unsafe(`ALTER TABLE users ALTER COLUMN uid SET DEFAULT '1111111111'`)
+    try {
+      const usersBefore = await scratch.select({ id: users.id }).from(users)
+      const identitiesBefore = await scratch
+        .select({ userId: wechatIdentities.userId })
+        .from(wechatIdentities)
+
+      const first = await app.request('/auth/wechat/session', post({ code: 'uid-collision-a' }))
+      expect(first.status).toBe(200)
+
+      const second = await app.request('/auth/wechat/session', post({ code: 'uid-collision-b' }))
+      expect(second.status).toBe(401)
+      expect(await second.json()).toMatchObject({ error: { code: 'WECHAT_CODE_INVALID' } })
+
+      const usersAfter = await scratch.select({ id: users.id }).from(users)
+      const identitiesAfter = await scratch
+        .select({ userId: wechatIdentities.userId })
+        .from(wechatIdentities)
+      expect(usersAfter).toHaveLength(usersBefore.length + 1)
+      expect(identitiesAfter).toHaveLength(identitiesBefore.length + 1)
+    } finally {
+      await scratch.$client.unsafe(
+        `ALTER TABLE users ALTER COLUMN uid SET DEFAULT (floor(random() * 9000000000) + 1000000000)::text`,
+      )
+    }
+  }, 30000)
 })

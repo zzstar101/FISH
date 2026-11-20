@@ -11,6 +11,7 @@ const profile = {
   user: {
     // PATCH 回包会经契约校验，必须使用规范 usr_ ID。
     id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+    uid: '1000000001',
     nickname: '小明',
     avatarUrl: null,
     authStatus: 'VERIFIED',

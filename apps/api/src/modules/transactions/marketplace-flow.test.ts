@@ -17,6 +17,7 @@ import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 import { websocket } from '../../ws'
+import { createTestUser } from '../auth/testing'
 
 /**
  * #42 的双账号链路验收（Marketplace Flow）。
@@ -64,10 +65,13 @@ let server: ReturnType<typeof Bun.serve>
 let baseUrl = ''
 let wsBaseUrl = ''
 
-const PASSWORD = 'fish123456'
-const SELLER_NO = '202199000001'
-const BUYER_NO = '202199000002'
-const OUTSIDER_NO = '202199000003'
+/**
+ * #703 后注册口已下线：这里用「标签」造用户，并在 `userLabels` 里记住 userId，
+ * 供后续 SQL fixture（商品归属 / 会话双方 / 交易令牌）使用。
+ */
+const SELLER = 'seller'
+const BUYER = 'buyer'
+const OUTSIDER = 'outsider'
 
 let sellerCookie = ''
 let buyerCookie = ''
@@ -89,16 +93,16 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${server.port}`
   wsBaseUrl = `ws://127.0.0.1:${server.port}`
 
-  sellerCookie = await register(SELLER_NO, '卖家')
-  buyerCookie = await register(BUYER_NO, '买家')
-  outsiderCookie = await register(OUTSIDER_NO, '路人')
+  sellerCookie = await register(SELLER, '卖家')
+  buyerCookie = await register(BUYER, '买家')
+  outsiderCookie = await register(OUTSIDER, '路人')
   // 买家要发愿望：#514 起 POST /wishes 须已绑手机号。直接写 users.phone（与走
   // POST /auth/phone/bind 落库的是同一列），免得本文件为此再接一套微信 stub 传输。
-  await db.execute(sql`UPDATE users SET phone = '19900008802' WHERE student_no = ${BUYER_NO}`)
+  await db.execute(sql`UPDATE users SET phone = '19900008802' WHERE id = ${await userIdOf(BUYER)}`)
 
   // 商品由「卖家」拥有：走 SQL fixture 而不是 #6 的发布接口（要图片直传），
   // 避免验收依赖另一个 Domain 的上传链路。
-  listingId = await insertListing(await userIdOf(SELLER_NO))
+  listingId = await insertListing(await userIdOf(SELLER))
 })
 
 afterAll(async () => {
@@ -147,31 +151,19 @@ async function json<T>(response: Response): Promise<T> {
   return (await response.json()) as T
 }
 
-async function register(studentNo: string, nickname: string): Promise<string> {
-  const response = await api('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({ studentNo, password: PASSWORD, nickname }),
-  })
-  // #146：失败时先打出响应体再断言状态码——此前只报「期望 200 实际 400」，
-  // 拿不到 error.code 无法定位（register 的 4xx 出口按契约只有 422 / 409，
-  // 400 属于异常路径，出现时响应体是唯一线索）。
-  if (response.status !== 200) {
-    const body = await response.text().catch(() => '<unreadable>')
-    throw new Error(`注册失败：${studentNo} → HTTP ${response.status} ${body}`)
-  }
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith('fish_session='))
-    ?.split(';')[0]
-  if (!cookie) throw new Error('注册未下发 fish_session cookie')
+/** 标签 → userId：SQL fixture 需要稳定 id，`register` 造号时一并登记。 */
+const userLabels = new Map<string, string>()
+
+async function register(label: string, nickname: string): Promise<string> {
+  const { userId, cookie } = await createTestUser(db, { nickname })
+  userLabels.set(label, userId)
   return cookie
 }
 
-async function userIdOf(studentNo: string): Promise<string> {
-  const row = rows(
-    await db.execute(sql`SELECT id FROM users WHERE student_no = ${studentNo}`),
-  )[0] as { id: string }
-  return row.id
+async function userIdOf(label: string): Promise<string> {
+  const userId = userLabels.get(label)
+  if (!userId) throw new Error(`未登记的用户标签：${label}`)
+  return userId
 }
 
 /**
@@ -308,7 +300,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(buyerMessage.content).toBe('这台键盘还在吗') // trim 在服务端做
     expect(buyerMessage.type).toBe('TEXT')
     expect(buyerMessage.sender?.id).toBe(
-      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO)),
+      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER)),
     )
 
     const reply = await api(CHAT_ROUTES.messages(conversationId), {
@@ -346,7 +338,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(sellerRow.lastMessage).toMatchObject({
       type: 'TEXT',
       content: '能便宜点吗',
-      senderId: encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO)),
+      senderId: encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER)),
     })
 
     const buyerRow = await conversationRow(buyerCookie)
@@ -354,7 +346,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(buyerRow.unreadCount).toBe(0)
     expect(buyerRow.lastMessage?.content).toBe('能便宜点吗')
     expect(buyerRow.counterpart.id).toBe(
-      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(SELLER_NO)),
+      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(SELLER)),
     )
 
     // read 把未读推进到当前时刻 → 归零（列表与 read 响应两处口径一致）
@@ -452,7 +444,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
       const pushed = seller.frames.find((frame) => frame.type === 'conversation.read')
       if (!pushed?.readAt) throw new Error('conversation.read 帧缺少 readAt')
       expect(pushed.conversationId).toBe(conversationId)
-      expect(pushed.readerId).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO)))
+      expect(pushed.readerId).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER)))
 
       // 推出去的 readAt 必须是**落库那一侧**的值：卖家视角回查会话，对方（买家）读位应与之相等。
       // 若 service 里另取一次 now()，本机 host 时钟比 DB 快约 48ms，会漂到落库值之后，
@@ -494,7 +486,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const sellerView = await json<ConversationDto>(
       await api(CHAT_ROUTES.detail(conversationId), { cookie: sellerCookie }),
     )
-    const buyerUserId = encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO))
+    const buyerUserId = encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER))
     expect(sellerView.counterpart.id).toBe(buyerUserId)
     expect(sellerView.counterpartPresence.online).toBe(true)
 
@@ -515,14 +507,14 @@ describe('marketplace flow 双账号验收（#42）', () => {
    * 于是探针在本文件里第一次已认证活动就是这次 WS 握手。
    */
   test('WS：presence.changed 推给有会话的对方，不泄漏给无会话的人', async () => {
-    const probeNo = '202199000004'
-    const probeCookie = await register(probeNo, '在线态探针')
-    const probeId = await userIdOf(probeNo)
+    const probeLabel = 'presence-probe'
+    const probeCookie = await register(probeLabel, '在线态探针')
+    const probeId = await userIdOf(probeLabel)
     const probeUserId = encodePublicId(PUBLIC_ID_PREFIX.user, probeId)
     const probeConversation = '01990000-0000-7000-8000-0000000000c9'
     await db.execute(sql`
       INSERT INTO conversations (id, listing_id, buyer_id, seller_id)
-      VALUES (${probeConversation}, ${listingId}, ${probeId}, ${await userIdOf(SELLER_NO)})
+      VALUES (${probeConversation}, ${listingId}, ${probeId}, ${await userIdOf(SELLER)})
     `)
 
     const seller = await connectRealtime(sellerCookie) // 与探针有会话 → 应当收到
@@ -698,7 +690,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const buyerTx = buyerProfile.transactions[0]
     expect(buyerTx?.role).toBe('buyer')
     expect(buyerTx?.counterpart.id).toBe(
-      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(SELLER_NO)),
+      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(SELLER)),
     )
     expect(buyerTx?.id).toBe(sellerTx?.id)
 
@@ -744,7 +736,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
   test('取消路径：Listing 回 ACTIVE，CANCELLED 上的 confirm 被拒', async () => {
     // 另起一个未成交商品：上面的商品已 SOLD，不能再走取消
     const secondListingId = await insertListing(
-      await userIdOf(SELLER_NO),
+      await userIdOf(SELLER),
       '01990000-0000-7000-8000-0000000000b2',
       9000,
     )
@@ -791,7 +783,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
   test('#175/#147 面交码链路：一单一码（重复取码不变）→ 核销盖卖家确认 → 终态销毁凭证', async () => {
     // 面交链路用第三个商品：前面的商品一个 SOLD 一个已取消。
     const thirdListingId = await insertListing(
-      await userIdOf(SELLER_NO),
+      await userIdOf(SELLER),
       '01990000-0000-7000-8000-0000000000b5',
       12000,
     )
@@ -938,7 +930,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
   test('#147 面交码终态销毁：签发后 cancel，凭证行同事务删除、旧码不可再用', async () => {
     // 第四个商品：走「签发 → 取消 → 旧码失效」
     const fourthListingId = await insertListing(
-      await userIdOf(SELLER_NO),
+      await userIdOf(SELLER),
       '01990000-0000-7000-8000-0000000000b6',
       8000,
     )
@@ -1006,7 +998,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     // 直接 INSERT 一行模拟旧数据（migration 生成文件不可手改，故用守卫兜住遗留行）。
     await db.execute(sql`
       INSERT INTO transaction_meetup_tokens (transaction_id, token_hash, code_hash, issued_by)
-      VALUES (${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}, ${'legacy'.repeat(10)}, ${'stale'.repeat(10)}, ${await userIdOf(SELLER_NO)})
+      VALUES (${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}, ${'legacy'.repeat(10)}, ${'stale'.repeat(10)}, ${await userIdOf(SELLER)})
     `)
     const legacyStatus = await json<{ status: string }>(
       await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
@@ -1032,7 +1024,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     // 第五个商品：一笔 PENDING_MEETUP 交易上直接塞一行「改动前签发的随机码」（哈希与
     // 派生值对不上），并已进入锁定 —— 模拟升级那一刻库里的存量数据。
     const fifthListingId = await insertListing(
-      await userIdOf(SELLER_NO),
+      await userIdOf(SELLER),
       '01990000-0000-7000-8000-0000000000b7',
       5000,
     )
@@ -1061,7 +1053,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
       INSERT INTO transaction_meetup_tokens
         (transaction_id, token_hash, code_hash, issued_by, failed_attempts, locked_until)
       VALUES (${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}, ${legacyTokenHash}, ${legacyCodeHash},
-              ${await userIdOf(SELLER_NO)}, 5, now() + interval '10 minutes')
+              ${await userIdOf(SELLER)}, 5, now() + interval '10 minutes')
     `)
     // 锁定期间核销：先撞锁定（429），与码对不对无关
     const locked = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
@@ -1107,7 +1099,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     // 第九个商品：同一笔交易分别用大写 / 小写 URL 取码 —— 派生输入必须归一化，
     // 否则大写 URL 会派生另一枚码并覆写未核销行的哈希，作废卖家刚展示的那一枚。
     const caseListingId = await insertListing(
-      await userIdOf(SELLER_NO),
+      await userIdOf(SELLER),
       '01990000-0000-7000-8000-0000000000b9',
       6000,
     )
@@ -1173,7 +1165,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
 
   test('reject 全流程：卖家拒绝 → tx.rejected，且不产生交易、商品仍 ACTIVE', async () => {
     const rejectedListingId = await insertListing(
-      await userIdOf(SELLER_NO),
+      await userIdOf(SELLER),
       '01990000-0000-7000-8000-0000000000b3',
       12000,
     )
@@ -1220,7 +1212,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
 
   test('并发争抢：两个买家同时被接受，只有一个成功、另一个 409 LISTING_NOT_ACTIVE', async () => {
     const raceListingId = await insertListing(
-      await userIdOf(SELLER_NO),
+      await userIdOf(SELLER),
       '01990000-0000-7000-8000-0000000000b4',
       8000,
     )

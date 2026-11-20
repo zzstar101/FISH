@@ -22,7 +22,7 @@ export class ApiError extends Error {
 
 /**
  * 契约冻结的「跳登录」判据：**401 且 code 为 `UNAUTHENTICATED`**。
- * 裸 401 不算 —— 带业务错误码的 401（例如 `INVALID_CREDENTIALS`）属于页面内错误，不是「未登录」。
+ * 裸 401 不算 —— 带业务错误码的 401 属于页面内错误，不是「未登录」。
  */
 export function isUnauthenticatedError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401 && error.code === 'UNAUTHENTICATED'

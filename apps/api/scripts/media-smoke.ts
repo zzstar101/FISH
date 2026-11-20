@@ -42,9 +42,9 @@ try {
   const outsider = newId()
   const listing = newId()
   const conversation = newId()
-  for (const [i, id] of [buyer, seller, outsider].entries()) {
-    await db.execute(sql`INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${id}, ${`media${process.pid}_${i}`}, 'test-hash', 'media smoke')`)
+  for (const id of [buyer, seller, outsider]) {
+    await db.execute(sql`INSERT INTO users (id, nickname)
+      VALUES (${id}, 'media smoke')`)
   }
   const listingNo = await reserveTestListingNo(db, listing)
   await db.execute(sql`INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)

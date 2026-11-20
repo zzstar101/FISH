@@ -18,6 +18,7 @@ import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/p
 import { and, eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import { createSessions } from '../auth/session'
 import { contentDigestOf } from '../uploads/dispute-media'
 import { createSqlDisputeStore } from './store'
 
@@ -67,7 +68,6 @@ const admin = createDb(databaseUrl)
 let scratch: Db
 let app: ReturnType<typeof createApp>
 
-const DEMO_PASSWORD = 'fish123456'
 const DAY = 24 * 60 * 60 * 1000
 
 const ADMIN_ID = '01930000-0000-7000-8000-000000000201'
@@ -115,12 +115,9 @@ beforeAll(async () => {
   await migrate(scratch, { migrationsFolder })
   app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
 
-  const passwordHash = await Bun.password.hash(DEMO_PASSWORD)
   await scratch.insert(users).values([
     {
       id: ADMIN_ID,
-      studentNo: '202101000921',
-      passwordHash,
       nickname: '管理员甲',
       authStatus: 'VERIFIED',
       verifiedAt: new Date('2026-09-01T00:00:00Z'),
@@ -129,24 +126,18 @@ beforeAll(async () => {
     },
     {
       id: BUYER_ID,
-      studentNo: '202101000922',
-      passwordHash,
       nickname: '买家乙',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
     },
     {
       id: SELLER_ID,
-      studentNo: '202101000923',
-      passwordHash,
       nickname: '卖家丙',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
     },
     {
       id: STRANGER_ID,
-      studentNo: '202101000924',
-      passwordHash,
       nickname: '路人丁',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
@@ -274,17 +265,10 @@ const postAs = (cookie: string, body: unknown) => ({
   body: JSON.stringify(body),
 })
 
-function sessionCookie(res: Response): string {
-  const cookies = res.headers.getSetCookie()
-  const session = cookies.find((value) => value.startsWith('fish_session='))
-  if (!session) throw new Error(`响应未下发 fish_session：${cookies.join(' | ')}`)
-  return session.split(';')[0] ?? ''
-}
-
-async function loginAs(studentNo: string): Promise<string> {
-  const res = await app.request('/auth/login', post({ studentNo, password: DEMO_PASSWORD }))
-  expect(res.status).toBe(200)
-  return sessionCookie(res)
+/** 直写 sessions 表签发会话（#703：/auth/login 已下线）。 */
+async function loginAs(userId: string): Promise<string> {
+  const { token } = await createSessions(scratch).create(userId)
+  return `fish_session=${token}`
 }
 
 let adminCookie: string
@@ -300,10 +284,10 @@ async function errorOf(res: Response): Promise<ErrorBody['error']> {
 
 describe('争议闭环（#465）', () => {
   test('setup: login all accounts', async () => {
-    adminCookie = await loginAs('202101000921')
-    buyerCookie = await loginAs('202101000922')
-    sellerCookie = await loginAs('202101000923')
-    strangerCookie = await loginAs('202101000924')
+    adminCookie = await loginAs(ADMIN_ID)
+    buyerCookie = await loginAs(BUYER_ID)
+    sellerCookie = await loginAs(SELLER_ID)
+    strangerCookie = await loginAs(STRANGER_ID)
   })
 
   test('匿名一律 401（发起 / 我的 / 详情 / 撤回 / 附件 / 证据）', async () => {

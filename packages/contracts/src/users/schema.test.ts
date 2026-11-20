@@ -13,6 +13,7 @@ const USER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0
 function profile(overrides: Record<string, unknown> = {}) {
   return {
     id: USER_ID,
+    uid: '1234567890',
     nickname: '阿岚',
     avatarUrl: null,
     authStatus: 'VERIFIED',
@@ -67,6 +68,7 @@ describe('PublicUserProfileSchema', () => {
       'presence',
       'signature',
       'soldCount',
+      'uid',
     ])
   })
 

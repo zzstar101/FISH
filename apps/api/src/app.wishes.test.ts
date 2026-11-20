@@ -6,6 +6,7 @@ import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createTestUser } from './modules/auth/testing'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -51,8 +52,6 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-const PASSWORD = 'fish123456'
-
 const post = (body: unknown, cookie?: string) => ({
   method: 'POST' as const,
   headers: {
@@ -62,21 +61,9 @@ const post = (body: unknown, cookie?: string) => ({
   body: JSON.stringify(body),
 })
 
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线），再走 stub 绑定手机号。 */
 async function registerUser(serial: string): Promise<string> {
-  const response = await app.request(
-    '/auth/register',
-    post({
-      studentNo: `2021000000${serial}`,
-      password: PASSWORD,
-      nickname: `验收用户${serial}`,
-    }),
-  )
-  expect(response.status).toBe(200)
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith('fish_session='))
-    ?.split(';')[0]
-  if (!cookie) throw new Error('注册未下发 fish_session cookie')
+  const { cookie } = await createTestUser(db, { nickname: `验收用户${serial}` })
   // #514：未绑定手机号不能发布求购。stub 传输下 code 即 11 位号码；serial 两位，号码各不相同
   const bind = await app.request('/auth/phone/bind', post({ code: `199000000${serial}` }, cookie))
   expect(bind.status).toBe(200)

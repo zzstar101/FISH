@@ -37,10 +37,10 @@ const txB = '01990000-0000-7000-8000-0000000000e2' // 我是卖家
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
-  for (const [i, uid] of [me, other].entries()) {
+  for (const uid of [me, other]) {
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${uid}, ${`prof${process.pid}_${i}`}, 'test-hash', '个人中心测试')
+      INSERT INTO users (id, nickname)
+      VALUES (${uid}, '个人中心测试')
     `)
   }
   for (const [listingId, status] of [

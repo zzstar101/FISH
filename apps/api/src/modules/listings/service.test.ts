@@ -58,8 +58,7 @@ function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
 function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
   return {
     id: SELLER_ID,
-    studentNo: '202101000001',
-    passwordHash: 'not-a-real-hash',
+    uid: '1000000001',
     nickname: '阿岚',
     avatarUrl: null,
     // #287：users 新增可空 signature 列，oldest fixture 也带默认值。
@@ -686,7 +685,7 @@ describe('getDetail', () => {
     expect(detail.seller.authStatus).toBe('VERIFIED')
     expect('verifiedAt' in detail.seller).toBe(false)
     expect('campusEmail' in detail.seller).toBe(false)
-    expect('studentNo' in detail.seller).toBe(false)
+    expect('uid' in detail.seller).toBe(false)
   })
 
   /*

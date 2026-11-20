@@ -72,6 +72,8 @@ const { syncRecommendationViewer } = await import('@/features/recommendation/que
 
 const userA: Me = {
   id: 'usr_01jc000000e00800000000000a',
+  // #703：Me 必填 10 位 UID（本用例只关心推荐位的观看者身份切换）
+  uid: '1000000001',
   nickname: 'A',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

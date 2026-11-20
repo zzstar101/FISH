@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { eq, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb } from './client'
 import { jsonParam } from './json'
@@ -17,9 +17,9 @@ import { notifications } from './schema/notifications'
 import { subscribeMessageDeliveries, subscribeMessageGrants } from './schema/subscribe-messages'
 import { transactions } from './schema/transactions'
 import { userInterestProfiles } from './schema/user-interest-profiles'
-import { users } from './schema/users'
+import { users, wechatIdentities } from './schema/users'
 import { wishes } from './schema/wishes'
-import { DEMO_PASSWORD, seed } from './seed'
+import { DEMO_WECHAT_CODES, seed } from './seed'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -41,10 +41,26 @@ const scratchUrl = (() => {
   return url.toString()
 })()
 
+/**
+ * 与 `seed.ts` 的 `stubOpenid()` 同一规则：`sha256('wechat-stub:' + code)` 取十六进制摘要，
+ * 每字节映射成 64 个 base64url 字符之一，共 27 位、前缀 `o`。seed 没导出该函数，这里独立实现一份，
+ * 用来验证 `DEMO_WECHAT_CODES` 与库里 openid 的绑定关系。
+ */
+function stubOpenid(code: string): string {
+  const ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'
+  const digest = new Bun.CryptoHasher('sha256').update(`wechat-stub:${code}`).digest('hex')
+  let suffix = ''
+  for (let i = 0; i < 27; i += 1) {
+    const byte = Number.parseInt(digest.slice(i * 2, i * 2 + 2), 16)
+    suffix += ALPHABET[byte % ALPHABET.length]
+  }
+  return `o${suffix}`
+}
+
 /** 只是拿它当"建/删库"的执行通道，所有断言都在 scratch 库上。 */
 const admin = createDb(databaseUrl)
 
-test('seed 可生成基础数据（matches/notifications 留空，由 worker 产出），且演示账号可登录', async () => {
+test('seed 可生成基础数据（matches/notifications 留空，由 worker 产出），且演示账号带固定微信身份', async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   const scratch = createDb(scratchUrl)
 
@@ -210,16 +226,25 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
     `)
     expect([...txMessageViolations]).toEqual([])
 
-    // seed 写的是真实 argon2id 哈希（#3 替换了 #2 的占位值），前端要用它登录调试，
-    // 因此这里断言文档里的演示密码（README「演示账号」）确实能校验通过，而不只断言行数。
-    const demoUsers = await scratch
-      .select({ passwordHash: users.passwordHash })
-      .from(users)
-      .where(eq(users.studentNo, '202101000001'))
-    const demoHash = demoUsers[0]?.passwordHash
-    expect(demoHash).toBeDefined()
-    expect(await Bun.password.verify(DEMO_PASSWORD, demoHash ?? '')).toBe(true)
-    expect(await Bun.password.verify('wrong-password', demoHash ?? '')).toBe(false)
+    // #703：学号/密码登录随凭据列一起删除，演示账号改用固定微信 stub code 登录
+    // （本地 `WECHAT_TRANSPORT=stub` 下 code 即身份种子）。三个演示用户必须各绑一条
+    // wechat_identities，且 openid 确实由这些 code 派生——两边算法漂移时本地登录会失效，
+    // 这条断言在 db 包内就要能红。
+    const demoIdentities = await scratch
+      .select({ userId: wechatIdentities.userId, openid: wechatIdentities.openid })
+      .from(wechatIdentities)
+    expect(demoIdentities).toHaveLength(3)
+    expect(demoIdentities.map((row) => row.openid).sort()).toEqual(
+      Object.values(DEMO_WECHAT_CODES).map(stubOpenid).sort(),
+    )
+
+    // uid 是 DB 默认值生成的 10 位随机数；演示账号同样只有 uid 这一种标识。
+    const demoUsers = await scratch.select({ id: users.id, uid: users.uid }).from(users)
+    expect(demoUsers).toHaveLength(3)
+    for (const demoUser of demoUsers) {
+      expect(demoUser.uid).toMatch(/^[0-9]{10}$/)
+      expect(demoIdentities.some((identity) => identity.userId === demoUser.id)).toBe(true)
+    }
 
     // 回归：jsonb 列必须落成真正的 JSON object。
     // 用 `insert().values({ payload: {...} })` 写时 drizzle + bun-sql 会 stringify 两次，

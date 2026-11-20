@@ -1,13 +1,13 @@
 /**
  * 受控 Admin 初始化脚本（#73）。
  *
- * 用途：按**显式学号 / 手机号 / 用户 ID** 把一名用户提升为 `ADMIN`，并把提升写入
- * `admin_audit_logs`。`#180` 之后微信注册的用户没有学号，生产只能按手机号或用户 ID 提升。
+ * 用途：按**显式 UID / 手机号 / 用户 ID** 把一名用户提升为 `ADMIN`，并把提升写入
+ * `admin_audit_logs`。`#703` 之后学号列已删除，人类可读标识是 10 位 UID。
  *
  * 自举规则（评审 P1 修复）：
  * - 系统**尚无任何 ADMIN** 时才允许省略 `--actor`（首次引导自举），审计 `actor_user_id`
  *   记 `NULL`（system bootstrap，不伪装成任何真实用户）；
- * - 系统已有 ADMIN 后必须显式传 `--actor <学号|手机号|用户 ID>`，且执行者必须是现有
+ * - 系统已有 ADMIN 后必须显式传 `--actor <UID|手机号|用户 ID>`，且执行者必须是现有
  *   ADMIN，否则拒绝；
  * - 「计数检查 → 行锁 → 条件更新 → 审计写入」全部在同一个事务里完成，并发自举
  *   也只会成功一个（行锁串行化 + `WHERE role = 'USER'` 条件更新）。
@@ -18,16 +18,15 @@
  *
  * 用法（仓库根目录）：
  * ```bash
- * bun run db:promote -- 202101000001          # 仅限系统尚无 ADMIN 时（首次引导自举）
- * bun run db:promote -- 13798764006 --actor 202012345678 --reason "运营开通"
+ * bun run db:promote -- 1234567890            # 仅限系统尚无 ADMIN 时（首次引导自举）
+ * bun run db:promote -- 13798764006 --actor 1234567890 --reason "运营开通"
  * bun run db:promote -- 01a19715-23cd-7269-b5c2-f29353dc0ea5 --actor 13700000000
  * ```
  *
  * 提升与审计日志在同**一个数据库事务**里完成：任何一步失败整体回滚，不留
  * 「已提升但无记录」或「有记录但没提升」的假状态。
  *
- * 注意：不打印任何密码 / 密钥；不把 password_hash / 完整 Cookie 写进审计日志
- * （只写脱敏快照，这里 before/after 仅含 role）。
+ * 注意：不打印任何密钥；审计日志只写脱敏快照（这里 before/after 仅含 role）。
  */
 import { and, eq, ne, sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
@@ -45,8 +44,8 @@ class AlreadyAdmin extends Error {}
 function usage(code: number): never {
   console.error(
     [
-      '用法：bun run db:promote -- <学号|手机号|用户 ID> [--actor <学号|手机号|用户 ID>] [--reason <原因>]',
-      '  <标识>     被提升为 ADMIN 的用户：学号、11 位手机号或用户 UUID（必填）',
+      '用法：bun run db:promote -- <UID|手机号|用户 ID> [--actor <UID|手机号|用户 ID>] [--reason <原因>]',
+      '  <标识>     被提升为 ADMIN 的用户：10 位 UID、11 位手机号或用户 UUID（必填）',
       '  --actor    执行提升操作的 Admin 的用户标识；系统已存在 ADMIN 时必填，且必须是现有 ADMIN',
       '             （仅系统尚无任何 ADMIN 时可省略，即首次引导自举）',
       '  --reason   审计原因（缺省：“管理后台初始化”）',
@@ -88,7 +87,7 @@ if (!databaseUrl) {
 const db = createDb(databaseUrl)
 
 interface Identity {
-  kind: 'id' | 'phone' | 'studentNo'
+  kind: 'id' | 'phone' | 'uid'
   value: string
   label: string
 }
@@ -97,9 +96,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /**
  * 与绑定端实际落库判据保持一致：apps/api/src/modules/auth/router.ts 只校验
  * `/^1\d{10}$/`（11 位、以 1 开头），并不收口到 `1[3-9]`。这里若更严，10/11/12
- * 开头的真实号码会被误当成学号去查。
+ * 开头的真实号码会被误判成无法识别。
  */
 const PHONE_RE = /^1\d{10}$/
+/** 人类可读 UID（#703）：10 位数字、无前导 0，与 11 位手机号不重叠。 */
+const UID_RE = /^[1-9]\d{9}$/
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0]
 
@@ -108,18 +109,18 @@ interface PromoteUser {
   role: string
   accountStatus: string
   phone: string | null
-  studentNo: string | null
+  uid: string
 }
 
 /**
- * 三种标识形状互不重叠：UUID、11 位手机号，其余按学号处理。不做「手机号查不到就
- * 回退学号」的猜测——`#180` 后生产用户没有学号，回退只会把输错手机号的人引到
- * 另一列上。
+ * 三种标识形状互不重叠：UUID、11 位手机号、10 位 UID。不做「手机号查不到就回退
+ * UID」的猜测——输错一位就换列查只会给出误导性的结果。
  */
 function parseIdentity(raw: string): Identity {
   if (UUID_RE.test(raw)) return { kind: 'id', value: raw.toLowerCase(), label: '用户 ID' }
   if (PHONE_RE.test(raw)) return { kind: 'phone', value: raw, label: '手机号' }
-  return { kind: 'studentNo', value: raw, label: '学号' }
+  if (UID_RE.test(raw)) return { kind: 'uid', value: raw, label: 'UID' }
+  throw new PromoteError(`无法识别的用户标识：${raw}（应为 10 位 UID、11 位手机号或用户 UUID）`)
 }
 
 async function userByIdentity(tx: Tx, identity: Identity): Promise<PromoteUser | null> {
@@ -128,14 +129,14 @@ async function userByIdentity(tx: Tx, identity: Identity): Promise<PromoteUser |
       ? eq(users.id, identity.value)
       : identity.kind === 'phone'
         ? eq(users.phone, identity.value)
-        : eq(users.studentNo, identity.value)
+        : eq(users.uid, identity.value)
   const rows = await tx
     .select({
       id: users.id,
       role: users.role,
       accountStatus: users.accountStatus,
       phone: users.phone,
-      studentNo: users.studentNo,
+      uid: users.uid,
     })
     .from(users)
     .where(where)
@@ -143,11 +144,11 @@ async function userByIdentity(tx: Tx, identity: Identity): Promise<PromoteUser |
   return rows[0] ?? null
 }
 
-/** 行锁之后重新核对标识仍指向同一行：防止解析与加锁之间号码/学号被改绑。 */
+/** 行锁之后重新核对标识仍指向同一行：防止解析与加锁之间号码被改绑。 */
 function matchesIdentity(user: PromoteUser, identity: Identity): boolean {
   if (identity.kind === 'id') return user.id === identity.value
   if (identity.kind === 'phone') return user.phone === identity.value
-  return user.studentNo === identity.value
+  return user.uid === identity.value
 }
 
 const targetIdentity = parseIdentity(target)
@@ -198,7 +199,7 @@ try {
         role: users.role,
         accountStatus: users.accountStatus,
         phone: users.phone,
-        studentNo: users.studentNo,
+        uid: users.uid,
       })
       .from(users)
       .where(eq(users.id, targetUser.id))
@@ -263,4 +264,4 @@ try {
   throw error
 }
 
-console.log(`[db:promote] ok — 已将${targetIdentity.label} ${target} 提升为 ADMIN（${reason}）`)
+console.log(`[db:promote] ok — 已将 ${targetIdentity.label} ${target} 提升为 ADMIN（${reason}）`)

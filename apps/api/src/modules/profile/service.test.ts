@@ -16,6 +16,7 @@ import type {
 const USER_ID = '01930000-0000-7000-8000-0000000000a1'
 const me: Me = {
   id: encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID),
+  uid: '1000000001',
   nickname: '小明',
   avatarUrl: null,
   authStatus: 'VERIFIED',
@@ -59,8 +60,7 @@ function fakeUploads(
 /** `users` 行 fixture：写用例要断言 DB 行 → Me 的映射仍走认证域的 toMe。 */
 const userRow = (overrides: Partial<UserRow> = {}): UserRow => ({
   id: USER_ID,
-  studentNo: null,
-  passwordHash: null,
+  uid: '1000000001',
   nickname: '小明',
   avatarUrl: null,
   // #287：users 新增可空 signature 列，fixture 补默认值。

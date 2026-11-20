@@ -2,11 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
 import { aiPolishRequests } from '@fish/db/schema/ai-polish-requests'
 import { loadServerEnv } from '@fish/shared/env'
-import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createAiPolishStub } from '../scripts/ai-polish-stub'
 import { createApp } from './app'
+import { createTestUser } from './modules/auth/testing'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -67,8 +67,6 @@ afterAll(async () => {
   await admin.$client.close()
 })
 
-const PASSWORD = 'fish123456'
-
 const post = (body: unknown, cookie?: string) => ({
   method: 'POST' as const,
   headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
@@ -76,24 +74,11 @@ const post = (body: unknown, cookie?: string) => ({
 })
 
 let serial = 0
+/** 直写 users + sessions 签发会话（#703：注册 / 密码登录路由已下线）。 */
 async function registerUser(): Promise<{ id: string; cookie: string }> {
   serial += 1
-  const response = await app.request(
-    '/auth/register',
-    post({
-      studentNo: `2021000000${String(serial).padStart(2, '0')}`,
-      password: PASSWORD,
-      nickname: `润色验收${serial}`,
-    }),
-  )
-  expect(response.status).toBe(200)
-  const body = (await response.json()) as { user: { id: string } }
-  const cookie = response.headers
-    .getSetCookie()
-    .find((value) => value.startsWith('fish_session='))
-    ?.split(';')[0]
-  if (!cookie) throw new Error('注册未下发 fish_session cookie')
-  return { id: decodePublicId(PUBLIC_ID_PREFIX.user, body.user.id), cookie }
+  const { userId, cookie } = await createTestUser(db, { nickname: `润色验收${serial}` })
+  return { id: userId, cookie }
 }
 
 const BODY = {

@@ -77,10 +77,10 @@ async function countByRequestId(clientRequestId: string, table: 'messages' | 'me
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
-  for (const [i, uid] of [buyer, seller].entries()) {
+  for (const uid of [buyer, seller]) {
     await db.execute(sql`
-      INSERT INTO users (id, student_no, password_hash, nickname)
-      VALUES (${uid}, ${`media${process.pid}_${i}`}, 'test-hash', '媒体测试')
+      INSERT INTO users (id, nickname)
+      VALUES (${uid}, '媒体测试')
     `)
   }
   const listingNo = await reserveTestListingNo(db, listingA)

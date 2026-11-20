@@ -15,7 +15,7 @@ const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode
  * delivery 状态（#68 评审 P2-5）：只有 **'SENT'** 的行参与「最新码」判定与限频计数——
  * 发送失败（FAILED）既不使用户手中已有的旧码失效，也不消耗 60s/每日额度。
  * 消费/尝试计数不受 delivery 影响：SENT 之前的旧码依然可验证。
- * 明文码只出现在邮件内容里；库与日志只允许 argon2id 哈希（与 users.password_hash 同一纪律）。
+ * 明文码只出现在邮件内容里；库与日志只允许 argon2id 哈希（与口令哈希同一纪律）。
  *
  * 限频查询都落在这张表上（#68 不引入 Redis）：
  * - 60s 间隔：`(email, sent_at)` / `(user_id, sent_at)` 的最近一封；

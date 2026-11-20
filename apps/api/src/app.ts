@@ -159,7 +159,7 @@ import { upgradeWebSocket } from './ws'
  * 只输出**脱敏**的错误描述，不打印整个错误对象。
  *
  * Drizzle 的包装错误 message 是两行：第一行 `Failed query: <占位符 SQL>`，第二行 `params: [...]`
- * 才是实参值（注册路径的 params 里含 `student_no` 与 `password_hash`）——所以只取第一行；
+ * 才是实参值（例如手机号、微信 code 这类实参）——所以只取第一行；
  * 栈的首行同样是 `name: message`，因此只保留 `at ` 开头的调用帧。
  */
 function describeError(error: unknown): string {

@@ -12,6 +12,7 @@ import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/p
 import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import { createSessions } from '../auth/session'
 
 /**
  * 意见反馈闭环端到端（#463）：用户提交 → 管理队列 → 处理 / 回复 → 用户查看结果。
@@ -39,7 +40,6 @@ const admin = createDb(databaseUrl)
 let scratch: Db
 let app: ReturnType<typeof createApp>
 
-const DEMO_PASSWORD = 'fish123456'
 const ADMIN_ID = '01930000-0000-7000-8000-000000000a91'
 const USER_ID = '01930000-0000-7000-8000-000000000a92'
 const OTHER_USER_ID = '01930000-0000-7000-8000-000000000a93'
@@ -51,24 +51,11 @@ beforeAll(async () => {
   await migrate(scratch, { migrationsFolder })
   app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
 
-  const passwordHash = await Bun.password.hash(DEMO_PASSWORD)
   await scratch.insert(users).values([
-    { id: ADMIN_ID, studentNo: '202101000991', passwordHash, nickname: '管理员甲', role: 'ADMIN' },
-    { id: USER_ID, studentNo: '202101000992', passwordHash, nickname: '用户乙', role: 'USER' },
-    {
-      id: OTHER_USER_ID,
-      studentNo: '202101000993',
-      passwordHash,
-      nickname: '用户丙',
-      role: 'USER',
-    },
-    {
-      id: LIMITED_USER_ID,
-      studentNo: '202101000994',
-      passwordHash,
-      nickname: '用户丁',
-      role: 'USER',
-    },
+    { id: ADMIN_ID, nickname: '管理员甲', role: 'ADMIN' },
+    { id: USER_ID, nickname: '用户乙', role: 'USER' },
+    { id: OTHER_USER_ID, nickname: '用户丙', role: 'USER' },
+    { id: LIMITED_USER_ID, nickname: '用户丁', role: 'USER' },
   ])
 })
 
@@ -84,12 +71,10 @@ const postAs = (cookie: string | null, body: unknown) => ({
   body: JSON.stringify(body),
 })
 
-async function loginAs(studentNo: string): Promise<string> {
-  const res = await app.request('/auth/login', postAs(null, { studentNo, password: DEMO_PASSWORD }))
-  expect(res.status).toBe(200)
-  const session = res.headers.getSetCookie().find((value) => value.startsWith('fish_session='))
-  if (!session) throw new Error('响应未下发 fish_session')
-  return session.split(';')[0] ?? ''
+/** 直写 sessions 表签发会话（#703：/auth/login 已下线）。 */
+async function loginAs(userId: string): Promise<string> {
+  const { token } = await createSessions(scratch).create(userId)
+  return `fish_session=${token}`
 }
 
 const errorCode = async (res: Response) =>
@@ -110,9 +95,9 @@ let feedbackId: string
 
 describe('意见反馈（#463 用户端）', () => {
   test('setup: login', async () => {
-    adminCookie = await loginAs('202101000991')
-    userCookie = await loginAs('202101000992')
-    otherCookie = await loginAs('202101000993')
+    adminCookie = await loginAs(ADMIN_ID)
+    userCookie = await loginAs(USER_ID)
+    otherCookie = await loginAs(OTHER_USER_ID)
   })
 
   test('匿名不能提交，也不能看我的反馈（401）', async () => {
@@ -169,7 +154,7 @@ describe('意见反馈（#463 用户端）', () => {
   })
 
   test(`24 小时内第 ${FEEDBACK_DAILY_LIMIT + 1} 条是 429；并发提交不会越过上限`, async () => {
-    const limitedCookie = await loginAs('202101000994')
+    const limitedCookie = await loginAs(LIMITED_USER_ID)
     const submit = () =>
       app.request(
         FEEDBACK_ROUTES.create,
