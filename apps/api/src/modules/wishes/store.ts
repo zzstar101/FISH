@@ -87,7 +87,11 @@ export interface WishStore {
     userId: string,
     filter: { status?: WishStatus; limit: number; offset: number },
   ): Promise<{ rows: WishRow[]; total: number }>
-  update(id: string, fields: EditableWishFields): Promise<WishRow | null>
+  update(
+    id: string,
+    fields: EditableWishFields,
+    options?: { advanceContentVersion?: boolean; clearPending?: boolean },
+  ): Promise<WishRow | null>
   updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED'): Promise<WishRow | null>
   /** 编辑进入人工复审：只写 pending_*，公开字段保持不变；与审核记录同事务。 */
   setPending(
@@ -235,7 +239,7 @@ export function createSqlWishStore(db: Db): WishStore {
       }
     },
 
-    async update(id, fields) {
+    async update(id, fields, options) {
       const sets: (SQL | undefined)[] = [
         fields.keyword !== undefined ? sql`keyword = ${fields.keyword}` : undefined,
         fields.category !== undefined ? sql`category = ${fields.category}` : undefined,
@@ -249,28 +253,58 @@ export function createSqlWishStore(db: Db): WishStore {
         fields.acceptSimilar !== undefined
           ? sql`accept_similar = ${fields.acceptSimilar}`
           : undefined,
+        options?.advanceContentVersion ? sql`content_version = content_version + 1` : undefined,
+        options?.clearPending
+          ? sql`pending_keyword = NULL, pending_description = NULL, pending_version = NULL`
+          : undefined,
         sql`updated_at = clock_timestamp()`,
       ]
-      return firstWishRow(
-        await db.execute(sql`
-        UPDATE wishes SET ${sql.join(
-          sets.filter((fragment): fragment is SQL => fragment !== undefined),
-          sql`, `,
-        )}
-        WHERE id = ${id} AND status = 'ACTIVE'
-        RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
-      `),
-      )
+      const run = async (executor: Pick<Db, 'execute'>) =>
+        firstWishRow(
+          await executor.execute(sql`
+          UPDATE wishes SET ${sql.join(
+            sets.filter((fragment): fragment is SQL => fragment !== undefined),
+            sql`, `,
+          )}
+          WHERE id = ${id} AND status = 'ACTIVE'
+          RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
+        `),
+        )
+      if (!options?.clearPending) return run(db)
+      return db.transaction(async (tx) => {
+        const row = await run(tx)
+        if (row) {
+          // 通过的编辑取代了任何在途待审版本：旧记录已经没有可结算的对象。
+          await tx.execute(
+            sql`DELETE FROM wish_moderation_records WHERE wish_id = ${id}::uuid AND status = 'PENDING'`,
+          )
+        }
+        return row
+      })
     },
 
     async setPending(id, input, moderation) {
       return db.transaction(async (tx) => {
+        const current = toRows(
+          await tx.execute(sql`
+            SELECT status, moderation_status, content_version, pending_version
+            FROM wishes WHERE id = ${id}::uuid
+            FOR UPDATE
+          `),
+        )[0]
+        if (!current) return null
+        const contentVersion = Number(current.content_version ?? 1)
+        // 已有在途待审版本时复用它：重复编辑只替换待审内容，不制造第二个版本号。
+        const version =
+          current.pending_version === null || current.pending_version === undefined
+            ? contentVersion + 1
+            : Number(current.pending_version)
         const updated = firstWishRow(
           await tx.execute(sql`
             UPDATE wishes
             SET pending_keyword = ${input.keyword},
                 pending_description = ${input.description},
-                pending_version = ${input.version},
+                pending_version = ${version},
                 updated_at = clock_timestamp()
             WHERE id = ${id} AND status = 'ACTIVE' AND moderation_status <> 'REJECTED'
             RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
@@ -278,11 +312,14 @@ export function createSqlWishStore(db: Db): WishStore {
         )
         if (!updated) return null
         if (moderation) {
+          await tx.execute(
+            sql`DELETE FROM wish_moderation_records WHERE wish_id = ${id}::uuid AND status = 'PENDING'`,
+          )
           await insertWishModerationRecord(tx, id, updated.user_id, {
             ...moderation,
             keyword: input.keyword,
             description: input.description,
-            version: input.version,
+            version,
           })
         }
         return updated

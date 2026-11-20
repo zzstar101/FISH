@@ -328,7 +328,10 @@ export function createWishService({
           throw error
         }
       }
-      const updated = await store.update(id, toEditableFields(patch))
+      const updated = await store.update(id, toEditableFields(patch), {
+        advanceContentVersion: true,
+        clearPending: true,
+      })
       if (updated) {
         invalidatePoolCache()
         // #322 M1：编辑愿望此前**不投递任何 job**，于是改完 keyword/description/category 既不重算

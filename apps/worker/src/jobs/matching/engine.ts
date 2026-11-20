@@ -280,6 +280,8 @@ const LISTING_COLUMNS = {
 function narrowedWishes(listing: ListingTarget): SQL | undefined {
   return and(
     eq(wishes.status, 'ACTIVE'),
+    // #694 M5：审核状态与生命周期正交——待审/被拒愿望不得进入匹配（卖家能看到 wish.keyword）。
+    eq(wishes.moderationStatus, 'APPROVED'),
     // 自己的愿望不吃自己的商品。
     ne(wishes.userId, listing.sellerId),
     sql`(${wishes.category} IS NULL OR ${wishes.category} = ${listing.category})`,

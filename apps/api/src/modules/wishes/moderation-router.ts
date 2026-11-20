@@ -2,13 +2,12 @@ import {
   wishModerationDecisionInputSchema,
   wishModerationQueueQuerySchema,
 } from '@fish/contracts/wishes/moderation'
+import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { WishModerationService } from './moderation-service'
 import { WishModerationServiceError } from './moderation-service'
-
-const RECORD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export function createWishModerationRouter(options: {
   service: WishModerationService
@@ -42,8 +41,11 @@ export function createWishModerationRouter(options: {
   })
 
   router.post('/:recordId/decision', async (c) => {
-    const recordId = c.req.param('recordId')
-    if (!RECORD_ID.test(recordId)) {
+    const rawId = c.req.param('recordId')
+    const recordId = isPublicId(PUBLIC_ID_PREFIX.wishModerationRecord, rawId)
+      ? decodePublicId(PUBLIC_ID_PREFIX.wishModerationRecord, rawId)
+      : null
+    if (!recordId) {
       return c.json(
         { error: { code: 'WISH_MODERATION_NOT_FOUND', message: '待审记录不存在' } },
         404,

@@ -155,12 +155,12 @@ async function selectTargets(
           ? db
               .select({ id: wishes.id })
               .from(wishes)
-              .where(eq(wishes.status, 'ACTIVE'))
+              .where(and(eq(wishes.status, 'ACTIVE'), eq(wishes.moderationStatus, 'APPROVED')))
               .orderBy(asc(wishes.createdAt), asc(wishes.id))
           : db
               .select({ id: wishes.id })
               .from(wishes)
-              .where(eq(wishes.status, 'ACTIVE'))
+              .where(and(eq(wishes.status, 'ACTIVE'), eq(wishes.moderationStatus, 'APPROVED')))
               .orderBy(asc(wishes.createdAt), asc(wishes.id))
               .limit(limit))
 

@@ -18,6 +18,7 @@ import {
   TransactionIdSchema,
   UserIdSchema,
   UserRestrictionIdSchema,
+  WishModerationRecordIdSchema,
 } from '../system/public-id'
 
 /**
@@ -145,6 +146,7 @@ export const AdminAuditTargetTypeSchema = z.enum([
   'FEEDBACK',
   'USER_RESTRICTION',
   'CHAT_MODERATION_RECORD',
+  'WISH_MODERATION_RECORD',
 ])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
 
@@ -157,6 +159,7 @@ export const AdminAuditTargetIdSchema = z.union([
   FeedbackIdSchema,
   UserRestrictionIdSchema,
   ChatModerationRecordIdSchema,
+  WishModerationRecordIdSchema,
 ])
 
 const auditTargetIdByType = {
@@ -168,6 +171,7 @@ const auditTargetIdByType = {
   FEEDBACK: FeedbackIdSchema,
   USER_RESTRICTION: UserRestrictionIdSchema,
   CHAT_MODERATION_RECORD: ChatModerationRecordIdSchema,
+  WISH_MODERATION_RECORD: WishModerationRecordIdSchema,
 } satisfies Record<AdminAuditTargetType, (typeof AdminAuditTargetIdSchema.options)[number]>
 
 function auditTargetMatches(value: {
@@ -366,6 +370,7 @@ export const AdminAuditActionSchema = z.enum([
   'ACCOUNT_DELETION_COMPLETED',
   /** #694 M2：人工处理聊天待审消息（ALLOW 投递 / BLOCK 拒绝）。 */
   'CHAT_MODERATION_DECISION',
+  'WISH_MODERATION_DECISION',
 ])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 

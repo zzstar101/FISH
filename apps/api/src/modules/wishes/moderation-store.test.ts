@@ -39,9 +39,21 @@ describeDb('wish moderation store (#694 M5)', () => {
   })
 
   afterAll(async () => {
+    // 审计行同时按 actor 与 target 清：decide 的 target_id 是记录 id，而 record 会随 wishes 级联删除。
+    await db.execute(sql`
+      DELETE FROM admin_audit_logs
+      WHERE actor_user_id = ${userId}::uuid
+         OR (target_type = 'WISH_MODERATION_RECORD'
+             AND target_id IN (
+               SELECT r.id FROM wish_moderation_records r
+               JOIN wishes w ON w.id = r.wish_id
+               WHERE w.user_id = ${userId}::uuid
+             ))
+    `)
     for (const id of ids) {
       await db.execute(sql`DELETE FROM wishes WHERE id = ${id}::uuid`)
     }
+    await db.execute(sql`DELETE FROM admin_audit_logs WHERE actor_user_id = ${userId}::uuid`)
     await db.execute(sql`DELETE FROM users WHERE id = ${userId}::uuid`)
   })
 
@@ -160,5 +172,91 @@ describeDb('wish moderation store (#694 M5)', () => {
       sql`SELECT moderation_status FROM wishes WHERE id = ${wishId}::uuid`,
     )) as unknown as { moderation_status: string }[]
     expect(wish?.moderation_status).toBe('REJECTED')
+  })
+
+  test('同一愿望反复进入 REVIEW：复用待审版本且不撞唯一索引；放行后按新版本公开', async () => {
+    const store = createSqlWishModerationStore(db)
+    const wishId = await createWish('APPROVED')
+    const first = newId()
+    await insertWishModerationRecord(db, wishId, userId, baseRecord(2))
+    await db.execute(
+      sql`UPDATE wishes SET pending_keyword = '第一次待审', pending_version = 2 WHERE id = ${wishId}::uuid`,
+    )
+    // 模拟第二次 REVIEW 编辑：同版本覆盖 pending 记录，不应 23505。
+    await db.execute(
+      sql`DELETE FROM wish_moderation_records WHERE wish_id = ${wishId}::uuid AND status = 'PENDING'`,
+    )
+    await insertWishModerationRecord(db, wishId, userId, {
+      ...baseRecord(2),
+      keyword: '第二次待审',
+    })
+    const [pending] = (await db.execute(
+      sql`SELECT id FROM wish_moderation_records WHERE wish_id = ${wishId}::uuid AND status = 'PENDING'`,
+    )) as unknown as { id: string }[]
+    expect(pending?.id).toBeString()
+
+    const decided = await store.decide({
+      recordId: pending?.id as string,
+      decision: 'ALLOW',
+      reason: '放行第二次编辑',
+      version: 0,
+      actorUserId: userId,
+    })
+    expect(decided.outcome).toBe('applied')
+    const [wish] = (await db.execute(
+      sql`SELECT keyword, content_version, pending_version, moderation_status
+          FROM wishes WHERE id = ${wishId}::uuid`,
+    )) as unknown as {
+      keyword: string
+      content_version: number
+      pending_version: number | null
+      moderation_status: string
+    }[]
+    expect(wish).toMatchObject({
+      keyword: '第二次待审',
+      content_version: 2,
+      pending_version: null,
+      moderation_status: 'APPROVED',
+    })
+    // 审计落库（P0-3）。
+    const audits = (await db.execute(
+      sql`SELECT action, target_type FROM admin_audit_logs WHERE target_id = ${pending?.id}::uuid`,
+    )) as unknown as { action: string; target_type: string }[]
+    expect(audits).toEqual([
+      { action: 'WISH_MODERATION_DECISION', target_type: 'WISH_MODERATION_RECORD' },
+    ])
+    expect(first).toBeString()
+  })
+
+  test('REJECTED 愿望不能被剩余待审记录复活', async () => {
+    const store = createSqlWishModerationStore(db)
+    const wishId = await createWish('PENDING_REVIEW')
+    const recordId = newId()
+    await insertWishModerationRecord(db, wishId, userId, baseRecord(1))
+    const [row] = (await db.execute(
+      sql`SELECT id FROM wish_moderation_records WHERE wish_id = ${wishId}::uuid`,
+    )) as unknown as { id: string }[]
+    const blocked = await store.decide({
+      recordId: row?.id as string,
+      decision: 'BLOCK',
+      reason: '拒绝',
+      version: 0,
+      actorUserId: userId,
+    })
+    expect(blocked.outcome).toBe('applied')
+    // 再放行同一记录：已 SETTLED 且异结论 → conflict，不会把 REJECTED 改回 APPROVED。
+    const again = await store.decide({
+      recordId: row?.id as string,
+      decision: 'ALLOW',
+      reason: '试图复活',
+      version: 0,
+      actorUserId: userId,
+    })
+    expect(again.outcome).toBe('conflict')
+    const [wish] = (await db.execute(
+      sql`SELECT moderation_status FROM wishes WHERE id = ${wishId}::uuid`,
+    )) as unknown as { moderation_status: string }[]
+    expect(wish?.moderation_status).toBe('REJECTED')
+    expect(recordId).toBeString()
   })
 })

@@ -72,7 +72,7 @@ function serviceErrorResponse(c: WishesContext, error: unknown) {
   if (error instanceof SyntaxError) return c.json(jsonError('请求体不是有效 JSON'), 400)
   // 并发 PATCH 可能让组合后的预算区间违反 DB CHECK（SQLSTATE 23514）：数据由约束兜住，
   // 语义上是"与当前状态冲突"，应映射 409 而不是 500。
-  if (isCheckViolation(error)) {
+  if (isCheckViolation(error) || isUniqueViolation(error)) {
     return c.json(jsonError('愿望已被其他修改更新，请重试', 'CONFLICT'), 409)
   }
   console.error('[wishes] unhandled error', describeError(error))
@@ -81,6 +81,12 @@ function serviceErrorResponse(c: WishesContext, error: unknown) {
 
 async function parseJson<T>(c: WishesContext, parse: (input: unknown) => T) {
   return parse(await c.req.json())
+}
+
+/** Postgres 唯一约束违例：并发重复提交同一待审版本时按冲突处理，不暴露 500。 */
+function isUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('errno' in error)) return false
+  return (error as { errno?: unknown }).errno === '23505'
 }
 
 /** Postgres CHECK 约束违例（bun-sql 把 SQLSTATE 放在 errno 上）。 */

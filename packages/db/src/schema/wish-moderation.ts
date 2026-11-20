@@ -66,7 +66,9 @@ export const wishModerationRecords = pgTable(
       'wish_moderation_score_check',
       sql`${table.score} IS NULL OR (${table.score} >= 0 AND ${table.score} <= 100)`,
     ),
-    uniqueIndex('wish_moderation_wish_content_version_uq').on(table.wishId, table.contentVersion),
+    uniqueIndex('wish_moderation_pending_wish_content_version_uq')
+      .on(table.wishId, table.contentVersion)
+      .where(sql`${table.status} = 'PENDING'`),
     index('wish_moderation_status_created_at_idx').on(table.status, table.createdAt),
   ],
 )

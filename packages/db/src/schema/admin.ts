@@ -24,6 +24,7 @@ export const adminAuditActionEnum = pgEnum('admin_audit_action', [
    */
   'ACCOUNT_DELETION_COMPLETED',
   'CHAT_MODERATION_DECISION',
+  'WISH_MODERATION_DECISION',
 ])
 
 /** 审计目标类型。审核决定以 moderation record 为审计目标。 */
@@ -36,6 +37,7 @@ export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
   'FEEDBACK',
   'USER_RESTRICTION',
   'CHAT_MODERATION_RECORD',
+  'WISH_MODERATION_RECORD',
 ])
 
 /**

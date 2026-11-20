@@ -29,13 +29,15 @@ export interface WishModerationService {
   ): Promise<{ id: string; wishId: string; decision: 'ALLOW' | 'BLOCK'; replayed: boolean }>
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 function encodeCursor(createdAt: Date | string, id: string): string {
   return `${new Date(createdAt).toISOString()}|${id}`
 }
 
 function decodeCursor(cursor: string): { createdAt: Date; id: string } {
   const [iso, id] = cursor.split('|')
-  if (!iso || !id) {
+  if (!iso || !id || !UUID.test(id)) {
     throw new WishModerationServiceError(
       'WISH_MODERATION_INVALID_CURSOR',
       422,
@@ -80,14 +82,17 @@ export function createWishModerationService({
       const rows = await store.listPending({ before, limit: query.limit + 1 })
       const page = rows.slice(0, query.limit)
       const items = page.map((row) => ({
-        id: row.id,
+        id: encodePublicId(PUBLIC_ID_PREFIX.wishModerationRecord, row.id),
         wishId: encodePublicId(PUBLIC_ID_PREFIX.wish, row.wish_id),
         contentVersion: Number(row.content_version),
         keyword: payloadKeyword(row),
         description: payloadDescription(row),
         currentKeyword: String(row.keyword),
         currentDescription: row.description ?? null,
-        author: { id: row.user_id, nickname: row.author_nickname ?? '用户' },
+        author: {
+          id: encodePublicId(PUBLIC_ID_PREFIX.user, row.user_id),
+          nickname: row.author_nickname ?? '用户',
+        },
         machineDecision: row.machine_decision,
         provider: row.provider,
         policyVersion: row.policy_version,
@@ -127,11 +132,12 @@ export function createWishModerationService({
         )
       }
       // 放行后愿望才首次进入公开池/匹配：在事务提交后投递（重复投递幂等）。
-      if (result.outcome === 'applied' && result.decision === 'ALLOW') {
+      // replayed 也要补投：首次 applied 时若进程在提交后崩溃，重放是唯一的补救入口。
+      if (result.decision === 'ALLOW') {
         await matchQueue.enqueue(result.wishId)
       }
       return {
-        id: result.recordId,
+        id: encodePublicId(PUBLIC_ID_PREFIX.wishModerationRecord, result.recordId),
         wishId: encodePublicId(PUBLIC_ID_PREFIX.wish, result.wishId),
         decision: result.decision,
         replayed: result.outcome === 'replayed',

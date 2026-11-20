@@ -17,6 +17,7 @@ import {
   ReportIdSchema,
   UserIdSchema,
   UserRestrictionIdSchema,
+  WishModerationRecordIdSchema,
 } from '@fish/contracts/system/public-id'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
@@ -79,6 +80,11 @@ const AUDIT_TARGET_ID_SPECS = {
     label: '目标 ID',
     prefix: 'cmr_',
     schema: ChatModerationRecordIdSchema,
+  },
+  WISH_MODERATION_RECORD: {
+    label: '目标 ID',
+    prefix: 'wmr_',
+    schema: WishModerationRecordIdSchema,
   },
   REPORT: { label: '目标 ID', prefix: 'rpt_', schema: ReportIdSchema },
   DISPUTE: { label: '目标 ID', prefix: 'dsp_', schema: DisputeIdSchema },

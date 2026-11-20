@@ -77,16 +77,35 @@ class MemoryWishStore implements WishStore {
   ) {
     const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
     if (!row) return null
-    if (moderation) this.records.push({ id, version: input.version })
+    if (moderation) {
+      const version = row.pending_version ?? (row.content_version ?? 1) + 1
+      this.records = this.records.filter((record) => record.id !== id)
+      this.records.push({ id, version })
+      row.pending_version = version
+      row.pending_keyword = input.keyword
+      row.pending_description = input.description
+      return { ...row }
+    }
     row.pending_keyword = input.keyword
     row.pending_description = input.description
     row.pending_version = input.version
     return { ...row }
   }
 
-  async update(id: string, fields: EditableWishFields) {
+  async update(
+    id: string,
+    fields: EditableWishFields,
+    options?: { advanceContentVersion?: boolean; clearPending?: boolean },
+  ) {
     const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
     if (!row) return null
+    if (options?.advanceContentVersion) row.content_version = (row.content_version ?? 1) + 1
+    if (options?.clearPending) {
+      row.pending_keyword = null
+      row.pending_description = null
+      row.pending_version = null
+      this.records = this.records.filter((record) => record.id !== id)
+    }
     Object.assign(row, {
       ...(fields.keyword === undefined ? {} : { keyword: fields.keyword }),
       ...(fields.category === undefined ? {} : { category: fields.category }),

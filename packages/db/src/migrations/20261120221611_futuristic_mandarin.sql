@@ -1,4 +1,6 @@
 CREATE TYPE "public"."wish_moderation_status" AS ENUM('APPROVED', 'PENDING_REVIEW', 'REJECTED');--> statement-breakpoint
+ALTER TYPE "public"."admin_audit_action" ADD VALUE 'WISH_MODERATION_DECISION';--> statement-breakpoint
+ALTER TYPE "public"."admin_audit_target_type" ADD VALUE 'WISH_MODERATION_RECORD';--> statement-breakpoint
 CREATE TABLE "wish_moderation_records" (
 	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
 	"wish_id" uuid NOT NULL,
@@ -38,6 +40,6 @@ ALTER TABLE "wishes" ADD COLUMN "pending_version" integer;--> statement-breakpoi
 ALTER TABLE "wish_moderation_records" ADD CONSTRAINT "wish_moderation_records_wish_id_wishes_id_fk" FOREIGN KEY ("wish_id") REFERENCES "public"."wishes"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "wish_moderation_records" ADD CONSTRAINT "wish_moderation_records_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "wish_moderation_records" ADD CONSTRAINT "wish_moderation_records_reviewed_by_users_id_fk" FOREIGN KEY ("reviewed_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "wish_moderation_wish_content_version_uq" ON "wish_moderation_records" USING btree ("wish_id","content_version");--> statement-breakpoint
+CREATE UNIQUE INDEX "wish_moderation_pending_wish_content_version_uq" ON "wish_moderation_records" USING btree ("wish_id","content_version") WHERE "wish_moderation_records"."status" = 'PENDING';--> statement-breakpoint
 CREATE INDEX "wish_moderation_status_created_at_idx" ON "wish_moderation_records" USING btree ("status","created_at");--> statement-breakpoint
 CREATE INDEX "wishes_moderation_status_idx" ON "wishes" USING btree ("moderation_status");

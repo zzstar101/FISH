@@ -1,6 +1,8 @@
 import type { ModerationDecision } from '@fish/contracts/moderation/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { jsonParam } from '@fish/db/json'
+import { adminAuditLogs } from '@fish/db/schema/admin'
 import { sql } from 'drizzle-orm'
 import type { ModerationProviderName, ModerationSuggestion } from '../moderation/providers/types'
 
@@ -76,9 +78,6 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
   return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : []
 }
 
-const stringArray = (value: unknown): string[] =>
-  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-
 /**
  * 许愿墙待审队列（#694 M5）。与聊天待审同一姿态：审核记录是权威队列，专家放行/拒绝
  * 在**一个事务**里同时推进记录与愿望，CAS 版本防过期放行。
@@ -134,10 +133,13 @@ export function createSqlWishModerationStore(db: Db): WishModerationStore {
         const initial =
           Number(locked.content_version) === 1 && locked.moderation_status === 'PENDING_REVIEW'
 
+        const recordVersion = Number(locked.content_version)
         if (decision === 'ALLOW') {
           const updated = initial
             ? await tx.execute(sql`
-                UPDATE wishes SET moderation_status = 'APPROVED', updated_at = clock_timestamp()
+                UPDATE wishes SET moderation_status = 'APPROVED',
+                                  pending_keyword = NULL, pending_description = NULL,
+                                  pending_version = NULL, updated_at = clock_timestamp()
                 WHERE id = ${locked.wish_id}::uuid AND moderation_status = 'PENDING_REVIEW'
                 RETURNING id
               `)
@@ -148,7 +150,7 @@ export function createSqlWishModerationStore(db: Db): WishModerationStore {
                       WHEN jsonb_exists(r.payload, 'description') THEN r.payload ->> 'description'
                       ELSE description
                     END,
-                    content_version = wishes.content_version + 1,
+                    content_version = ${recordVersion},
                     pending_keyword = NULL,
                     pending_description = NULL,
                     pending_version = NULL,
@@ -157,14 +159,17 @@ export function createSqlWishModerationStore(db: Db): WishModerationStore {
                 FROM wish_moderation_records r
                 WHERE wishes.id = ${locked.wish_id}::uuid
                   AND r.id = ${recordId}::uuid
-                  AND wishes.pending_version = ${Number(locked.content_version)}
+                  AND wishes.moderation_status <> 'REJECTED'
+                  AND wishes.pending_version = ${recordVersion}
                 RETURNING wishes.id
               `)
           if (rowsOf(updated).length === 0) return { outcome: 'conflict' } as const
         } else {
           const updated = initial
             ? await tx.execute(sql`
-                UPDATE wishes SET moderation_status = 'REJECTED', updated_at = clock_timestamp()
+                UPDATE wishes SET moderation_status = 'REJECTED',
+                                  pending_keyword = NULL, pending_description = NULL,
+                                  pending_version = NULL, updated_at = clock_timestamp()
                 WHERE id = ${locked.wish_id}::uuid AND moderation_status = 'PENDING_REVIEW'
                 RETURNING id
               `)
@@ -173,7 +178,8 @@ export function createSqlWishModerationStore(db: Db): WishModerationStore {
                 SET pending_keyword = NULL, pending_description = NULL, pending_version = NULL,
                     updated_at = clock_timestamp()
                 WHERE id = ${locked.wish_id}::uuid
-                  AND pending_version = ${Number(locked.content_version)}
+                  AND moderation_status <> 'REJECTED'
+                  AND pending_version = ${recordVersion}
                 RETURNING id
               `)
           if (rowsOf(updated).length === 0) return { outcome: 'conflict' } as const
@@ -191,13 +197,37 @@ export function createSqlWishModerationStore(db: Db): WishModerationStore {
           WHERE id = ${recordId}::uuid
         `)
 
+        // 同一愿望的其它待审记录已被本次结算取代：直接清掉，避免队列里永远留一条无法收敛的
+        // PENDING（同一内容版本也可能因为历史分配而重复）。
+        await tx.execute(sql`
+          DELETE FROM wish_moderation_records
+          WHERE wish_id = ${locked.wish_id}::uuid AND status = 'PENDING' AND id <> ${recordId}::uuid
+        `)
+
+        await tx.insert(adminAuditLogs).values({
+          id: newId(),
+          actorUserId,
+          action: 'WISH_MODERATION_DECISION',
+          targetType: 'WISH_MODERATION_RECORD',
+          targetId: recordId,
+          before: jsonParam({ status: 'PENDING', decision: locked.machine_decision, version }),
+          after: jsonParam({
+            status: 'SETTLED',
+            decision,
+            wishId: String(locked.wish_id),
+            contentVersion: recordVersion,
+            moderationStatus: decision === 'ALLOW' ? 'APPROVED' : 'REJECTED',
+          }),
+          reason,
+        })
+
         return {
           outcome: 'applied' as const,
           recordId,
           wishId: String(locked.wish_id),
           decision,
           initial,
-          contentVersion: Number(locked.content_version),
+          contentVersion: recordVersion,
         }
       })
     },

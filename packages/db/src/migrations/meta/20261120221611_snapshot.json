@@ -1,5 +1,5 @@
 {
-  "id": "093ba13b-11f2-4483-9caf-a8af384a3ef5",
+  "id": "08c38881-d658-4355-818e-e5f828ebdc55",
   "prevId": "f5ef2b34-7134-44f0-b53f-c09c14771fd6",
   "version": "7",
   "dialect": "postgresql",
@@ -3067,8 +3067,8 @@
         }
       },
       "indexes": {
-        "wish_moderation_wish_content_version_uq": {
-          "name": "wish_moderation_wish_content_version_uq",
+        "wish_moderation_pending_wish_content_version_uq": {
+          "name": "wish_moderation_pending_wish_content_version_uq",
           "columns": [
             {
               "expression": "wish_id",
@@ -3084,6 +3084,7 @@
             }
           ],
           "isUnique": true,
+          "where": "\"wish_moderation_records\".\"status\" = 'PENDING'",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -7690,7 +7691,8 @@
         "USER_BANNED",
         "USER_UNBANNED",
         "ACCOUNT_DELETION_COMPLETED",
-        "CHAT_MODERATION_DECISION"
+        "CHAT_MODERATION_DECISION",
+        "WISH_MODERATION_DECISION"
       ]
     },
     "public.admin_audit_target_type": {
@@ -7704,7 +7706,8 @@
         "DISPUTE",
         "FEEDBACK",
         "USER_RESTRICTION",
-        "CHAT_MODERATION_RECORD"
+        "CHAT_MODERATION_RECORD",
+        "WISH_MODERATION_RECORD"
       ]
     },
     "public.job_status": {
