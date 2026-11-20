@@ -14,6 +14,10 @@ const targets = {
     prefix: PUBLIC_ID_PREFIX.moderationRecord,
     table: 'listing_moderation_records',
   },
+  CHAT_MODERATION_RECORD: {
+    prefix: PUBLIC_ID_PREFIX.chatModerationRecord,
+    table: 'chat_moderation_records',
+  },
   REPORT: { prefix: PUBLIC_ID_PREFIX.report, table: 'reports' },
   USER_RESTRICTION: { prefix: PUBLIC_ID_PREFIX.userRestriction, table: 'user_restrictions' },
   DISPUTE: { prefix: PUBLIC_ID_PREFIX.dispute, table: 'disputes' },

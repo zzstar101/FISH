@@ -9,6 +9,7 @@ import {
   AdminAuditTargetTypeSchema,
 } from '@fish/contracts/admin/schema'
 import {
+  ChatModerationRecordIdSchema,
   DisputeIdSchema,
   FeedbackIdSchema,
   ListingIdSchema,
@@ -74,6 +75,11 @@ const AUDIT_TARGET_ID_SPECS = {
   USER: { label: '目标 ID', prefix: 'usr_', schema: UserIdSchema },
   LISTING: { label: '目标 ID', prefix: 'lst_', schema: ListingIdSchema },
   MODERATION_RECORD: { label: '目标 ID', prefix: 'mdr_', schema: ModerationRecordIdSchema },
+  CHAT_MODERATION_RECORD: {
+    label: '目标 ID',
+    prefix: 'cmr_',
+    schema: ChatModerationRecordIdSchema,
+  },
   REPORT: { label: '目标 ID', prefix: 'rpt_', schema: ReportIdSchema },
   DISPUTE: { label: '目标 ID', prefix: 'dsp_', schema: DisputeIdSchema },
   FEEDBACK: { label: '目标 ID', prefix: 'fbk_', schema: FeedbackIdSchema },

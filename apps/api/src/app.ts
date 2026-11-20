@@ -91,6 +91,8 @@ import { createMessageService, toMessageDto } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
 import { createSystemContentProjector } from './modules/messages/system-content'
 import { createChatModerationPolicy } from './modules/moderation/chat'
+import { createChatModerationService } from './modules/moderation/chat-service'
+import { createSqlChatModerationStore } from './modules/moderation/chat-store'
 import { createContentModerationProvider } from './modules/moderation/providers/factory'
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
@@ -1004,9 +1006,33 @@ export function createApp(
   // 管理后台（#73）：与普通用户页面 / 普通用户 API 路由隔离。
   // 挂载点为根级 `/admin`；requireAuth（401）与 requireAdmin（403）两道守卫在 admin
   // router 内部 `use('*')` 应用，覆盖全部 `/admin/*` 入口，普通用户无法靠改前端状态绕过。
+  // 聊天待审（#694 M2）：与消息服务共用同一个 hub；人工 ALLOW 只在决策事务提交后
+  // 推一次 message.new（service 保证 replayed 不重推）。
+  const chatMediaUrl = (conversationId: string, mediaId: string) =>
+    `/api/conversations/${conversationId}/media/${mediaId}`
+  const chatModerationService = createChatModerationService({
+    store: createSqlChatModerationStore(db),
+    mediaUrl: chatMediaUrl,
+    onDelivered: (delivery) => {
+      if (delivery.kind === 'media') {
+        hub.pushMediaToUsers([delivery.buyerId, delivery.sellerId], {
+          type: 'media.new',
+          conversationId: delivery.media.conversationId,
+          media: delivery.media,
+        })
+        return
+      }
+      hub.pushToUsers([delivery.buyerId, delivery.sellerId], {
+        type: 'message.new',
+        conversationId: delivery.message.conversationId,
+        message: delivery.message,
+      })
+    },
+  })
   const admin = createAdminModule({
     db,
     storage,
+    chatModeration: chatModerationService,
     requireAuth: auth.requireAuth,
     governance: governanceService,
     guard: restrictionGuard,

@@ -30,8 +30,27 @@ export type ReportRow = {
   handledAt: Date | null
   handlingReason: string | null
   handledBy: string | null
+  /** MESSAGE 目标在举报创建时固化的取证快照（jsonb），其它目标为 null。 */
+  evidenceSnapshot: ReportEvidenceSnapshot | null
   /** 微秒精度游标文本（`to_char` 产出，见 admin/cursor.ts）。 */
   createdAtCursor: string
+}
+
+/**
+ * 私聊消息取证快照（#694 M2）。由服务端从消息/媒体行读取，客户端无法写入；
+ * 消息后续被撤回也不会清掉它，避免「撤回即销毁证据」。
+ */
+export type ReportEvidenceSnapshot = {
+  conversationId: string
+  senderId: string
+  senderNickname: string
+  kind: 'TEXT' | 'IMAGE' | 'VOICE'
+  content: string | null
+  mimeType: string | null
+  sizeBytes: number | null
+  objectKey: string | null
+  createdAt: string
+  recalledAt: string | null
 }
 
 /** 被举报目标的摘要。`label` 为 null 表示目标不存在。 */
@@ -41,6 +60,22 @@ export type TargetSummaryRow = {
   label: string | null
   listingStatus: string | null
   moderationStatus: string | null
+  /** MESSAGE 目标才有：接收方校验与取证所需的原始行。 */
+  message: {
+    conversationId: string
+    senderId: string
+    buyerId: string
+    sellerId: string
+    visibility: string
+    kind: 'TEXT' | 'IMAGE' | 'VOICE'
+    content: string | null
+    mimeType: string | null
+    sizeBytes: number | null
+    objectKey: string | null
+    createdAt: Date
+    recalledAt: Date | null
+    senderNickname: string
+  } | null
 }
 
 /** 举报人摘要（管理端展示用，不返回敏感字段）。 */
@@ -95,6 +130,7 @@ export interface ReportStore {
     targetId: string
     reason: ReportReason
     detailText: string | null
+    evidenceSnapshot: ReportEvidenceSnapshot | null
   }): Promise<{ row: ReportRow; created: boolean }>
   listMine(reporterId: string, criteria: ListMineCriteria): Promise<ReportRow[]>
   listAdminReports(criteria: ListAdminReportsCriteria): Promise<AdminReportRow[]>
@@ -110,6 +146,12 @@ export interface ReportStore {
   handleReport(input: HandleReportInput): Promise<'applied' | 'not-found' | 'conflict'>
 }
 
+function mediaKindOf(type: unknown, mimeType: unknown): 'IMAGE' | 'VOICE' {
+  const mime = String(mimeType ?? '')
+  if (String(type) === 'MEDIA' && mime.startsWith('audio/')) return 'VOICE'
+  return 'IMAGE'
+}
+
 function rowsOf(result: unknown): Record<string, unknown>[] {
   if (Array.isArray(result)) return result as Record<string, unknown>[]
   if (result && typeof result === 'object' && Array.isArray((result as { rows?: unknown }).rows)) {
@@ -123,6 +165,7 @@ const reportSelectSql = sql`
   r.target_id AS target_id, r.reason AS reason, r.detail_text AS detail_text,
   r.status AS status, r.created_at AS created_at, r.handled_at AS handled_at,
   r.handling_reason AS handling_reason, r.handled_by AS handled_by,
+  r.evidence_snapshot AS evidence_snapshot,
   ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor
 `
 
@@ -141,6 +184,7 @@ function reportFromRow(row: Record<string, unknown>): ReportRow {
       : null,
     handlingReason: (row.handling_reason as string | null) ?? null,
     handledBy: (row.handled_by as string | null) ?? null,
+    evidenceSnapshot: (row.evidence_snapshot as ReportEvidenceSnapshot | null) ?? null,
     createdAtCursor: String(row.created_at_cursor),
   }
 }
@@ -157,7 +201,7 @@ const adminReportSelectSql = sql`
     AS report_count,
   ru.id AS reporter_summary_id, ru.nickname AS reporter_nickname,
   hu.id AS handler_summary_id, hu.nickname AS handler_nickname,
-  COALESCE(l.title, tu.nickname) AS target_label,
+  COALESCE(l.title, tu.nickname, tm_text.label) AS target_label,
   l.status::text AS listing_status,
   l.moderation_status::text AS moderation_status
   FROM reports r
@@ -165,6 +209,14 @@ const adminReportSelectSql = sql`
   LEFT JOIN users hu ON hu.id = r.handled_by
   LEFT JOIN listings l ON r.target_type = 'LISTING' AND l.id = r.target_id
   LEFT JOIN users tu ON r.target_type = 'USER' AND tu.id = r.target_id
+  LEFT JOIN LATERAL (
+    SELECT CASE
+             WHEN m.type = 'TEXT' THEN left(m.content, 120)
+             WHEN m.type = 'MEDIA' THEN '[媒体消息]'
+             ELSE '[系统消息]'
+           END AS label
+    FROM messages m WHERE r.target_type = 'MESSAGE' AND m.id = r.target_id
+  ) tm_text ON true
 `
 
 function adminReportFromRow(row: Record<string, unknown>): AdminReportRow {
@@ -184,6 +236,7 @@ function adminReportFromRow(row: Record<string, unknown>): AdminReportRow {
       label: (row.target_label as string | null) ?? null,
       listingStatus: (row.listing_status as string | null) ?? null,
       moderationStatus: (row.moderation_status as string | null) ?? null,
+      message: null,
     },
     reportCount: Number(row.report_count),
   }
@@ -203,21 +256,61 @@ export function createSqlReportStore(db: Db): ReportStore {
                      moderation_status::text AS moderation_status
               FROM listings WHERE id = ${targetId}
             `)
-          : await db.execute(sql`
-              SELECT ${targetId}::uuid AS target_id,
-                     nickname AS label,
-                     NULL::text AS listing_status,
-                     NULL::text AS moderation_status
-              FROM users WHERE id = ${targetId}
-            `)
+          : targetType === 'USER'
+            ? await db.execute(sql`
+                SELECT ${targetId}::uuid AS target_id,
+                       nickname AS label,
+                       NULL::text AS listing_status,
+                       NULL::text AS moderation_status
+                FROM users WHERE id = ${targetId}
+              `)
+            : await db.execute(sql`
+                SELECT ${targetId}::uuid AS target_id,
+                       CASE WHEN m.type = 'TEXT' THEN left(m.content, 120)
+                            WHEN m.type = 'MEDIA' THEN '[媒体消息]'
+                            ELSE '[系统消息]' END AS label,
+                       NULL::text AS listing_status,
+                       NULL::text AS moderation_status,
+                       m.conversation_id, m.sender_id, m.visibility::text AS visibility,
+                       m.type::text AS kind, m.content, m.created_at, m.recalled_at,
+                       c.buyer_id, c.seller_id, u.nickname AS sender_nickname,
+                       mm.mime_type, mm.size_bytes, mm.object_key
+                FROM messages m
+                JOIN conversations c ON c.id = m.conversation_id
+                LEFT JOIN users u ON u.id = m.sender_id
+                LEFT JOIN message_media mm ON mm.message_id = m.id
+                WHERE m.id = ${targetId} AND m.type IN ('TEXT', 'MEDIA')
+              `)
       const row = rowsOf(result)[0]
       if (!row) return null
+      const message =
+        targetType === 'MESSAGE'
+          ? {
+              conversationId: String(row.conversation_id),
+              senderId: String(row.sender_id),
+              buyerId: String(row.buyer_id),
+              sellerId: String(row.seller_id),
+              visibility: String(row.visibility),
+              kind:
+                String(row.kind) === 'MEDIA'
+                  ? mediaKindOf(row.kind, row.mime_type)
+                  : ('TEXT' as const),
+              content: (row.content as string | null) ?? null,
+              mimeType: (row.mime_type as string | null) ?? null,
+              sizeBytes: row.size_bytes === null ? null : Number(row.size_bytes),
+              objectKey: (row.object_key as string | null) ?? null,
+              createdAt: new Date(row.created_at as string | Date),
+              recalledAt: row.recalled_at ? new Date(row.recalled_at as string | Date) : null,
+              senderNickname: String(row.sender_nickname ?? '用户'),
+            }
+          : null
       return {
         targetType,
         targetId,
         label: String(row.label),
         listingStatus: (row.listing_status as string | null) ?? null,
         moderationStatus: (row.moderation_status as string | null) ?? null,
+        message,
       }
     },
 
@@ -225,9 +318,11 @@ export function createSqlReportStore(db: Db): ReportStore {
       // ON CONFLICT DO NOTHING 命中部分唯一索引：并发重复提交不会双双插入，也不需要
       // 捕异常（异常路径在 bun-sql 下会污染连接池）。
       const inserted = await db.execute(sql`
-        INSERT INTO reports (id, reporter_id, target_type, target_id, reason, detail_text)
+        INSERT INTO reports (id, reporter_id, target_type, target_id, reason, detail_text,
+                             evidence_snapshot)
         VALUES (${newId()}, ${input.reporterId}, ${input.targetType}::report_target_type,
-                ${input.targetId}, ${input.reason}::report_reason, ${input.detailText})
+                ${input.targetId}, ${input.reason}::report_reason, ${input.detailText},
+                ${input.evidenceSnapshot === null ? null : jsonParam(input.evidenceSnapshot)})
         ON CONFLICT (reporter_id, target_type, target_id) WHERE status = 'PENDING'
         DO NOTHING
         RETURNING id, reporter_id, target_type::text AS target_type, target_id, reason,

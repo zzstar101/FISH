@@ -94,6 +94,7 @@ export const AUDIT_ACTION_META: Record<AdminAuditAction, string> = {
   USER_RESTRICTION_LIFTED: '解除限制',
   USER_BANNED: '封禁用户',
   USER_UNBANNED: '解封用户',
+  CHAT_MODERATION_DECISION: '聊天待审处理',
 }
 
 /** 审计动作 → 中文。入参是契约联合（原为 `string` + `as`，见文件头注释）。 */
@@ -116,6 +117,7 @@ export const AUDIT_TARGET_TYPE_LABEL: Record<AdminAuditTargetType, string> = {
   USER: '用户',
   LISTING: '商品',
   MODERATION_RECORD: '审核记录',
+  CHAT_MODERATION_RECORD: '聊天审核记录',
   REPORT: '举报',
   DISPUTE: '争议',
   FEEDBACK: '意见反馈',

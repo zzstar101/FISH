@@ -10,6 +10,8 @@ import { createFeedbackService } from '../feedback/service'
 import { createSqlFeedbackStore } from '../feedback/store'
 import type { RestrictionGuard } from '../governance/guard'
 import type { GovernanceService } from '../governance/service'
+import { createChatModerationRouter } from '../moderation/chat-router'
+import type { ChatModerationService } from '../moderation/chat-service'
 import { createSqlModerationStore } from '../moderation/store'
 import { createReportsRouter } from '../reports/router'
 import { createReportService } from '../reports/service'
@@ -51,6 +53,11 @@ export function createAdminModule(options: {
    * outbox 可以补投（冻结口径）。接线层决定「通知怎么写」，本模块只透传。
    */
   notifyDispute?: DisputeNotificationWriter
+  /**
+   * 聊天待审队列（#694 M2）。app.ts 传同一个 service 实例；未传（旧测试/裁剪部署）时
+   * 不挂载 /admin/chat-moderation，其它管理端点不受影响。
+   */
+  chatModeration?: ChatModerationService
 }) {
   // #286 复审 blocker 1：管理员对 REVIEW 商品的 ALLOW/BLOCK 必须同时结算它引用的审核中图片，
   // 否则人工放行会被卖家下一次「不改图」的文本编辑重新压回人工队列。钩子从 uploads 域注入，
@@ -83,6 +90,15 @@ export function createAdminModule(options: {
     requireAuth: options.requireAuth,
     requireAdmin,
     governance: options.governance,
+    // 控制器自带鉴权守卫；父 router 的 `use('*')` 也会先跑一遍，双层等价于其它 /admin 端点。
+    chatModerationRouter: options.chatModeration
+      ? createChatModerationRouter({
+          service: options.chatModeration,
+          storage: options.storage,
+          requireAuth: options.requireAuth,
+          requireAdmin,
+        })
+      : undefined,
   })
   return {
     router,

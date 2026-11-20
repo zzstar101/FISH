@@ -159,35 +159,6 @@ function uintBE(value: number, length: number): number[] {
 }
 
 /**
- * WebM（流式，无 `Info.Duration`）：`Cluster[Timecode, SimpleBlock...]`。
- * 用于回归「Cluster 的 Timecode 只是起点、必须加上块的相对偏移」这一条。
- */
-function streamingWebm(clusterTimecode: number, blockOffsets: number[]): Uint8Array {
-  const timecodeField = [
-    ...vint(0xe7, 1),
-    ...vint(
-      uintBE(clusterTimecode, clusterTimecode < 0x100 ? 1 : clusterTimecode < 0x10000 ? 2 : 3)
-        .length,
-    ),
-    ...uintBE(clusterTimecode, clusterTimecode < 0x100 ? 1 : clusterTimecode < 0x10000 ? 2 : 3),
-  ]
-  const blocks = blockOffsets.flatMap((offset) => {
-    const payload = [0x81, (offset >> 8) & 0xff, offset & 0xff, 0x80, 0x00]
-    return [...vint(0xa3, 1), ...vint(payload.length), ...payload]
-  })
-  const clusterPayload = [...timecodeField, ...blocks]
-  const cluster = [...vint(0x1f43b675, 4), ...vint(clusterPayload.length), ...clusterPayload]
-  const ebmlHeader = [0x1a, 0x45, 0xdf, 0xa3, ...vint(0)]
-  const segmentId = [0x18, 0x53, 0x80, 0x67]
-  return new Uint8Array([
-    ...ebmlHeader,
-    ...segmentId,
-    ...[0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-    ...cluster,
-  ])
-}
-
-/**
  * WebM：`Info[TimecodeScale=1ms, Duration=ticks]`，时长 = ticks ms。
  *
  * 两个字段都是 **EBML Unsigned Integer / Float**，不是 VINT：用普通大端 uint 编码

@@ -23,6 +23,7 @@ export const adminAuditActionEnum = pgEnum('admin_audit_action', [
    * 不记昵称 / 学号 / 手机号等原始资料（本表禁止保存敏感信息）。
    */
   'ACCOUNT_DELETION_COMPLETED',
+  'CHAT_MODERATION_DECISION',
 ])
 
 /** 审计目标类型。审核决定以 moderation record 为审计目标。 */
@@ -34,6 +35,7 @@ export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
   'DISPUTE',
   'FEEDBACK',
   'USER_RESTRICTION',
+  'CHAT_MODERATION_RECORD',
 ])
 
 /**

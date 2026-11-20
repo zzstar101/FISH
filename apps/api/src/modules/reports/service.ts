@@ -12,6 +12,7 @@ import {
   type ReportHandleResult,
   type ReportListResponse,
   ReportListResponseSchema,
+  ReportMessageEvidenceSchema,
   type ReportMineQuery,
   ReportSchema,
   type ReportTargetType,
@@ -59,10 +60,13 @@ function invalidCursor(): ReportServiceError {
 
 function publicTargetId(type: string, id: string) {
   const targetType = ReportTargetTypeSchema.parse(type)
-  return encodePublicId(
-    targetType === 'LISTING' ? PUBLIC_ID_PREFIX.listing : PUBLIC_ID_PREFIX.user,
-    id,
-  )
+  const prefix =
+    targetType === 'LISTING'
+      ? PUBLIC_ID_PREFIX.listing
+      : targetType === 'MESSAGE'
+        ? PUBLIC_ID_PREFIX.message
+        : PUBLIC_ID_PREFIX.user
+  return encodePublicId(prefix, id)
 }
 
 function toReportDto(row: ReportRow) {
@@ -106,6 +110,18 @@ function toAdminReportItem(row: AdminReportRow): AdminReportItem {
       moderationStatus: row.target.moderationStatus,
     },
     reportCount: row.reportCount,
+    messageEvidence: row.report.evidenceSnapshot
+      ? ReportMessageEvidenceSchema.parse({
+          kind: row.report.evidenceSnapshot.kind,
+          content: row.report.evidenceSnapshot.content,
+          mimeType: row.report.evidenceSnapshot.mimeType,
+          sizeBytes: row.report.evidenceSnapshot.sizeBytes,
+          hasMedia: row.report.evidenceSnapshot.objectKey !== null,
+          senderNickname: row.report.evidenceSnapshot.senderNickname,
+          createdAt: row.report.evidenceSnapshot.createdAt,
+          recalledAt: row.report.evidenceSnapshot.recalledAt,
+        })
+      : null,
   })
 }
 
@@ -143,12 +159,44 @@ export function createReportService(store: ReportStore): ReportService {
       if (!target) {
         throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
       }
+      // #694 M2：私聊消息只有**接收方**能举报，且服务端此刻固化正文/媒体快照，
+      // 不采信客户端上传的「证据」。非参与者按不存在处理，避免猜 id 探测会话。
+      if (input.targetType === 'MESSAGE') {
+        const message = target.message
+        if (message?.visibility !== 'DELIVERED') {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+        if (message.senderId === reporterId) {
+          throw new ReportServiceError('REPORT_SELF_TARGET', 422, '不能举报自己发送的消息')
+        }
+        if (reporterId !== message.buyerId && reporterId !== message.sellerId) {
+          throw new ReportServiceError('REPORT_TARGET_NOT_FOUND', 404, '举报目标不存在')
+        }
+      }
+      const evidenceSnapshot =
+        input.targetType === 'MESSAGE' && target.message
+          ? {
+              conversationId: target.message.conversationId,
+              senderId: target.message.senderId,
+              senderNickname: target.message.senderNickname,
+              kind: target.message.kind,
+              content: target.message.content,
+              mimeType: target.message.mimeType,
+              sizeBytes: target.message.sizeBytes,
+              objectKey: target.message.objectKey,
+              createdAt: target.message.createdAt.toISOString(),
+              recalledAt: target.message.recalledAt
+                ? target.message.recalledAt.toISOString()
+                : null,
+            }
+          : null
       const { row, created } = await store.createReport({
         reporterId,
         targetType: input.targetType,
         targetId: input.targetId,
         reason: input.reason as Parameters<ReportStore['createReport']>[0]['reason'],
         detailText: input.detailText,
+        evidenceSnapshot,
       })
       return ReportCreateResponseSchema.parse({ report: toReportDto(row), created })
     },

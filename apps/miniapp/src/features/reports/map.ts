@@ -34,6 +34,8 @@ import type { ReportTarget } from './meta'
 const TARGET_TITLE: Record<ReportTarget, string> = {
   LISTING: '被举报商品',
   USER: '被举报用户',
+  // 消息举报在端上的入口/列表属于 M4 双端 UI 批次；这里只保证契约扩枚举后类型完整。
+  MESSAGE: '被举报消息',
 }
 
 /**

@@ -76,6 +76,11 @@ export type AdminRouterOptions = {
    * 会有两套真相。
    */
   governance: GovernanceService
+  /**
+   * 聊天待审子路由（#694 M2）。由 admin module 在 requireAdmin 之后创建并注入；必须
+   * 注册在 `all('*')` catch-all 之前，否则路径会被吞成 404。
+   */
+  chatModerationRouter?: Hono<{ Variables: AuthVariables }>
 }
 
 function zodValidationFailure(
@@ -651,6 +656,10 @@ export function createAdminRouter(options: AdminRouterOptions) {
   //
   // 代价：路径存在但方法不匹配（如 `POST /admin/users`）也落到这里拿 404。Hono 在本项目里本来
   // 也不会返回 405（改动前实测 `POST /admin/me` 同样是 404），因此这是既有语义，不是本次引入的回归。
+  // #694 M2：聊天待审子路由必须注册在 catch-all 之前，否则会被 `all('*')` 吞成 404。
+  if (options.chatModerationRouter) {
+    router.route('/chat-moderation', options.chatModerationRouter)
+  }
   router.all('*', (c) => c.json(errorBody('ADMIN_NOT_FOUND', '目标不存在'), 404))
 
   return router
