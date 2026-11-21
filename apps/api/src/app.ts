@@ -30,6 +30,7 @@ import type {
 import {
   loadAiPolishEnv,
   loadMeetupTokenEnv,
+  loadModerationBotEnv,
   loadRecommendationRateLimitEnv,
   loadSubscribeMessageTemplatesEnv,
   STUB_EMBEDDING_MODEL,
@@ -89,6 +90,7 @@ import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService, toMessageDto } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
 import { createSystemContentProjector } from './modules/messages/system-content'
+import { createModerationBotRouter } from './modules/moderation/bot-router'
 import { createContentModerationProvider } from './modules/moderation/providers/factory'
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
@@ -1002,6 +1004,23 @@ export function createApp(
       }),
   })
   app.route('/admin', admin.router)
+
+  // 飞书审核台（fish-ops 的 AstrBot 插件）：静态 token + 两条最小能力，不走会话/角色。
+  // 没配 `MODERATION_BOT_TOKEN` / `MODERATION_BOT_ACTOR_USER_ID` 就不挂载（404），
+  // 部署里没打算用机器人时不存在这个入口。
+  const moderationBot = loadModerationBotEnv()
+  if (moderationBot) {
+    app.route(
+      '/internal/moderation',
+      createModerationBotRouter({
+        service: admin.service,
+        db,
+        storage,
+        token: moderationBot.token,
+        actorUserId: moderationBot.actorUserId,
+      }),
+    )
+  }
 
   // 举报入口只允许登录用户；与管理端共用同一个持久化 service。
   app.use('/reports/*', auth.requireAuth)

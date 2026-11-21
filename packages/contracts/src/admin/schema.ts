@@ -461,10 +461,32 @@ export const AdminModerationQueueSchema = z.object({
 })
 export type AdminModerationQueue = z.infer<typeof AdminModerationQueueSchema>
 
+/**
+ * 模型二审：只在腾讯判 REVIEW 时才可能有一条。
+ *
+ * `decision` 是模型自己的结论，`outcome` 是**平台最终怎么用它**——两者必须分开看：
+ * `SHADOW` 表示只记录不生效（上线第一周），`PENDING` 表示模型没把握/出错、仍走人工。
+ * `reason` 只进后台，不得透给卖家（卖家只看到固定话术）。
+ */
+export const AdminModerationModelReviewSchema = z.object({
+  model: z.string().min(1),
+  promptVersion: z.string().min(1),
+  decision: z.enum(['PASS', 'BLOCK', 'UNSURE', 'ERROR']),
+  category: z.string().nullable(),
+  reason: z.string(),
+  evidence: z.array(z.string()),
+  confidence: z.number().nullable(),
+  latencyMs: z.number().int().nullable(),
+  outcome: z.enum(['SHADOW', 'AUTO_PASSED', 'AUTO_REJECTED', 'PENDING']),
+  createdAt: z.iso.datetime(),
+})
+export type AdminModerationModelReview = z.infer<typeof AdminModerationModelReviewSchema>
+
 export const AdminModerationDetailSchema = z.object({
   item: AdminModerationQueueItemSchema,
   history: z.array(AdminModerationRecordSchema),
   machineDecision: ModerationDecisionSchema.nullable(),
+  modelReview: AdminModerationModelReviewSchema.nullable(),
   humanDecision: z
     .object({
       decision: z.enum(['ALLOW', 'BLOCK']),

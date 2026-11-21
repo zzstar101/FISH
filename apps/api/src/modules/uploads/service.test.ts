@@ -490,6 +490,9 @@ describe('confirm', () => {
       moderationDecision: 'ALLOW',
       provider: 'TENCENT_IMS',
       providerRequestId: 'req-1',
+      // 标签跟着图落库：模型二审要按图判断严重类别，不能只剩一个 decision。
+      providerLabel: 'Normal',
+      providerSubLabel: null,
     })
   })
 
@@ -621,6 +624,8 @@ describe('confirm', () => {
           moderationDecision: 'ALLOW',
           provider: 'TENCENT_IMS',
           providerRequestId: 'req-1',
+          providerLabel: null,
+          providerSubLabel: null,
         })
       },
     })
@@ -655,6 +660,8 @@ describe('confirm', () => {
           moderationDecision: 'BLOCK',
           provider: 'TENCENT_IMS',
           providerRequestId: 'req-1',
+          providerLabel: null,
+          providerSubLabel: null,
         }),
     })
     const { service, storage } = buildService({
@@ -718,6 +725,8 @@ describe('confirm', () => {
           moderationDecision: 'ALLOW',
           provider: 'TENCENT_IMS',
           providerRequestId: 'req-1',
+          providerLabel: null,
+          providerSubLabel: null,
         })
       },
       insert: async () => null,

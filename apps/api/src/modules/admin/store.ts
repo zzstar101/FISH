@@ -182,6 +182,19 @@ export interface ModerationDetailRow {
   listing: ModerationListingRow
   seller: ModerationSellerRow
   history: ModerationRecordRow[]
+  /** 最新一条模型复核记录。NULL = 没跑过（腾讯直接 ALLOW/BLOCK、或模型开关未开）。 */
+  modelReview: {
+    model: string
+    promptVersion: string
+    decision: string
+    category: string | null
+    reason: string
+    evidence: unknown
+    confidence: number | string | null
+    latencyMs: number | string | null
+    outcome: string
+    createdAt: Date
+  } | null
   humanDecision: {
     decision: 'ALLOW' | 'BLOCK'
     reason: string
@@ -1111,6 +1124,16 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         WHERE r.listing_id = ${row.listing_id}
         ORDER BY r.created_at ASC, r.id ASC
       `)
+      const modelReviewResult = await db.execute(sql`
+        SELECT m.model, m.prompt_version, m.decision::text AS decision, m.category,
+               m.reason, m.evidence, m.confidence, m.latency_ms,
+               m.outcome::text AS outcome, m.created_at
+        FROM moderation_model_reviews m
+        WHERE m.listing_id = ${row.listing_id}
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT 1
+      `)
+      const modelReviewRow = rowsOf(modelReviewResult)[0]
       const audit = await db.execute(sql`
         SELECT a.after, a.reason, a.created_at AS decided_at,
                u.id AS actor_id, u.nickname AS actor_nickname
@@ -1144,6 +1167,20 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         listing: moderationListingFromRow(row),
         seller: { id: String(row.seller_id), nickname: String(row.seller_nickname) },
         history: rowsOf(historyResult).map(moderationRecordFromRow),
+        modelReview: modelReviewRow
+          ? {
+              model: String(modelReviewRow.model),
+              promptVersion: String(modelReviewRow.prompt_version),
+              decision: String(modelReviewRow.decision),
+              category: (modelReviewRow.category as string | null) ?? null,
+              reason: String(modelReviewRow.reason),
+              evidence: modelReviewRow.evidence,
+              confidence: (modelReviewRow.confidence as number | string | null) ?? null,
+              latencyMs: (modelReviewRow.latency_ms as number | string | null) ?? null,
+              outcome: String(modelReviewRow.outcome),
+              createdAt: new Date(modelReviewRow.created_at as string | Date),
+            }
+          : null,
         humanDecision,
       }
     },

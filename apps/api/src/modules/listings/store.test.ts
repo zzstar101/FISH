@@ -1277,6 +1277,33 @@ test('job 写入失败时商品改动一起回滚（投递确实在同一事务�
   })
 })
 
+test('编辑后重新进入 REVIEW 的商品会补投模型复核任务', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+
+    await store.updateListingAtomic({
+      id: created.listingId,
+      sellerId,
+      apply: () => ({
+        kind: 'write' as const,
+        fields: { title: '加微信联系', moderationStatus: 'REVIEW' },
+      }),
+    })
+
+    const queued = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, 'LISTING_MODERATION'),
+          sql`${jobs.payload}->>'listingId' = ${created.listingId}`,
+        ),
+      )
+    // 不补投的话，模型只会复核新建商品，卖家改一次文案就永远停在「审核中」。
+    expect(queued).toHaveLength(1)
+  })
+})
+
 test('重复投递在商品被删除后仍能写入（重投递不依赖商品存在）', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(record(sellerId))

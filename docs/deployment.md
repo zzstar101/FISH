@@ -376,7 +376,7 @@ MEETUP_TOKEN_SECRET=REPLACE_ME_64_HEX
 AI_POLISH_TRANSPORT=live
 AI_POLISH_BASE_URL=https://api.deepseek.com
 AI_POLISH_API_KEY=REPLACE_ME_UPSTREAM_KEY
-AI_POLISH_MODEL=deepseek-flash
+AI_POLISH_MODEL=DeepSeek-V4.1-Flash
 
 # #462 微信订阅消息（仅 API 加载；三项都可选，留空 = 该 kind 未开通）
 # 值是「微信公众平台 → 功能 → 订阅消息」里的 priTmplId（43 位），不是模板标题。
@@ -440,7 +440,7 @@ read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
   printf 'AI_POLISH_TRANSPORT=live\n'
   printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
   printf 'AI_POLISH_API_KEY=%s\n' "$AI_POLISH_API_KEY"
-  printf 'AI_POLISH_MODEL=deepseek-flash\n'
+  printf 'AI_POLISH_MODEL=DeepSeek-V4.1-Flash\n'
 } | sudo tee /etc/fish/api-mail.env >/dev/null
 sudo chown root:root /etc/fish/api-mail.env && sudo chmod 600 /etc/fish/api-mail.env
 unset SMTP_USER SMTP_PASS AI_POLISH_API_KEY
@@ -481,7 +481,7 @@ read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
   printf 'AI_POLISH_TRANSPORT=live\n'
   printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
   printf 'AI_POLISH_API_KEY=%s\n' "$AI_POLISH_API_KEY"
-  printf 'AI_POLISH_MODEL=deepseek-flash\n'
+  printf 'AI_POLISH_MODEL=DeepSeek-V4.1-Flash\n'
 } | sudo tee -a /etc/fish/api-mail.env >/dev/null
 unset AI_POLISH_API_KEY
 ```
@@ -544,6 +544,57 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
 - **监控**：审核不可用时接口返回 **503 `CONTENT_MODERATION_UNAVAILABLE`** 且**不落库**（CREATE 不建商品、
   UPDATE 不改旧内容、图片 confirm 不标可引用）——这是设计上的 fail-closed，不是故障降级。按 5xx 比例
   与 `reason=timeout|network|throttled|upstream_error` 日志告警；持续 503 时先查腾讯云侧配额/密钥。
+- **模型二审（worker）**：`MODERATION_MODEL_REVIEW_MODE` 缺省 `off`；`shadow` 只落记录、
+  不改任何状态（后台详情页标注「影子模式」并在群里标注「模型认为」）；`enforce` 才让模型的
+  `PASS` 自动上架、`BLOCK` 自动拒绝。开启前必须补齐 `MODERATION_MODEL_BASE_URL /
+  MODERATION_MODEL_API_KEY / MODERATION_MODEL_MODEL`（缺一 worker 启动失败），并确认端点能看图——
+  用一张 1×1 png 打一次 `/chat/completions`，响应 `usage.prompt_tokens` 明显大于纯文本即可。
+  色情/低俗/违禁/暴恐/辱骂五类标签即使腾讯只给 REVIEW 也不进模型，直接人工——**文本与图片分别判**：
+  文本看 `listing_moderation_records.label`，图片看 `listing_media_objects.provider_label`。
+  自动放行的前提是「每一张 REVIEW 图都被模型看到」：REVIEW 图超过 6 张、任意一张读不出来、
+  整包超过 8MB、引用了没有台账行的老图（#286 之前）、或者腾讯那一行**没有标签**（存量数据，
+  判不了是否属于五类严重标签），都**不调模型或直接转人工**，不会出现「审了一半就上架」。
+  模型置信度低于 0.8（含没给）同样转人工。自动放行只结算模型实际看过的那些图。
+  新建商品与**编辑后重新进入 REVIEW** 的商品都会投这条 job；同一份内容（`input_digest`）用同一
+  提示词/模型只落一行，影子期与「没把握」的旧行在重跑时会被本次结论覆盖。切 `enforce` 后要把
+  影子期已经跑过、仍停在 `REVIEW` 的商品重投一次（否则它们的 job 已经消费掉了）：
+
+  ```sql
+  INSERT INTO jobs (type, payload)
+  SELECT 'LISTING_MODERATION', jsonb_build_object('listingId', id)
+  FROM listings WHERE moderation_status = 'REVIEW'
+  ON CONFLICT DO NOTHING;
+  ```
+
+  模型失败（超时/网络/HTTP/解析）一律收敛为 `ERROR` 转人工，**不存在"模型挂了就放行"**的分支；
+  影子期与转人工**不给卖家发结论通知**（只有自动放行/自动拒绝才发）。
+  观察口径：`worker.started` 日志里的 `moderationReviewMode`；后台审核详情的「模型复核」区块
+  （模型结论 + 实际动作 + 耗时 + 置信度）；`moderation_model_reviews` 里按 `outcome` 汇总。
+  回滚只需把 `MODERATION_MODEL_REVIEW_MODE` 改回 `off` 并重启 worker——已有记录保留，审核退回
+  「REVIEW 全人工」。
+- **飞书审核台（群里的「通过 / 拒绝」卡片）**：可选。`MODERATION_BOT_TOKEN` 与
+  `MODERATION_BOT_ACTOR_USER_ID` **必须同时给**（只给一个启动失败）：前者是静态 token（≥32 字符，
+  `openssl rand -hex 32` 生成），后者是卡片点击者（Owner）的内部用户 ID——机器人没有会话身份，
+  审核记录与审计日志里的「谁决定的」只能落到这个人身上。两个都不配就不挂载
+  `/internal/moderation`（404），部署里没有机器人时不存在这个入口。
+
+  能力刻意只有两条，都不超出 `/admin` 已有的判定语义（共用同一个 `decideModeration` 事务：
+
+  ```bash
+  # 待审商品（默认 5 条，最多 10 条；图片是短期签名 URL）
+  curl -sS -H "Authorization: Bearer $MODERATION_BOT_TOKEN" \
+    "https://<api>/internal/moderation/pending?limit=5"
+
+  # 通过 / 拒绝（recordId 来自上一条的 recordId；Idempotency-Key 必填，重试要复用同一个值）
+  curl -sS -X POST -H "Authorization: Bearer $MODERATION_BOT_TOKEN" \
+    -H "Content-Type: application/json" -H "Idempotency-Key: lark-card-<message_id>" \
+    -d '{"decision":"ALLOW"}' \
+    "https://<api>/internal/moderation/<recordId>/decision"
+  ```
+
+  token 轮换 = 改 `api-mail.env` 后 `systemctl restart fish-api`（会中断机器人几秒）；
+  不改代码即可下线这个入口（删掉两个变量再重启）。机器人侧的轮询/卡片实现见 fish-ops 的
+  `docs/runbook.md`。
 - **回滚**：审核链路没有独立开关，回滚就是回滚 API 代码（§7.3）。注意 `CONTENT_MODERATION_TRANSPORT`
   仍必须保留为 `tencent`：回滚到只认 `local` 的旧版本会因 `NODE_ENV` 未设置而**不会**被护栏拦截，
   等于静默退回本地词表——因此回滚窗口内要么保持新版本，要么显式接受这一降级。

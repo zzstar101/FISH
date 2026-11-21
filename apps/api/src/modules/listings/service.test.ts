@@ -872,55 +872,26 @@ describe('createListing', () => {
     ).toBe('IMAGE_REFERENCE_INVALID')
   })
 
-  test('blocks prohibited content before upload validation and records the decision', async () => {
-    const records: string[] = []
+  // Owner 2026-11-21：发布不再因审核结论被拒 —— 先让商品落地，卖家在「我的发布」里看到
+  // 「未通过 · 原因」，而不是在提交表单时收到一句没有上下文的 422。
+  test('creates a blocked listing instead of rejecting the publish', async () => {
+    const created: CreateListingRecord[] = []
     const service = createListingService({
-      storage: fakeStorage({
-        stat: async () => {
-          throw new Error('should not inspect uploads')
-        },
-      }),
+      storage: fakeStorage(),
       store: fakeStore({
-        recordModeration: async (input) => {
-          records.push(`${input.action}:${input.decision}`)
+        createListingAtomic: async (record) => {
+          created.push(record)
+          return { kind: 'created', listingId: LISTING_ID }
         },
       }),
     })
 
-    const error = await expectServiceError(() =>
-      service.createListing(SELLER_ID, { ...validCreate, title: '毒品交易' }),
-    )
+    const result = await service.createListing(SELLER_ID, { ...validCreate, title: '毒品交易' })
 
-    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
-    expect(records).toEqual(['CREATE:BLOCK'])
-  })
-
-  // #74：BLOCK 要给可定位到输入框的字段级错误，但**不下发命中词或词库**。
-  // 这里同时命中 BLOCK（毒品）与 REVIEW（加微信）规则，只有前者能出现在 details 里。
-  test('reports the blocked field without leaking the matched terms', async () => {
-    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
-
-    const error = await expectServiceError(() =>
-      service.createListing(SELLER_ID, {
-        ...validCreate,
-        description: '出售毒品，加微信联系',
-      }),
-    )
-
-    expect(error.details).toEqual([{ field: 'description', message: '描述包含平台禁止发布的内容' }])
-    const serialized = JSON.stringify(error.details)
-    expect(serialized).not.toContain('毒品')
-    expect(serialized).not.toContain('加微信')
-  })
-
-  test('reports both fields when the title and the description are blocked', async () => {
-    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
-
-    const error = await expectServiceError(() =>
-      service.createListing(SELLER_ID, { ...validCreate, title: '毒品', description: '枪支' }),
-    )
-
-    expect(error.details?.map((detail) => detail.field).sort()).toEqual(['description', 'title'])
+    expect(result.created).toBe(true)
+    expect(created[0]?.moderationStatus).toBe('BLOCKED')
+    expect(created[0]?.moderationReason).toBe('PROHIBITED_CONTENT')
+    expect(created[0]?.moderation?.decision).toBe('BLOCK')
   })
 
   test('creates review listings offline and does not expose them in the public feed', async () => {
@@ -1940,35 +1911,27 @@ describe('文本审核 provider 接线（#228）', () => {
     expect(created[0]?.moderationReason).toBe('CONTENT_REQUIRES_REVIEW')
   })
 
-  test('CREATE：BLOCK 报字段级错误且不泄漏腾讯 Label/策略', async () => {
+  test('CREATE：BLOCK 落 BLOCKED（不拒发布），provider 元数据仍进审计', async () => {
     const fake = fakeProvider([blockedTextResult()])
-    const recorded: Array<Record<string, unknown>> = []
-    let createdCalls = 0
+    const created: CreateListingRecord[] = []
     const service = createListingService({
       storage: fakeStorage(),
       moderationProvider: fake.provider,
       store: fakeStore({
-        createListingAtomic: async () => {
-          createdCalls += 1
+        createListingAtomic: async (record) => {
+          created.push(record)
           return { kind: 'created', listingId: LISTING_ID }
-        },
-        recordModeration: async (input) => {
-          recorded.push(input as unknown as Record<string, unknown>)
         },
       }),
     })
 
-    const error = await expectServiceError(() => service.createListing(SELLER_ID, validCreate))
+    await service.createListing(SELLER_ID, validCreate)
 
-    expect(error.status).toBe(422)
-    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
-    expect(error.details?.[0]?.field).toBe('title')
-    // 阻断文案只有安全话术：不含 label/subLabel/命中词。
-    expect(JSON.stringify(error.details)).not.toContain('AdLaw')
-    expect(createdCalls).toBe(0)
-    // 审计仍记录 provider 元数据（#228），供人工复核与调参。
-    expect(recorded[0]).toMatchObject({
-      action: 'CREATE',
+    expect(created[0]?.moderationStatus).toBe('BLOCKED')
+    expect(created[0]?.moderationReason).toBe('PROHIBITED_CONTENT')
+    // 对外只给安全码：不泄漏腾讯 Label/SubLabel/Score（#228）。
+    expect(created[0]?.moderationReason).not.toContain('AdLaw')
+    expect(created[0]?.moderation).toMatchObject({
       decision: 'BLOCK',
       provider: 'TENCENT_TMS',
       providerRequestId: 'req-title',

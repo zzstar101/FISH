@@ -341,6 +341,79 @@ export function loadContentModerationEnv(
 }
 
 /**
+ * 模型复核——**worker 专属**：API 只投递 `LISTING_MODERATION` job，不调模型。
+ *
+ * 与 `AI_POLISH_*` 的差别是**允许缺省**：这是给存量链路加的一层可选改进，不是一个已有功能
+ * 的开关。若强制必填，没配的部署会在升级瞬间起不来；而"没配"在这里有明确、安全的语义
+ * ——`off`（不做模型复核，REVIEW 全部照旧进人工队列）。
+ *
+ * 三种取值：`off` / `shadow`（只记结论、不生效，看一周准确率）/ `enforce`（PASS 自动上架、
+ * BLOCK 自动拒绝）。**显式写成别的值一律报错**：`shdow` 这种拼写错误不能静默退化为 `off`，
+ * 否则以为开了影子期、实际一行记录都没有。
+ */
+export type ModerationReviewEnv =
+  | { mode: 'off' }
+  | { mode: 'shadow' | 'enforce'; baseUrl: string; apiKey: string; model: string }
+
+export function loadModerationReviewEnv(
+  source: Record<string, string | undefined> = process.env,
+): ModerationReviewEnv {
+  // 未定义与空串（`MODERATION_MODEL_REVIEW_MODE=`）都是 off：空串是 .env 里最常见的"没填"，
+  // 不能让它把 worker 启动打挂，文案也一直写的是"留空视为 off"。
+  const mode = source.MODERATION_MODEL_REVIEW_MODE?.trim() || 'off'
+  if (mode === 'off') return { mode: 'off' }
+  if (mode !== 'shadow' && mode !== 'enforce') {
+    throw new Error(
+      '环境变量校验失败：MODERATION_MODEL_REVIEW_MODE 只能是 off / shadow / enforce（留空视为 off，其他取值不静默降级）',
+    )
+  }
+  const baseUrl = source.MODERATION_MODEL_BASE_URL?.trim()
+  const apiKey = source.MODERATION_MODEL_API_KEY?.trim()
+  const model = source.MODERATION_MODEL_MODEL?.trim()
+  if (!baseUrl || !apiKey || !model) {
+    const missing = [
+      !baseUrl ? 'MODERATION_MODEL_BASE_URL' : null,
+      !apiKey ? 'MODERATION_MODEL_API_KEY' : null,
+      !model ? 'MODERATION_MODEL_MODEL' : null,
+    ].filter((name): name is string => name !== null)
+    throw new Error(
+      `环境变量校验失败：MODERATION_MODEL_REVIEW_MODE=${mode} 缺少 ${missing.join(' / ')}。三项配置都必须提供：MODERATION_MODEL_BASE_URL / MODERATION_MODEL_API_KEY / MODERATION_MODEL_MODEL`,
+    )
+  }
+  return { mode, baseUrl, apiKey, model }
+}
+
+/**
+ * 飞书审核台（fish-ops 的 AstrBot 插件）——**API 专属**，允许整体缺省。
+ *
+ * 两个变量必须同时给：只给 token 的话决策会写进一个不存在的 actor（外键直接报错），
+ * 只给 actor 的话等于开了一个没有认证的后台入口。都不给 = 不挂载 `/internal/moderation`
+ * （404），与「没配就没有这个功能」一致。
+ *
+ * `MODERATION_BOT_ACTOR_USER_ID` 是卡片点击者（Owner）的内部用户 ID：机器人没有会话身份，
+ * 审核记录与审计日志里的「谁决定的」只能落到这个人身上——这正符合「群里只有 Owner 能点」的约定。
+ * token 至少 32 字符：它是绕过登录态的唯一凭证，不该是随手敲的短串。
+ */
+export type ModerationBotEnv = { token: string; actorUserId: string }
+
+export function loadModerationBotEnv(
+  source: Record<string, string | undefined> = process.env,
+): ModerationBotEnv | null {
+  const token = source.MODERATION_BOT_TOKEN?.trim()
+  const actorUserId = source.MODERATION_BOT_ACTOR_USER_ID?.trim()
+  if (!token && !actorUserId) return null
+  if (!token || !actorUserId) {
+    throw new Error(
+      '环境变量校验失败：MODERATION_BOT_TOKEN 与 MODERATION_BOT_ACTOR_USER_ID 必须同时提供（要么都不配，要么都配）',
+    )
+  }
+  if (token.length < 32) {
+    throw new Error('环境变量校验失败：MODERATION_BOT_TOKEN 至少 32 个字符')
+  }
+  return { token, actorUserId }
+}
+
+/**
  * embedding 生成配置（#322 M1）——**worker 专属**，不进共享 `ServerEnv`：API 进程只投递
  * `EMBED_*` job、不调 embedding 上游，上游密钥不扩散到不需要它的进程（与
  * `AI_POLISH_*` / `TENCENT_CLOUD_*` 同一拆分原则）。
