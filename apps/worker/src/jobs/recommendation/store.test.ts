@@ -69,6 +69,7 @@ async function insertListing(
     moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
     governanceDelistedAt: Date
     createdAt: Date
+    listingType: 'SALE' | 'RENTAL'
   }> = {},
 ): Promise<void> {
   const id = newId()
@@ -466,5 +467,68 @@ describe('createRankEvalStore（取数口径）', () => {
       expect(row.mean).toBeCloseTo(normalizedByKey[row.key], 12)
       expect(row.p50).toBeCloseTo(normalizedByKey[row.key], 12)
     }
+  })
+
+  /**
+   * #705：出租商品不能进出售排名的评估数据集。
+   *
+   * 取出侧三道口子都要在：可见性分母、事件归因、事件所引用商品的元数据。前一道用
+   * `visibleListings` 断言，后两道看 `events` / `listings` —— 只要漏一处，出租互动就会
+   * 混进售价指标（「日租价」被当作一次成交/曝光参与排序评估）。
+   */
+  test('出租商品的请求、事件与元数据都不进评估数据集（#705）', async () => {
+    // 独立窗口：与本文件其它用例的时间轴隔开，不与既有断言互相牵制。
+    const rentalSince = new Date('2026-02-01T00:00:00Z')
+    const rentalUntil = new Date('2026-02-02T00:00:00Z')
+    const createdAt = new Date('2026-01-31T00:00:00Z')
+
+    await insertListing('R1', { createdAt, listingType: 'RENTAL' })
+    await insertListing('S1', { createdAt })
+
+    const rentalRequest = await insertRequest({
+      userId,
+      anonymousSessionId: null,
+      requestedAt: new Date('2026-02-01T10:00:00Z'),
+    })
+    await insertItem(rentalRequest, 'R1', 0)
+    const saleRequest = await insertRequest({
+      userId,
+      anonymousSessionId: null,
+      requestedAt: new Date('2026-02-01T10:10:00Z'),
+    })
+    await insertItem(saleRequest, 'S1', 0)
+
+    await insertEvent({
+      key: 'R1',
+      eventType: 'DETAIL_VIEW',
+      occurredAt: new Date('2026-02-01T10:01:00Z'),
+      requestId: rentalRequest,
+      position: 0,
+      userId,
+      anonymousSessionId: null,
+    })
+    await insertEvent({
+      key: 'S1',
+      eventType: 'DETAIL_VIEW',
+      occurredAt: new Date('2026-02-01T10:11:00Z'),
+      requestId: saleRequest,
+      position: 0,
+      userId,
+      anonymousSessionId: null,
+    })
+
+    const dataset = await store.loadDataset({
+      since: rentalSince,
+      until: rentalUntil,
+      attributionWindowMs: WINDOW_MS,
+    })
+
+    // 可见性分母是**全库**快照（不限请求引用的商品），所以只断言出租商品被排除。
+    expect(dataset.visibleListings.map((listing) => listing.listingId)).not.toContain(
+      listingId('R1'),
+    )
+    expect(dataset.visibleListings.map((listing) => listing.listingId)).toContain(listingId('S1'))
+    expect(dataset.events.map((event) => event.listingId)).toEqual([listingId('S1')])
+    expect(dataset.listings.map((listing) => listing.listingId)).toEqual([listingId('S1')])
   })
 })

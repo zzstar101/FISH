@@ -122,6 +122,7 @@ export function createRankEvalStore(db: Db): RankEvalStore {
                e.occurred_at,
                a.request_id::text        AS attributed_request_id
         FROM recommendation_events e
+        JOIN listings el ON el.id = e.listing_id
         LEFT JOIN LATERAL (
           SELECT c.request_id
           FROM candidates c
@@ -133,6 +134,9 @@ export function createRankEvalStore(db: Db): RankEvalStore {
           LIMIT 1
         ) a ON TRUE
         WHERE e.occurred_at >= ${since} AND e.occurred_at < ${until}
+          -- #705：评估数据集只看出售域的事件。出租互动（含本 PR 之前落库的历史行）
+          -- 不能混进售价排名指标 —— 与摄取侧 findExistingListingIds 的收口同口径。
+          AND el.listing_type = 'SALE'
         ORDER BY e.occurred_at ASC, e.id ASC
       `)
 
@@ -159,6 +163,8 @@ export function createRankEvalStore(db: Db): RankEvalStore {
           FROM recommendation_events e
           WHERE e.occurred_at >= ${since} AND e.occurred_at < ${until}
         )
+          -- #705：评估数据集只认出售域商品（快照与事件引用的都算），与事件查询同口径。
+          AND l.listing_type = 'SALE'
       `)
 
       // 可见性口径只有一份：与 `packages/db/src/recall-store.ts` 的 `visibleListingConditions` 同义。
