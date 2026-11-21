@@ -552,8 +552,20 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
   色情/低俗/违禁/暴恐/辱骂五类标签即使腾讯只给 REVIEW 也不进模型，直接人工——**文本与图片分别判**：
   文本看 `listing_moderation_records.label`，图片看 `listing_media_objects.provider_label`。
   自动放行的前提是「每一张 REVIEW 图都被模型看到」：REVIEW 图超过 6 张、任意一张读不出来、
-  整包超过 8MB，或者模型置信度低于 0.8（含没给置信度），**都不调模型或直接转人工**，不会出现
-  「审了一半就上架」。自动放行只结算模型实际看过的那些图。
+  整包超过 8MB、引用了没有台账行的老图（#286 之前）、或者腾讯那一行**没有标签**（存量数据，
+  判不了是否属于五类严重标签），都**不调模型或直接转人工**，不会出现「审了一半就上架」。
+  模型置信度低于 0.8（含没给）同样转人工。自动放行只结算模型实际看过的那些图。
+  新建商品与**编辑后重新进入 REVIEW** 的商品都会投这条 job；同一份内容（`input_digest`）用同一
+  提示词/模型只落一行，影子期与「没把握」的旧行在重跑时会被本次结论覆盖。切 `enforce` 后要把
+  影子期已经跑过、仍停在 `REVIEW` 的商品重投一次（否则它们的 job 已经消费掉了）：
+
+  ```sql
+  INSERT INTO jobs (type, payload)
+  SELECT 'LISTING_MODERATION', jsonb_build_object('listingId', id)
+  FROM listings WHERE moderation_status = 'REVIEW'
+  ON CONFLICT DO NOTHING;
+  ```
+
   模型失败（超时/网络/HTTP/解析）一律收敛为 `ERROR` 转人工，**不存在"模型挂了就放行"**的分支；
   影子期与转人工**不给卖家发结论通知**（只有自动放行/自动拒绝才发）。
   观察口径：`worker.started` 日志里的 `moderationReviewMode`；后台审核详情的「模型复核」区块

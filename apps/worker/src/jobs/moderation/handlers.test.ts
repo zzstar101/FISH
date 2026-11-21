@@ -73,7 +73,7 @@ type Fixture = {
 async function createReviewListing(
   overrides: {
     label?: string
-    imageLabel?: string
+    imageLabel?: string | null
     moderationStatus?: 'REVIEW' | 'APPROVED' | 'BLOCKED'
   } = {},
 ): Promise<Fixture> {
@@ -105,7 +105,8 @@ async function createReviewListing(
     moderationDecision: 'REVIEW',
     provider: 'TENCENT_IMS',
     providerRequestId: 'req-img-1',
-    providerLabel: overrides.imageLabel ?? null,
+    // 腾讯 IMS 的图**有**标签：新列上线后每一行都写。传 `null` 用来模拟存量行。
+    providerLabel: overrides.imageLabel === undefined ? 'Ad' : overrides.imageLabel,
     providerSubLabel: null,
   })
   await db.insert(listingImages).values({
@@ -116,7 +117,7 @@ async function createReviewListing(
   await db.insert(listingModerationRecords).values({
     listingId,
     sellerId,
-    action: 'LISTING_SUBMIT',
+    action: 'CREATE',
     titleSnapshot: 'Python 编程基础及应用',
     descriptionSnapshot: '教育部大学计算机课程改革项目规划教材，九成新，附光盘',
     decision: moderationStatus === 'REVIEW' ? 'REVIEW' : 'BLOCK',
@@ -139,7 +140,7 @@ const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])
 async function addReviewImage(
   fixture: Fixture,
   index: number,
-  options: { label?: string } = {},
+  options: { label?: string | null } = {},
 ): Promise<string> {
   const key = `listing-review-media/${fixture.sellerId}/extra-${index}.jpg`
   await db.insert(listingMediaObjects).values({
@@ -150,7 +151,7 @@ async function addReviewImage(
     moderationDecision: 'REVIEW',
     provider: 'TENCENT_IMS',
     providerRequestId: `req-img-${index}`,
-    providerLabel: options.label ?? null,
+    providerLabel: options.label === undefined ? 'Ad' : options.label,
     providerSubLabel: null,
   })
   await db
@@ -457,6 +458,56 @@ describe('LISTING_MODERATION handler（真实 DB）', () => {
     expect(result).toMatchObject({ status: 'skipped', reason: 'severe-image-label', label: 'Porn' })
     expect(client.calls).toBe(0)
     expect(await listingState(fixture.listingId)).toMatchObject({ moderationStatus: 'REVIEW' })
+  })
+
+  test('腾讯图没有标签（存量行）：判不了严重类别，照样人工，不猜"不严重"', async () => {
+    const fixture = await createReviewListing({ imageLabel: null })
+    const client = fakeClient(PASS_JSON)
+
+    const result = await handlersWith(client).LISTING_MODERATION({ listingId: fixture.listingId })
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'unlabeled-image' })
+    expect(client.calls).toBe(0)
+    expect(await listingState(fixture.listingId)).toMatchObject({ moderationStatus: 'REVIEW' })
+  })
+
+  test('引用了没有台账行的图（#286 之前的老键）：模型看不到它，整条转人工', async () => {
+    const fixture = await createReviewListing()
+    await db.insert(listingImages).values({
+      listingId: fixture.listingId,
+      objectKey: `listings/${fixture.sellerId}/legacy.jpg`,
+      sortOrder: 1,
+    })
+    const client = fakeClient(PASS_JSON)
+
+    const result = await handlersWith(client).LISTING_MODERATION({ listingId: fixture.listingId })
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'unaccounted-image' })
+    expect(client.calls).toBe(0)
+    expect(await reviewRows(fixture.listingId)).toHaveLength(0)
+    expect(await listingState(fixture.listingId)).toMatchObject({ moderationStatus: 'REVIEW' })
+  })
+
+  test('影子期跑过的商品切 enforce 后重跑：结论被覆盖并真正生效', async () => {
+    const fixture = await createReviewListing()
+    await handlersWith(fakeClient(PASS_JSON), 'shadow').LISTING_MODERATION({
+      listingId: fixture.listingId,
+    })
+    expect((await reviewRows(fixture.listingId))[0]?.outcome).toBe('SHADOW')
+
+    // 影子记录占着唯一键：不覆盖的话这里会变成 duplicate，商品永远上不了架。
+    const result = await handlersWith(fakeClient(PASS_JSON)).LISTING_MODERATION({
+      listingId: fixture.listingId,
+    })
+
+    expect(result).toMatchObject({ status: 'recorded', outcome: 'AUTO_PASSED' })
+    const rows = await reviewRows(fixture.listingId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.outcome).toBe('AUTO_PASSED')
+    expect(await listingState(fixture.listingId)).toMatchObject({
+      moderationStatus: 'APPROVED',
+      status: 'ACTIVE',
+    })
   })
 
   test('有 REVIEW 图读不出来：整条转人工，绝不拿"看了一半"的结论自动放行', async () => {

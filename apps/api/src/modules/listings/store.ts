@@ -949,7 +949,20 @@ export function createSqlListingStore(db: Db): ListingStore {
         }
 
         // 审核中的商品不可进入匹配链路；只有通过审核的编辑才需要重算匹配。
-        if ((plan.fields.moderationStatus ?? 'APPROVED') !== 'APPROVED') {
+        const nextModerationStatus = plan.fields.moderationStatus ?? 'APPROVED'
+        if (nextModerationStatus !== 'APPROVED') {
+          // 编辑后重新进入 REVIEW 的商品同样交给模型复核（与 createListingAtomic 的分支同形）。
+          // 不补投的话，模型只会复核新建商品，卖家改一次文案就永远停在「审核中」。
+          if (nextModerationStatus === 'REVIEW') {
+            await tx
+              .insert(jobs)
+              .values({
+                id: newId(),
+                type: 'LISTING_MODERATION',
+                payload: jsonParam({ listingId: input.id }),
+              })
+              .onConflictDoNothing()
+          }
           return { kind: 'updated' as const }
         }
 

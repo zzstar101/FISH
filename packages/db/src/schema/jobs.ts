@@ -27,7 +27,8 @@ export type JobType =
   /**
    * 对一条「腾讯判 REVIEW」的商品跑多模态模型复核（payload `{listingId}`）。
    *
-   * 只在创建时投递一次：人工改判、模型放行/拒绝都直接改 `listings`，没有"再审一遍"的语义。
+   * 创建时投递一次；编辑后重新进入 REVIEW 也会补投（见 `updateListingAtomic`）。同一份内容
+   * 重复投递由 `(listing_id, prompt_version, model, input_digest)` 唯一键挡成 duplicate。
    */
   | 'LISTING_MODERATION'
 

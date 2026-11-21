@@ -122,9 +122,28 @@ export function createModerationJobHandlers(db: Db, deps: ModerationJobDeps) {
         // 不落记录：这不是"模型复核过"，是"根本不归模型管"。
         return { status: 'skipped', reason: 'severe-label', label: initial.label }
       }
+      // 腾讯记录却没有 label（旧数据/上游没回标签）：无法判断是否属于五类严重标签，
+      // 不能把"不知道"当成"不严重"——这正是红线被绕过的典型形状。local 记录不在此列。
+      if (initial.label === null && initial.provider === 'TENCENT_TMS') {
+        return { status: 'skipped', reason: 'unlabeled-text' }
+      }
+
+      // 有引用但台账里没有行的图（#286 之前的老键）：模型压根看不到它，
+      // 自动放行就等于让它随商品上架。整条转人工。
+      if (initial.unaccountedKeys.length > 0) {
+        return { status: 'skipped', reason: 'unaccounted-image' }
+      }
 
       // 图片的严重标签同样不归模型管。文本记录只反映标题/描述，图片标签在
       // `listing_media_objects.provider_label` 里；只看文本会漏掉"文字干净、图被标 Porn"的商品。
+      // 腾讯 IMS 的图却没有 label（多为新列上线前的存量行）：同样无法判断严重类别。
+      if (
+        initial.reviewImages.some(
+          (image) => image.label === null && image.provider === 'TENCENT_IMS',
+        )
+      ) {
+        return { status: 'skipped', reason: 'unlabeled-image' }
+      }
       const severeImage = initial.reviewImages.find(
         (image) => image.label !== null && SEVERE_LABELS.has(image.label.toLowerCase()),
       )
@@ -187,7 +206,7 @@ export function createModerationJobHandlers(db: Db, deps: ModerationJobDeps) {
         const current = await tx
           .select({
             moderationStatus: listings.moderationStatus,
-            updatedAt: listings.updatedAt,
+            updatedAt: sql<string>`${listings.updatedAt}::text`,
           })
           .from(listings)
           .where(eq(listings.id, listingId))
@@ -196,31 +215,68 @@ export function createModerationJobHandlers(db: Db, deps: ModerationJobDeps) {
         const row = current[0]
         if (!row) return 'missing' as const
         if (row.moderationStatus !== 'REVIEW') return 'raced' as const
-        if (row.updatedAt.getTime() !== initial.snapshotUpdatedAt.getTime()) return 'stale' as const
+        if (row.updatedAt !== initial.updatedAt) return 'stale' as const
 
+        const values = {
+          listingId,
+          moderationRecordId: initial.recordId,
+          model: client.model,
+          promptVersion: PROMPT_VERSION,
+          inputDigest: initial.inputDigest,
+          decision: review.decision,
+          category: review.category,
+          reason: review.reason,
+          evidence: jsonParam(review.evidence),
+          confidence: review.confidence,
+          latencyMs,
+          promptTokens,
+          completionTokens,
+          outcome,
+        }
         const inserted = await tx
           .insert(moderationModelReviews)
-          .values({
-            listingId,
-            moderationRecordId: initial.recordId,
-            model: client.model,
-            promptVersion: PROMPT_VERSION,
-            inputDigest: initial.inputDigest,
-            decision: review.decision,
-            category: review.category,
-            reason: review.reason,
-            evidence: jsonParam(review.evidence),
-            confidence: review.confidence,
-            latencyMs,
-            promptTokens,
-            completionTokens,
-            outcome,
-          })
+          .values(values)
           .onConflictDoNothing()
           .returning({ id: moderationModelReviews.id })
 
-        // 同一条商品被审过（重试/重复投递）：已有结论，别再改状态。
-        if (inserted.length === 0) return 'duplicate' as const
+        if (inserted.length === 0) {
+          // 同内容已经审过。影子期（SHADOW）与"没把握"（PENDING）的行是**没有生效**的记录：
+          // 切 enforce 或重新投递时要用这次的结论覆盖它，否则这些商品永远停在"已审过"的
+          // 假象里（唯一键把它们挡在门外）。已有自动结论才算真的重复投递。
+          const prior = (
+            await tx
+              .select({ id: moderationModelReviews.id, outcome: moderationModelReviews.outcome })
+              .from(moderationModelReviews)
+              .where(
+                and(
+                  eq(moderationModelReviews.listingId, listingId),
+                  eq(moderationModelReviews.promptVersion, PROMPT_VERSION),
+                  eq(moderationModelReviews.model, client.model),
+                  eq(moderationModelReviews.inputDigest, initial.inputDigest),
+                ),
+              )
+              .for('update')
+              .limit(1)
+          )[0]
+          if (prior === undefined || (prior.outcome !== 'SHADOW' && prior.outcome !== 'PENDING')) {
+            return 'duplicate' as const
+          }
+          await tx
+            .update(moderationModelReviews)
+            .set({
+              moderationRecordId: values.moderationRecordId,
+              decision: values.decision,
+              category: values.category,
+              reason: values.reason,
+              evidence: values.evidence,
+              confidence: values.confidence,
+              latencyMs: values.latencyMs,
+              promptTokens: values.promptTokens,
+              completionTokens: values.completionTokens,
+              outcome: values.outcome,
+            })
+            .where(eq(moderationModelReviews.id, prior.id))
+        }
 
         if (outcome === 'AUTO_PASSED') {
           await tx
@@ -319,9 +375,6 @@ type ReviewTarget = {
   priceCents: number
   sellerId: string
   moderationStatus: string
-  updatedAt: Date
-  /** 读到的 `updated_at`：模型跑完后用它证明"内容没被改过"。 */
-  snapshotUpdatedAt: Date
   objectKeys: string[]
   /**
    * 待复核（有效结论仍是 `REVIEW`）的图片：键 + 腾讯给这张图的标签。
@@ -329,10 +382,20 @@ type ReviewTarget = {
    * 有效结论 = `settled_decision ?? moderation_decision`（人工放行过的 REVIEW 图不再重复复核）。
    * 模型只看这些图，自动放行也只结算这些图。
    */
-  reviewImages: { key: string; label: string | null; subLabel: string | null }[]
+  reviewImages: {
+    key: string
+    label: string | null
+    subLabel: string | null
+    provider: string
+  }[]
+  /** 有引用、但台账里没有对应行的键（#286 之前的老键）：这些图模型看不到，不能自动放行。 */
+  unaccountedKeys: string[]
   recordId: string | null
   label: string | null
   subLabel: string | null
+  provider: string | null
+  /** 微秒精度的文本形式：`timestamptz` 落成 Date 只有毫秒，同一毫秒内的编辑会被误判"没变"。 */
+  updatedAt: string
   inputDigest: string
 }
 
@@ -345,7 +408,7 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
       priceCents: listings.priceCents,
       sellerId: listings.sellerId,
       moderationStatus: listings.moderationStatus,
-      updatedAt: listings.updatedAt,
+      updatedAt: sql<string>`${listings.updatedAt}::text`,
     })
     .from(listings)
     .where(eq(listings.id, listingId))
@@ -365,6 +428,7 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
       id: listingModerationRecords.id,
       label: listingModerationRecords.label,
       subLabel: listingModerationRecords.subLabel,
+      provider: listingModerationRecords.provider,
       providerRequestId: listingModerationRecords.providerRequestId,
     })
     .from(listingModerationRecords)
@@ -387,16 +451,31 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
             settledDecision: listingMediaObjects.settledDecision,
             label: listingMediaObjects.providerLabel,
             subLabel: listingMediaObjects.providerSubLabel,
+            provider: listingMediaObjects.provider,
           })
           .from(listingMediaObjects)
           .where(inArray(listingMediaObjects.finalKey, objectKeys))
+  const accountedKeys = new Set(
+    mediaRows.flatMap((row) => (row.finalKey === null ? [] : [row.finalKey])),
+  )
   const reviewImages = mediaRows.flatMap((row) => {
     if (row.finalKey === null) return []
     const effective = row.settledDecision ?? row.moderationDecision
     return effective === 'REVIEW'
-      ? [{ key: row.finalKey, label: row.label, subLabel: row.subLabel }]
+      ? [
+          {
+            key: row.finalKey,
+            label: row.label,
+            subLabel: row.subLabel,
+            provider: row.provider,
+          },
+        ]
       : []
   })
+  // `listing_images` 里有、台账里没有的键（#286 之前的老图，或调用方绕过 confirm 写入）。
+  // 这些图既不是 ALLOW 也不在 reviewImages 里，模型根本没看过 —— 一旦自动放行就等于
+  // 把一张没审过的图放上公网，所以整条转人工（见 handler 的 `unaccounted-image`）。
+  const unaccountedKeys = objectKeys.filter((key) => !accountedKeys.has(key))
   const digest = new Bun.CryptoHasher('sha256')
   digest.update(
     JSON.stringify({
@@ -418,12 +497,13 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
     sellerId: listing.sellerId,
     moderationStatus: listing.moderationStatus,
     updatedAt: listing.updatedAt,
-    snapshotUpdatedAt: listing.updatedAt,
     objectKeys,
     reviewImages,
+    unaccountedKeys,
     recordId: record?.id ?? null,
     label: record?.label ?? null,
     subLabel: record?.subLabel ?? null,
+    provider: record?.provider ?? null,
     inputDigest: digest.digest('hex'),
   }
 }

@@ -1,5 +1,5 @@
 {
-  "id": "d15d9879-a4ed-4266-be64-b588e6a00529",
+  "id": "31767995-e818-4a9c-9e34-0a3d50c19167",
   "prevId": "c25cb42d-178f-42f3-b43f-4cfb40cd9013",
   "version": "7",
   "dialect": "postgresql",
@@ -3540,6 +3540,12 @@
             },
             {
               "expression": "model",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "input_digest",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

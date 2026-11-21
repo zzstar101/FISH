@@ -138,11 +138,13 @@ export const moderationModelReviews = pgTable(
     createdAt: createdAt(),
   },
   (table) => [
-    // 幂等：job 重试或重复投递时，同一 (商品, 提示词版本, 模型) 只落一行。
+    // 幂等：同一份内容（input_digest 相同）用同一提示词、同一模型只落一行。把 digest 放进
+    // 唯一键，编辑后的商品（内容变了）才能重新复核；内容没变的重复投递仍然被挡住。
     uniqueIndex('moderation_model_reviews_listing_prompt_model_uq').on(
       table.listingId,
       table.promptVersion,
       table.model,
+      table.inputDigest,
     ),
     check(
       'moderation_model_reviews_confidence_range',

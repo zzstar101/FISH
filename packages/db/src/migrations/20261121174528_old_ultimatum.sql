@@ -24,5 +24,5 @@ ALTER TABLE "listing_media_objects" ADD COLUMN "provider_label" text;--> stateme
 ALTER TABLE "listing_media_objects" ADD COLUMN "provider_sub_label" text;--> statement-breakpoint
 ALTER TABLE "moderation_model_reviews" ADD CONSTRAINT "moderation_model_reviews_listing_id_listings_id_fk" FOREIGN KEY ("listing_id") REFERENCES "public"."listings"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "moderation_model_reviews" ADD CONSTRAINT "moderation_model_reviews_moderation_record_id_listing_moderation_records_id_fk" FOREIGN KEY ("moderation_record_id") REFERENCES "public"."listing_moderation_records"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "moderation_model_reviews_listing_prompt_model_uq" ON "moderation_model_reviews" USING btree ("listing_id","prompt_version","model");--> statement-breakpoint
+CREATE UNIQUE INDEX "moderation_model_reviews_listing_prompt_model_uq" ON "moderation_model_reviews" USING btree ("listing_id","prompt_version","model","input_digest");--> statement-breakpoint
 CREATE UNIQUE INDEX "jobs_listing_moderation_listing_id_pending_uidx" ON "jobs" USING btree (("payload"->>'listingId')) WHERE "jobs"."type" = 'LISTING_MODERATION' AND "jobs"."status" = 'PENDING';
