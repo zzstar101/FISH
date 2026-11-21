@@ -70,13 +70,14 @@ export function createAdminModule(options: {
   })
   // 意见反馈（#463）同一姿态：用户端与管理端共用一个 service 实例。
   const feedbackService = createFeedbackService(createSqlFeedbackStore(options.db))
+  const service = createAdminService({
+    store,
+    storage: options.storage,
+    latency: options.latency,
+    recommendationProcessMetrics: options.recommendationProcessMetrics,
+  })
   const router = createAdminRouter({
-    service: createAdminService({
-      store,
-      storage: options.storage,
-      latency: options.latency,
-      recommendationProcessMetrics: options.recommendationProcessMetrics,
-    }),
+    service,
     reportsService,
     disputesService,
     feedbackService,
@@ -86,6 +87,12 @@ export function createAdminModule(options: {
   })
   return {
     router,
+    /**
+     * 审核判定入口。`app.ts` 给飞书审核台的内部路由注入**同一个** service：机器人点「通过」
+     * 与管理员在后台点「通过」必须走同一条事务（图片结算 / 通知 / 幂等 / 审计），
+     * 不允许出现第二套判定逻辑。
+     */
+    service,
     /** 用户端举报路由（POST /reports、GET /reports/mine），由 app.ts 挂在 requireAuth 之后。 */
     reportsRouter: createReportsRouter({
       service: reportsService,

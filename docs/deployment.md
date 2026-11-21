@@ -572,6 +572,29 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
   （模型结论 + 实际动作 + 耗时 + 置信度）；`moderation_model_reviews` 里按 `outcome` 汇总。
   回滚只需把 `MODERATION_MODEL_REVIEW_MODE` 改回 `off` 并重启 worker——已有记录保留，审核退回
   「REVIEW 全人工」。
+- **飞书审核台（群里的「通过 / 拒绝」卡片）**：可选。`MODERATION_BOT_TOKEN` 与
+  `MODERATION_BOT_ACTOR_USER_ID` **必须同时给**（只给一个启动失败）：前者是静态 token（≥32 字符，
+  `openssl rand -hex 32` 生成），后者是卡片点击者（Owner）的内部用户 ID——机器人没有会话身份，
+  审核记录与审计日志里的「谁决定的」只能落到这个人身上。两个都不配就不挂载
+  `/internal/moderation`（404），部署里没有机器人时不存在这个入口。
+
+  能力刻意只有两条，都不超出 `/admin` 已有的判定语义（共用同一个 `decideModeration` 事务：
+
+  ```bash
+  # 待审商品（默认 5 条，最多 10 条；图片是短期签名 URL）
+  curl -sS -H "Authorization: Bearer $MODERATION_BOT_TOKEN" \
+    "https://<api>/internal/moderation/pending?limit=5"
+
+  # 通过 / 拒绝（recordId 来自上一条的 recordId；Idempotency-Key 必填，重试要复用同一个值）
+  curl -sS -X POST -H "Authorization: Bearer $MODERATION_BOT_TOKEN" \
+    -H "Content-Type: application/json" -H "Idempotency-Key: lark-card-<message_id>" \
+    -d '{"decision":"ALLOW"}' \
+    "https://<api>/internal/moderation/<recordId>/decision"
+  ```
+
+  token 轮换 = 改 `api-mail.env` 后 `systemctl restart fish-api`（会中断机器人几秒）；
+  不改代码即可下线这个入口（删掉两个变量再重启）。机器人侧的轮询/卡片实现见 fish-ops 的
+  `docs/runbook.md`。
 - **回滚**：审核链路没有独立开关，回滚就是回滚 API 代码（§7.3）。注意 `CONTENT_MODERATION_TRANSPORT`
   仍必须保留为 `tencent`：回滚到只认 `local` 的旧版本会因 `NODE_ENV` 未设置而**不会**被护栏拦截，
   等于静默退回本地词表——因此回滚窗口内要么保持新版本，要么显式接受这一降级。

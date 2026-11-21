@@ -384,6 +384,36 @@ export function loadModerationReviewEnv(
 }
 
 /**
+ * 飞书审核台（fish-ops 的 AstrBot 插件）——**API 专属**，允许整体缺省。
+ *
+ * 两个变量必须同时给：只给 token 的话决策会写进一个不存在的 actor（外键直接报错），
+ * 只给 actor 的话等于开了一个没有认证的后台入口。都不给 = 不挂载 `/internal/moderation`
+ * （404），与「没配就没有这个功能」一致。
+ *
+ * `MODERATION_BOT_ACTOR_USER_ID` 是卡片点击者（Owner）的内部用户 ID：机器人没有会话身份，
+ * 审核记录与审计日志里的「谁决定的」只能落到这个人身上——这正符合「群里只有 Owner 能点」的约定。
+ * token 至少 32 字符：它是绕过登录态的唯一凭证，不该是随手敲的短串。
+ */
+export type ModerationBotEnv = { token: string; actorUserId: string }
+
+export function loadModerationBotEnv(
+  source: Record<string, string | undefined> = process.env,
+): ModerationBotEnv | null {
+  const token = source.MODERATION_BOT_TOKEN?.trim()
+  const actorUserId = source.MODERATION_BOT_ACTOR_USER_ID?.trim()
+  if (!token && !actorUserId) return null
+  if (!token || !actorUserId) {
+    throw new Error(
+      '环境变量校验失败：MODERATION_BOT_TOKEN 与 MODERATION_BOT_ACTOR_USER_ID 必须同时提供（要么都不配，要么都配）',
+    )
+  }
+  if (token.length < 32) {
+    throw new Error('环境变量校验失败：MODERATION_BOT_TOKEN 至少 32 个字符')
+  }
+  return { token, actorUserId }
+}
+
+/**
  * embedding 生成配置（#322 M1）——**worker 专属**，不进共享 `ServerEnv`：API 进程只投递
  * `EMBED_*` job、不调 embedding 上游，上游密钥不扩散到不需要它的进程（与
  * `AI_POLISH_*` / `TENCENT_CLOUD_*` 同一拆分原则）。
