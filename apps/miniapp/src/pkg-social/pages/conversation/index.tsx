@@ -138,6 +138,7 @@ import {
   resolveConvState,
   resolveMsgState,
   resolvePanelHeightPx,
+  resolveScrollTarget,
   resolveSentinel,
   settleSend,
   shouldDropReplyOnSendFailure,
@@ -417,8 +418,9 @@ export default function Conversation() {
    * 「点摘引跳过去」的目标 DOM id（null = 跟随最新）。
    *
    * 与「打开即看最新」的 `tailId` 共用 ScrollView 的 `scrollIntoView`。`tail` 记下**设它时**
-   * 的尾行 id：新消息一落地尾行就变，比对不上时目标自动失效、回到跟随最新（否则页面会
-   * 永久停在被引用那条上，之后的消息看起来像「没进来」）。
+   * 的尾行 id：新消息一落地尾行就变，比对不上时目标自动失效（否则页面会永久停在被引用
+   * 那条上，之后的消息看起来像「没进来」）。失效后的落点交回贴底判据（#633）：贴着底就
+   * 继续跟随尾行，翻着历史就停在原处 —— 判据见 `resolveScrollTarget`。
    */
   const [jumpTo, setJumpTo] = useState<{ id: string; tail: string } | null>(null)
   /**
@@ -494,8 +496,18 @@ export default function Conversation() {
   /**
    * 消息流此刻是不是贴着底部（#561）。几何一变（键盘升降、面板开合）就据此决定要不要
    * 重指尾行：贴底就继续贴底，翻历史翻到一半就原地不动。
+   *
+   * `ref` 给事件回调读（滚动事件很密，判贴底不该触发渲染）；**渲染期**要不要把尾行锚点
+   * 下发成 `scrollIntoView` 读的是下面那份 `stickBottom` state 镜像（#633）。
    */
   const stickBottomRef = useRef(true)
+  /**
+   * 贴底标志的渲染态镜像（#633）：`scrollIntoView` 指向哪儿是渲染期的决定。
+   *
+   * 只有 `ref` 的话，「从贴底翻到翻历史」这一下不重渲染 —— 属性仍指着尾行锚点，下一条
+   * 新消息/后台刷新一到照样把人从历史里拽回底部。两者必须同步写（见 `onScroll`）。
+   */
+  const [stickBottom, setStickBottom] = useState(true)
   /**
    * 最近一次滚动事件里的 `scrollTop`（#561）：几何变化前后拿它做「偏移有没有被原生层丢掉」
    * 的比对依据，也是非贴底时写回去的原值。
@@ -718,6 +730,8 @@ export default function Conversation() {
      */
     scrollTopRef.current = 0
     stickBottomRef.current = true
+    // 渲染态镜像一并归位（#633）：新身份的第一屏要停在最新，不能沿用上个身份的「翻历史」
+    setStickBottom(true)
     bottomGapAllowanceRef.current = 0
     setScrollRestore(null)
     setPending([])
@@ -1657,6 +1671,29 @@ export default function Conversation() {
    */
   const canSend = convState === 'ok' && msgState === 'ok'
 
+  /**
+   * 用户自己发出内容：重新进入「跟随最新」，把消息流带回底部（#633）。
+   *
+   * 发送和「翻历史」是会撞在一起的两件事：用户向上翻着记录、就着手输一条发出去。默认判据
+   * （只有贴着底才跟随尾行）这时会让他自己刚发的那条留在视口外 —— 这是「保留阅读位置」
+   * 最容易误伤的场景。所以这是**本页发出的内容**里唯一不看 `stickBottom` 的自动贴底：
+   * 动作由用户发起，他要看的就是尾行。
+   *
+   * 边界（只记录，不在此处理）：经 `pkg-trade/pages/send-listing` 发出的商品卡不是本页
+   * 发的 —— 它自己 `navigateBack`，回到本页只走 `useDidShow` 的静默刷新，不经过这里，
+   * 于是翻着历史发完商品卡也停在原处。要不要把它并进「自己发的」需要子页面的成功信号，
+   * 属于产品取舍，另开 Issue 讨论。
+   *
+   * 置真之后新气泡会把尾行锚点换掉（`tailAnchorId` 带 `keyId`），`scrollIntoView` 的值
+   * 一变原生层就滚到底；`stickBottom` 一并回真，后续新消息继续跟随 —— 只置 `ref` 不置
+   * state 的话，「发完停在原地」只是推迟到下一条消息才发作。
+   */
+  const followAfterSend = () => {
+    stickBottomRef.current = true
+    // 贴着底发送时同值 setState 会被 React 早退，不额外渲染
+    setStickBottom(true)
+  }
+
   const send = () => {
     const text = inputValue.trim()
     if (!text || !canSend) return
@@ -1678,6 +1715,8 @@ export default function Conversation() {
       ? { id: replyTarget.id, excerpt: localReplyExcerpt(replyTarget) }
       : null
     setReplyTarget(null)
+    // 翻着历史发的这一条必须看得见（#633）
+    followAfterSend()
     doSend(text, undefined, reply)
   }
 
@@ -1876,6 +1915,8 @@ export default function Conversation() {
       status: 'uploading',
     }
     setPendingMedia((prev) => [...prev, item])
+    // 图片 / 语音同理：翻着历史发，气泡也在尾行（#633）
+    followAfterSend()
     runMediaSend(item)
   }
 
@@ -3324,25 +3365,60 @@ export default function Conversation() {
    * 不能只靠一个恒定 id —— 几何一变（键盘升降、面板开合）就得换一个**同位**锚点再指一次，
    * 否则偏移被截断后没人把它推回底部。两个锚点都贴在最末一条消息之后，位置等价。
    *
-   * 带上尾行的 `keyId`：内容追加时值也必然变，新消息照旧跟随到底（与改前同一条路径）。
+   * 带上尾行的 `keyId`：内容追加时值也必然变。值变**是否**真会滚到底还要过贴底判据
+   * （#633）：贴着底时照旧跟随到底，翻着历史则不下发这个锚点。
+   *
+   * 顺带说明：撤回只把尾行内容换成墓碑、`keyId` 不变，锚点值也就不变 —— 改前改后都不
+   * 因此滚动。
    */
   const tailAnchorId = tail ? `conv-tail-${tail.keyId}-${tailAnchorFlip ? 'b' : 'a'}` : ''
 
   /**
-   * 新消息落地就放弃「跳去看摘引」的目标，回到跟随最新。
+   * 新消息落地就放弃「跳去看摘引」的目标，落点退回贴底判据（贴着底继续跟随，翻着历史
+   * 停在原处）。
    *
    * 不做成 `useEffect(() => setJumpTo(''), [tailId])`：那样要先渲染一帧旧目标再纠正，
    * 且 biome 的 `useExhaustiveDependencies` 会把 `tailId` 判成多余依赖（`setJumpTo` 是
    * 稳定引用）。这里把「跳转目标」与「设它时的 tailId」绑成一个值，渲染期直接比对 ——
    * tail 一变，目标自动失效，无需任何副作用。
    *
-   * ⚠️ 已知限制（只记录，本票不改）：停在「跳去看摘引」期间，这里的值恒为 `jumpTo.id`，
+   * ⚠️ 已知限制（只记录，本票不改）：停在「跳去看摘引」期间，`jumpTarget` 恒为 `jumpTo.id`，
    * 于是 `keepTailAnchored()` 翻的尾行锚点落不到 `scrollIntoView` 上 —— 那几秒里的重锚是
    * 空操作。它的代价只在「点摘引后、新消息到达前」这个窗口内，且 `#540` 要求那时锁住
    * 被引用的那条（不能被拽到底），两者本来就是互斥的；改法要连 `#540` 的判据一起动，
    * 不在本票范围。
+   *
+   * 另：摘引过期后的落点（#633）取决于「程序化滚动也会回吐 `bindscroll`」这条端上行为。
+   * 回吐 → `stickBottom` 已在上滑时置假，过期后停在被引用那条附近（#633 要的行为）；
+   * 不回吐 → 仍为真，退化成 #540 原来的「回到底部」，不会丢消息。
    */
-  const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailAnchorId
+  const jumpTarget = jumpTo !== null && jumpTo.tail === tailId ? jumpTo.id : null
+
+  /**
+   * `scrollIntoView` 此刻指向哪儿（#633）：摘引目标 → 跟随最新时的尾行锚点 → 什么都不指。
+   *
+   * 改前这里恒定下发尾行锚点：`scrollIntoView` 的值一变，原生层就滚一次底。于是后台刷新
+   * 补进来的消息、实时推送、待发落定（`pending` → 真实消息，`keyId` 会换）—— 每一样都会
+   * 把**正在翻更早消息**的人拽回底部，而他并没有做任何想回底部的动作。
+   *
+   * 现在尾部跟随只发生在「用户本来就贴着底」时（`onScroll` → `stickAfterScroll` 逐次回写
+   * 的 `stickBottom`）；翻历史态给 `''`，属性值不变原生层就不滚，阅读位置留在原地。
+   *
+   * 自动贴底只剩这几种时机，其余一律不动：
+   * ① 进页 / 换身份：`stickBottom` 初值为真，首次下发即停在尾行；
+   * ② 贴着底时尾行变化（新消息、待发落定、媒体项从待发改成已发）；
+   * ③ 贴着底时几何变化（键盘、面板、输入行变高），由 `keepTailAnchored()` 翻同位锚点；
+   * ④ **用户自己在本页发消息**（`followAfterSend()`）：翻着历史发也要看得见自己发的那条。
+   * 摘引跳转（#540）是用户点的定位，目标有效期间恒优先，与贴底判据无关。
+   *
+   * 已知取舍：贴底判据依赖「程序化滚动也会回吐 bindscroll」，静态无法证伪（同 `#540`
+   * 那条注释的顾虑）。万一端上不回吐，最坏退化回改前行为（一直跟随），不会丢消息。
+   */
+  const scrollTarget = resolveScrollTarget({
+    jumpTarget,
+    tailAnchorId,
+    stickToBottom: stickBottom,
+  })
 
   /**
    * 滚动动画只留给「点摘引跳过去」这一条路径（#540）。
@@ -3352,13 +3428,13 @@ export default function Conversation() {
    * `jumpTo` 命中时目标是被引用的那条，需要动画交代「跳到哪儿去了」；其余时刻目标
    * 恒为尾行，瞬时贴底即可。
    *
-   * 代价（验收第 2 条要求写明）：新消息追加也从「滑过去」变成「瞬移贴底」。最容易被
-   * 看出来的是「用户正向上翻历史，对方发来一条」—— 改前有一次滑动交代去向，改后是硬跳。
-   * 两者的落点完全一致（都强制贴底），丢的只是过渡；不在这里加 `onScroll` 首帧 settled
+   * 代价（验收第 2 条要求写明）：跟随时追加也从「滑过去」变成「瞬移贴底」。贴着底的人
+   * 看不出差别，但改前「正在向上翻历史、对方发来一条」还有一次滑动交代去向 —— 现在
+   * （#633）翻历史态**完全不滚**，连这次滑动也没有了。不在这里加 `onScroll` 首帧 settled
    * 判定还原跟随动画，是因为那依赖「程序化滚动也触发 bindscroll」这条静态无法证伪的端上
    * 行为，一旦不触发就会静默退化成「永远瞬时」，比写明取舍更难排查。
    */
-  const animateScroll = jumpTo !== null && jumpTo.tail === tailId
+  const animateScroll = jumpTarget !== null
 
   /**
    * 非贴底时的偏移复位指令（#561）：只有原生层把滚动偏移丢掉过才会出现这个值。
@@ -3627,8 +3703,13 @@ export default function Conversation() {
   }, [keyboardHeight, panelOpen, voiceMode, inputRowPx, recording])
 
   /**
-   * 记住用户是不是贴着底部。只写 ref：滚动事件很密，翻历史不该引起重渲染
-   * （先例 `pkg-browse/pages/user/index.tsx:172-182` 的 `onScroll`）。
+   * 记住用户是不是贴着底部。滚动事件很密，所以这里**不能**裸 `setState`：`stickBottomRef`
+   * 是同步快照（`keepTailAnchored()` 这类几何路径要立刻读到），同值时不引起重渲染；只在
+   * 翻转那一次把同一份值镜像进 `stickBottom`（#633）。
+   *
+   * 镜像不是可选项：`scrollIntoView` 指向哪儿是**渲染期**的决定（`resolveScrollTarget`）。
+   * 只写 ref 的话，「从贴底翻到翻历史」这一下不重渲染，属性仍指着尾行锚点，下一条新消息
+   * 照样把人从历史里拽回底部。
    *
    * `scrollTop` 另外存一份（#561）：几何变化前后拿它判断原生层有没有把偏移丢掉，非贴底时
    * 也靠它把位置写回去。
@@ -3646,7 +3727,11 @@ export default function Conversation() {
       Math.max(BOTTOM_SLACK_PX, bottomGapAllowanceRef.current),
     )
     if (nearBottom) bottomGapAllowanceRef.current = 0
-    stickBottomRef.current = stickAfterScroll(nearBottom)
+    const stick = stickAfterScroll(nearBottom)
+    stickBottomRef.current = stick
+    // 渲染态镜像同步写（#633）：`scrollIntoView` 要不要指尾行看的是它。同值返回原 state，
+    // React 在这条路径上直接 bail out —— 滚动事件再密，也只在越界那一次真渲染。
+    setStickBottom((prev) => (prev === stick ? prev : stick))
   }, [])
 
   /**
@@ -4090,7 +4175,8 @@ export default function Conversation() {
         </View>
       </View>
 
-      {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条。
+      {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条；用户向上翻历史后
+          不再自动跟随（#633，判据见 `resolveScrollTarget`）。
           `scrollTop` 只在原生层丢过偏移（非贴底复位）之后才有值，且**用过不撤** ——
           靠 `tick % 2` 的 0.5px 交替保证同一位置也能再下发，属性值不变则不会重新应用，
           所以它长期在场也不会盖住 `scrollIntoView` 的后续定位（两者并存的优先级只能端上验）

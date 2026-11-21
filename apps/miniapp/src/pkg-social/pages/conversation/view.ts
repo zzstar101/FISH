@@ -1885,6 +1885,34 @@ export function stickAfterScroll(nearBottom: boolean): boolean {
 }
 
 /**
+ * `scrollIntoView` 此刻该指向哪儿（#633）—— **翻历史的人不该被新消息拽回底部**。
+ *
+ * `scrollIntoView` 指向尾行锚点时，锚点值一变（新消息到达、待发落定、媒体项从待发改成
+ * 已发）原生层就滚一次底。进页面要停在最新，这没问题；但用户在翻更早的消息、后台刷新或
+ * 实时消息刚好到达时，这一滚就把阅读位置整个扔掉 —— 而他并没有做任何想回底部的动作。
+ *
+ * 所以尾行锚点只在**跟随最新**（`stickToBottom`，由页面的 `onScroll` 用 `stickAfterScroll`
+ * 逐次回写）时才下发；翻历史态给 `''`，属性值不变即不重滚，位置留在原地。
+ *
+ * `''` 不是新造的状态：消息流为空时 `tailAnchorId` 本来就是 `''`，这个值一直在给。
+ *
+ * 摘引跳转（#540）不受贴底判据约束 —— 那是用户自己点的定位，目标有效期间恒优先；尾行一变
+ * 就由调用方把 `jumpTarget` 作废成 `null`，退回上面的贴底判据。
+ */
+export function resolveScrollTarget(input: {
+  /** 「跳去看摘引」的目标，已按尾行是否变化失效为 `null`（#540） */
+  jumpTarget: string | null
+  /** 尾行锚点：贴底态下指向它即滚到最新 */
+  tailAnchorId: string
+  /** 此刻是否跟随最新（翻历史态为 `false`） */
+  stickToBottom: boolean
+}): string {
+  const { jumpTarget, tailAnchorId, stickToBottom } = input
+  if (jumpTarget !== null) return jumpTarget
+  return stickToBottom ? tailAnchorId : ''
+}
+
+/**
  * 几何变了、回读出来的偏移掉回了顶部：这一跳该怎么补（#561）。
  *
  * 返回的是**动作**而不是动作名：`restore` 要把哪个值写回去也在里面，页面只负责执行副作用

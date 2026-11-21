@@ -1750,8 +1750,11 @@ describe('「+」面板与贴底（#561）', () => {
     // 本页自己造成的视口缩量算进容差；真到底了归零，免得长期放宽
     expect(body).toContain('Math.max(BOTTOM_SLACK_PX, bottomGapAllowanceRef.current)')
     expect(body).toContain('bottomGapAllowanceRef.current = 0')
-    // 标志的取值交给 `view.ts` 的纯函数（表驱动单测在上面），组件里不许自己决断
-    expect(body).toContain('stickBottomRef.current = stickAfterScroll(nearBottom)')
+    // 标志的取值交给 `view.ts` 的纯函数（表驱动单测在上面），组件里不许自己决断；
+    // 取到的值原样写进 ref（同一份也写进渲染态镜像，见 #633 的用例）
+    expect(body).toContain(
+      'const stick = stickAfterScroll(nearBottom) stickBottomRef.current = stick',
+    )
   })
 
   test('首次量测不算「缩量」：视口高度从 ref 的 0 长起来时不能一次性放宽到整屏', async () => {
@@ -1766,7 +1769,7 @@ describe('「+」面板与贴底（#561）', () => {
     expect(body).toContain('scrollViewportRef.current = viewport.height')
   })
 
-  test('尾行锚点带 keyId 且能交替：内容追加与几何变化都能重新滚到底', async () => {
+  test('尾行锚点带 keyId 且能交替：贴底时内容追加与几何变化都能重新滚到底', async () => {
     const source = squash(await pageSource())
     // `${` 拆成两段拼，免得被当成模板串插值
     expect(source).toContain(
@@ -1774,9 +1777,12 @@ describe('「+」面板与贴底（#561）', () => {
         '{tail.keyId}-$' +
         "{tailAnchorFlip ? 'b' : 'a'}` : ''",
     )
+    // 摘引目标按「尾行一变即失效」先归约成 `string | null`，再与贴底判据一起决定
+    // `scrollIntoView`（#633：翻历史态不再下发尾行锚点）
     expect(source).toContain(
-      'const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailAnchorId',
+      'const jumpTarget = jumpTo !== null && jumpTo.tail === tailId ? jumpTo.id : null',
     )
+    expect(source).toContain('const scrollTarget = resolveScrollTarget({')
     // 锚点挂在 ScrollView 里、消息流最末（零尺寸，滚到它就是滚到底）
     expect(source).toContain('{tailAnchorId ? <View id={tailAnchorId} /> : null}')
   })

@@ -44,16 +44,21 @@ describe('会话页进入即贴底（#540）', () => {
 
   test('判据只在「点摘引跳过去」命中时开动画', async () => {
     const source = squash(await pageSource())
-    expect(source).toContain('const animateScroll = jumpTo !== null && jumpTo.tail === tailId')
+    expect(source).toContain('const animateScroll = jumpTarget !== null')
   })
 
-  test('跳转目标与动画判据同源，正常态仍指向最后一条消息', async () => {
+  test('跳转目标与动画判据同源，滚动目标交给贴底判据裁决', async () => {
     const source = squash(await pageSource())
+    // 摘引目标与动画判据同一份：`jumpTarget` 命中（尾行没变）才开动画
+    expect(source).toContain(
+      'const jumpTarget = jumpTo !== null && jumpTo.tail === tailId ? jumpTo.id : null',
+    )
     // 非摘引态指向的是「尾行锚点」而不是尾行自己的 id：几何一变要换一个同位锚点重指
     // （`scrollIntoView` 值不变时原生层不重滚，见 #561），锚点仍是最末一条消息之后。
-    expect(source).toContain(
-      'const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailAnchorId',
-    )
+    // 尾行锚点只在「跟随最新」时下发（#633）：翻历史态给空串，见
+    // `tests/conversation-reading-position.test.ts`。
+    expect(source).toContain('const scrollTarget = resolveScrollTarget({')
+    expect(source).toContain('stickToBottom: stickBottom')
     expect(source).toContain('scrollIntoView={scrollTarget}')
   })
 })
