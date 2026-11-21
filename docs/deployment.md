@@ -544,7 +544,7 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
 - **监控**：审核不可用时接口返回 **503 `CONTENT_MODERATION_UNAVAILABLE`** 且**不落库**（CREATE 不建商品、
   UPDATE 不改旧内容、图片 confirm 不标可引用）——这是设计上的 fail-closed，不是故障降级。按 5xx 比例
   与 `reason=timeout|network|throttled|upstream_error` 日志告警；持续 503 时先查腾讯云侧配额/密钥。
-- **模型二审（#751，worker）**：`MODERATION_MODEL_REVIEW_MODE` 缺省 `off`；`shadow` 只落记录、
+- **模型二审（worker）**：`MODERATION_MODEL_REVIEW_MODE` 缺省 `off`；`shadow` 只落记录、
   不改任何状态（后台详情页标注「影子模式」并在群里标注「模型认为」）；`enforce` 才让模型的
   `PASS` 自动上架、`BLOCK` 自动拒绝。开启前必须补齐 `MODERATION_MODEL_BASE_URL /
   MODERATION_MODEL_API_KEY / MODERATION_MODEL_MODEL`（缺一 worker 启动失败），并确认端点能看图——

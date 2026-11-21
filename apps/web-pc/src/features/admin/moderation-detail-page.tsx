@@ -293,7 +293,7 @@ export function ModerationDetailView({
 }
 
 /**
- * 模型复核区块（#751）。
+ * 模型复核区块。
  *
  * 两个标签必须同时露出：`decision` 是模型**建议**，`outcome` 是平台**怎么用它**——
  * 影子期两者会不一致（`PASS` + `SHADOW`），只显示一个会让值班同学误以为已经放行。

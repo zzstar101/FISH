@@ -25,7 +25,7 @@ export type JobType =
   /** #324 M8：为 Listing 封面生成视觉向量（回填与"换图后重算"共用同一种 job）。 */
   | 'VISUAL_EMBED_LISTING'
   /**
-   * #751：对一条「腾讯判 REVIEW」的商品跑多模态模型复核（payload `{listingId}`）。
+   * 对一条「腾讯判 REVIEW」的商品跑多模态模型复核（payload `{listingId}`）。
    *
    * 只在创建时投递一次：人工改判、模型放行/拒绝都直接改 `listings`，没有"再审一遍"的语义。
    */
@@ -109,7 +109,7 @@ export const jobs = pgTable(
       .on(sql`(${table.payload}->>'listingId')`)
       .where(sql`${table.type} = 'VISUAL_EMBED_LISTING' AND ${table.status} = 'PENDING'`),
     /*
-     * #751：一条商品最多一条**待执行**的模型复核 job。
+     * 一条商品最多一条**待执行**的模型复核 job。
      *
      * `createListingAtomic` 投递时用 `ON CONFLICT DO NOTHING`，靠的就是这条索引——没有它，
      * 重复投递（重试、同一事务被重放）会排进第二条，虽然 handler 侧的唯一索引能兜住最终状态，

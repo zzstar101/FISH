@@ -341,7 +341,7 @@ export function loadContentModerationEnv(
 }
 
 /**
- * 模型复核（#751）——**worker 专属**：API 只投递 `LISTING_MODERATION` job，不调模型。
+ * 模型复核——**worker 专属**：API 只投递 `LISTING_MODERATION` job，不调模型。
  *
  * 与 `AI_POLISH_*` 的差别是**允许缺省**：这是给存量链路加的一层可选改进，不是一个已有功能
  * 的开关。若强制必填，没配的部署会在升级瞬间起不来；而"没配"在这里有明确、安全的语义

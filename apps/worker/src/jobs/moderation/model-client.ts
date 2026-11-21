@@ -1,7 +1,7 @@
 import type { ModerationReviewEnv } from '@fish/shared/env'
 
 /**
- * 模型复核的上游调用（#751）。
+ * 模型复核的上游调用。
  *
  * 形状照 `apps/api/src/modules/ai/provider.ts` 与 `apps/api/src/modules/auth/email-providers.ts`：
  * 裸 `fetch`、`AbortSignal.timeout`、**不重试**（重试交给 job 队列，避免一次审核里叠加重试把

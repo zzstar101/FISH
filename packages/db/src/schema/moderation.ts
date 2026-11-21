@@ -81,7 +81,7 @@ export const listingModerationRecords = pgTable(
 )
 
 /**
- * 多模态模型二次审核记录（#751）。
+ * 多模态模型二次审核记录。
  *
  * **为什么不塞进 `listing_moderation_records`**：那张表的 `provider` CHECK 只允许
  * `LOCAL / TENCENT_TMS / TENCENT_IMS / MANUAL`，一行描述的是「某次内容安全判定」；

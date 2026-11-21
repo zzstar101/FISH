@@ -182,7 +182,7 @@ export interface ModerationDetailRow {
   listing: ModerationListingRow
   seller: ModerationSellerRow
   history: ModerationRecordRow[]
-  /** 最新一条模型复核记录（#751）。NULL = 没跑过（腾讯直接 ALLOW/BLOCK、或模型开关未开）。 */
+  /** 最新一条模型复核记录。NULL = 没跑过（腾讯直接 ALLOW/BLOCK、或模型开关未开）。 */
   modelReview: {
     model: string
     promptVersion: string

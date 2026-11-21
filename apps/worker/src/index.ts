@@ -95,7 +95,7 @@ const embeddingProvider = createEmbeddingProvider(embeddingEnv, {
   },
 })
 
-// 模型复核（#751）：`MODERATION_MODEL_REVIEW_MODE` 缺省即 `off`（见 `loadModerationReviewEnv`
+// 模型复核：`MODERATION_MODEL_REVIEW_MODE` 缺省即 `off`（见 `loadModerationReviewEnv`
 // 的取舍），`shadow`/`enforce` 时把上游装配好；`off` 连 client 都不建，避免"配置半套也能跑"。
 const moderationReviewEnv = loadModerationReviewEnv()
 const moderationModelClient =
