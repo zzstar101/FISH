@@ -71,7 +71,11 @@ type Fixture = {
 
 /** 造一条「腾讯判 REVIEW」的商品：状态、审核记录、一张图片都按真实链路的形状写。 */
 async function createReviewListing(
-  overrides: { label?: string; moderationStatus?: 'REVIEW' | 'APPROVED' | 'BLOCKED' } = {},
+  overrides: {
+    label?: string
+    imageLabel?: string
+    moderationStatus?: 'REVIEW' | 'APPROVED' | 'BLOCKED'
+  } = {},
 ): Promise<Fixture> {
   const sellerId = await createUser()
   const listingId = newId()
@@ -101,6 +105,8 @@ async function createReviewListing(
     moderationDecision: 'REVIEW',
     provider: 'TENCENT_IMS',
     providerRequestId: 'req-img-1',
+    providerLabel: overrides.imageLabel ?? null,
+    providerSubLabel: null,
   })
   await db.insert(listingImages).values({
     listingId,
@@ -128,6 +134,30 @@ async function createReviewListing(
 }
 
 const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])
+
+/** 再挂一张 REVIEW 图（台账行 + listing_images 行），用来验证"图多过上限/有严重标签"。 */
+async function addReviewImage(
+  fixture: Fixture,
+  index: number,
+  options: { label?: string } = {},
+): Promise<string> {
+  const key = `listing-review-media/${fixture.sellerId}/extra-${index}.jpg`
+  await db.insert(listingMediaObjects).values({
+    userId: fixture.sellerId,
+    stagingKey: `listing-media/${fixture.sellerId}/extra-${index}.jpg`,
+    finalKey: key,
+    contentDigest: `${index}`.repeat(64),
+    moderationDecision: 'REVIEW',
+    provider: 'TENCENT_IMS',
+    providerRequestId: `req-img-${index}`,
+    providerLabel: options.label ?? null,
+    providerSubLabel: null,
+  })
+  await db
+    .insert(listingImages)
+    .values({ listingId: fixture.listingId, objectKey: key, sortOrder: index })
+  return key
+}
 
 function fakeStorage(): WorkerMediaStorage {
   return {
@@ -242,12 +272,12 @@ describe('decideOutcome（纯函数）', () => {
     }
   })
 
-  test('enforce：PASS 自动放行、BLOCK 自动拒绝、UNSURE / ERROR 转人工', () => {
+  test('enforce：高置信度 PASS/BLOCK 自动处置，UNSURE / ERROR / 没把握一律转人工', () => {
     const base: Omit<ModerationReview, 'decision'> = {
       category: null,
       reason: 'r',
       evidence: [],
-      confidence: null,
+      confidence: 0.9,
     }
     expect(decideOutcome({ mode: 'enforce', review: { ...base, decision: 'PASS' } })).toBe(
       'AUTO_PASSED',
@@ -261,6 +291,24 @@ describe('decideOutcome（纯函数）', () => {
     expect(decideOutcome({ mode: 'enforce', review: { ...base, decision: 'ERROR' } })).toBe(
       'PENDING',
     )
+  })
+
+  test('enforce：置信度低于阈值或缺失时，PASS 与 BLOCK 都不自动处置', () => {
+    const base: Omit<ModerationReview, 'decision'> = {
+      category: null,
+      reason: 'r',
+      evidence: [],
+      confidence: 0.5,
+    }
+    for (const decision of ['PASS', 'BLOCK'] as const) {
+      expect(decideOutcome({ mode: 'enforce', review: { ...base, decision } })).toBe('PENDING')
+      expect(
+        decideOutcome({ mode: 'enforce', review: { ...base, decision, confidence: null } }),
+      ).toBe('PENDING')
+      expect(
+        decideOutcome({ mode: 'enforce', review: { ...base, decision, confidence: 0.8 } }),
+      ).toBe(decision === 'PASS' ? 'AUTO_PASSED' : 'AUTO_REJECTED')
+    }
   })
 })
 
@@ -381,6 +429,69 @@ describe('LISTING_MODERATION handler（真实 DB）', () => {
     expect(await handlers.LISTING_MODERATION({ listingId })).toMatchObject({ status: 'duplicate' })
     expect((await listingState(listingId)).moderationStatus).toBe('REVIEW')
     expect(await reviewRows(listingId)).toHaveLength(1)
+  })
+
+  test('REVIEW 图超过模型送审上限：不调模型、不落记录，留给人工', async () => {
+    const fixture = await createReviewListing()
+    for (let index = 1; index <= 6; index += 1) await addReviewImage(fixture, index)
+    const client = fakeClient(PASS_JSON)
+
+    const result = await handlersWith(client).LISTING_MODERATION({ listingId: fixture.listingId })
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'too-many-review-images' })
+    expect(client.calls).toBe(0)
+    const records = await db
+      .select({ id: moderationModelReviews.id })
+      .from(moderationModelReviews)
+      .where(eq(moderationModelReviews.listingId, fixture.listingId))
+    expect(records).toHaveLength(0)
+    expect(await listingState(fixture.listingId)).toMatchObject({ moderationStatus: 'REVIEW' })
+  })
+
+  test('图片带严重标签（如 Porn）：即使文本干净也不进模型，直接人工', async () => {
+    const fixture = await createReviewListing({ imageLabel: 'Porn' })
+    const client = fakeClient(PASS_JSON)
+
+    const result = await handlersWith(client).LISTING_MODERATION({ listingId: fixture.listingId })
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'severe-image-label', label: 'Porn' })
+    expect(client.calls).toBe(0)
+    expect(await listingState(fixture.listingId)).toMatchObject({ moderationStatus: 'REVIEW' })
+  })
+
+  test('有 REVIEW 图读不出来：整条转人工，绝不拿"看了一半"的结论自动放行', async () => {
+    const fixture = await createReviewListing()
+    const client = fakeClient(PASS_JSON)
+    const handlers = createModerationJobHandlers(db, {
+      env: { mode: 'enforce', baseUrl: 'https://example.test', apiKey: 'k', model: 'm' },
+      storage: {
+        async readBytes() {
+          return null
+        },
+        async deleteObject() {},
+      },
+      client,
+    })
+
+    const result = await handlers.LISTING_MODERATION({ listingId: fixture.listingId })
+
+    expect(result).toMatchObject({ status: 'skipped', reason: 'image-unreadable' })
+    expect(client.calls).toBe(0)
+    expect(await listingState(fixture.listingId)).toMatchObject({ moderationStatus: 'REVIEW' })
+  })
+
+  test('影子期与转人工都不给卖家发结论通知', async () => {
+    const shadowFixture = await createReviewListing()
+    await handlersWith(fakeClient(PASS_JSON), 'shadow').LISTING_MODERATION({
+      listingId: shadowFixture.listingId,
+    })
+    expect(await notificationOutcomes(shadowFixture.listingId)).toEqual([])
+
+    const errorFixture = await createReviewListing()
+    await handlersWith(
+      fakeClient(JSON.stringify({ decision: 'UNSURE', reason: '看不清', confidence: 0.3 })),
+    ).LISTING_MODERATION({ listingId: errorFixture.listingId })
+    expect(await notificationOutcomes(errorFixture.listingId)).toEqual([])
   })
 
   test('开关关掉时只跳过，不落记录', async () => {

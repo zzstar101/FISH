@@ -358,8 +358,9 @@ export type ModerationReviewEnv =
 export function loadModerationReviewEnv(
   source: Record<string, string | undefined> = process.env,
 ): ModerationReviewEnv {
-  const raw = source.MODERATION_MODEL_REVIEW_MODE
-  const mode = raw === undefined ? 'off' : raw.trim()
+  // 未定义与空串（`MODERATION_MODEL_REVIEW_MODE=`）都是 off：空串是 .env 里最常见的"没填"，
+  // 不能让它把 worker 启动打挂，文案也一直写的是"留空视为 off"。
+  const mode = source.MODERATION_MODEL_REVIEW_MODE?.trim() || 'off'
   if (mode === 'off') return { mode: 'off' }
   if (mode !== 'shadow' && mode !== 'enforce') {
     throw new Error(

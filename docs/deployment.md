@@ -549,8 +549,13 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
   `PASS` 自动上架、`BLOCK` 自动拒绝。开启前必须补齐 `MODERATION_MODEL_BASE_URL /
   MODERATION_MODEL_API_KEY / MODERATION_MODEL_MODEL`（缺一 worker 启动失败），并确认端点能看图——
   用一张 1×1 png 打一次 `/chat/completions`，响应 `usage.prompt_tokens` 明显大于纯文本即可。
-  色情/低俗/违禁/暴恐/辱骂五类标签即使腾讯只给 REVIEW 也不进模型，直接人工。
-  模型失败（超时/网络/HTTP/解析）一律收敛为 `ERROR` 转人工，**不存在"模型挂了就放行"**的分支。
+  色情/低俗/违禁/暴恐/辱骂五类标签即使腾讯只给 REVIEW 也不进模型，直接人工——**文本与图片分别判**：
+  文本看 `listing_moderation_records.label`，图片看 `listing_media_objects.provider_label`。
+  自动放行的前提是「每一张 REVIEW 图都被模型看到」：REVIEW 图超过 6 张、任意一张读不出来、
+  整包超过 8MB，或者模型置信度低于 0.8（含没给置信度），**都不调模型或直接转人工**，不会出现
+  「审了一半就上架」。自动放行只结算模型实际看过的那些图。
+  模型失败（超时/网络/HTTP/解析）一律收敛为 `ERROR` 转人工，**不存在"模型挂了就放行"**的分支；
+  影子期与转人工**不给卖家发结论通知**（只有自动放行/自动拒绝才发）。
   观察口径：`worker.started` 日志里的 `moderationReviewMode`；后台审核详情的「模型复核」区块
   （模型结论 + 实际动作 + 耗时 + 置信度）；`moderation_model_reviews` 里按 `outcome` 汇总。
   回滚只需把 `MODERATION_MODEL_REVIEW_MODE` 改回 `off` 并重启 worker——已有记录保留，审核退回

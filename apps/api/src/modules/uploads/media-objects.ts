@@ -62,6 +62,10 @@ export type ListingMediaObjectInsert = {
   moderationDecision: ModerationDecision
   provider: ImageModerationResult['provider']
   providerRequestId: string | null
+  /** 上游一级标签（腾讯 IMS `Label`）；模型二审据此判断"这张 REVIEW 图是不是严重类别"。 */
+  providerLabel: string | null
+  /** 上游二级标签（腾讯 IMS `SubLabel`）。 */
+  providerSubLabel: string | null
 }
 
 export interface ListingMediaObjectStore extends ConfirmedImageLookup {

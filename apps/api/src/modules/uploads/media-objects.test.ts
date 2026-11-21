@@ -49,6 +49,8 @@ function mediaObject(
     moderationDecision: 'ALLOW',
     provider: 'TENCENT_IMS',
     providerRequestId: 'req-1',
+    providerLabel: null,
+    providerSubLabel: null,
     ...overrides,
   }
 }

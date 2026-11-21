@@ -327,6 +327,10 @@ export function createUploadService(deps: {
         moderationDecision: verdict.decision,
         provider: verdict.provider,
         providerRequestId: verdict.requestId,
+        // 标签要跟着图落库：文本的标签在 `listing_moderation_records`，图片没有那一行，
+        // 模型二审（worker）只能从这里读"这张 REVIEW 图是不是 Porn 之类"。
+        providerLabel: verdict.label,
+        providerSubLabel: verdict.subLabel,
       }
 
       // BLOCK：只留审计行，**不固化**。因此被阻断的图不可能出现在 `listings/` 前缀下，

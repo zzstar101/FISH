@@ -48,8 +48,25 @@ import {
  */
 const SEVERE_LABELS = new Set(['porn', 'sexy', 'illegal', 'abuse', 'terror'])
 
-/** 送审图片上限：一张商品最多 16 图，全送会把延迟与成本放大到不可控。 */
-const MAX_REVIEW_IMAGES = 4
+/**
+ * 送审图片上限：一张商品最多 9 图，全送会把延迟与成本放大到不可控。
+ *
+ * 这个上限不只是"省成本"，还是**安全边界**：只要有一张 REVIEW 图没被模型看到，自动放行就
+ * 等于把没审过的图放上公网。所以超过上限的商品**不调模型**，直接留给人工（见 handler 的
+ * `too-many-review-images`）。
+ */
+const MAX_REVIEW_IMAGES = 6
+
+/** 整包图片的字节预算：base64 后还要 ×4/3，一次请求体别无限长。 */
+const MAX_TOTAL_IMAGE_BYTES = 8 * 1024 * 1024
+
+/**
+ * 自动结论的最低置信度。
+ *
+ * 模型被要求给 `confidence`；低于这条线（或没给）就当"没把握"，一律转人工 —— 正是需求里
+ * "模型没有把握就不要自动处置"的那条。两个方向对称：低置信度的 BLOCK 也不自动拒绝。
+ */
+const MIN_AUTO_CONFIDENCE = 0.8
 
 /** 自动拒绝时给用户看的话（固定话术，不含模型理由；30 字以内，端上一行能放下）。 */
 export const AUTO_REJECT_REASON = '商品信息涉嫌违反平台发布规范，如有异议请通过意见反馈申诉'
@@ -68,10 +85,15 @@ export function decideOutcome(input: {
   mode: 'shadow' | 'enforce'
   review: ModerationReview
 }): ModerationOutcome {
+  // 影子期只记录：连"模型没把握"也要落成 SHADOW，否则量出来的放行率会偏低。
   if (input.mode === 'shadow') return 'SHADOW'
-  if (input.review.decision === 'PASS') return 'AUTO_PASSED'
-  if (input.review.decision === 'BLOCK') return 'AUTO_REJECTED'
-  return 'PENDING'
+  // ERROR 是"没跑完"，UNSURE 是"跑完了但没把握"，都不许自动动状态。
+  if (input.review.decision === 'UNSURE' || input.review.decision === 'ERROR') return 'PENDING'
+  // 没给 confidence 或低于阈值 = 没把握：两个方向都转人工，不拿不确定的结论去动状态。
+  if (input.review.confidence === null || input.review.confidence < MIN_AUTO_CONFIDENCE) {
+    return 'PENDING'
+  }
+  return input.review.decision === 'PASS' ? 'AUTO_PASSED' : 'AUTO_REJECTED'
 }
 
 export type ModerationJobDeps = {
@@ -101,7 +123,27 @@ export function createModerationJobHandlers(db: Db, deps: ModerationJobDeps) {
         return { status: 'skipped', reason: 'severe-label', label: initial.label }
       }
 
-      const images = await readReviewImages(deps.storage, initial.objectKeys)
+      // 图片的严重标签同样不归模型管。文本记录只反映标题/描述，图片标签在
+      // `listing_media_objects.provider_label` 里；只看文本会漏掉"文字干净、图被标 Porn"的商品。
+      const severeImage = initial.reviewImages.find(
+        (image) => image.label !== null && SEVERE_LABELS.has(image.label.toLowerCase()),
+      )
+      if (severeImage) {
+        return { status: 'skipped', reason: 'severe-image-label', label: severeImage.label }
+      }
+
+      // 自动放行的前提是"每一张 REVIEW 图都被模型看过"：只要有一张超出上限，放行就等于
+      // 把没审过的图放上公网。这类商品直接留给人工，不调模型。
+      if (initial.reviewImages.length > MAX_REVIEW_IMAGES) {
+        return { status: 'skipped', reason: 'too-many-review-images' }
+      }
+
+      const images = await readReviewImages(
+        deps.storage,
+        initial.reviewImages.map((image) => image.key),
+      )
+      // 读失败/超限/不是图片：少看一张就不能自动放行，整条转人工（不落模型记录）。
+      if (images === null) return { status: 'skipped', reason: 'image-unreadable' }
       const prompt = buildModerationReviewPrompt({
         title: initial.title,
         description: initial.description,
@@ -196,13 +238,17 @@ export function createModerationJobHandlers(db: Db, deps: ModerationJobDeps) {
           // 人工队列。**只翻结论、不搬字节**：worker 没有公开前缀的写能力（见
           // apps/worker/src/media-storage.ts 的取舍），图片继续留私有前缀走签名代理读；
           // 这与人工放行"搬到 listings/"的差别是 CDN 路径，不影响可引用性。
-          if (initial.objectKeys.length > 0) {
+          // 只结算这次真正送审的图（`initial.reviewImages`）——不是商品的全部图片。
+          if (initial.reviewImages.length > 0) {
             await tx
               .update(listingMediaObjects)
               .set({ settledDecision: 'ALLOW', settledAt: sql`now()` })
               .where(
                 and(
-                  inArray(listingMediaObjects.finalKey, initial.objectKeys),
+                  inArray(
+                    listingMediaObjects.finalKey,
+                    initial.reviewImages.map((image) => image.key),
+                  ),
                   eq(listingMediaObjects.moderationDecision, 'REVIEW'),
                   isNull(listingMediaObjects.settledDecision),
                 ),
@@ -226,6 +272,10 @@ export function createModerationJobHandlers(db: Db, deps: ModerationJobDeps) {
 
         // 卖家侧的通知与人工决策同形（`moderation/store.ts` 的 decideWithin）：商品从
         // 「审核中」变成有结论，客户端据此刷新「我的发布」并弹结果。
+        //
+        // **只为自动结论发**：影子期不改状态、PENDING 是"转人工"而不是"被拒"，这两种情况给卖家
+        // 发「商品未通过审核」是错误结论（还会在人工改判后再发一次"通过"，自相矛盾）。
+        if (outcome !== 'AUTO_PASSED' && outcome !== 'AUTO_REJECTED') return 'recorded' as const
         await tx.insert(notifications).values({
           id: newId(),
           userId: initial.sellerId,
@@ -273,6 +323,13 @@ type ReviewTarget = {
   /** 读到的 `updated_at`：模型跑完后用它证明"内容没被改过"。 */
   snapshotUpdatedAt: Date
   objectKeys: string[]
+  /**
+   * 待复核（有效结论仍是 `REVIEW`）的图片：键 + 腾讯给这张图的标签。
+   *
+   * 有效结论 = `settled_decision ?? moderation_decision`（人工放行过的 REVIEW 图不再重复复核）。
+   * 模型只看这些图，自动放行也只结算这些图。
+   */
+  reviewImages: { key: string; label: string | null; subLabel: string | null }[]
   recordId: string | null
   label: string | null
   subLabel: string | null
@@ -312,11 +369,34 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
     })
     .from(listingModerationRecords)
     .where(eq(listingModerationRecords.listingId, listingId))
-    .orderBy(desc(listingModerationRecords.createdAt))
+    // 同一毫秒可能落两条（标题/描述各一次），按 id 兜底排序，别让"最近一条标签"随机。
+    .orderBy(desc(listingModerationRecords.createdAt), desc(listingModerationRecords.id))
     .limit(1)
   const record = records[0] ?? null
 
   const objectKeys = images.map((image) => image.objectKey)
+
+  // 每张图的有效结论与标签：决定"哪些图要模型看""哪些标签属于严重类别"。
+  const mediaRows =
+    objectKeys.length === 0
+      ? []
+      : await db
+          .select({
+            finalKey: listingMediaObjects.finalKey,
+            moderationDecision: listingMediaObjects.moderationDecision,
+            settledDecision: listingMediaObjects.settledDecision,
+            label: listingMediaObjects.providerLabel,
+            subLabel: listingMediaObjects.providerSubLabel,
+          })
+          .from(listingMediaObjects)
+          .where(inArray(listingMediaObjects.finalKey, objectKeys))
+  const reviewImages = mediaRows.flatMap((row) => {
+    if (row.finalKey === null) return []
+    const effective = row.settledDecision ?? row.moderationDecision
+    return effective === 'REVIEW'
+      ? [{ key: row.finalKey, label: row.label, subLabel: row.subLabel }]
+      : []
+  })
   const digest = new Bun.CryptoHasher('sha256')
   digest.update(
     JSON.stringify({
@@ -326,6 +406,7 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
       label: record?.label ?? null,
       subLabel: record?.subLabel ?? null,
       objectKeys,
+      imageLabels: reviewImages.map((image) => image.label),
     }),
   )
 
@@ -339,6 +420,7 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
     updatedAt: listing.updatedAt,
     snapshotUpdatedAt: listing.updatedAt,
     objectKeys,
+    reviewImages,
     recordId: record?.id ?? null,
     label: record?.label ?? null,
     subLabel: record?.subLabel ?? null,
@@ -347,21 +429,25 @@ async function readReviewTarget(db: Db, listingId: string): Promise<ReviewTarget
 }
 
 /**
- * 把前几张图读成 data URL。
+ * 把待复核的图读成 data URL。
  *
- * 读不到/超限/魔术字节不认识的图**跳过而不是失败**：一条商品有 16 张图，其中一张 S3 抖动
- * 不该让整次复核退化成人工。全部读不到时仍是纯文本复核，模型照样能判文字里的引流。
+ * **一张都不能少**：只要有一张读不到/超限/不是图片/整包超预算，就返回 `null`，调用方据此
+ * 转人工。跳过一张图的代价不是"少看一点"，而是"自动放行后把没审过的图放上公网"。
  */
 async function readReviewImages(
   storage: WorkerMediaStorage,
   objectKeys: string[],
-): Promise<string[]> {
+): Promise<string[] | null> {
   const images: string[] = []
-  for (const key of objectKeys.slice(0, MAX_REVIEW_IMAGES)) {
+  let totalBytes = 0
+  for (const key of objectKeys) {
     const bytes = await storage.readBytes(key, MAX_IMAGE_BYTES)
-    if (bytes === null || bytes.length > MAX_IMAGE_BYTES) continue
+    // 任何一张读不到/超限/不是图片都返回 null：少看一张就不能自动放行（见调用点）。
+    if (bytes === null || bytes.length > MAX_IMAGE_BYTES) return null
     const mime = sniffImageMime(bytes)
-    if (mime === null) continue
+    if (mime === null) return null
+    totalBytes += bytes.length
+    if (totalBytes > MAX_TOTAL_IMAGE_BYTES) return null
     images.push(`data:${mime};base64,${Buffer.from(bytes).toString('base64')}`)
   }
   return images

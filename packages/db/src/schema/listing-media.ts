@@ -35,6 +35,17 @@ export const listingMediaObjects = pgTable(
     /** 审核上游返回的内容摘要（腾讯 `FileMD5`）；provider 未返回时为 NULL。 */
     providerMd5: text('provider_md5'),
     moderationDecision: moderationDecisionEnum('moderation_decision').notNull(),
+    /**
+     * 上游一级标签（腾讯 IMS `Label`，原样大写驼峰，如 `Porn` / `Ad`）。只给**图片**用：
+     * 文本标签在 `listing_moderation_records` 里，这个表不存文本。
+     *
+     * 存它的理由：机器的 `REVIEW` 可能来自 `Porn` 这种严重标签（腾讯只给建议复核），
+     * 而"严重标签不进模型"这条红线只读文本记录时对图片不成立。模型二审要按图判断，
+     * 就必须知道每张 REVIEW 图的标签，而不是只看文本那条。
+     */
+    providerLabel: text('provider_label'),
+    /** 上游二级标签（腾讯 IMS `SubLabel`，如 `SexBehavior` / `QRCODE`）。 */
+    providerSubLabel: text('provider_sub_label'),
     /** 人工结算结论（管理员对商品的 ALLOW/BLOCK）；NULL = 尚未结算，仍以机器结论为准。 */
     settledDecision: moderationDecisionEnum('settled_decision'),
     settledAt: timestamp('settled_at', { withTimezone: true }),
