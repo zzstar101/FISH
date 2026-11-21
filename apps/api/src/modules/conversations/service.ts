@@ -13,7 +13,7 @@ import type { BlockRelationCheck } from '../blocks/store'
 import type { PresenceReader } from '../presence/presence'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
-import type { MediaStorage } from '../uploads/storage'
+import { listingCoverUrl, type MediaStorage } from '../uploads/storage'
 import { decodeCursor, encodeCursor } from './cursor'
 import type { ConversationDetailRow, ConversationStore } from './store'
 
@@ -69,7 +69,7 @@ function toConversationDto(
       // 自己的商品详情里仍能看到审核中的图（那条路径按归属校验），会话封面统一不给。
       coverUrl:
         row.coverObjectKey && !isListingReviewMediaKey(row.coverObjectKey)
-          ? storage.publicUrl(row.coverObjectKey)
+          ? listingCoverUrl(storage, row.coverObjectKey)
           : null,
     },
     counterpart: {

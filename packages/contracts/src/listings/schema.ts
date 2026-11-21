@@ -222,7 +222,17 @@ export const ListingCardSchema = z.object({
   urgent: z.boolean(),
   negotiable: z.boolean(),
   free: z.boolean(),
-  /** 无图商品为 `null`（seed 6 条商品里有 3 条无图），前端必须有占位处理。 */
+  /**
+   * 列表封面：无图商品为 `null`（seed 6 条商品里有 3 条无图），前端必须有占位处理。
+   *
+   * #620 起**列表/卡片返回的是缩略图**（服务端生成的 `listings/{usr}/{med}-thumb.webp`，
+   * 长边 ≤ 640、webp），不是上传原图 —— PC 卡片在 2x 屏上约 608 设备像素，原图
+   * 单张可达 300 KB。需要大图（详情画廊、放大预览、分享海报）请用详情的 `images`；
+   * 详情的 `coverUrl` 仍是原图（见 `ListingDetailSchema` 的注记）。
+   *
+   * 历史图片的缩略图由部署时的回填脚本生成；legacy / 审核中 / seed 键没有缩略图，
+   * 服务端会退回原地址（审核中走短期签名代理）。
+   */
   coverUrl: z.url().nullable(),
   createdAt: z.iso.datetime(),
   /**
@@ -346,7 +356,12 @@ export const ListingCardSchema = z.object({
 
 export type ListingCard = z.infer<typeof ListingCardSchema>
 
-/** 详情用 `.extend()` 从 card 派生：两个 schema 的公共字段不可能漂移。 */
+/**
+ * 详情用 `.extend()` 从 card 派生：两个 schema 的公共字段不可能漂移。
+ *
+ * `coverUrl` 在详情里**是原图**（#620 只为列表/卡片换缩略图），与 `images` 同源：
+ * 详情页的画廊、放大与分享都读 `images`，`coverUrl` 只作无图时的兜底。
+ */
 export const ListingDetailSchema = ListingCardSchema.extend({
   description: ListingDescriptionSchema,
   images: z.array(ListingImageSchema).max(MAX_LISTING_IMAGES),

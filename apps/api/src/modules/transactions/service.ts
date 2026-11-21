@@ -25,7 +25,7 @@ import { decodeCursor, encodeCursor } from '../conversations/cursor'
 import { toMessageDto } from '../messages/service'
 import type { MessageRow, MessageStore } from '../messages/store'
 import { publicAvatarUrl } from '../uploads/avatar-url'
-import type { MediaStorage } from '../uploads/storage'
+import { listingCoverUrl, type MediaStorage } from '../uploads/storage'
 import { MeetupTokenCrypto } from './meetup-token'
 import {
   MeetupConsumeRaceError,
@@ -94,7 +94,7 @@ function toTransactionDto(
       title: listing.title,
       priceCents: listing.priceCents,
       status: listing.status,
-      coverUrl: listing.coverObjectKey ? storage.publicUrl(listing.coverObjectKey) : null,
+      coverUrl: listingCoverUrl(storage, listing.coverObjectKey),
     },
     counterpart: {
       ...counterpart,

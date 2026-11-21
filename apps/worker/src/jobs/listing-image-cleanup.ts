@@ -5,6 +5,7 @@ import {
   isListingImageKeyReferenced,
   listReclaimableListingImageDeletions,
 } from '@fish/db/listing-image-deletions'
+import { listingThumbnailKeyOf } from '@fish/shared/listing-media-key'
 import type { WorkerMediaStorage } from '../media-storage'
 
 /**
@@ -26,6 +27,11 @@ import type { WorkerMediaStorage } from '../media-storage'
  *   被同一卖家的多条商品共享时，一条商品摘除它、另一条仍引用它，它就不会被删。把过滤放进 SQL 而不是
  *   只"取回来再跳过"还有一个原因：被引用的键可能长期留在台账里，只跳过会让它们永久占住
  *   `ORDER BY removed_at` 的批次头部，累计到批次上限后回收静默停摆；放进 SQL 后批次头部始终是可回收的行。
+ *
+ * **缩略图随原图一起回收（#620）**：列表封面指向服务端派生的 `listings/{usr}/{med}-thumb.webp`，
+ * 它不是独立引用，也不单独进台账 —— 台账行到期时原图一定已无人引用，由同一个原图键派生的缩略图
+ * 自然也没有任何商品在用。所以这里在删原图之前先删缩略图：缩略图删失败就整行留到下一轮重试，
+ * 不会出现「原图没了、缩略图永远留在桶里」。
  *
  * 已知残留窗口（接受，且与既有清理同形）：单行复核通过后、`deleteObject` 之前，若有并发写请求把该键
  * **重新引用**回某条商品，对象仍会被删。该键必须已被摘除且超过保留期，正常前端拿不到它
@@ -56,13 +62,25 @@ export async function cleanupRemovedListingImages(input: {
     // 候选集已排除"查询那一刻仍被引用"的键；删对象前再复核一次，把窗口从整批缩到单行。
     // 复核失败的行不会被下一轮重取（它此刻被引用，会被候选集过滤掉），所以不会占住批次头部。
     if (await isListingImageKeyReferenced(input.db, row.objectKey)) continue
+    // 先删缩略图（派生对象，见模块注释）：失败时原图与台账行都还在，下一轮整行重试。
+    const thumbnailKey = listingThumbnailKeyOf(row.objectKey)
+    if (thumbnailKey) {
+      try {
+        await input.storage.deleteObject(thumbnailKey)
+      } catch (error) {
+        failed += 1
+        console.error(
+          `[worker] 商品图缩略图对象删除失败（${thumbnailKey}）：${describeError(error)}`,
+        )
+        continue
+      }
+    }
     try {
       await input.storage.deleteObject(row.objectKey)
     } catch (error) {
       // 一行删不掉不该拖住整批：记日志后继续，行不删（下一轮同一行重试）。
       failed += 1
-      const detail = error instanceof Error ? error.message : String(error)
-      console.error(`[worker] 商品图对象删除失败（${row.objectKey}）：${detail}`)
+      console.error(`[worker] 商品图对象删除失败（${row.objectKey}）：${describeError(error)}`)
       continue
     }
     await deleteListingImageDeletionRow(input.db, row.objectKey)
@@ -70,4 +88,8 @@ export async function cleanupRemovedListingImages(input: {
   }
 
   return { scanned: rows.length, deleted, failed }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

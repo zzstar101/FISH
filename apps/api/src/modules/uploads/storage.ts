@@ -1,3 +1,8 @@
+import {
+  isListingThumbnailKey,
+  isPublicListingKey,
+  listingThumbnailKeyOf,
+} from '@fish/shared/listing-media-key'
 import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   DISPUTE_MEDIA_URL_TTL_SECONDS,
@@ -180,17 +185,34 @@ export function isSafeObjectKey(key: string): boolean {
   return key.split('/').every((segment) => segment !== '.' && segment !== '..')
 }
 
-export function isPublicListingKey(key: string): boolean {
-  const match = /^listings\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/.exec(key)
-  return Boolean(
-    match &&
-      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
-      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
-  )
-}
-
 /** Seed illustrations have stable non-resource slugs, never a user/listing UUID. */
 const SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/
+
+/**
+ * 公开键 / 缩略图键的规则定义在 `@fish/shared/listing-media-key`（API 与 worker 回收任务共用），
+ * 这里 re-export 维持「键域校验统一从 storage 出口拿」的既有 import 面。
+ */
+export {
+  isListingThumbnailKey,
+  isPublicListingKey,
+  LISTING_THUMBNAIL_SUFFIX,
+  listingThumbnailKeyOf,
+} from '@fish/shared/listing-media-key'
+
+/**
+ * 卡片封面地址（#620）：列表/卡片一律给缩略图，详情与放大仍走原图。
+ *
+ * 只对规范公开键换成缩略图键，其余键（审核中签名代理、legacy、seed）原样交给 `publicUrl` ——
+ * 那些前缀下没有缩略图对象，硬换会 404。缩略图在 `confirm` / 人工放行结算时随原图一起写，
+ * 历史对象由 `apps/api/scripts/backfill-listing-thumbnails.ts` 补齐。
+ */
+export function listingCoverUrl(
+  storage: Pick<MediaStorage, 'publicUrl'>,
+  objectKey: string | null,
+): string | null {
+  if (!objectKey) return null
+  return storage.publicUrl(listingThumbnailKeyOf(objectKey) ?? objectKey)
+}
 
 /**
  * #286：**待审核**的 staging 前缀。
@@ -521,12 +543,13 @@ export function createBunS3MediaStorage(options: {
       }
       // New listing keys must carry strict resource TypeIDs; refuse any other shape instead of
       // silently exposing raw UUIDs or unknown object namespaces in a public response.
-      if (!isPublicListingKey(key) && !SEED_LISTING_KEY.test(key)) {
+      if (!isPublicListingKey(key) && !isListingThumbnailKey(key) && !SEED_LISTING_KEY.test(key)) {
         // 这一句是"真实 POST /visual-search 回 500 INTERNAL_ERROR"最常见的根因（#406 第 4 项：
         // seed 数据的三条隐性契约）。把出错的键与两种合法形状一起打出来，否则只能从 500 反推。
         throw new Error(
           `公开媒体对象键不规范：${JSON.stringify(key)}` +
-            '（期望 listings/{usr_…}/{med_…}.jpg|png|webp，或 seed 演示键 listings/seed-<slug>/<n>.jpg|png|webp）',
+            '（期望 listings/{usr_…}/{med_…}.jpg|png|webp、listings/{usr_…}/{med_…}-thumb.webp，' +
+            '或 seed 演示键 listings/seed-<slug>/<n>.jpg|png|webp）',
         )
       }
       return `${publicUrlBase.replace(/\/+$/, '')}/${key}`

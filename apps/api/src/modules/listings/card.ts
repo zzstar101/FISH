@@ -5,7 +5,7 @@ import {
 } from '@fish/contracts/listings/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { publicAvatarUrl } from '../uploads/avatar-url'
-import type { MediaStorage } from '../uploads/storage'
+import { listingCoverUrl, type MediaStorage } from '../uploads/storage'
 
 /**
  * 卖家公开投影的**源列**（#191）：调用方只要 SELECT 出这四列就能用。
@@ -97,7 +97,7 @@ export function toListingCard(
     urgent: listing.urgent,
     negotiable: listing.negotiable,
     free: listing.free,
-    coverUrl: coverObjectKey ? storage.publicUrl(coverObjectKey) : null,
+    coverUrl: listingCoverUrl(storage, coverObjectKey),
     createdAt: listing.createdAt.toISOString(),
     wants: listing.wants,
     views: listing.views,

@@ -17,6 +17,7 @@ import {
   type ContentModerationProvider,
   moderationErrorResponse,
 } from '../moderation/providers/types'
+import { tryWriteListingThumbnail } from './listing-thumbnail'
 import {
   effectiveModerationDecision,
   type ListingMediaObjectRow,
@@ -356,6 +357,12 @@ export function createUploadService(deps: {
           ? `${publicListingPrefix(userId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${EXTENSION_BY_MIME[contentType]}`
           : `${listingReviewMediaPrefix(userId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${EXTENSION_BY_MIME[contentType]}`
       await storage.writeMediaBytes(finalKey, bytes, contentType)
+      // #620：公开固化的图同时写一份列表缩略图（`listings/{usr}/{med}-thumb.webp`），列表/卡片
+      // 的封面直接指向它，详情与放大仍用原图。REVIEW 落在私有前缀，没有缩略图 —— 人工放行搬到
+      // 公开前缀时再生成（listing-media-settlement.ts）。
+      if (verdict.decision === 'ALLOW') {
+        await tryWriteListingThumbnail(storage, finalKey, bytes)
+      }
 
       const inserted = await mediaObjects.insert({ ...record, finalKey })
       if (inserted) {

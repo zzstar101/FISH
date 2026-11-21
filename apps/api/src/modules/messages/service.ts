@@ -21,7 +21,7 @@ import {
 import type { BlockRelationCheck } from '../blocks/store'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
-import type { MediaStorage } from '../uploads/storage'
+import { listingCoverUrl, type MediaStorage } from '../uploads/storage'
 import {
   listingRequestHash,
   MessageIdempotencyConflictError,
@@ -168,7 +168,7 @@ function toListingCard(brief: ListingBrief, storage: MediaStorage): Conversation
     status: brief.status,
     coverUrl:
       brief.coverObjectKey && !isListingReviewMediaKey(brief.coverObjectKey)
-        ? storage.publicUrl(brief.coverObjectKey)
+        ? listingCoverUrl(storage, brief.coverObjectKey)
         : null,
   })
 }

@@ -17,8 +17,12 @@ import {
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createModerationService, type ModerationService } from '../moderation/service'
 import { publicAvatarUrl } from '../uploads/avatar-url'
-import type { MediaStorage } from '../uploads/storage'
-import { isReviewMediaPublicKey, reviewMediaPublicPrefix } from '../uploads/storage'
+import {
+  isReviewMediaPublicKey,
+  listingCoverUrl,
+  type MediaStorage,
+  reviewMediaPublicPrefix,
+} from '../uploads/storage'
 import { createReviewMediaService, type ReviewMediaService } from './media-service'
 import type { MyReviewRow, ReviewTimelineRow, TransactionReviewsStore } from './store'
 
@@ -121,7 +125,7 @@ export function toTransactionReviewItem(
       title: t.listingTitle,
       priceCents: t.listingPriceCents,
       status: t.listingStatus,
-      coverUrl: t.coverObjectKey ? storage.publicUrl(t.coverObjectKey) : null,
+      coverUrl: listingCoverUrl(storage, t.coverObjectKey),
     },
     counterpart: {
       id: encodePublicId(PUBLIC_ID_PREFIX.user, t.counterpartId),

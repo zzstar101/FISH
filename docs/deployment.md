@@ -865,7 +865,7 @@ if [ "${bad:-0}" -eq 1 ]; then
 fi
 unset MEETUP_KEY
 
-# 同一理由：#141 起 AI_POLISH_TRANSPORT 也是必填且无默认值，缺了同样在第 6 步进 crash loop。
+# 同一理由：#141 起 AI_POLISH_TRANSPORT 也是必填且无默认值，缺了同样在第 7 步进 crash loop。
 AI_TRANSPORT=$(sed -n 's/^AI_POLISH_TRANSPORT=//p' "$API_ENV" | tail -1 | tr -d '\r')
 AI_BASE_URL=$(sed -n 's/^AI_POLISH_BASE_URL=//p' "$API_ENV" | tail -1 | tr -d '\r')
 AI_API_KEY=$(sed -n 's/^AI_POLISH_API_KEY=//p' "$API_ENV" | tail -1 | tr -d '\r')
@@ -910,17 +910,43 @@ sudo -u fish -H /usr/local/bin/bun run db:migrate
 sudo -u fish -H /usr/local/bin/bun run build
 rsync -a --delete /srv/fish/apps/web-pc/dist/ /var/www/fish-pc/
 
-# 6) 起服务
+# 6) 列表缩略图回填（#620）。这一步必须在起 API 之前跑完：新代码的列表/卡片封面一律指向
+#    缩略图对象（listings/{usr}/{med}-thumb.webp），而这次发布之前固化的历史图片还没有它，
+#    先起 API 会让老商品在列表里显示空白封面。脚本幂等、可重复执行，失败时退出码 1
+#    （此时服务仍是停着的，修好原因重跑本脚本即可）。回滚到 #620 之前的 tag 时脚本不存在，
+#    自动跳过 —— 旧代码不读缩略图。
+if [ -f apps/api/scripts/backfill-listing-thumbnails.ts ]; then
+  sudo -u fish -H /usr/local/bin/bun --env-file=.env apps/api/scripts/backfill-listing-thumbnails.ts
+else
+  echo "跳过列表缩略图回填：$REF 还没有该脚本（回滚到 #620 之前的版本）"
+fi
+
+# 7) 起服务
 systemctl start fish-api
 systemctl start fish-worker
 
-# 7) 验收（见 §8）
+# 8) 验收（见 §8）
 curl -fsS http://127.0.0.1:3000/health
 ```
 
 本脚本是**幂等**的：任何一步失败后修好原因重新执行即可，不需要额外回退动作。
 
-代价是第 3–6 步之间数十秒停机：API 的 WebSocket 连接由进程内 hub 维护
+第 6 步（#620 起）回填历史图片的列表缩略图：原图与缩略图是**两个独立对象**（不是给原图拼
+`?imageMogr2/...` 查询参数 —— 实测当前生产 CDN 会忽略它并返回原字节），所以只有上传/人工放行时
+才会生成缩略图，此前已存在的图片必须由这一步补。数据源同时包含 `listing_images` 与上传台账里
+已固化的公开键：只扫前者会漏掉「部署前已 confirm、部署后才挂到商品上」的图片（`confirm` 的幂等
+重放不重新渲染缩略图），它们的列表封面会永久 404。首次上线（§7.1）没有历史图片，可以跳过；
+回滚到 #620 之前的 tag 时这一步自动跳过（旧代码不读缩略图，已生成的对象留着也无害）。
+
+先用 `--check` 只看差多少、不写任何对象（有缺失时退出码 1，可放进发布前的检查清单）：
+
+```bash
+sudo -u fish -H /usr/local/bin/bun --env-file=.env \
+  apps/api/scripts/backfill-listing-thumbnails.ts --check
+```
+
+代价是第 3–7 步之间数十秒停机：回填按缺失的图片逐张 GET + PUT，历史图片很多时会线性变长；
+API 的 WebSocket 连接由进程内 hub 维护
 （`apps/api/src/modules/realtime/hub.ts`），重启即断；worker 也只能单实例，做不了滚动发布。
 当前阶段接受这个停机；要做零停机得先改代码，不在部署范畴内。
 
