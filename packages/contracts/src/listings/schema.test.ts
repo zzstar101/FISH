@@ -288,6 +288,18 @@ describe('ListingCardSchema', () => {
     views: 0,
   }
 
+  /*
+   * `listingType` 必填（#705）：DB 列 `NOT NULL DEFAULT 'SALE'`，任何一张卡片都取得到。
+   * 写成 optional 会让 `undefined` 与 `SALE` 在端上长得一样 —— 那时「这条是出租」这个事实
+   * 会静默退化成「看起来像出售」，正是本单要防的混淆。
+   */
+  test('缺 listingType 必须被拒（必填，不允许退化成 undefined ≈ SALE）', () => {
+    const { listingType: _omitted, ...withoutType } = card
+    expect(ListingCardSchema.safeParse(withoutType).success).toBe(false)
+    // 拒收理由必须落在这个字段上，而不是别的字段被带崩。
+    expect(issuePaths(ListingCardSchema, withoutType)).toContainEqual(['listingType'])
+  })
+
   test('rejects an unknown status (DRAFT does not exist in the state machine)', () => {
     expect(ListingCardSchema.safeParse({ ...card, status: 'DRAFT' }).success).toBe(false)
   })

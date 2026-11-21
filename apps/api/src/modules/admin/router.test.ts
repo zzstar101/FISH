@@ -1339,4 +1339,49 @@ describe('Admin 查询端到端', () => {
       expect(invalid.status).toBe(422)
     }
   })
+
+  /**
+   * #705：管理端的两处**聚合**口径也必须是「出售」的。
+   *
+   * `listingStatusCounts`（用户详情四桶）与 `getOverview().activeListings` 各自一条独立 SQL，
+   * 与 `listListings` / `findListingDetail` 的可见性收口不共享代码 —— 删掉它们自己的类型条件，
+   * 上面那些列表/详情用例都不会红。这里插一件出租商品，要求两个计数纹丝不动。
+   */
+  test('#705 管理端聚合只算 SALE：出租商品不进四桶计数与在售总数', async () => {
+    const before = await app.request(ADMIN_ROUTES.overview, { headers: { cookie: adminCookie } })
+    const beforeDetail = await app.request(ADMIN_ROUTES.userDetail(USER_ID), {
+      headers: { cookie: adminCookie },
+    })
+    const beforeOverview = AdminOverviewSchema.parse(await before.json())
+    const beforeStats = AdminUserDetailSchema.parse(await beforeDetail.json()).listingStats
+
+    const rentalId = '01930000-0000-7000-8000-0000000000a9'
+    await scratch.insert(listings).values({
+      id: rentalId,
+      listingNo: await reserveTestListingNo(scratch, rentalId),
+      sellerId: USER_ID,
+      title: '管理端应忽略的出租商品',
+      description: '#705 回归夹具',
+      priceCents: 1500,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: 'ACTIVE',
+      listingType: 'RENTAL',
+    })
+
+    try {
+      const after = await app.request(ADMIN_ROUTES.overview, { headers: { cookie: adminCookie } })
+      const afterDetail = await app.request(ADMIN_ROUTES.userDetail(USER_ID), {
+        headers: { cookie: adminCookie },
+      })
+      const afterOverview = AdminOverviewSchema.parse(await after.json())
+      const afterStats = AdminUserDetailSchema.parse(await afterDetail.json()).listingStats
+
+      expect(afterOverview.activeListings).toBe(beforeOverview.activeListings)
+      expect(afterStats).toEqual(beforeStats)
+    } finally {
+      // 本用例排在文件最后，但仍显式清理：删除顺序与 FK 无关（出租商品没有图 / 会话）。
+      await scratch.delete(listings).where(eq(listings.id, rentalId))
+    }
+  })
 })

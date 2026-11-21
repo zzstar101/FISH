@@ -15,6 +15,7 @@ import { createSqlCommentStore } from '../comments/store'
 import { createSqlConversationStore } from '../conversations/store'
 import { createFavoriteService } from '../favorites/service'
 import { createSqlFavoriteStore } from '../favorites/store'
+import { createMatchingService } from '../matching/service'
 import { createSqlMatchingStore } from '../matching/store'
 import { createSqlProfileStore } from '../profile/store'
 import { createSqlRecommendationStore } from '../recommendation/store'
@@ -110,6 +111,7 @@ async function insertListing(input: {
 }
 
 beforeAll(async () => {
+  await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
 
@@ -261,6 +263,36 @@ describe('#705 买卖读路径隔离：RENTAL 不出现在出售语义的返回�
     expect(stats.activeListings).toBe(1)
   })
 
+  /**
+   * #705：「已售出」段与 `soldCount` 是与「在售」并列的另一半主页读路径，类型条件必须同样在。
+   *
+   * 单独成例而不是并进上一条：出租商品只有在 `status = 'SOLD'` 时才可能漏进已售段，
+   * 上面那件出租商品是 ACTIVE —— 删掉 `sold_count` 与已售段的类型条件它照样绿。
+   */
+  test('他人主页「已售出」：列表与 soldCount 都只算 SALE', async () => {
+    const soldRentalId = await insertListing({
+      sellerId,
+      title: '已售出的出租商品',
+      listingType: 'RENTAL',
+      status: 'SOLD',
+    })
+    const soldSaleId = await insertListing({
+      sellerId,
+      title: '已售出的出售商品',
+      listingType: 'SALE',
+      status: 'SOLD',
+    })
+
+    const [rows, stats] = await Promise.all([
+      publicUserStore.listListings(sellerId, 'SOLD', 20, null),
+      publicUserStore.stats(sellerId),
+    ])
+    const ids = rows.map((row) => row.id)
+    expect(ids).toContain(soldSaleId)
+    expect(ids).not.toContain(soldRentalId)
+    expect(stats.soldCount).toBe(1)
+  })
+
   test('我发过的留言：列表与总数都只算 SALE', async () => {
     const [rows, total] = await Promise.all([
       commentStore.listByAuthor(buyerId, 20, null),
@@ -297,6 +329,25 @@ describe('#705 买卖读路径隔离：RENTAL 不出现在出售语义的返回�
     expect(ids).toContain(saleId)
     expect(ids).not.toContain(rentalId)
     expect(total).toBe(1)
+  })
+
+  /**
+   * #705：`/matches?listingId=` 是匹配的**另一个方向**（listing → wish），与上面的 wish → listing
+   * 各有一套 SQL。出租商品在这一侧要按 404 处理 —— 不是空列表，也不是「匹配功能正常但恰好没结果」。
+   */
+  test('许愿匹配（listing 方向）：出租商品一律 404，出售商品正常返回', async () => {
+    const service = createMatchingService({ store: matchingStore, storage })
+
+    // 连卖家本人也 404：与 `GET /listings/:id` 对出租商品的口径一致，不给存在性探针。
+    for (const viewer of [sellerId, buyerId]) {
+      await expect(service.listByListing(viewer, rentalId, 20)).rejects.toMatchObject({
+        status: 404,
+        code: 'MATCH_TARGET_NOT_FOUND',
+      })
+    }
+
+    const saleResult = await service.listByListing(sellerId, saleId, 20)
+    expect(saleResult.total).toBe(1)
   })
 
   test('推荐事件摄取：出租商品按不存在处理（不写足迹、不写事件）', async () => {
