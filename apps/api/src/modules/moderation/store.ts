@@ -131,10 +131,13 @@ export function createSqlModerationStore(
           : record.action === 'CREATE'
             ? 'ACTIVE'
             : String(record.prior_listing_status ?? 'OFFLINE')
+      // `moderation_reason` 的语义是"未通过原因"（见契约 `ListingCard.moderationReason`）：
+      // 放行时留着管理员的操作备注会让一条已上架的商品带着一句负面话术，因此只在 BLOCK 时写。
+      // 管理员的原话不会丢：`decideModeration` 同事务写 `admin_audit_logs.reason`。
       await tx.execute(sql`
         UPDATE listings
         SET moderation_status = ${moderationStatus}::listing_moderation_status,
-            moderation_reason = ${input.reason},
+            moderation_reason = ${input.decision === 'ALLOW' ? null : input.reason},
             moderation_rule_version = ${record.rule_version},
             moderated_at = now(),
             status = ${listingStatus}::listing_status,

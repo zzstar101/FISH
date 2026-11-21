@@ -142,6 +142,43 @@ test('人工放行在 listings 更新之后调用图片结算钩子，参数为 
   })
 })
 
+test('人工放行清空 moderation_reason，人工下架写入管理员原话', async () => {
+  // 放行：该字段是「未通过原因」，商品已经上架就不该继续挂着机器阶段的 REVIEW 原因码。
+  await withReviewListing(async ({ listingId, recordId }) => {
+    await db
+      .update(listings)
+      .set({ moderationReason: 'CONTENT_REQUIRES_REVIEW' })
+      .where(eq(listings.id, listingId))
+
+    const store = createSqlModerationStore(db)
+    const result = await db.transaction((tx) =>
+      store.decideWithin(tx, { recordId, decision: 'ALLOW', reason: '人工放行' }),
+    )
+    expect(result.kind).toBe('applied')
+
+    const [row] = await db
+      .select({ reason: listings.moderationReason })
+      .from(listings)
+      .where(eq(listings.id, listingId))
+    expect(row?.reason).toBeNull()
+  })
+
+  // 下架：管理员原话必须留在商品上，客户端据此渲染拒因。
+  await withReviewListing(async ({ listingId, recordId }) => {
+    const store = createSqlModerationStore(db)
+    const result = await db.transaction((tx) =>
+      store.decideWithin(tx, { recordId, decision: 'BLOCK', reason: '违规下架' }),
+    )
+    expect(result.kind).toBe('applied')
+
+    const [row] = await db
+      .select({ reason: listings.moderationReason })
+      .from(listings)
+      .where(eq(listings.id, listingId))
+    expect(row?.reason).toBe('违规下架')
+  })
+})
+
 test('人工决策同事务写 MODERATION 通知（任务一 #89）：放行 APPROVED / 下架 REJECTED', async () => {
   // 放行：通知卖家 outcome=APPROVED，payload 带 listingId（读侧转公开 TypeID）
   await withReviewListing(async ({ sellerId, listingId, recordId }) => {
