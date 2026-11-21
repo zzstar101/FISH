@@ -1,7 +1,12 @@
 import { RANKING_VERSION } from '@fish/contracts/matching/schema'
 import { RECOMMENDATION_CLEANUP_INTERVAL_MS } from '@fish/contracts/recommendation/observability'
 import { createDb } from '@fish/db/client'
-import { loadEmbeddingEnv, loadServerEnv, loadVisualEmbeddingEnv } from '@fish/shared/env'
+import {
+  loadEmbeddingEnv,
+  loadModerationReviewEnv,
+  loadServerEnv,
+  loadVisualEmbeddingEnv,
+} from '@fish/shared/env'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
 import { sql } from 'drizzle-orm'
 import { purgeDueAccountDeletions } from './jobs/account-deletion/purge'
@@ -12,6 +17,8 @@ import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
 import { cleanupRemovedListingImages } from './jobs/listing-image-cleanup'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
+import { createModerationJobHandlers } from './jobs/moderation/handlers'
+import { createModerationModelClient } from './jobs/moderation/model-client'
 import { createJobQueue } from './jobs/queue'
 import { cleanupExpiredRecommendationData } from './jobs/recommendation/cleanup'
 import { cleanupExpiredViewHistory } from './jobs/view-history/cleanup'
@@ -88,6 +95,12 @@ const embeddingProvider = createEmbeddingProvider(embeddingEnv, {
   },
 })
 
+// 模型复核（#751）：`MODERATION_MODEL_REVIEW_MODE` 缺省即 `off`（见 `loadModerationReviewEnv`
+// 的取舍），`shadow`/`enforce` 时把上游装配好；`off` 连 client 都不建，避免"配置半套也能跑"。
+const moderationReviewEnv = loadModerationReviewEnv()
+const moderationModelClient =
+  moderationReviewEnv.mode === 'off' ? null : createModerationModelClient(moderationReviewEnv)
+
 // 视觉 provider 同一理由在启动期装配（#324 M3）。`VISUAL_EMBEDDING_TRANSPORT` 同样没有默认值。
 const visualEmbeddingEnv = loadVisualEmbeddingEnv()
 const visualEmbeddingProvider = createVisualEmbeddingProvider(visualEmbeddingEnv)
@@ -120,6 +133,10 @@ logEvent({
   visualTransport: visualEmbeddingEnv.transport,
   visualModel: visualEmbeddingProvider.model,
   visualDimensions: visualEmbeddingProvider.dimensions,
+  moderationReviewMode: moderationReviewEnv.mode,
+  ...(moderationReviewEnv.mode === 'off'
+    ? {}
+    : { moderationReviewModel: moderationReviewEnv.model }),
 })
 
 /**
@@ -140,6 +157,11 @@ const queue = createJobQueue(db, {
     // 长期兴趣画像（#323 R2）同样要显式拿到模型：聚合只吃当前模型的向量，换模型后由 backfill 重建。
     ...createInterestJobHandlers(db, { embeddingModel: embeddingProvider.model }),
     ...createVisualEmbedJobHandlers(db, visualEmbeddingProvider, mediaStorage),
+    ...createModerationJobHandlers(db, {
+      env: moderationReviewEnv,
+      storage: mediaStorage,
+      client: moderationModelClient,
+    }),
   },
   isFatalError: (error) =>
     // 源封面确定性不可用（超限、魔术字节不符）重发不会变好 ⇒ 立即 FAILED，

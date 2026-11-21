@@ -341,10 +341,36 @@ function toModerationItem(row: ModerationQueueRow | ModerationHistoryRow | Moder
 
 function moderationDetailOf(row: ModerationDetailRow) {
   const machine = row.record.action !== 'MANUAL_DECISION' ? row.record : null
+  const modelReview = row.modelReview
   return AdminModerationDetailSchema.parse({
     item: toModerationItem(row),
     history: row.history.map(toModerationRecord),
     machineDecision: machine?.decision ?? null,
+    modelReview: modelReview
+      ? {
+          model: modelReview.model,
+          promptVersion: modelReview.promptVersion,
+          decision: modelReview.decision,
+          category: modelReview.category,
+          reason: modelReview.reason,
+          // jsonb 由驱动解成数组，也可能（老驱动/字符串列）是 JSON 文本；两种都收。
+          evidence: modelReviewEvidence(modelReview.evidence),
+          confidence:
+            typeof modelReview.confidence === 'number'
+              ? modelReview.confidence
+              : modelReview.confidence === null
+                ? null
+                : Number(modelReview.confidence),
+          latencyMs:
+            typeof modelReview.latencyMs === 'number'
+              ? modelReview.latencyMs
+              : modelReview.latencyMs === null
+                ? null
+                : Number(modelReview.latencyMs),
+          outcome: modelReview.outcome,
+          createdAt: modelReview.createdAt.toISOString(),
+        }
+      : null,
     humanDecision: row.humanDecision
       ? {
           decision: row.humanDecision.decision,
@@ -359,6 +385,20 @@ function moderationDetailOf(row: ModerationDetailRow) {
         }
       : null,
   })
+}
+
+function modelReviewEvidence(value: unknown): string[] {
+  const parsed = typeof value === 'string' ? safeJsonParse(value) : value
+  if (!Array.isArray(parsed)) return []
+  return parsed.filter((item): item is string => typeof item === 'string')
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
 }
 
 function toAdminTransaction(row: AdminTransactionRow) {

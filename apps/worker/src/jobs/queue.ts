@@ -124,6 +124,7 @@ const PENDING_DEDUPE_KEY: Record<JobType, string> = {
   EMBED_WISH: 'wishId',
   REFRESH_USER_INTEREST: 'userId',
   VISUAL_EMBED_LISTING: 'listingId',
+  LISTING_MODERATION: 'listingId',
 }
 
 /**

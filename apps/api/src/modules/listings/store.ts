@@ -591,6 +591,10 @@ export function createSqlListingStore(db: Db): ListingStore {
         }
         if (listingNo === undefined) throw new Error('无法分配唯一的商品编号')
 
+        // 调用方不传 moderationStatus 时的既有约定就是 APPROVED（见本函数下方的 job 投递分支），
+        // 这里必须先归一化再决定 status，否则省略字段会把商品落成 OFFLINE（store.test.ts 会红）。
+        const moderationStatus = record.moderationStatus ?? 'APPROVED'
+
         await tx.insert(listings).values({
           id: record.id,
           listingNo,
@@ -600,8 +604,10 @@ export function createSqlListingStore(db: Db): ListingStore {
           priceCents: record.priceCents,
           category: record.category,
           condition: record.condition,
-          status: record.moderationStatus === 'REVIEW' ? 'OFFLINE' : NEW_LISTING_STATUS,
-          moderationStatus: record.moderationStatus ?? 'APPROVED',
+          // 审核中（REVIEW）与未通过（BLOCKED）都必须 OFFLINE：前者不在公开 Feed（等结论），
+          // 后者本来就不可见。只有 APPROVED 才以 ACTIVE 落库并投递匹配 job（见文件末尾）。
+          status: moderationStatus === 'APPROVED' ? NEW_LISTING_STATUS : 'OFFLINE',
+          moderationStatus,
           moderationReason: record.moderationReason ?? null,
           moderationRuleVersion: record.moderationRuleVersion ?? null,
           moderatedAt: new Date(),
@@ -639,8 +645,20 @@ export function createSqlListingStore(db: Db): ListingStore {
           })),
         )
 
-        if ((record.moderationStatus ?? 'APPROVED') === 'APPROVED') {
+        if (moderationStatus === 'APPROVED') {
           await enqueueListingJobsWith(tx, record.id)
+        } else if (moderationStatus === 'REVIEW') {
+          // 审核中：交给 worker 跑「腾讯 REVIEW → 模型复核 → 放行/拒绝/转人工」。
+          // `jobs_listing_moderation_listing_id_pending_uidx` 保证同一商品最多一条待跑任务，
+          // 这里的 ON CONFLICT DO NOTHING 因此是空操作兜底，不会白调一次计费模型。
+          await tx
+            .insert(jobs)
+            .values({
+              id: newId(),
+              type: 'LISTING_MODERATION',
+              payload: jsonParam({ listingId: record.id }),
+            })
+            .onConflictDoNothing()
         }
 
         return { kind: 'created' as const, listingId: record.id }

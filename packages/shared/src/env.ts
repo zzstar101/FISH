@@ -341,6 +341,48 @@ export function loadContentModerationEnv(
 }
 
 /**
+ * 模型复核（#751）——**worker 专属**：API 只投递 `LISTING_MODERATION` job，不调模型。
+ *
+ * 与 `AI_POLISH_*` 的差别是**允许缺省**：这是给存量链路加的一层可选改进，不是一个已有功能
+ * 的开关。若强制必填，没配的部署会在升级瞬间起不来；而"没配"在这里有明确、安全的语义
+ * ——`off`（不做模型复核，REVIEW 全部照旧进人工队列）。
+ *
+ * 三种取值：`off` / `shadow`（只记结论、不生效，看一周准确率）/ `enforce`（PASS 自动上架、
+ * BLOCK 自动拒绝）。**显式写成别的值一律报错**：`shdow` 这种拼写错误不能静默退化为 `off`，
+ * 否则以为开了影子期、实际一行记录都没有。
+ */
+export type ModerationReviewEnv =
+  | { mode: 'off' }
+  | { mode: 'shadow' | 'enforce'; baseUrl: string; apiKey: string; model: string }
+
+export function loadModerationReviewEnv(
+  source: Record<string, string | undefined> = process.env,
+): ModerationReviewEnv {
+  const raw = source.MODERATION_MODEL_REVIEW_MODE
+  const mode = raw === undefined ? 'off' : raw.trim()
+  if (mode === 'off') return { mode: 'off' }
+  if (mode !== 'shadow' && mode !== 'enforce') {
+    throw new Error(
+      '环境变量校验失败：MODERATION_MODEL_REVIEW_MODE 只能是 off / shadow / enforce（留空视为 off，其他取值不静默降级）',
+    )
+  }
+  const baseUrl = source.MODERATION_MODEL_BASE_URL?.trim()
+  const apiKey = source.MODERATION_MODEL_API_KEY?.trim()
+  const model = source.MODERATION_MODEL_MODEL?.trim()
+  if (!baseUrl || !apiKey || !model) {
+    const missing = [
+      !baseUrl ? 'MODERATION_MODEL_BASE_URL' : null,
+      !apiKey ? 'MODERATION_MODEL_API_KEY' : null,
+      !model ? 'MODERATION_MODEL_MODEL' : null,
+    ].filter((name): name is string => name !== null)
+    throw new Error(
+      `环境变量校验失败：MODERATION_MODEL_REVIEW_MODE=${mode} 缺少 ${missing.join(' / ')}。三项配置都必须提供：MODERATION_MODEL_BASE_URL / MODERATION_MODEL_API_KEY / MODERATION_MODEL_MODEL`,
+    )
+  }
+  return { mode, baseUrl, apiKey, model }
+}
+
+/**
  * embedding 生成配置（#322 M1）——**worker 专属**，不进共享 `ServerEnv`：API 进程只投递
  * `EMBED_*` job、不调 embedding 上游，上游密钥不扩散到不需要它的进程（与
  * `AI_POLISH_*` / `TENCENT_CLOUD_*` 同一拆分原则）。

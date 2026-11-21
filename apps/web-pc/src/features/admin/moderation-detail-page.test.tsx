@@ -89,7 +89,24 @@ const DETAIL: AdminModerationDetail = {
   item: QUEUE_ITEM,
   history: [],
   machineDecision: 'REVIEW',
+  modelReview: null,
   humanDecision: null,
+}
+
+const WITH_MODEL_REVIEW: AdminModerationDetail = {
+  ...DETAIL,
+  modelReview: {
+    model: 'DeepSeek-V4.1-Flash',
+    promptVersion: '2026-11-21-v1',
+    decision: 'PASS',
+    category: null,
+    reason: '教材封面的「教育部」是出版信息，不是涉政内容。',
+    evidence: ['封面为《Python 编程基础及应用》，出版社为人民邮电出版社'],
+    confidence: 0.86,
+    latencyMs: 3200,
+    outcome: 'SHADOW',
+    createdAt: '2026-10-05T08:01:00.000Z',
+  },
 }
 
 const DECIDED: AdminModerationDetail = {
@@ -170,6 +187,37 @@ describe('页级冲突横幅（静态渲染）', () => {
     expect(html).toContain('role="alert"')
     expect(html).toContain('bg-danger-soft')
     expect(textOf(html)).toContain('该审核记录已被其他管理员处理，详情已刷新。')
+  })
+})
+
+describe('模型复核区块（静态渲染）', () => {
+  test('影子期：模型的「放行」建议与实际未生效要同时可见', () => {
+    const html = render(
+      createElement(ModerationDetailView, {
+        detail: WITH_MODEL_REVIEW,
+        recordId: 'mdr_01AAAAAAAAAAAAAAAAAAAAAA',
+        search: { tab: 'records' },
+      }),
+    )
+    const text = textOf(html)
+    expect(text).toContain('模型复核')
+    expect(text).toContain('模型认为：可以放行')
+    expect(text).toContain('影子模式（未生效）')
+    expect(text).toContain('教材封面的「教育部」是出版信息，不是涉政内容。')
+    expect(text).toContain('DeepSeek-V4.1-Flash')
+    expect(text).toContain('置信度 0.86')
+    expect(text).toContain('模型理由只在后台可见')
+  })
+
+  test('没有模型记录时不渲染该区块（腾讯直接放行/拦截的常见路径）', () => {
+    const html = render(
+      createElement(ModerationDetailView, {
+        detail: DETAIL,
+        recordId: 'mdr_01AAAAAAAAAAAAAAAAAAAAAA',
+        search: { tab: 'records' },
+      }),
+    )
+    expect(textOf(html)).not.toContain('模型复核')
   })
 })
 

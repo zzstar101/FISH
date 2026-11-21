@@ -1,4 +1,8 @@
-import type { AdminModerationDetail, AdminModerationRecord } from '@fish/contracts/admin/schema'
+import type {
+  AdminModerationDetail,
+  AdminModerationModelReview,
+  AdminModerationRecord,
+} from '@fish/contracts/admin/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
@@ -11,6 +15,7 @@ import { useAdminModerationDetail, useModerationDecision } from './admin-queries
 import { withoutCursor } from './admin-search'
 import {
   auditActionLabel,
+  type BadgeVariant,
   formatAdminDateTime,
   moderationDecisionMeta,
   moderationProviderMeta,
@@ -227,6 +232,8 @@ export function ModerationDetailView({
         </Card>
       </div>
 
+      {detail.modelReview === null ? null : <ModelReviewCard review={detail.modelReview} />}
+
       <Card className="gap-0 divide-y divide-line border border-line p-0">
         <h2 className="p-4 font-semibold">审核历史</h2>
         {detail.history.length === 0 ? (
@@ -283,6 +290,66 @@ export function ModerationDetailView({
       ) : null}
     </div>
   )
+}
+
+/**
+ * 模型复核区块（#751）。
+ *
+ * 两个标签必须同时露出：`decision` 是模型**建议**，`outcome` 是平台**怎么用它**——
+ * 影子期两者会不一致（`PASS` + `SHADOW`），只显示一个会让值班同学误以为已经放行。
+ */
+function ModelReviewCard({ review }: { review: AdminModerationModelReview }) {
+  const decisionMeta = MODEL_DECISION_META[review.decision]
+  const outcomeMeta = MODEL_OUTCOME_META[review.outcome]
+  return (
+    <Card className="gap-3 border border-line p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-semibold">模型复核</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={decisionMeta.variant}>模型认为：{decisionMeta.label}</Badge>
+          <Badge variant={outcomeMeta.variant}>{outcomeMeta.label}</Badge>
+        </div>
+      </div>
+      <p className="text-ink-2 text-sm">{review.reason}</p>
+      {review.evidence.length > 0 ? (
+        <ul className="list-disc space-y-1 pl-5 text-ink-2 text-sm">
+          {review.evidence.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="text-ink-3 text-xs">
+        {review.model} · 提示词 {review.promptVersion}
+        {review.confidence === null ? '' : ` · 置信度 ${review.confidence.toFixed(2)}`}
+        {review.latencyMs === null ? '' : ` · 耗时 ${review.latencyMs}ms`}
+        {review.category === null ? '' : ` · 类别 ${review.category}`} ·{' '}
+        {formatAdminDateTime(review.createdAt)}
+      </p>
+      <p className="text-ink-3 text-xs">
+        模型理由只在后台可见；卖家看到的是固定话术，不含这里的任何文字。
+      </p>
+    </Card>
+  )
+}
+
+const MODEL_DECISION_META: Record<
+  AdminModerationModelReview['decision'],
+  { label: string; variant: BadgeVariant }
+> = {
+  PASS: { label: '可以放行', variant: 'success' },
+  BLOCK: { label: '应当拒绝', variant: 'danger' },
+  UNSURE: { label: '没有把握', variant: 'warn' },
+  ERROR: { label: '未完成', variant: 'secondary' },
+}
+
+const MODEL_OUTCOME_META: Record<
+  AdminModerationModelReview['outcome'],
+  { label: string; variant: BadgeVariant }
+> = {
+  SHADOW: { label: '影子模式（未生效）', variant: 'secondary' },
+  AUTO_PASSED: { label: '已自动放行', variant: 'success' },
+  AUTO_REJECTED: { label: '已自动拒绝', variant: 'danger' },
+  PENDING: { label: '转人工', variant: 'warn' },
 }
 
 /** 上游来源标注（#228：含义随 provider 变化，端上只标注来源与请求号）。 */

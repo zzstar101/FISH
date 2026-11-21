@@ -21,7 +21,7 @@ import { loginTickets } from './schema/login-tickets'
 import { matches } from './schema/matches'
 import { messageMedia } from './schema/message-media'
 import { messages } from './schema/messages'
-import { listingModerationRecords } from './schema/moderation'
+import { listingModerationRecords, moderationModelReviews } from './schema/moderation'
 import { notifications } from './schema/notifications'
 import { recommendationEvents } from './schema/recommendation-events'
 import { recommendationRequestItems } from './schema/recommendation-request-items'
@@ -145,10 +145,12 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 免得上一轮留下的待删键在下一轮 worker 回收时被"顺带"删掉。
   // `feedback`（#463，引用 users）同理必须在内；反馈由用户真实提交产生，seed 不预置。
   // 漏掉会让 seed 直接失败（实测未列入时报 0A000，不需要该表里真有数据）。
+  // `moderation_model_reviews`（#751，引用 listings 与 listing_moderation_records）：不列它，
+  // TRUNCATE 会因外键直接报 cannot truncate a table referenced in a foreign key constraint。
   // `subscribe_message_grants` / `subscribe_message_deliveries`（#462，均引用 users）同理；
   // 两者由真实授权与调度循环产生，seed 不预置。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingImageDeletions}, ${listingModerationRecords}, ${moderationModelReviews}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${disputes}, ${disputeAttachments}, ${disputeEvidenceMessages}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${feedback}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}, ${subscribeMessageGrants}, ${subscribeMessageDeliveries}`,
   )
 
   const now = new Date()

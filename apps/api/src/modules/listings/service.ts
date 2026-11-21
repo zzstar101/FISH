@@ -671,33 +671,16 @@ export function createListingService(deps: {
         title: input.title,
         description: input.description,
       })
-      if (moderationResult.decision === 'BLOCK') {
-        await recordModeration(store, {
-          sellerId: userId,
-          action: 'CREATE',
-          title: input.title,
-          description: input.description,
-          result: moderationResult,
-        })
-        throw new ListingServiceError(
-          422,
-          'LISTING_CONTENT_BLOCKED',
-          '商品内容未通过审核',
-          moderationBlockDetailsOf(moderationResult),
-        )
-      }
-
+      // 发布**不再**因审核结论被拒（Owner 2026-11-21 口径：先让商品落地，再异步/人工给结论）。
+      // 机器判 BLOCK 时商品照样建，只是落成 `BLOCKED` + `OFFLINE`：卖家能在「我的发布」看到它、
+      // 看到原因、删得掉、走申诉；而不是在提交表单时收到一句没有上下文的 422。
+      // 审核结论与证据仍写进 `listing_moderation_records`（见下面的 `moderation` 计划）。
       const imageDecisions = await assertUsableObjectKeys(userId, input.objectKeys, NO_STORED_KEYS)
       // 图片结论与文本结论取最严的一档（ALLOW < REVIEW < BLOCK，见 aggregateModerationDecision）：
       // 只要有一张图是 REVIEW，整条商品就进人工队列。图片侧给不出 BLOCK —— 被判 BLOCK 的图不固化、
-      // 确认表里根本没有它的键，所以上面的引用校验早就拒了；BLOCK 只可能来自文本，且已经拦下。
-      // 这里仍然显式挡一次：聚合结果绝不能掉进下面的 `APPROVED` 分支。
+      // 确认表里根本没有它的键，所以上面的引用校验早就拒了（`UPLOAD_OBJECT_MISSING` / 结算为
+      // `BLOCKED` 的键）。真出现图片 BLOCK 也只落「未通过」，不会放行。
       const decision = aggregateModerationDecision([moderationResult.decision, ...imageDecisions])
-      if (decision === 'BLOCK') {
-        throw new ListingServiceError(422, 'IMAGE_CONTENT_BLOCKED', '图片内容未通过审核', [
-          { field: 'objectKeys', message: '图片内容未通过审核' },
-        ])
-      }
 
       const result = await store.createListingAtomic({
         id: listingId,
@@ -712,7 +695,9 @@ export function createListingService(deps: {
         free: input.free,
         objectKeys: input.objectKeys,
         duplicateWindowStart: new Date(now().getTime() - DUPLICATE_WINDOW_MS),
-        moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+        // 决策 → 落库状态：ALLOW → 上架；REVIEW → 审核中（OFFLINE，仅自己可见）；BLOCK → 未通过。
+        moderationStatus:
+          decision === 'ALLOW' ? 'APPROVED' : decision === 'REVIEW' ? 'REVIEW' : 'BLOCKED',
         // 对外只给既有安全码，绝不透出腾讯 Label/Score/命中策略（#228）。
         moderationReason: moderationReasonCodeFor(decision),
         moderationRuleVersion: moderationResult.policyVersion,
@@ -939,32 +924,6 @@ export function createListingService(deps: {
       }
     },
   }
-}
-
-async function recordModeration(
-  store: ListingStore,
-  input: {
-    listingId?: string
-    sellerId: string
-    action: 'CREATE' | 'UPDATE'
-    title: string
-    description: string
-    result: TextModerationResult
-  },
-): Promise<void> {
-  await store.recordModeration?.({
-    listingId: input.listingId,
-    sellerId: input.sellerId,
-    action: input.action,
-    title: input.title,
-    description: input.description,
-    decision: input.result.decision,
-    // provider 结果里没有本地词表的命中规则/脱敏词条；审计看下面的 provider 字段（#228）。
-    matchedRules: [],
-    matchedTermsMasked: [],
-    ruleVersion: input.result.policyVersion,
-    ...moderationTraceOf(input.result),
-  })
 }
 
 /** #228：provider 结果里风险最高的那个字段（审计字段取它的 label/subLabel/score/requestId）。 */
