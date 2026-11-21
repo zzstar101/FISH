@@ -1,6 +1,6 @@
 {
-  "id": "be5415a6-6d0e-438c-8d9b-30a4e03b6037",
-  "prevId": "fd3a5ee7-c388-49e8-8085-35205a0cf3a0",
+  "id": "d15d9879-a4ed-4266-be64-b588e6a00529",
+  "prevId": "c25cb42d-178f-42f3-b43f-4cfb40cd9013",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5761,6 +5761,14 @@
           "primaryKey": false,
           "notNull": true
         },
+        "listing_type": {
+          "name": "listing_type",
+          "type": "listing_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'SALE'"
+        },
         "category": {
           "name": "category",
           "type": "listing_category",
@@ -7383,6 +7391,14 @@
         "RESERVED",
         "SOLD",
         "OFFLINE"
+      ]
+    },
+    "public.listing_type": {
+      "name": "listing_type",
+      "schema": "public",
+      "values": [
+        "SALE",
+        "RENTAL"
       ]
     },
     "public.message_media_kind": {
