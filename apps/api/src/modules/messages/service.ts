@@ -463,7 +463,12 @@ export function createMessageService({
       const brief = listingUuid
         ? (await store.findListingBriefs([listingUuid])).get(listingUuid)
         : undefined
-      const shareable = brief?.status === 'ACTIVE' && brief.moderationStatus === 'APPROVED'
+      // #705：出租商品不能作为**售价卡片**分享进会话（与详情 404 同口径，统一 404 不给探针）。
+      // 历史消息的富化不受影响 —— 已经发出去的卡片照常出图，只是新分享被拦下。
+      const shareable =
+        brief?.status === 'ACTIVE' &&
+        brief.moderationStatus === 'APPROVED' &&
+        brief.listingType === 'SALE'
       if (!shareable) throw listingNotFound()
 
       let row: MessageRow

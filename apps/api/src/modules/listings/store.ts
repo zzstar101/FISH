@@ -153,6 +153,12 @@ export type UpdateListingFields = {
 export type ListingState = {
   sellerId: string
   status: ListingStatus
+  /**
+   * #705：商品类型。`transition` / `deleteListing` 必须在**写之前**据此拒绝出租商品 ——
+   * 本模块的写端点（上下架 / 删除）属于买卖域，出租的生命周期由租赁域负责。
+   * 少了这一列，那些端点会「先改库、再在 loadDetail 里 404」，把写入变成静默成功。
+   */
+  listingType: 'SALE' | 'RENTAL'
   title?: string
   description?: string
   priceCents: number
@@ -167,6 +173,12 @@ export type ListingState = {
 export type ListingUpdateTarget = {
   sellerId: string
   status: ListingStatus
+  /**
+   * #705：`readUpdateTarget` 用它拒绝出租商品（编辑属于买卖域）。它**不**进
+   * `EDITABLE_COLUMNS` 的写入面 —— 类型创建后不可互转，写路径永远不写这一列。
+   * 所以它不出现在 `UpdateListingFields` 里，也不参与冲突比较。
+   */
+  listingType: 'SALE' | 'RENTAL'
   title: string
   description: string
   priceCents: number
@@ -421,6 +433,8 @@ export const LOCKED_LISTING_STATUSES: ListingStatus[] = ['RESERVED', 'SOLD']
 const EDITABLE_COLUMNS = {
   sellerId: listings.sellerId,
   status: listings.status,
+  /** #705：编辑路径（`readUpdateTarget`）据此在**锁内**拒绝出租商品。 */
+  listingType: listings.listingType,
   title: listings.title,
   description: listings.description,
   priceCents: listings.priceCents,
@@ -475,6 +489,10 @@ async function readUpdateTarget(
 
   const row = current[0]
   if (!row) return { kind: 'not-found' as const }
+  // #705：编辑属于买卖域，出租商品按「不存在」处理（与 `loadDetail` 对出租商品的 404 同码）。
+  // 放在归属判定**之前**：先判归属会把"别人的商品是否存在"泄漏出去，而这里根本不该
+  // 让出租商品通过任何一步。
+  if (row.listingType !== 'SALE') return { kind: 'not-found' as const }
   if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
   if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
   // 与管理员下架串行：写回前再查一次，卖家的 PATCH 不能清除治理标记。
@@ -544,6 +562,9 @@ export function createSqlListingStore(db: Db): ListingStore {
               eq(listings.title, record.title),
               eq(listings.priceCents, record.priceCents),
               eq(listings.category, record.category),
+              // #705：查重是**同一类型内部**的去重。少了这一条，一件同名的出租商品会把
+              // 一次合法的出售发布判成重复，返回一个在 `loadDetail` 里 404 的 id。
+              eq(listings.listingType, 'SALE'),
               gt(listings.createdAt, record.duplicateWindowStart),
             ),
           )
@@ -676,6 +697,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         .select({
           sellerId: listings.sellerId,
           status: listings.status,
+          listingType: listings.listingType,
           title: listings.title,
           description: listings.description,
           priceCents: listings.priceCents,
@@ -693,6 +715,10 @@ export function createSqlListingStore(db: Db): ListingStore {
       const conditions: SQL[] = [
         ...(criteria.status ? [eq(listings.status, criteria.status)] : []),
         ...(criteria.includeUnapproved ? [] : [eq(listings.moderationStatus, 'APPROVED')]),
+        // #705：买卖 Feed 只认 SALE。这里**无条件**加，不放进 `criteria` —— 本方法只服务
+        // 出售域（公开 Feed / 我发布的 / 他人主页），出租的列表由租赁域自己的查询负责。
+        // 旧的创建路径也只会产出 SALE，所以存量行为不变。
+        eq(listings.listingType, 'SALE'),
       ]
 
       if (criteria.sellerId) conditions.push(eq(listings.sellerId, criteria.sellerId))
@@ -949,6 +975,9 @@ export function createSqlListingStore(db: Db): ListingStore {
             and(
               eq(listings.id, input.id),
               eq(listings.status, input.from),
+              // #705：上下架属于买卖域，条件里带上类型 —— 与 `accept` 的条件更新同一手法：
+              // 判定与写入对同一行原子，出租商品改不到（返 0 行 → service 走幂等复查后 404）。
+              eq(listings.listingType, 'SALE'),
               ...(input.to === 'ACTIVE' ? [eq(listings.moderationStatus, 'APPROVED')] : []),
             ),
           )
@@ -975,6 +1004,7 @@ export function createSqlListingStore(db: Db): ListingStore {
           SELECT seller_id::text AS seller_id,
                  status::text AS status,
                  moderation_status::text AS moderation_status,
+                 listing_type::text AS listing_type,
                  governance_delisted_at
           FROM listings
           WHERE id = ${input.id}
@@ -982,6 +1012,8 @@ export function createSqlListingStore(db: Db): ListingStore {
         `)
         const row = rowsOf(current)[0]
         if (!row) return { kind: 'not-found' as const }
+        // #705：出租商品的删除归租赁域，本端点按「不存在」处理（与详情 404 同码）。
+        if (String(row.listing_type) !== 'SALE') return { kind: 'not-found' as const }
         if (String(row.seller_id) !== input.sellerId) return { kind: 'not-owner' as const }
         /*
          * 只有「不过审」可删（判定口径见接口注释）。

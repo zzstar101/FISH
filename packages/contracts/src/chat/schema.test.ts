@@ -267,6 +267,7 @@ describe('messageDtoSchema', () => {
         title: 'K380 键盘',
         priceCents: 16000,
         status: 'ACTIVE',
+        listingType: 'SALE',
         coverUrl: null,
       },
     }
@@ -316,6 +317,7 @@ describe('conversationDtoSchema', () => {
         title: 'K380 键盘',
         priceCents: 16000,
         status: 'ACTIVE',
+        listingType: 'SALE',
         coverUrl: null,
       },
       counterpart: {
@@ -379,6 +381,7 @@ describe('conversationDtoSchema', () => {
         title: 'K380 键盘',
         priceCents: 16000,
         status: 'ACTIVE',
+        listingType: 'SALE',
         coverUrl: null,
       },
       counterpart: {
@@ -407,6 +410,7 @@ describe('conversationDtoSchema', () => {
         title: 'K380 键盘',
         priceCents: 16000,
         status: 'ACTIVE',
+        listingType: 'SALE',
         coverUrl: null,
       },
       counterpart: {

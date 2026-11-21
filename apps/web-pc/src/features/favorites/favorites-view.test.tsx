@@ -33,6 +33,7 @@ function listingFixture(
     category: 'BOOKS',
     condition: 'GOOD',
     status,
+    listingType: 'SALE',
     urgent: false,
     negotiable: false,
     free: false,

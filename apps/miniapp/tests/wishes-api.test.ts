@@ -179,6 +179,7 @@ function card(id: string, seller: ListingCard['seller'] = undefined): ListingCar
     category: 'DIGITAL',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE',
     urgent: false,
     negotiable: false,
     free: false,

@@ -87,6 +87,7 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
   category: 'DIGITAL',
   condition: 'GOOD',
   status: 'OFFLINE', // 本人视角可见非在售
+  listingType: 'SALE',
   urgent: false,
   negotiable: true,
   free: false,

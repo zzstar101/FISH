@@ -37,6 +37,17 @@ export const ListingStatusSchema = z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'OFFLIN
 export type ListingStatus = z.infer<typeof ListingStatusSchema>
 
 /**
+ * 商品类型（#705 RNT-01）：`SALE` = 出售，`RENTAL` = 出租。
+ *
+ * 读模型必带（卡片的 `listingType`），写模型**不接受** —— 创建后不可互转，且本版只开放
+ * `SALE` 的创建路径，出租发布由 #706 另开端点。旧买卖链路（交易、匹配、推荐、识图、
+ * 许愿匹配、收藏、个人主页在售/已售）一律只返回 `SALE`，`RENTAL` 不会混进售价商品。
+ */
+export const ListingTypeSchema = z.enum(['SALE', 'RENTAL'])
+
+export type ListingType = z.infer<typeof ListingTypeSchema>
+
+/**
  * 审核状态（读模型）。
  *
  * `REVIEW` 的商品在库里同时是 `status = OFFLINE`，所以客户端**只看 `status` 分不出**
@@ -200,6 +211,14 @@ export const ListingCardSchema = z.object({
   category: ListingCategorySchema,
   condition: ListingConditionSchema,
   status: ListingStatusSchema,
+  /**
+   * 商品类型（#705）。**必填**：DB 列 `NOT NULL DEFAULT 'SALE'`，API 任何一张卡片都取得到，
+   * 不存在「暂时未知」——写成可选会让 `undefined` 与 `SALE` 在端上长得一样。
+   *
+   * 旧买卖读通道只返回 `SALE`（出租走租赁域自己的 Feed / 详情），所以本字段在那些页面上
+   * 恒为 `SALE`；它是给 #706 起的租赁入口与端上分流用的。
+   */
+  listingType: ListingTypeSchema,
   urgent: z.boolean(),
   negotiable: z.boolean(),
   free: z.boolean(),

@@ -105,6 +105,7 @@ function listingSource(id: string, overrides: Partial<ListingCardSource> = {}): 
     category: 'BOOKS',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     urgent: false,
     negotiable: false,
     free: false,

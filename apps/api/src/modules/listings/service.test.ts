@@ -41,6 +41,7 @@ function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
     category: 'DIGITAL',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     urgent: false,
     negotiable: true,
     free: false,
@@ -122,6 +123,7 @@ function updateTarget(overrides: Partial<ListingUpdateTarget> = {}): ListingUpda
   return {
     sellerId: SELLER_ID,
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     title: '罗技 K380 键盘',
     description: '宿舍用了一学期，功能正常。',
     priceCents: 16000,
@@ -154,6 +156,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
     findState: async () => ({
       sellerId: SELLER_ID,
       status: 'ACTIVE',
+      listingType: 'SALE' as const,
       priceCents: 16000,
       free: false,
       governanceDelistedAt: null,
@@ -1620,6 +1623,7 @@ describe('transition', () => {
         findState: async () => ({
           sellerId: SELLER_ID,
           status: 'OFFLINE',
+          listingType: 'SALE' as const,
           priceCents: 16000,
           free: false,
           governanceDelistedAt: null,
@@ -1652,6 +1656,7 @@ describe('transition', () => {
         findState: async () => ({
           sellerId: SELLER_ID,
           status: 'RESERVED',
+          listingType: 'SALE' as const,
           priceCents: 16000,
           free: false,
           governanceDelistedAt: null,
@@ -1685,6 +1690,7 @@ describe('transition', () => {
           return {
             sellerId: SELLER_ID,
             status: reads === 1 ? 'ACTIVE' : 'RESERVED',
+            listingType: 'SALE' as const,
             priceCents: 16000,
             free: false,
             governanceDelistedAt: null,
@@ -1716,6 +1722,7 @@ describe('transition', () => {
           return {
             sellerId: SELLER_ID,
             status: reads === 1 ? 'ACTIVE' : 'OFFLINE',
+            listingType: 'SALE' as const,
             priceCents: 16000,
             free: false,
             governanceDelistedAt: null,

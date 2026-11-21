@@ -211,6 +211,7 @@ function makeCard(seq: number, overrides: Partial<ListingCard> = {}): ListingCar
     category: 'BOOKS',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     urgent: false,
     negotiable: false,
     free: false,

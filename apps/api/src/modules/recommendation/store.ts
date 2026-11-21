@@ -222,10 +222,13 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
 
     async findExistingListingIds(ids) {
       if (ids.length === 0) return []
+      // #705：事件摄取里「商品存在」= **出售**商品存在。租赁互动属租赁域，混进来会污染
+      // 浏览足迹（`view-history/ingest`）与推荐指标；不含类型的 id 按不存在处理，
+      // 与公开 Feed / 详情对出租商品的 404 同一口径。
       const rows = await db
         .select({ id: listings.id })
         .from(listings)
-        .where(inArray(listings.id, ids))
+        .where(and(inArray(listings.id, ids), eq(listings.listingType, 'SALE')))
       return rows.map((row) => row.id)
     },
 

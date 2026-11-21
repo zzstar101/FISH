@@ -17,6 +17,7 @@ function row(overrides: Partial<FavoriteRow> = {}): FavoriteRow {
     category: 'DIGITAL',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     urgent: false,
     negotiable: true,
     free: false,
@@ -36,6 +37,7 @@ function row(overrides: Partial<FavoriteRow> = {}): FavoriteRow {
 function listingState(overrides: Partial<FavoriteListingState> = {}): FavoriteListingState {
   return {
     status: 'ACTIVE',
+    listingType: 'SALE' as const,
     moderationStatus: 'APPROVED',
     governanceDelistedAt: null,
     sellerId: seller,

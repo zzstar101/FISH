@@ -37,11 +37,15 @@ type ListingCategory = (typeof listingCategoryEnum.enumValues)[number]
  * 治理下架当前**一定**同时把 `status` 置为 `OFFLINE`（`governance/service.ts` 的 delist 路径），
  * 所以 `status='ACTIVE'` 已经覆盖它；这里再写一次 `governance_delisted_at IS NULL` 是纵深防御：
  * 一旦将来某条路径只打标记不改状态，"治理下架立即消失"（Issue #323 M3）不能靠一条隐式约定撑着。
+ *
+ * `listing_type = 'SALE'`（#705）：买卖侧的召回 / 推荐 / 语义检索只认出售商品。出租商品
+ * 有自己的租赁广场与详情读路径，一旦混进这里就会以售价样式出现在推荐与识图结果里。
  */
 export function visibleListingConditions(viewerUserId: string | null): SQL[] {
   return [
     eq(listings.status, 'ACTIVE'),
     eq(listings.moderationStatus, 'APPROVED'),
+    eq(listings.listingType, 'SALE'),
     isNull(listings.governanceDelistedAt),
     ...(viewerUserId === null ? [] : [ne(listings.sellerId, viewerUserId)]),
   ]

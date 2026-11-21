@@ -32,6 +32,15 @@ export const listingCategoryEnum = pgEnum('listing_category', [
 
 export const listingConditionEnum = pgEnum('listing_condition', ['NEW', 'LIKE_NEW', 'GOOD', 'FAIR'])
 
+/**
+ * 商品类型（#705 RNT-01）：`SALE` = 出售，`RENTAL` = 出租。
+ *
+ * 创建后**不可互转**：旧买卖链路（报价、接受提案、成交、匹配、推荐、识图、许愿匹配、
+ * 收藏、个人主页在售/已售）全部按 `SALE` 巡滤，`RENTAL` 只走租赁域自己的读路径。
+ * 迁移前的存量行由列默认值 `SALE` 补齐，行为与扩展前完全一致。
+ */
+export const listingTypeEnum = pgEnum('listing_type', ['SALE', 'RENTAL'])
+
 export const listingStatusEnum = pgEnum('listing_status', ['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE'])
 export const listingModerationStatusEnum = pgEnum('listing_moderation_status', [
   'APPROVED',
@@ -51,6 +60,11 @@ export const listings = pgTable(
     description: text('description').notNull(),
     /** 金额统一整数分。 */
     priceCents: integer('price_cents').notNull(),
+    /**
+     * 商品类型（#705）：默认 `SALE` 让**存量行与旧创建路径**保持扩展前的语义。
+     * 类型创建后不可互转 —— 写路径不提供该字段，服务端只按 `SALE` 创建。
+     */
+    listingType: listingTypeEnum('listing_type').notNull().default('SALE'),
     category: listingCategoryEnum('category').notNull(),
     condition: listingConditionEnum('condition').notNull(),
     status: listingStatusEnum('status').notNull().default('ACTIVE'),

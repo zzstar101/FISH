@@ -34,8 +34,12 @@ import type { ListingCardSource } from '../listings/card'
 
 export type MatchTarget = { id: string; ownerId: string }
 
-/** listing 方向多带一个 `status`：`OFFLINE` 对非卖家要按 404 处理（与 #6 同一口径）。 */
-export type MatchListingTarget = MatchTarget & { status: ListingStatus }
+/** listing 方向多带 `status`：`OFFLINE` 对非卖家要按 404 处理（与 #6 同一口径）。 */
+export type MatchListingTarget = MatchTarget & {
+  status: ListingStatus
+  /** #705：出租商品没有买卖侧匹配语义，service 与 OFFLINE 同码（404）。 */
+  listingType: 'SALE' | 'RENTAL'
+}
 
 export type WishMatchEntry = {
   matchId: string
@@ -104,6 +108,8 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             ownerId: listings.sellerId,
             status: listings.status,
             moderationStatus: listings.moderationStatus,
+            // #705：出租商品没有买卖侧的匹配语义，service 据此按 404 处理（与 OFFLINE 同码）。
+            listingType: listings.listingType,
           })
           .from(listings)
           .where(eq(listings.id, id))
@@ -125,6 +131,8 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             eq(wishes.status, 'ACTIVE'),
             ne(listings.status, 'OFFLINE'),
             eq(listings.moderationStatus, 'APPROVED'),
+            // #705：许愿匹配是买卖链路，出租商品不参与（与 `listWishMatches` 同条件）。
+            eq(listings.listingType, 'SALE'),
             priceWithinBudget,
           ),
         )
@@ -149,6 +157,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           category: listings.category,
           condition: listings.condition,
           status: listings.status,
+          listingType: listings.listingType,
           urgent: listings.urgent,
           negotiable: listings.negotiable,
           free: listings.free,
@@ -175,6 +184,8 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             eq(wishes.status, 'ACTIVE'),
             ne(listings.status, 'OFFLINE'),
             eq(listings.moderationStatus, 'APPROVED'),
+            // #705：与 `countWishMatches` 同条件 —— 计数与列表必须逐字一致。
+            eq(listings.listingType, 'SALE'),
             priceWithinBudget,
           ),
         )
@@ -195,6 +206,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           category: row.category,
           condition: row.condition,
           status: row.status,
+          listingType: row.listingType,
           urgent: row.urgent,
           negotiable: row.negotiable,
           free: row.free,
@@ -218,6 +230,8 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
             eq(listings.moderationStatus, 'APPROVED'),
+            // #705：listing 方向的匹配计数同样只认 SALE（与 store 里另一条计数同口径）。
+            eq(listings.listingType, 'SALE'),
             priceWithinBudget,
           ),
         )
@@ -247,6 +261,8 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
             eq(listings.moderationStatus, 'APPROVED'),
+            // #705：与 `countListingMatches` 逐字同条件（该方法的注释承诺两者一致）。
+            eq(listings.listingType, 'SALE'),
             priceWithinBudget,
           ),
         )

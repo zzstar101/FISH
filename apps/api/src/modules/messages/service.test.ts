@@ -26,6 +26,7 @@ function listingBrief(
   overrides: Partial<{
     status: string
     moderationStatus: string | null
+    listingType: 'SALE' | 'RENTAL'
     coverObjectKey: string | null
   }> = {},
 ) {
@@ -35,6 +36,7 @@ function listingBrief(
     priceCents: 16000,
     status: 'ACTIVE',
     moderationStatus: 'APPROVED',
+    listingType: 'SALE' as const,
     coverObjectKey: 'listings/covers/k380.webp',
     ...overrides,
   }
@@ -291,7 +293,12 @@ describe('message service: sendListingMessage（#359 商品卡）', () => {
       }),
     ).rejects.toMatchObject({ status: 404, code: 'LISTING_NOT_FOUND' })
 
-    for (const overrides of [{ status: 'SOLD' }, { moderationStatus: 'BLOCKED' }]) {
+    // #705：出租商品同样不能作为售价卡片分享（`listingType` 是卡片语义的一部分）。
+    for (const overrides of [
+      { status: 'SOLD' },
+      { moderationStatus: 'BLOCKED' },
+      { listingType: 'RENTAL' as const },
+    ]) {
       const store = new MemoryMessageStore()
       store.listings.set(LISTING_ID, listingBrief(overrides))
       expect(

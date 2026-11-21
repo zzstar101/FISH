@@ -55,6 +55,7 @@ class MemoryTxStore implements TransactionStore {
           sellerId: seller,
           listingId: listingA,
           listingStatus: 'ACTIVE',
+          listingType: 'SALE',
           // 与 listingBriefs 的摘要同价：提案金额必须等于挂价（#676）
           listingPriceCents: 16000,
         },
@@ -420,12 +421,61 @@ describe('transaction service: propose / reject / accept', () => {
         sellerId: seller,
         listingId: listingA,
         listingStatus: 'RESERVED',
+        listingType: 'SALE',
         listingPriceCents: 16000,
       },
     })
     expect(
       service.propose(buyer, { conversationId: conversationA, amountCents: 1 }),
     ).rejects.toMatchObject({ status: 409, code: 'LISTING_NOT_ACTIVE' })
+  })
+
+  test('#705 RENTAL 商品不能提买卖提案：409 LISTING_NOT_ACTIVE，一条 SYSTEM 消息都不写', async () => {
+    const { store, service, messages, notifications } = await build()
+    store.conversations.set(conversationA, {
+      kind: 'ok',
+      brief: {
+        id: conversationA,
+        buyerId: buyer,
+        sellerId: seller,
+        listingId: listingA,
+        listingStatus: 'ACTIVE',
+        listingType: 'RENTAL',
+        listingPriceCents: 16000,
+      },
+    })
+    await expect(
+      service.propose(buyer, { conversationId: conversationA, amountCents: 16000 }),
+    ).rejects.toMatchObject({ status: 409, code: 'LISTING_NOT_ACTIVE' })
+    expect(messages.messages).toHaveLength(0)
+    expect(notifications).toHaveLength(0)
+  })
+
+  /**
+   * #705：`accept` 的 service 前置校验（`brief.listingType !== 'SALE'` → 409）。
+   *
+   * 真正不可绕过的闸在 `store.accept` 的条件更新里（`AND listing_type = 'SALE'`），所以删掉本层
+   * 不会造成越权 —— 但本层是「先说不，再进事务」，缺了它会替一个必然失败的操作白跑一次事务。
+   * store 侧条件更新已有独立用例；这条钉的是本层的返回码与「零写入」。
+   */
+  test('#705 RENTAL 会话不能接受提案：409 LISTING_NOT_ACTIVE 且不建交易', async () => {
+    const { store, service } = await build()
+    store.conversations.set(conversationA, {
+      kind: 'ok',
+      brief: {
+        id: conversationA,
+        buyerId: buyer,
+        sellerId: seller,
+        listingId: listingA,
+        listingStatus: 'ACTIVE',
+        listingType: 'RENTAL',
+        listingPriceCents: 16000,
+      },
+    })
+    await expect(
+      service.accept(seller, { conversationId: conversationA, amountCents: 16000 }),
+    ).rejects.toMatchObject({ status: 409, code: 'LISTING_NOT_ACTIVE' })
+    expect(store.rows).toHaveLength(0)
   })
 
   test('#676 提案金额 ≠ 挂价 → 422 PROPOSAL_AMOUNT_MISMATCH（不落消息、不发通知）', async () => {
@@ -448,6 +498,7 @@ describe('transaction service: propose / reject / accept', () => {
         sellerId: seller,
         listingId: listingA,
         listingStatus: 'ACTIVE',
+        listingType: 'SALE',
         listingPriceCents: 0,
       },
     })

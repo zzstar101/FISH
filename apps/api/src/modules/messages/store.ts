@@ -146,6 +146,12 @@ export interface ListingBrief {
   status: string
   /** 公开可见性的第二道闸（与 feed / 公开在售列表同口径，见 users/store.ts 的在售统计）。 */
   moderationStatus: string | null
+  /**
+   * #705：商品类型。分享（`sendListingMessage`）只放行 `SALE` —— 出租商品的「分享」入口
+   * 属于租赁域，旧聊天卡片没有日租价语义，把它按售价展示就是错误信息。
+   * 历史消息的富化不看这一列（已经发出去的消息照常出卡）。
+   */
+  listingType: 'SALE' | 'RENTAL'
   /** 封面 objectKey；无图商品为 null（URL 由 service 经注入的 MediaStorage 拼）。 */
   coverObjectKey: string | null
 }
@@ -276,6 +282,7 @@ export function createSqlMessageStore(db: Db): MessageStore {
       if (ids.length === 0) return briefs
       const result = await db.execute(sql`
         SELECT l.id, l.title, l.price_cents, l.status::text, l.moderation_status::text,
+               l.listing_type::text AS listing_type,
                li.object_key AS cover_object_key
         FROM listings l
         LEFT JOIN listing_images li ON li.listing_id = l.id AND li.sort_order = 0
@@ -291,6 +298,7 @@ export function createSqlMessageStore(db: Db): MessageStore {
           priceCents: Number(row.price_cents),
           status: row.status as string,
           moderationStatus: (row.moderation_status as string | null) ?? null,
+          listingType: row.listing_type as 'SALE' | 'RENTAL',
           coverObjectKey: (row.cover_object_key as string | null) ?? null,
         })
       }

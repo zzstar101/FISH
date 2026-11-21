@@ -53,6 +53,8 @@ export interface FavoriteListingState {
   status: ListingCard['status']
   /** 与契约 / DB 同源，不另写一份枚举联合（增删枚举值时这里跟着编译报错）。 */
   moderationStatus: ListingCard['moderationStatus']
+  /** #705：出租商品对买卖侧的收藏通道不可见（与 `listFavorites` 的 `SALE` 条件一致）。 */
+  listingType: ListingCard['listingType']
   governanceDelistedAt: Date | null
   sellerId: string
 }
@@ -94,6 +96,7 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
         .select({
           status: listings.status,
           moderationStatus: listings.moderationStatus,
+          listingType: listings.listingType,
           governanceDelistedAt: listings.governanceDelistedAt,
           sellerId: listings.sellerId,
         })
@@ -113,7 +116,9 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
     },
 
     async listFavorites(userId, limit, cursor) {
-      const conditions: SQL[] = [eq(favorites.userId, userId)]
+      // #705：收藏列表是买卖侧读路径，只展示出售商品。已收藏的出租商品不进这个列表
+      // （出租详情由租赁域负责）；`totalFavorites` 必须用同一个条件，否则数字与列表对不上。
+      const conditions: SQL[] = [eq(favorites.userId, userId), eq(listings.listingType, 'SALE')]
       if (cursor) conditions.push(cursorCondition(cursor))
 
       return (
@@ -126,6 +131,7 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
             category: listings.category,
             condition: listings.condition,
             status: listings.status,
+            listingType: listings.listingType,
             urgent: listings.urgent,
             negotiable: listings.negotiable,
             free: listings.free,
@@ -165,10 +171,12 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
     },
 
     async totalFavorites(userId) {
+      // #705：与 `listFavorites` 逐字相同的类型条件 —— 否则会出现「写着 5 条、只列出 3 条」。
       const rows = await db
         .select({ total: sql<number>`count(*)::int` })
         .from(favorites)
-        .where(eq(favorites.userId, userId))
+        .innerJoin(listings, eq(listings.id, favorites.listingId))
+        .where(and(eq(favorites.userId, userId), eq(listings.listingType, 'SALE')))
       return Number(rows[0]?.total ?? 0)
     },
 

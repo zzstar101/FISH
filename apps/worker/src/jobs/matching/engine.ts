@@ -291,6 +291,8 @@ function narrowedListings(wish: WishTarget): SQL | undefined {
   return and(
     eq(listings.status, 'ACTIVE'),
     eq(listings.moderationStatus, 'APPROVED'),
+    // #705：许愿匹配是买卖链路，出租商品不进候选集（与 API 侧 `/matches` 的条件同源）。
+    eq(listings.listingType, 'SALE'),
     ne(listings.sellerId, wish.userId),
     /*
      * 不限分类 → 不生成条件。
@@ -493,6 +495,9 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       if (listing.status !== 'ACTIVE' || listing.moderationStatus !== 'APPROVED') {
         return skipped('target-not-active')
       }
+      // #705：出租商品不参与买卖侧匹配。`target-not-active` 是**跳过**而不是错误：job 由
+      // 审核通过 / 编辑时投递，出租商品也会走同一条投递路径，这里静默 no-op 即可。
+      if (listing.listingType !== 'SALE') return skipped('target-not-active')
 
       const listingTarget: ListingTarget = {
         id: listing.id,

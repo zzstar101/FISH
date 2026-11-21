@@ -65,6 +65,8 @@ export function createSqlViewHistoryStore(db: Db): ViewHistoryStore {
       const conditions: SQL[] = [
         eq(listingViewHistory.userId, userId),
         gte(listingViewHistory.lastViewedAt, since),
+        // #705：浏览足迹是买卖侧读路径，只展示出售商品；与 `totalViewHistory` 逐字同条件。
+        eq(listings.listingType, 'SALE'),
       ]
       if (cursor) conditions.push(cursorCondition(cursor))
 
@@ -78,6 +80,7 @@ export function createSqlViewHistoryStore(db: Db): ViewHistoryStore {
             category: listings.category,
             condition: listings.condition,
             status: listings.status,
+            listingType: listings.listingType,
             urgent: listings.urgent,
             negotiable: listings.negotiable,
             free: listings.free,
@@ -115,11 +118,17 @@ export function createSqlViewHistoryStore(db: Db): ViewHistoryStore {
     },
 
     async totalViewHistory(userId, since) {
+      // #705：与 `listViewHistory` 逐字同条件（含 SALE）—— 否则「共 N 条」与列表条数分叉。
       const rows = await db
         .select({ total: sql<number>`count(*)::int` })
         .from(listingViewHistory)
+        .innerJoin(listings, eq(listings.id, listingViewHistory.listingId))
         .where(
-          and(eq(listingViewHistory.userId, userId), gte(listingViewHistory.lastViewedAt, since)),
+          and(
+            eq(listingViewHistory.userId, userId),
+            gte(listingViewHistory.lastViewedAt, since),
+            eq(listings.listingType, 'SALE'),
+          ),
         )
       return Number(rows[0]?.total ?? 0)
     },

@@ -118,6 +118,7 @@ async function insertListingWithTime(
     category?: ListingCategory
     free?: boolean
     status?: 'ACTIVE' | 'OFFLINE'
+    listingType?: 'SALE' | 'RENTAL'
   },
 ): Promise<string> {
   const id = newId()
@@ -131,6 +132,7 @@ async function insertListingWithTime(
     category: input.category ?? 'DIGITAL',
     condition: 'GOOD',
     status: input.status ?? 'ACTIVE',
+    listingType: input.listingType ?? 'SALE',
     free: input.free ?? false,
     createdAt: input.createdAt,
   })
@@ -437,6 +439,67 @@ test('feed 只返回请求的状态，并按 (createdAt, id) 翻页且不重不�
     expect(collected).toHaveLength(4)
     expect(new Set(collected).size).toBe(4)
     expect(collected).not.toContain(offlineId)
+  })
+})
+
+/*
+ * #705 RNT-01 买卖隔离：`listFeed` 是旧买卖 Feed（公开列表 / 我发布的 / 他人主页）的
+ * 唯一商品来源，必须在 SQL 层把 RENTAL 挡掉。漏这一处，出租商品就会以售价样式出现在
+ * 出售列表里 —— 这正是本 Issue 的验收项之一。
+ */
+test('listFeed 只返回 SALE：RENTAL 不混进出售 Feed（含「我发布的」分支）', async () => {
+  await withSeller(async (sellerId) => {
+    const saleId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:00:00.000Z'),
+      priceCents: 1000,
+    })
+    const rentalId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T04:00:00.000Z'),
+      priceCents: 500,
+      listingType: 'RENTAL',
+    })
+
+    // 公开 Feed（无 sellerId）：只剩 SALE。
+    const publicRows = await store.listFeed({
+      limit: 20,
+      cursor: null,
+      sort: 'newest',
+      status: 'ACTIVE',
+    })
+    const publicIds = publicRows.map((row) => row.listing.id)
+    expect(publicIds).toContain(saleId)
+    expect(publicIds).not.toContain(rentalId)
+
+    // 「我发布的」（带 sellerId，不限状态）：同样只剩 SALE —— 出租有自己的「我的出租」入口。
+    const ownRows = await store.listFeed({
+      limit: 20,
+      cursor: null,
+      sort: 'newest',
+      sellerId,
+      includeUnapproved: true,
+    })
+    const ownIds = ownRows.map((row) => row.listing.id)
+    expect(ownIds).toContain(saleId)
+    expect(ownIds).not.toContain(rentalId)
+  })
+})
+
+test('findCardsByIds 只返回 SALE：推荐 / 识图按 id 取卡片时 RENTAL 也进不来', async () => {
+  await withSeller(async (sellerId) => {
+    const saleId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:00:00.000Z'),
+      priceCents: 1000,
+    })
+    const rentalId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T04:00:00.000Z'),
+      priceCents: 500,
+      listingType: 'RENTAL',
+    })
+
+    const entries = await store.findCardsByIds([saleId, rentalId], { viewerUserId: null })
+    const ids = entries.map((entry) => entry.listing.id)
+    expect(ids).toContain(saleId)
+    expect(ids).not.toContain(rentalId)
   })
 })
 

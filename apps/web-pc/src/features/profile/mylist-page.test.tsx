@@ -47,6 +47,7 @@ const DELETABLE: ListingCard = {
   category: 'BOOKS',
   condition: 'LIKE_NEW',
   status: 'OFFLINE',
+  listingType: 'SALE',
   urgent: false,
   negotiable: true,
   free: false,

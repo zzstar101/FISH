@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { jobs } from '@fish/db/schema/jobs'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
@@ -1068,5 +1069,73 @@ describe('meetup token store (integration, #70)', () => {
       (await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })).kind,
     ).toBe('ok')
     expect(await assertTerminalConsistency(txId)).toBe('COMPLETED')
+  })
+
+  /*
+   * #705 RNT-01 买卖隔离的最后一道闸：`accept` 的条件更新里带 `listing_type = 'SALE'`。
+   * 直接走 store（绕过 service 的前置校验），证明即使内部调用，出租商品也拿不到 RESERVED、
+   * 写不进 transactions —— 也就绝不可能走到 SOLD。
+   */
+  test('#705 accept 对 RENTAL 商品返回 listing-not-active，且不改状态、不建交易', async () => {
+    // 动态 id：这批集成用例的固定 uuid 段已经很密，写死容易与其它用例撞 listings_pkey。
+    const rentalListing = newId()
+    const rentalConversation = newId()
+    const listingNo = await reserveTestListingNo(db, rentalListing)
+    await db.execute(sql`
+      INSERT INTO listings
+        (id, listing_no, seller_id, title, description, price_cents, category, condition, status, listing_type)
+      VALUES (${rentalListing}, ${listingNo}, ${seller}, '出租商品', '按天租', 500, 'DIGITAL', 'GOOD',
+              'ACTIVE', 'RENTAL')
+    `)
+    await seedConversation(rentalConversation, rentalListing, buyer1)
+
+    const lookup = await store.findConversation(rentalConversation, buyer1)
+    if (lookup.kind !== 'ok') throw new Error('unreachable')
+    // 会话摘要如实带出类型：service 的前置校验靠它，SELECT 拼错时这里会先红。
+    expect(lookup.brief.listingType).toBe('RENTAL')
+
+    expect((await store.accept(lookup.brief, 500, acceptSystemContent)).kind).toBe(
+      'listing-not-active',
+    )
+
+    const listing = rows(
+      await db.execute(
+        sql`SELECT status::text AS status FROM listings WHERE id = ${rentalListing}`,
+      ),
+    )[0] as { status: string }
+    expect(listing.status).toBe('ACTIVE')
+    const live = rows(
+      await db.execute(
+        sql`SELECT count(*)::int AS n FROM transactions WHERE listing_id = ${rentalListing}`,
+      ),
+    )[0] as { n: number }
+    expect(live.n).toBe(0)
+  })
+
+  test('#705 propose 对 RENTAL 商品返回 listing-not-sale，不写 SYSTEM 消息', async () => {
+    const rentalListing = newId()
+    const rentalConversation = newId()
+    const listingNo = await reserveTestListingNo(db, rentalListing)
+    await db.execute(sql`
+      INSERT INTO listings
+        (id, listing_no, seller_id, title, description, price_cents, category, condition, status, listing_type)
+      VALUES (${rentalListing}, ${listingNo}, ${seller}, '出租商品 2', '按天租', 500, 'DIGITAL', 'GOOD',
+              'ACTIVE', 'RENTAL')
+    `)
+    await seedConversation(rentalConversation, rentalListing, buyer1)
+
+    const lookup = await store.findConversation(rentalConversation, buyer1)
+    if (lookup.kind !== 'ok') throw new Error('unreachable')
+
+    expect((await store.propose(lookup.brief, 500, acceptSystemContent('proposal'))).kind).toBe(
+      'listing-not-sale',
+    )
+
+    const systemMessages = rows(
+      await db.execute(
+        sql`SELECT count(*)::int AS n FROM messages WHERE conversation_id = ${rentalConversation}`,
+      ),
+    )[0] as { n: number }
+    expect(systemMessages.n).toBe(0)
   })
 })

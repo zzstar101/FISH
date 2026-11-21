@@ -32,6 +32,7 @@ function listingFixture(status: ListingCard['status']): ListingCard {
     category: 'BOOKS',
     condition: 'GOOD',
     status,
+    listingType: 'SALE',
     urgent: false,
     negotiable: false,
     free: false,

@@ -129,10 +129,17 @@ describe('createVisualSearchStore', () => {
     const visible = await createListing({ status: 'ACTIVE', moderationStatus: 'APPROVED' })
     const sold = await createListing({ status: 'SOLD', moderationStatus: 'APPROVED' })
     const review = await createListing({ status: 'ACTIVE', moderationStatus: 'REVIEW' })
+    // #705：出租商品在识别侧同样不可见 —— 它不仅「不是在售」，而且不是出售域的卡片。
+    // 去掉 `publicListingVisibility()` 里的 `listing_type = 'SALE'` 会让本用例在这里红。
+    const rental = await createListing({
+      status: 'ACTIVE',
+      moderationStatus: 'APPROVED',
+      listingType: 'RENTAL',
+    })
 
-    for (const listingId of [visible, sold, review]) {
+    for (const listingId of [visible, sold, review, rental]) {
       const cover = await addCover(listingId)
-      // 三个向量完全相同：差异只可能来自可见性过滤。
+      // 四个向量完全相同：差异只可能来自可见性过滤。
       await saveEmbedding({ listingId, model, sourceObjectKey: cover, embedding: query })
     }
 
@@ -379,8 +386,10 @@ describe('createVisualSearchStore', () => {
     })
     const sold = await createListing({ status: 'SOLD' })
     const review = await createListing({ moderationStatus: 'REVIEW' })
+    // #705：召回与取卡片之间会再判一次可见性，类型条件必须两处都在。
+    const rental = await createListing({ listingType: 'RENTAL' })
 
-    const result = await store.loadListings([visible, sold, review])
+    const result = await store.loadListings([visible, sold, review, rental])
 
     expect([...result.keys()]).toEqual([visible])
     const row = result.get(visible)
@@ -393,6 +402,7 @@ describe('createVisualSearchStore', () => {
       category: 'DIGITAL',
       condition: 'GOOD',
       status: 'ACTIVE',
+      listingType: 'SALE',
       urgent: true,
       negotiable: true,
       free: false,
@@ -487,10 +497,12 @@ describe('createVisualSearchStore', () => {
     const before = await store.soldPriceStats({ category })
 
     await createListing({ category, priceCents: soldPrice, status: 'SOLD' })
-    // 三条反例：未成交、审核中、被拒——都不该进统计（可见性谓词与召回逐条对齐）。
+    // 四条反例：未成交、审核中、被拒——都不该进统计（可见性谓词与召回逐条对齐）。
     await createListing({ category, priceCents: 9999, status: 'ACTIVE' })
     await createListing({ category, priceCents: 9999, status: 'SOLD', moderationStatus: 'REVIEW' })
     await createListing({ category, priceCents: 9999, status: 'SOLD', moderationStatus: 'BLOCKED' })
+    // #705：出租商品的 `price_cents` 是日租价，混进成交均价会把行情拉垮。
+    await createListing({ category, priceCents: 9999, status: 'SOLD', listingType: 'RENTAL' })
 
     const after = await store.soldPriceStats({ category })
 

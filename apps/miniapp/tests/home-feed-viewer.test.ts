@@ -46,6 +46,7 @@ function listing(id: string): MockListing {
     sub: '',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE',
     urgent: false,
     negotiable: false,
     free: false,

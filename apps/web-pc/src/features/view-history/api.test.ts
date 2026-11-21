@@ -36,6 +36,7 @@ describe('fetchMyViewHistory', () => {
               category: 'BOOKS',
               condition: 'GOOD',
               status: 'SOLD',
+              listingType: 'SALE',
               urgent: false,
               negotiable: false,
               free: false,

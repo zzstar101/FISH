@@ -331,6 +331,7 @@ describe('RecommendationFeedResponseSchema', () => {
     category: 'DIGITAL',
     condition: 'GOOD',
     status: 'ACTIVE',
+    listingType: 'SALE',
     urgent: false,
     negotiable: true,
     free: false,

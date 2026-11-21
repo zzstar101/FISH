@@ -28,6 +28,7 @@ const card = {
   category: 'TRANSPORT',
   condition: 'GOOD',
   status: 'ACTIVE',
+  listingType: 'SALE',
   urgent: false,
   negotiable: true,
   free: false,

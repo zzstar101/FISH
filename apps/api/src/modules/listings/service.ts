@@ -354,6 +354,7 @@ export function createListingService(deps: {
       category: input.listing.category,
       condition: input.listing.condition,
       status: input.listing.status,
+      listingType: input.listing.listingType,
       urgent: input.listing.urgent,
       negotiable: input.listing.negotiable,
       free: input.listing.free,
@@ -400,6 +401,10 @@ export function createListingService(deps: {
   async function loadDetail(viewerId: string | null, id: string): Promise<ListingDetail> {
     const found = await store.findDetail(id)
     if (!found) throw notFound()
+    // #705：`GET /listings/:id` 是**买卖侧的详情入口**，出租商品一律 404（连卖家也不行）——
+    // 出租详情的对外形状由 #706 的租赁域端点负责，两边共用一个 id 空间会让端上分不清该渲染
+    // 售价页还是日租页。与 OFFLINE 同码：不给「这个 id 存在且是出租」的探针。
+    if (found.listing.listingType !== 'SALE') throw notFound()
     // OFFLINE 对非卖家 404（不是 403）：403 等于确认"这个 id 存在且是别人的商品"。
     if (
       (found.listing.status === OFFLINE || found.listing.moderationStatus !== 'APPROVED') &&
@@ -1050,6 +1055,12 @@ async function requireOwnEditable(
 ): Promise<ListingState> {
   const state = await store.findState(id)
   if (!state) throw new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在')
+  // #705：本模块的编辑 / 上下架 / 删除都属于**买卖域**，出租商品一律视为不存在（404）。
+  // 必须放在**任何写入之前** —— `loadDetail` 里那条 404 是在写完之后才跑的，
+  // 单靠它会留下「接口报 404、库里已经改掉」的静默写入。
+  if (state.listingType !== 'SALE') {
+    throw new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在')
+  }
   if (state.sellerId !== userId) {
     throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
   }

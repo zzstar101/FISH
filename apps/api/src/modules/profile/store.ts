@@ -16,6 +16,8 @@ export interface ProfileListingRow {
   category: ListingCard['category']
   condition: ListingCard['condition']
   status: ListingCard['status']
+  /** #705：卡片契约必填。`/profile` 的「我发布的」只查 SALE，字段直接来自行。 */
+  listingType: ListingCard['listingType']
   urgent: boolean
   negotiable: boolean
   free: boolean
@@ -112,7 +114,8 @@ export function createSqlProfileStore(db: Db): ProfileStore {
       const result = await db.execute(sql`
         SELECT
           (SELECT count(*)::int FROM listings
-            WHERE seller_id = ${userId} AND status = 'ACTIVE') AS active_listings,
+            WHERE seller_id = ${userId} AND status = 'ACTIVE'
+              AND listing_type = 'SALE') AS active_listings,
           (SELECT count(*)::int FROM wishes
             WHERE user_id = ${userId} AND status = 'ACTIVE'
               AND category IS NOT NULL) AS active_wishes,
@@ -134,6 +137,8 @@ export function createSqlProfileStore(db: Db): ProfileStore {
 
     async ownListings(userId, limit) {
       // 本人视角：不筛 status（OFFLINE/RESERVED/SOLD 都是自己可见的）。
+      // #705：但**筛类型** —— 这是 `/profile` 的「我发布的」买卖卡片段，与上面的
+      // `stats.activeListings` 同条件只算 SALE；出租商品由租赁域自己的「我的出租」承接。
       // 封面只认 `sort_order = 0`（#6 契约 §1：下标即 sortOrder，0 才是封面），与 listings
       // feed / matching / 本文件其它查询同一口径（#40/F3）。
       // INNER JOIN users（#191）：卡片要带卖家公开子集（本人视角的卖家就是查看者自己），
@@ -141,6 +146,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
       const result = await db.execute(sql`
         SELECT l.id, l.listing_no, l.title, l.price_cents, l.category::text AS category,
                l.condition::text AS condition, l.status::text AS status,
+               l.listing_type::text AS listing_type,
                l.urgent, l.negotiable, l.free, l.created_at,
                (SELECT li.object_key FROM listing_images li
                  WHERE li.listing_id = l.id AND li.sort_order = 0 LIMIT 1)
@@ -151,7 +157,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
                u.avatar_url AS seller_avatar_url, u.auth_status::text AS seller_auth_status
         FROM listings l
         INNER JOIN users u ON u.id = l.seller_id
-        WHERE l.seller_id = ${userId}
+        WHERE l.seller_id = ${userId} AND l.listing_type = 'SALE'
         ORDER BY l.created_at DESC, l.id DESC
         LIMIT ${limit}
       `)
@@ -163,6 +169,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         category: row.category as ProfileListingRow['category'],
         condition: row.condition as ProfileListingRow['condition'],
         status: row.status as ProfileListingRow['status'],
+        listingType: row.listing_type as ProfileListingRow['listingType'],
         urgent: Boolean(row.urgent),
         negotiable: Boolean(row.negotiable),
         free: Boolean(row.free),

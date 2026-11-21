@@ -15,6 +15,7 @@ const detailFixture = {
   category: 'BOOKS',
   condition: 'GOOD',
   status: 'ACTIVE',
+  listingType: 'SALE',
   urgent: false,
   negotiable: false,
   free: false,
